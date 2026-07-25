@@ -1,0 +1,16 @@
+[Unit]
+Description=Backup Consilium SQLite database
+
+[Service]
+Type=oneshot
+User=consilium
+Group=consilium
+WorkingDirectory=/opt/consilium
+EnvironmentFile=/etc/consilium/consilium.env
+ExecStart=/opt/consilium/.venv/bin/python /opt/consilium/scripts/backup_database.py --destination /var/backups/consilium --keep 14
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/consilium /var/backups/consilium
+UMask=0077

@@ -1,0 +1,418 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>Консилиум — мультиагентный помощник</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  <main class="onboarding hidden" id="onboarding" aria-live="polite">
+    <header class="onboarding-brand"><span>К</span><div><strong>Консилиум</strong><small>Персональный старт</small></div><b id="onboardingStage">Анкета</b></header>
+    <section class="onboarding-card">
+      <div class="onboarding-progress"><i id="onboardingProgress"></i></div>
+      <div id="onboardingContent"></div>
+      <p class="onboarding-error hidden" id="onboardingError"></p>
+    </section>
+    <p class="onboarding-safety">Данные используются для персонализации ответов. Сервис не заменяет очную диагностику и экстренную помощь.</p>
+  </main>
+
+  <div class="app-shell hidden" id="appShell">
+    <aside class="sidebar" aria-label="Команда агентов">
+      <button class="sidebar-close" id="mobileTeamClose" aria-label="Закрыть список команды">×</button>
+      <div class="brand">
+        <div class="brand-mark" aria-hidden="true">К</div>
+        <div><strong>Консилиум</strong><span>AI-команда</span></div>
+      </div>
+
+      <div class="team-heading">
+        <span>Команда</span><span class="count" id="onlineCount">9 агентов</span>
+      </div>
+      <nav class="agent-list" id="agentList"></nav>
+
+      <div class="history-section">
+        <div class="team-heading"><span>Диалоги</span></div>
+        <div class="conversation-list" id="conversationList"></div>
+      </div>
+
+      <div class="sidebar-note">
+        <span class="pulse-dot"></span>
+        <div><strong id="aiStatus">Проверка подключения</strong><small id="aiModels">Python API</small></div>
+      </div>
+    </aside>
+    <button class="team-backdrop" id="teamBackdrop" aria-label="Закрыть список команды"></button>
+
+    <main class="chat-column">
+      <header class="chat-header">
+        <div class="active-avatar" id="headerAvatar">МН</div>
+        <div class="chat-title">
+          <div><strong id="headerName">Мария</strong><span class="role" id="headerRole">Менеджер</span></div>
+          <span class="online"><i></i>на связи</span>
+        </div>
+        <div class="header-actions">
+          <button class="header-action-button" id="capabilitiesButton" aria-label="Информация о возможностях" title="Информация о возможностях"><span>ⓘ</span></button>
+          <div class="function-menu-wrap">
+            <button class="header-action-button" id="functionMenuButton" aria-label="Открыть меню функций" aria-expanded="false" title="Функции"><span>☰</span></button>
+            <div class="function-menu hidden" id="functionMenu" role="menu">
+              <strong>Функции</strong>
+              <button id="mobileTeamButton" role="menuitem"><i>⌘</i><span>Команда агентов<small>Посмотреть специалистов</small></span></button>
+              <button id="newChatButton" role="menuitem"><i>＋</i><span>Новый диалог<small>Начать с чистого контекста</small></span></button>
+              <button id="humanButton" role="menuitem"><i>♙</i><span>Позвать человека<small>Чат или созвон</small></span></button>
+              <button class="hidden" id="secondOpinionButton" role="menuitem"><i>Ⅱ</i><span>Второе мнение<small>Независимая оценка</small></span></button>
+              <button class="hidden" id="councilButton" role="menuitem"><i>◎</i><span>Консилиум<small>Несколько врачебных мнений</small></span></button>
+              <button id="menuProfileButton" role="menuitem"><i>♙</i><span>Моя анкета<small>Изменить данные о себе</small></span></button>
+              <button id="menuLabResultsButton" role="menuitem"><i>▤</i><span>Результаты анализов<small id="menuLabResultsStatus">Проверить по номеру пробирки</small></span></button>
+              <button id="menuBodyMapButton" role="menuitem"><i>◉</i><span>Карта тела<small>Отметить область и симптом</small></span></button>
+              <button id="menuHealthHistoryButton" role="menuitem"><i>⌁</i><span>История здоровья<small>События и динамика по датам</small></span></button>
+              <button id="menuMemoryButton" role="menuitem"><i>◇</i><span>Память обо мне<small>Управлять сохранёнными фактами</small></span></button>
+              <button class="menu-danger" id="resetUserButton" role="menuitem"><i>↺</i><span>Начать заново<small>Удалить все данные и пройти первый вход</small></span></button>
+              <button id="menuFontSizeButton" role="menuitem"><i>А</i><span>Размер текста<small id="menuFontSizeStatus">Обычный</small></span></button>
+            </div>
+          </div>
+        </div>
+        <div class="header-risk hidden" id="headerRiskBar" aria-label="Уровень срочности">
+          <span class="header-risk-label"><i></i><strong id="urgencyLabel">Плановая оценка</strong></span>
+          <div class="urgency-track" aria-hidden="true"><i id="urgencyMarker"></i></div>
+          <span class="header-risk-topic" id="stateTopic">Тема уточняется</span>
+          <span class="header-risk-questions" id="stateQuestions">Нет открытых вопросов</span>
+        </div>
+      </header>
+
+      <section class="handoff-banner hidden" id="handoffBanner" aria-live="polite">
+        <span class="mini-avatar" id="handoffFrom">МН</span>
+        <span class="handoff-line"></span>
+        <span class="mini-avatar specialist" id="handoffTo">КД</span>
+        <p id="handoffText">Мария передаёт диалог специалисту</p>
+      </section>
+
+      <section class="insight-dock hidden" id="insightDock" aria-label="Контекст разговора">
+        <article class="insight-card summary-card">
+          <div class="insight-heading"><span class="insight-icon">✓</span><div><strong>Я правильно понял?</strong><small id="summaryGoal">Контекст разговора</small></div><button id="editContextButton">Изменить</button></div>
+          <div class="fact-list" id="summaryFacts"></div>
+        </article>
+      </section>
+
+      <section class="messages" id="messages" aria-live="polite" aria-label="Сообщения"></section>
+
+      <div class="suggestions" id="suggestions">
+        <button data-prompt="У меня второй день болит голова">Болит голова</button>
+        <button data-prompt="Помоги составить план проекта">План проекта</button>
+        <button data-prompt="Я хочу поговорить с человеком">Позвать человека</button>
+      </div>
+
+      <form class="composer" id="chatForm">
+        <label class="sr-only" for="messageInput">Сообщение</label>
+        <textarea id="messageInput" rows="1" placeholder="Опишите задачу или симптомы..." autocomplete="off"></textarea>
+        <input class="sr-only" type="file" id="attachmentInput" accept="image/jpeg,image/png,image/webp,image/gif,application/pdf,text/plain,text/csv" multiple>
+        <button type="button" class="attach-button" id="attachButton" aria-label="Прикрепить файл">＋</button>
+        <button type="submit" class="send-button" aria-label="Отправить">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12 14-7-4 14-3-5-7-2Z"/><path d="m12 14 7-9"/></svg>
+        </button>
+        <div class="attachment-list hidden" id="attachmentList"></div>
+        <div class="composer-meta"><span>Enter — отправить · Shift+Enter — новая строка</span><span>Ответы не заменяют врача</span></div>
+      </form>
+    </main>
+
+    <aside class="activity-panel" aria-label="Ход обработки">
+      <div class="activity-heading">
+        <div><strong>Ход обработки</strong><span id="taskStatus">Ожидает задачу</span></div>
+        <span class="live-badge">LIVE</span>
+      </div>
+      <button class="memory-button profile-button" id="profileButton"><span>♙</span><div><strong>Моя анкета</strong><small id="profileStatus">Не заполнена</small></div><b id="profileCompletion">0%</b></button>
+      <button class="memory-button" id="bodyMapButton"><span>◉</span><div><strong>Карта тела</strong><small id="bodyMapStatus">Отметить симптом</small></div><b id="bodySymptomCount">0</b></button>
+      <button class="memory-button" id="healthHistoryButton"><span>⌁</span><div><strong>История здоровья</strong><small>События и изменения</small></div><b id="healthHistoryCount">0</b></button>
+      <button class="memory-button" id="memoryButton"><span>◇</span><div><strong>Память обо мне</strong><small>Вы управляете сохранёнными фактами</small></div><b id="memoryCount">0</b></button>
+      <div class="timeline" id="timeline">
+        <div class="empty-state">
+          <div class="empty-icon">⌁</div>
+          <strong>Здесь появится маршрут</strong>
+          <p>Вы увидите, какой агент принял задачу и кому передал управление.</p>
+        </div>
+      </div>
+      <div class="safety-card">
+        <div class="shield">✓</div>
+        <div><strong>Безопасный режим</strong><p>При тревожных симптомах система предложит срочную помощь.</p></div>
+      </div>
+    </aside>
+  </div>
+
+  <div class="modal-backdrop hidden" id="fontSizeModal" role="dialog" aria-modal="true" aria-labelledby="fontSizeTitle">
+    <div class="modal font-size-modal">
+      <button class="modal-close" id="fontSizeClose" aria-label="Закрыть">×</button>
+      <div class="modal-icon">А</div>
+      <h2 id="fontSizeTitle">Размер текста</h2>
+      <p>Выберите комфортный размер. Настройка применяется ко всему приложению и сохраняется.</p>
+      <div class="font-size-options" id="fontSizeOptions"></div>
+    </div>
+  </div>
+
+  <div class="modal-backdrop hidden" id="councilModal" role="dialog" aria-modal="true" aria-labelledby="councilModalTitle">
+    <div class="modal council-modal">
+      <button class="modal-close" id="councilModalClose" aria-label="Закрыть">×</button>
+      <div class="modal-icon">◎</div>
+      <h2 id="councilModalTitle">Как работает Консилиум</h2>
+      <p>Несколько врачей изучат один контекст, но каждый получит свою отдельную задачу. Затем ведущий соберёт их выводы в один понятный план.</p>
+      <div class="council-steps">
+        <article><b>1</b><span><strong>Разные фокусы</strong><small>Каждый врач отвечает только за свою область и не повторяет уже высказанное.</small></span></article>
+        <article><b>2</b><span><strong>Сверка позиций</strong><small>Отдельно отмечаются согласие, расхождения и недостающие данные.</small></span></article>
+        <article><b>3</b><span><strong>Общий вывод</strong><small>Мария формирует безопасные следующие шаги без окончательного диагноза.</small></span></article>
+      </div>
+      <div class="council-members"><span>Будут участвовать</span><div id="councilMemberList"></div></div>
+      <button class="primary-button" id="startCouncilButton">Начать консилиум</button>
+      <button class="secondary-button" id="cancelCouncilButton">Не сейчас</button>
+    </div>
+  </div>
+
+  <div class="modal-backdrop hidden" id="humanModal" role="dialog" aria-modal="true" aria-labelledby="humanTitle">
+    <div class="modal">
+      <button class="modal-close" id="modalClose" aria-label="Закрыть">×</button>
+      <div class="modal-icon">♙</div>
+      <h2 id="humanTitle">Как продолжить со специалистом?</h2>
+      <p>Контекст разговора подготовлен, поэтому не придётся всё рассказывать заново. Выберите удобный формат — реальное подключение оператора в этой демоверсии пока работает как заглушка.</p>
+      <div class="handoff-preview" id="handoffPreview"><span>Подготавливаю сводку…</span></div>
+      <div class="ticket"><span>Номер обращения</span><strong id="ticketNumber">H-000000</strong></div>
+      <div class="human-options" aria-label="Способ связи">
+        <button class="human-option" id="humanChatButton">
+          <span class="human-option-icon" aria-hidden="true">⌨</span>
+          <span><strong>Чат со специалистом</strong><small>Продолжить эту переписку</small></span>
+        </button>
+        <button class="human-option" id="humanCallButton">
+          <span class="human-option-icon" aria-hidden="true">☎</span>
+          <span><strong>Созвон</strong><small>Выбрать звонок как следующий шаг</small></span>
+        </button>
+      </div>
+      <div class="call-phone-step hidden" id="callPhoneStep">
+        <button class="call-phone-back" id="callPhoneBack" type="button">← Выбрать другой способ</button>
+        <strong>На какой номер позвонить?</strong>
+        <p>Укажите российский номер. Мы сохраним его в едином формате и передадим только вместе с обращением.</p>
+        <label class="field-label">Номер телефона<input id="callPhoneInput" type="tel" inputmode="tel" autocomplete="tel" maxlength="30" placeholder="+7 999 123-45-67"></label>
+        <span class="call-phone-error hidden" id="callPhoneError" role="alert">Введите российский номер в формате +7 999 123-45-67</span>
+        <button class="primary-button" id="confirmCallButton" type="button" disabled>Запросить созвон</button>
+      </div>
+      <button class="secondary-button" id="modalOkay">Пока продолжить с ИИ</button>
+    </div>
+  </div>
+
+  <div class="modal-backdrop hidden" id="contextModal" role="dialog" aria-modal="true" aria-labelledby="contextTitle">
+    <div class="modal context-modal">
+      <button class="modal-close" id="contextClose" aria-label="Закрыть">×</button>
+      <div class="modal-icon">✓</div><h2 id="contextTitle">Что я понял из разговора</h2>
+      <p>Один факт на строку. Исправления сразу попадут в контекст всех агентов.</p>
+      <label class="field-label">Цель разговора<input id="contextGoal" maxlength="500"></label>
+      <label class="field-label">Подтверждённые факты<textarea id="contextFacts" rows="6"></textarea></label>
+      <label class="field-label">Что ещё нужно выяснить<textarea id="contextQuestions" rows="4"></textarea></label>
+      <button class="primary-button" id="saveContextButton">Сохранить контекст</button>
+    </div>
+  </div>
+
+  <div class="modal-backdrop hidden" id="memoryModal" role="dialog" aria-modal="true" aria-labelledby="memoryTitle">
+    <div class="modal memory-modal">
+      <button class="modal-close" id="memoryClose" aria-label="Закрыть">×</button>
+      <div class="modal-icon">◇</div><h2 id="memoryTitle">Память обо мне</h2>
+      <p>Агенты используют эти сведения в новых диалогах. Добавляйте только то, что действительно хотите сохранять.</p>
+      <div class="memory-form"><select id="memoryCategory"><option value="preference">Предпочтение</option><option value="health">Здоровье</option><option value="constraint">Ограничение</option><option value="goal">Цель</option></select><input id="memoryText" maxlength="500" placeholder="Например: отвечать коротко и по пунктам"><button id="addMemoryButton">Добавить</button></div>
+      <div class="memory-list" id="memoryList"></div>
+    </div>
+  </div>
+
+  <div class="modal-backdrop hidden" id="capabilitiesModal" role="dialog" aria-modal="true" aria-labelledby="capabilitiesTitle">
+    <div class="modal capabilities-modal">
+      <button class="modal-close" id="capabilitiesClose" aria-label="Закрыть">×</button>
+      <div class="modal-icon">✦</div><h2 id="capabilitiesTitle">Что умеет Консилиум</h2>
+      <p>Все возможности собраны здесь. Доступность отдельных действий зависит от контекста диалога.</p>
+      <div class="capability-grid">
+        <button class="capability-card accent" id="capabilityProfile"><i>♙</i><span><strong>Моя анкета</strong><small>Данные о здоровье и номер пробирки для результатов</small></span><b id="capabilityProfileStatus">Заполнить</b></button>
+        <button class="capability-card accent" id="capabilityLabResults"><i>▤</i><span><strong>Результаты анализов</strong><small>Проверка по сохранённому номеру пробирки</small></span><b id="capabilityLabResultsStatus">Открыть</b></button>
+        <button class="capability-card accent" id="capabilityBodyMap"><i>◉</i><span><strong>Интерактивная карта тела</strong><small>Область, характер, интенсивность и начало симптома</small></span><b>Открыть</b></button>
+        <button class="capability-card accent" id="capabilityHealthHistory"><i>⌁</i><span><strong>Моя история здоровья</strong><small>Симптомы, консультации, документы и обследования по датам</small></span><b>Открыть</b></button>
+        <article class="capability-card"><i>◫</i><span><strong>Дополнительные обследования</strong><small>22 набора анализов, персональные отметки и демо-оплата</small></span></article>
+        <article class="capability-card"><i>◎</i><span><strong>Живой консилиум</strong><small>Несколько профильных мнений и общий вывод</small></span></article>
+        <article class="capability-card"><i>Ⅱ</i><span><strong>Второе мнение</strong><small>Независимая оценка другого специалиста</small></span></article>
+        <article class="capability-card"><i>✓</i><span><strong>Проверяемый контекст</strong><small>Исправляйте, что агенты поняли из разговора</small></span></article>
+        <article class="capability-card"><i>⌁</i><span><strong>Карта состояния</strong><small>Тема, открытые вопросы и уровень срочности</small></span></article>
+        <article class="capability-card"><i>▱</i><span><strong>Фото и документы</strong><small>Изображения, PDF, TXT и CSV до 4 МБ</small></span></article>
+        <article class="capability-card"><i>◇</i><span><strong>Управляемая память</strong><small>Сохраняйте и удаляйте важные предпочтения</small></span></article>
+        <article class="capability-card"><i>↗</i><span><strong>Передача человеку</strong><small>Предпросмотр сводки, чат или созвон</small></span></article>
+        <article class="capability-card"><i>☰</i><span><strong>Меню функций</strong><small>Команда, новый диалог, анкета, память и связь с человеком</small></span></article>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal-backdrop hidden" id="bodyMapModal" role="dialog" aria-modal="true" aria-labelledby="bodyMapTitle">
+    <div class="modal body-map-modal">
+      <button class="modal-close" id="bodyMapClose" aria-label="Закрыть">×</button>
+      <div class="modal-icon">◉</div><h2 id="bodyMapTitle">Интерактивная карта тела</h2>
+      <p>Нажмите на область, затем опишите ощущение. Сохранённая отметка будет доступна всем медицинским агентам.</p>
+      <div class="body-map-layout">
+        <section class="body-picker">
+          <div class="body-view-tabs" role="tablist" aria-label="Вид тела">
+            <button class="selected" data-body-view="front" role="tab">Спереди</button>
+            <button data-body-view="back" role="tab">Со спины</button>
+          </div>
+          <div class="body-canvas">
+            <svg class="body-figure" id="bodyFront" viewBox="0 0 220 520" role="img" aria-label="Карта тела спереди">
+              <defs><linearGradient id="bodyFrontFill" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#f5faf7"/><stop offset="1" stop-color="#dcebe4"/></linearGradient></defs>
+              <g class="body-silhouette">
+                <ellipse cx="110" cy="42" rx="25" ry="32"/>
+                <path d="M99 70 C101 79 101 87 96 94 L81 100 C70 104 62 113 59 126 L51 187 C48 209 46 230 42 252 L32 316 L53 320 L65 257 C69 236 73 214 76 193 L79 169 C78 196 78 224 72 251 C69 265 72 278 81 286 L77 355 C76 382 81 414 84 443 L83 486 L103 487 L107 443 L108 301 L112 301 L113 443 L117 487 L137 486 L136 443 C139 414 144 382 143 355 L139 286 C148 278 151 265 148 251 C142 224 142 196 141 169 L144 193 C147 214 151 236 155 257 L167 320 L188 316 L178 252 C174 230 172 209 169 187 L161 126 C158 113 150 104 139 100 L124 94 C119 87 119 79 121 70Z"/>
+                <ellipse cx="42" cy="337" rx="13" ry="22"/><ellipse cx="178" cy="337" rx="13" ry="22"/>
+                <path d="M83 480 C82 492 75 500 68 506 C65 509 68 514 73 514 L104 514 L103 485Z"/>
+                <path d="M137 480 C138 492 145 500 152 506 C155 509 152 514 147 514 L116 514 L117 485Z"/>
+              </g>
+              <g class="body-details">
+                <path d="M78 116 Q92 127 110 127 Q128 127 142 116"/><path d="M110 128 L110 238"/><path d="M103 224 Q110 229 117 224"/><circle cx="110" cy="218" r="2.5"/><path d="M80 286 Q110 300 140 286"/><path d="M84 381 Q94 387 105 381"/><path d="M115 381 Q126 387 136 381"/>
+              </g>
+              <g class="body-zone" data-region="Голова" data-view="front" tabindex="0" role="button"><ellipse cx="110" cy="42" rx="27" ry="34"/></g>
+              <g class="body-zone" data-region="Шея" data-view="front" tabindex="0" role="button"><path d="M97 69 L123 69 L128 101 L92 101Z"/></g>
+              <g class="body-zone" data-region="Грудь" data-view="front" tabindex="0" role="button"><path d="M78 101 Q110 87 142 101 L146 177 Q110 192 74 177Z"/></g>
+              <g class="body-zone" data-region="Живот" data-view="front" tabindex="0" role="button"><path d="M75 174 Q110 188 145 174 L148 247 Q110 266 72 247Z"/></g>
+              <g class="body-zone" data-region="Таз" data-view="front" tabindex="0" role="button"><path d="M72 244 Q110 258 148 244 Q153 273 139 289 Q110 303 81 289 Q67 273 72 244Z"/></g>
+              <g class="body-zone" data-region="Левое плечо" data-view="front" tabindex="0" role="button"><ellipse cx="68" cy="122" rx="19" ry="23"/></g>
+              <g class="body-zone" data-region="Правое плечо" data-view="front" tabindex="0" role="button"><ellipse cx="152" cy="122" rx="19" ry="23"/></g>
+              <g class="body-zone" data-region="Левая рука" data-view="front" tabindex="0" role="button"><path d="M53 126 Q42 160 43 199 L29 316 L56 321 L69 252 L78 138Z"/></g>
+              <g class="body-zone" data-region="Правая рука" data-view="front" tabindex="0" role="button"><path d="M167 126 Q178 160 177 199 L191 316 L164 321 L151 252 L142 138Z"/></g>
+              <g class="body-zone" data-region="Левая кисть" data-view="front" tabindex="0" role="button"><ellipse cx="42" cy="337" rx="15" ry="24"/></g>
+              <g class="body-zone" data-region="Правая кисть" data-view="front" tabindex="0" role="button"><ellipse cx="178" cy="337" rx="15" ry="24"/></g>
+              <g class="body-zone" data-region="Левое бедро" data-view="front" tabindex="0" role="button"><path d="M80 283 Q95 290 108 298 L106 382 Q92 392 77 381Z"/></g>
+              <g class="body-zone" data-region="Правое бедро" data-view="front" tabindex="0" role="button"><path d="M140 283 Q125 290 112 298 L114 382 Q128 392 143 381Z"/></g>
+              <g class="body-zone" data-region="Левая нога" data-view="front" tabindex="0" role="button"><path d="M77 378 Q92 389 106 380 L103 487 L82 487Z"/></g>
+              <g class="body-zone" data-region="Правая нога" data-view="front" tabindex="0" role="button"><path d="M143 378 Q128 389 114 380 L117 487 L138 487Z"/></g>
+              <g class="body-zone" data-region="Левая стопа" data-view="front" tabindex="0" role="button"><path d="M81 478 L104 482 L104 515 L67 515 Q62 510 68 505 Q80 496 81 478Z"/></g>
+              <g class="body-zone" data-region="Правая стопа" data-view="front" tabindex="0" role="button"><path d="M139 478 L116 482 L116 515 L153 515 Q158 510 152 505 Q140 496 139 478Z"/></g>
+            </svg>
+            <svg class="body-figure hidden" id="bodyBack" viewBox="0 0 220 520" role="img" aria-label="Карта тела со спины">
+              <defs><linearGradient id="bodyBackFill" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#f5faf7"/><stop offset="1" stop-color="#dcebe4"/></linearGradient></defs>
+              <g class="body-silhouette">
+                <ellipse cx="110" cy="42" rx="25" ry="32"/>
+                <path d="M99 70 C101 79 101 87 96 94 L81 100 C70 104 62 113 59 126 L51 187 C48 209 46 230 42 252 L32 316 L53 320 L65 257 C69 236 73 214 76 193 L79 169 C78 196 78 224 72 251 C69 265 72 278 81 286 L77 355 C76 382 81 414 84 443 L83 486 L103 487 L107 443 L108 301 L112 301 L113 443 L117 487 L137 486 L136 443 C139 414 144 382 143 355 L139 286 C148 278 151 265 148 251 C142 224 142 196 141 169 L144 193 C147 214 151 236 155 257 L167 320 L188 316 L178 252 C174 230 172 209 169 187 L161 126 C158 113 150 104 139 100 L124 94 C119 87 119 79 121 70Z"/>
+                <ellipse cx="42" cy="337" rx="13" ry="22"/><ellipse cx="178" cy="337" rx="13" ry="22"/>
+                <path d="M83 480 C82 492 75 500 68 506 C65 509 68 514 73 514 L104 514 L103 485Z"/>
+                <path d="M137 480 C138 492 145 500 152 506 C155 509 152 514 147 514 L116 514 L117 485Z"/>
+              </g>
+              <g class="body-details">
+                <path d="M78 116 Q91 104 108 112"/><path d="M142 116 Q129 104 112 112"/><path d="M110 104 L110 249"/><path d="M81 285 Q110 270 139 285"/><path d="M84 381 Q94 387 105 381"/><path d="M115 381 Q126 387 136 381"/>
+              </g>
+              <g class="body-zone" data-region="Голова" data-view="back" tabindex="0" role="button"><ellipse cx="110" cy="42" rx="27" ry="34"/></g>
+              <g class="body-zone" data-region="Шея" data-view="back" tabindex="0" role="button"><path d="M97 69 L123 69 L128 101 L92 101Z"/></g>
+              <g class="body-zone" data-region="Верх спины" data-view="back" tabindex="0" role="button"><path d="M77 100 Q110 86 143 100 L146 184 Q110 200 74 184Z"/></g>
+              <g class="body-zone" data-region="Поясница" data-view="back" tabindex="0" role="button"><path d="M74 181 Q110 195 146 181 L149 250 Q110 267 71 250Z"/></g>
+              <g class="body-zone" data-region="Таз" data-view="back" tabindex="0" role="button"><path d="M72 246 Q110 260 148 246 Q151 274 139 289 Q110 303 81 289 Q69 274 72 246Z"/></g>
+              <g class="body-zone" data-region="Левое плечо" data-view="back" tabindex="0" role="button"><ellipse cx="68" cy="122" rx="19" ry="23"/></g>
+              <g class="body-zone" data-region="Правое плечо" data-view="back" tabindex="0" role="button"><ellipse cx="152" cy="122" rx="19" ry="23"/></g>
+              <g class="body-zone" data-region="Левая рука" data-view="back" tabindex="0" role="button"><path d="M53 126 Q42 160 43 199 L29 316 L56 321 L69 252 L78 138Z"/></g>
+              <g class="body-zone" data-region="Правая рука" data-view="back" tabindex="0" role="button"><path d="M167 126 Q178 160 177 199 L191 316 L164 321 L151 252 L142 138Z"/></g>
+              <g class="body-zone" data-region="Левая кисть" data-view="back" tabindex="0" role="button"><ellipse cx="42" cy="337" rx="15" ry="24"/></g>
+              <g class="body-zone" data-region="Правая кисть" data-view="back" tabindex="0" role="button"><ellipse cx="178" cy="337" rx="15" ry="24"/></g>
+              <g class="body-zone" data-region="Левое бедро" data-view="back" tabindex="0" role="button"><path d="M80 283 Q95 290 108 298 L106 382 Q92 392 77 381Z"/></g>
+              <g class="body-zone" data-region="Правое бедро" data-view="back" tabindex="0" role="button"><path d="M140 283 Q125 290 112 298 L114 382 Q128 392 143 381Z"/></g>
+              <g class="body-zone" data-region="Левая нога" data-view="back" tabindex="0" role="button"><path d="M77 378 Q92 389 106 380 L103 487 L82 487Z"/></g>
+              <g class="body-zone" data-region="Правая нога" data-view="back" tabindex="0" role="button"><path d="M143 378 Q128 389 114 380 L117 487 L138 487Z"/></g>
+              <g class="body-zone" data-region="Левая стопа" data-view="back" tabindex="0" role="button"><path d="M81 478 L104 482 L104 515 L67 515 Q62 510 68 505 Q80 496 81 478Z"/></g>
+              <g class="body-zone" data-region="Правая стопа" data-view="back" tabindex="0" role="button"><path d="M139 478 L116 482 L116 515 L153 515 Q158 510 152 505 Q140 496 139 478Z"/></g>
+            </svg>
+          </div>
+          <div class="body-map-legend"><span><i></i> Нажмите на область</span><span><i class="saved"></i> Есть активная отметка</span></div>
+        </section>
+        <section class="symptom-form">
+          <div class="selected-body-region" id="selectedBodyRegion"><span>1</span><div><small>Выбранная область</small><strong>Нажмите на карту</strong></div></div>
+          <fieldset id="symptomTypeField" disabled><legend>Что вы ощущаете?</legend><div class="symptom-choice-grid" id="symptomTypeChoices">
+            <button type="button" data-symptom-type="Боль">Боль</button><button type="button" data-symptom-type="Жжение">Жжение</button>
+            <button type="button" data-symptom-type="Онемение">Онемение</button><button type="button" data-symptom-type="Покалывание">Покалывание</button>
+            <button type="button" data-symptom-type="Зуд">Зуд</button><button type="button" data-symptom-type="Отёк">Отёк</button>
+            <button type="button" data-symptom-type="Слабость">Слабость</button><button type="button" data-symptom-type="Сыпь">Сыпь</button>
+            <button type="button" data-symptom-type="Другое">Другое</button>
+          </div></fieldset>
+          <label class="field-label custom-symptom-field hidden" id="customSymptomField">Опишите симптом своими словами<input id="customSymptomText" maxlength="100" placeholder="Например: пульсация, чувство давления или спазм"></label>
+          <label class="intensity-field">Интенсивность <strong id="symptomIntensityValue">5 из 10</strong><input id="symptomIntensity" type="range" min="1" max="10" value="5"></label>
+          <div class="symptom-field-grid">
+            <label class="field-label">Когда началось?<input id="symptomStartedAt" type="datetime-local"></label>
+            <label class="field-label">Как давно?<select id="symptomDuration"><option value="">Не указано</option><option value="minutes">Минуты</option><option value="hours">Часы</option><option value="days">Дни</option><option value="weeks">Недели</option><option value="months">Месяцы</option></select></label>
+          </div>
+          <label class="field-label">Когда проявляется?<select id="symptomPattern"><option value="constant">Постоянно</option><option value="episodes">Приступами</option><option value="movement">При движении</option><option value="touch">При прикосновении</option><option value="unknown">Не уверен(а)</option></select></label>
+          <label class="field-label">Дополнительные детали<textarea id="symptomNotes" rows="3" maxlength="1000" placeholder="Что усиливает или уменьшает симптом, куда он распространяется"></textarea></label>
+          <div class="symptom-safety-note">Карта помогает собрать контекст, но не ставит диагноз. При резком ухудшении используйте срочную медицинскую помощь.</div>
+          <button class="primary-button" id="saveBodySymptomButton" disabled>Сохранить отметку</button>
+        </section>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal-backdrop hidden" id="healthHistoryModal" role="dialog" aria-modal="true" aria-labelledby="healthHistoryTitle">
+    <div class="modal health-history-modal">
+      <button class="modal-close" id="healthHistoryClose" aria-label="Закрыть">×</button>
+      <div class="history-heading"><div><div class="modal-icon">⌁</div><h2 id="healthHistoryTitle">Моя история здоровья</h2><p>Единая лента симптомов, консультаций, документов и обследований.</p></div><button class="history-add-symptom" id="historyAddSymptom">＋ Добавить симптом</button></div>
+      <div class="history-filters" id="historyFilters">
+        <button class="selected" data-history-filter="all">Все</button>
+        <button data-history-filter="symptom">Симптомы</button>
+        <button data-history-filter="consultation">Консультации</button>
+        <button data-history-filter="document">Документы</button>
+        <button data-history-filter="council">Консилиумы</button>
+        <button data-history-filter="tests">Обследования</button>
+      </div>
+      <div class="health-history-summary" id="healthHistorySummary"></div>
+      <div class="health-history-list" id="healthHistoryList"></div>
+    </div>
+  </div>
+
+  <div class="modal-backdrop hidden" id="profileModal" role="dialog" aria-modal="true" aria-labelledby="profileTitle">
+    <div class="modal profile-modal">
+      <button class="modal-close" id="profileClose" aria-label="Закрыть">×</button>
+      <div class="modal-icon">♙</div><h2 id="profileTitle">Моя анкета</h2>
+      <p>Эти данные будут учитываться агентами, когда вопрос касается вас. Если вы спрашиваете о другом человеке, укажите это в сообщении.</p>
+      <div class="profile-grid">
+        <label class="field-label wide">Ваш ID в сервисе<input id="profileChelId" readonly aria-readonly="true"></label>
+        <label class="field-label wide">Как к вам обращаться<input id="profileName" maxlength="100" placeholder="Необязательно"></label>
+        <label class="field-label">Возраст<input id="profileAge" type="number" min="0" max="120" placeholder="лет"></label>
+        <label class="field-label">Пол для медицинского контекста<select id="profileSex"><option value="">Не указывать</option><option value="female">Женский</option><option value="male">Мужской</option><option value="intersex">Интерсекс</option><option value="other">Другое</option></select></label>
+        <label class="field-label">Рост<input id="profileHeight" type="number" min="30" max="250" step="0.1" placeholder="см"></label>
+        <label class="field-label">Вес<input id="profileWeight" type="number" min="1" max="500" step="0.1" placeholder="кг"></label>
+        <label class="field-label">Беременность<select id="profilePregnancy"><option value="not_applicable">Не применимо</option><option value="no">Нет</option><option value="yes">Да</option><option value="possible">Возможна</option><option value="unknown">Не знаю</option></select></label>
+        <label class="field-label">Курение<select id="profileSmoking"><option value="unknown">Не указано</option><option value="never">Не курю</option><option value="former">Курил(а) раньше</option><option value="current">Курю сейчас</option></select></label>
+        <label class="field-label">Алкоголь<select id="profileAlcohol"><option value="unknown">Не указано</option><option value="never">Не употребляю</option><option value="rarely">Редко</option><option value="weekly">Раз в неделю</option><option value="often">Чаще раза в неделю</option></select></label>
+        <label class="field-label">Активность<select id="profileActivity"><option value="unknown">Не указано</option><option value="low">Низкая</option><option value="moderate">Средняя</option><option value="high">Высокая</option></select></label>
+        <label class="field-label">Давление<select id="profilePressure"><option value="unknown">Не знаю</option><option value="normal">Обычно в норме</option><option value="high">Бывает повышенным</option><option value="low">Бывает пониженным</option><option value="unstable">Сильно меняется</option></select></label>
+        <label class="field-label">Сахар крови<select id="profileSugar"><option value="unknown">Не знаю</option><option value="normal">Был в норме</option><option value="high">Бывал повышен</option></select></label>
+        <label class="field-label">Длительная усталость<select id="profileFatigue"><option value="unknown">Не уверен(а)</option><option value="no">Нет</option><option value="yes">Да</option></select></label>
+        <label class="field-label">Боли в суставах<select id="profileJoints"><option value="unknown">Не уверен(а)</option><option value="no">Нет</option><option value="yes">Да</option></select></label>
+        <label class="field-label wide">Хронические заболевания<textarea id="profileConditions" rows="3" placeholder="Одно на строку"></textarea></label>
+        <label class="field-label wide">Постоянные лекарства<textarea id="profileMedications" rows="3" placeholder="Название и дозировка, если известна"></textarea></label>
+        <label class="field-label wide">Аллергии<textarea id="profileAllergies" rows="3" placeholder="Лекарства, продукты и другие аллергены"></textarea></label>
+        <label class="field-label wide">Номер пробирки<input id="profileTubeNumber" maxlength="80" autocomplete="off" placeholder="Введите номер с наклейки на пробирке"><small>Нужен, чтобы в дальнейшем получить результаты сданных дополнительных обследований.</small></label>
+        <label class="field-label wide">Что ещё важно учитывать<textarea id="profileNotes" rows="3" maxlength="1000" placeholder="Например: недавние операции или важные ограничения"></textarea></label>
+      </div>
+      <div class="profile-footer"><span id="profileBmi">ИМТ появится после заполнения роста и веса</span><button class="primary-button" id="saveProfileButton">Сохранить анкету</button></div>
+    </div>
+  </div>
+
+  <div class="modal-backdrop hidden" id="labResultsModal" role="dialog" aria-modal="true" aria-labelledby="labResultsTitle">
+    <div class="modal lab-results-modal">
+      <button class="modal-close" id="labResultsClose" aria-label="Закрыть">×</button>
+      <div class="modal-icon">▤</div>
+      <h2 id="labResultsTitle">Результаты анализов</h2>
+      <p>Для поиска используется номер с наклейки на пробирке. После сохранения повторно вводить его не придётся.</p>
+      <div class="lab-tube-step hidden" id="labTubeStep">
+        <strong>Введите номер пробирки</strong>
+        <p>Проверьте символы на наклейке и введите номер без сокращений.</p>
+        <label class="field-label">Номер пробирки<input id="labTubeInput" maxlength="80" autocomplete="off" placeholder="Например, LAB-2026-0042"></label>
+        <span class="lab-results-error hidden" id="labTubeError" role="alert">Введите номер пробирки</span>
+        <button class="primary-button" id="saveLabTubeButton" type="button">Сохранить и продолжить</button>
+      </div>
+      <div class="lab-results-ready hidden" id="labResultsReady">
+        <div class="lab-tube-card"><span>Номер пробирки</span><strong id="labSavedTube"></strong><button id="changeLabTubeButton" type="button">Изменить</button></div>
+        <div class="lab-results-placeholder">
+          <span>✓</span>
+          <div><strong>Номер готов для поиска</strong><p>Автоматическое получение результатов подключим на следующем этапе. Сейчас номер уже сохранён и доступен сервису.</p></div>
+        </div>
+        <button class="primary-button" type="button" disabled>Получение результатов появится позже</button>
+      </div>
+    </div>
+  </div>
+
+  <script src="/static/agents.js"></script>
+  <script src="/static/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,24 @@
+[Unit]
+Description=Consilium multi-agent web application
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=consilium
+Group=consilium
+WorkingDirectory=/opt/consilium
+EnvironmentFile=/etc/consilium/consilium.env
+ExecStart=/opt/consilium/.venv/bin/python -u /opt/consilium/run.py
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=20
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/lib/consilium /var/log/consilium
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target

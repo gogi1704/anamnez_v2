@@ -1,0 +1,14 @@
+.env
+.env.production
+.venv/
+.venv_broken_*/
+__pycache__/
+*.py[cod]
+data/*.db
+data/*.db.backup-*
+data/*.db-*
+backups/
+dist/
+*.log
+.idea/
+.pytest_cache/
