@@ -197,6 +197,177 @@ def current_external_identity() -> dict | None:
     return dict(row) if row else None
 
 
+def admin_dashboard(days: int = 14, limit: int = 100) -> dict:
+    """Return privacy-conscious aggregate analytics without message or profile text."""
+    days = max(7, min(90, int(days)))
+    limit = max(10, min(250, int(limit)))
+    now = datetime.now(timezone.utc)
+    first_day = (now - timedelta(days=days - 1)).date()
+    real_users = "chel_id NOT IN ('chel_legacy', 'chel_test_default')"
+
+    with connection() as conn:
+        def scalar(query: str, params: tuple = ()) -> int:
+            return int(conn.execute(query, params).fetchone()[0] or 0)
+
+        summary = {
+            "users_total": scalar(f"SELECT COUNT(*) FROM users WHERE {real_users}"),
+            "users_active_7d": scalar(
+                f"SELECT COUNT(*) FROM users WHERE {real_users} AND last_seen_at >= ?",
+                ((now - timedelta(days=7)).isoformat(),),
+            ),
+            "max_users": scalar(
+                """SELECT COUNT(DISTINCT e.chel_id) FROM external_identities e
+                WHERE e.access_status = 'active'
+                  AND e.chel_id NOT IN ('chel_legacy', 'chel_test_default')"""
+            ),
+            "onboarding_complete": scalar(
+                """SELECT COUNT(*) FROM onboarding_state
+                WHERE status = 'complete'
+                  AND chel_id NOT IN ('chel_legacy', 'chel_test_default')"""
+            ),
+            "profiles_with_tube": scalar(
+                """SELECT COUNT(*) FROM user_profile
+                WHERE TRIM(tube_number) <> ''
+                  AND chel_id NOT IN ('chel_legacy', 'chel_test_default')"""
+            ),
+            "conversations_total": scalar(
+                """SELECT COUNT(*) FROM conversations
+                WHERE chel_id NOT IN ('chel_legacy', 'chel_test_default')"""
+            ),
+            "messages_total": scalar(
+                """SELECT COUNT(*) FROM messages m
+                JOIN conversations c ON c.id = m.conversation_id
+                WHERE c.chel_id NOT IN ('chel_legacy', 'chel_test_default')"""
+            ),
+            "human_requests": scalar(
+                """SELECT COUNT(*) FROM conversations
+                WHERE human_ticket_id IS NOT NULL
+                  AND chel_id NOT IN ('chel_legacy', 'chel_test_default')"""
+            ),
+            "human_pending": scalar(
+                """SELECT COUNT(*) FROM conversations
+                WHERE human_status = 'pending'
+                  AND chel_id NOT IN ('chel_legacy', 'chel_test_default')"""
+            ),
+        }
+
+        created_rows = conn.execute(
+            f"""SELECT SUBSTR(created_at, 1, 10) AS day, COUNT(*) AS value
+            FROM users WHERE {real_users} AND created_at >= ?
+            GROUP BY day""",
+            (first_day.isoformat(),),
+        ).fetchall()
+        message_rows = conn.execute(
+            """SELECT SUBSTR(m.created_at, 1, 10) AS day, COUNT(*) AS value
+            FROM messages m JOIN conversations c ON c.id = m.conversation_id
+            WHERE c.chel_id NOT IN ('chel_legacy', 'chel_test_default')
+              AND m.created_at >= ? GROUP BY day""",
+            (first_day.isoformat(),),
+        ).fetchall()
+        conversation_rows = conn.execute(
+            """SELECT SUBSTR(created_at, 1, 10) AS day, COUNT(*) AS value
+            FROM conversations
+            WHERE chel_id NOT IN ('chel_legacy', 'chel_test_default')
+              AND created_at >= ? GROUP BY day""",
+            (first_day.isoformat(),),
+        ).fetchall()
+        created_by_day = {row["day"]: int(row["value"]) for row in created_rows}
+        messages_by_day = {row["day"]: int(row["value"]) for row in message_rows}
+        conversations_by_day = {row["day"]: int(row["value"]) for row in conversation_rows}
+        activity = []
+        for offset in range(days):
+            day = (first_day + timedelta(days=offset)).isoformat()
+            activity.append({
+                "date": day,
+                "new_users": created_by_day.get(day, 0),
+                "conversations": conversations_by_day.get(day, 0),
+                "messages": messages_by_day.get(day, 0),
+            })
+
+        agents = [
+            {"agent": row["agent_id"] or "manager", "messages": int(row["value"])}
+            for row in conn.execute(
+                """SELECT m.agent_id, COUNT(*) AS value
+                FROM messages m JOIN conversations c ON c.id = m.conversation_id
+                WHERE m.role = 'assistant'
+                  AND c.chel_id NOT IN ('chel_legacy', 'chel_test_default')
+                GROUP BY m.agent_id ORDER BY value DESC"""
+            ).fetchall()
+        ]
+        human_channels = [
+            {"channel": row["channel"], "requests": int(row["value"])}
+            for row in conn.execute(
+                """SELECT COALESCE(human_channel, 'not_selected') AS channel, COUNT(*) AS value
+                FROM conversations WHERE human_ticket_id IS NOT NULL
+                  AND chel_id NOT IN ('chel_legacy', 'chel_test_default')
+                GROUP BY channel ORDER BY value DESC"""
+            ).fetchall()
+        ]
+
+        users = [
+            dict(row) for row in conn.execute(
+                f"""SELECT u.chel_id, u.created_at, u.last_seen_at,
+                    COALESCE(o.status, 'not_started') AS onboarding_status,
+                    CASE WHEN e.id IS NULL THEN 0 ELSE 1 END AS max_linked,
+                    COUNT(DISTINCT c.id) AS conversations,
+                    COUNT(DISTINCT m.id) AS messages
+                FROM users u
+                LEFT JOIN onboarding_state o ON o.chel_id = u.chel_id
+                LEFT JOIN external_identities e
+                  ON e.chel_id = u.chel_id AND e.access_status = 'active'
+                LEFT JOIN conversations c ON c.chel_id = u.chel_id
+                LEFT JOIN messages m ON m.conversation_id = c.id
+                WHERE u.{real_users}
+                GROUP BY u.chel_id ORDER BY u.last_seen_at DESC LIMIT ?""",
+                (limit,),
+            ).fetchall()
+        ]
+        conversations = [
+            dict(row) for row in conn.execute(
+                """SELECT c.id, c.chel_id, c.active_agent, c.status,
+                    c.human_status, COALESCE(c.human_channel, '') AS human_channel,
+                    c.created_at, c.updated_at, COUNT(m.id) AS messages
+                FROM conversations c
+                LEFT JOIN messages m ON m.conversation_id = c.id
+                WHERE c.chel_id NOT IN ('chel_legacy', 'chel_test_default')
+                GROUP BY c.id ORDER BY c.updated_at DESC LIMIT ?""",
+                (limit,),
+            ).fetchall()
+        ]
+        requests = []
+        for row in conn.execute(
+            """SELECT human_ticket_id AS ticket_id, chel_id, human_status,
+                COALESCE(human_channel, '') AS channel, human_phone,
+                created_at, updated_at
+            FROM conversations WHERE human_ticket_id IS NOT NULL
+              AND chel_id NOT IN ('chel_legacy', 'chel_test_default')
+            ORDER BY updated_at DESC LIMIT ?""",
+            (limit,),
+        ).fetchall():
+            item = dict(row)
+            phone = str(item.pop("human_phone") or "")
+            item["phone"] = f"•••• {phone[-4:]}" if len(phone) >= 4 else ""
+            requests.append(item)
+
+    return {
+        "generated_at": now.isoformat(),
+        "period_days": days,
+        "summary": summary,
+        "activity": activity,
+        "agents": agents,
+        "human_channels": human_channels,
+        "tables": {
+            "users": users,
+            "conversations": conversations,
+            "human_requests": requests,
+        },
+        "privacy": {
+            "message_content_included": False,
+            "medical_profile_content_included": False,
+        },
+    }
+
+
 @contextmanager
 def connection():
     settings.database_path.parent.mkdir(parents=True, exist_ok=True)

@@ -1,4 +1,5 @@
 import json
+import re
 import urllib.error
 import urllib.request
 
@@ -57,10 +58,91 @@ class LLMService:
         return "\n".join(chunks).strip()
 
     @staticmethod
-    def runtime_context(history: list[dict], context: dict, conversation: dict, route_decision: dict | None = None) -> str:
+    def _profile_analysis(profile: dict) -> dict:
+        labels = {
+            "preferred_name": "имя", "age": "возраст", "sex": "пол",
+            "height_cm": "рост", "weight_kg": "вес", "pregnancy": "беременность",
+            "conditions": "хронические заболевания", "medications": "постоянные лекарства",
+            "allergies": "аллергии", "smoking": "курение", "alcohol": "алкоголь",
+            "activity": "физическая активность", "blood_pressure": "давление",
+            "blood_sugar": "сахар крови", "dark_in_eyes": "потемнение в глазах",
+            "joint_pain": "боль в суставах", "fatigue": "утомляемость",
+            "notes": "дополнительные сведения",
+        }
+        available: dict = {}
+        missing: list[str] = []
+        for key, label in labels.items():
+            value = profile.get(key)
+            is_missing = value is None or value == "" or value == "unknown" or value == []
+            if key == "pregnancy" and value == "not_applicable":
+                continue
+            if is_missing:
+                missing.append(label)
+            else:
+                available[key] = value
+
+        derived: dict = {}
+        try:
+            height_m = float(profile.get("height_cm")) / 100
+            weight_kg = float(profile.get("weight_kg"))
+            if 0.3 <= height_m <= 2.5 and 1 <= weight_kg <= 500:
+                derived["bmi"] = round(weight_kg / (height_m * height_m), 1)
+                derived["bmi_note"] = (
+                    "Расчётный ориентир по росту и весу; сам по себе не является диагнозом."
+                )
+        except (TypeError, ValueError, ZeroDivisionError):
+            pass
+        return {
+            "available_fields": available,
+            "missing_fields": missing,
+            "derived_indicators": derived,
+            "instruction": (
+                "При запросе анализа анкеты не пересказывай поля подряд. Выдели значимые "
+                "факторы, связи, пробелы и практические приоритеты; не превращай отсутствие "
+                "данных в отрицательный ответ."
+            ),
+        }
+
+    @staticmethod
+    def _dialogue_continuity(history: list[dict], context: dict) -> dict:
+        recent_questions: list[str] = []
+        current_topic = " ".join(str(context.get("current_topic", "")).casefold().split())
+        for message in history:
+            if message.get("role") != "assistant":
+                continue
+            metadata = message.get("metadata") or {}
+            message_topic = " ".join(
+                str(metadata.get("assessment_topic", "")).casefold().split()
+            )
+            if current_topic and message_topic and message_topic != current_topic:
+                continue
+            candidates = metadata.get("missing_information") or []
+            if not candidates:
+                candidates = re.findall(r"[^.!?\n]{3,180}\?", message.get("content", ""))
+            for question in candidates:
+                normalized = " ".join(str(question).split()).strip()
+                if normalized and normalized.casefold() not in {
+                    item.casefold() for item in recent_questions
+                }:
+                    recent_questions.append(normalized)
+        return {
+            "questions_already_asked": recent_questions[-12:],
+            "questions_already_answered": list(context.get("answered_questions", [])),
+            "questions_still_open": list(context.get("open_questions", []))[:2],
+            "instruction": (
+                "Не задавай questions_already_asked повторно, если пользователь уже ответил "
+                "или сведения есть в анкете. При резкой смене темы оставь прежний вопрос и "
+                "работай с новой целью. Уточняй противоречие только если оно меняет безопасность."
+            ),
+        }
+
+    @classmethod
+    def runtime_context(cls, history: list[dict], context: dict, conversation: dict, route_decision: dict | None = None) -> str:
         latest_user_message = next(
             (message["content"] for message in reversed(history) if message["role"] == "user"), ""
         )
+        normalized_context = normalize_context(context)
+        profile = conversation.get("_profile", {})
         payload = {
             "active_agent": conversation.get("active_agent", "manager"),
             "conversation_state": {
@@ -70,7 +152,8 @@ class LLMService:
                 "human_channel": conversation.get("human_channel"),
             },
             "user_memory": conversation.get("_memories", []),
-            "user_profile": conversation.get("_profile", {}),
+            "user_profile": profile,
+            "profile_analysis": cls._profile_analysis(profile),
             "active_body_symptoms": conversation.get("_body_symptoms", []),
             "consultation_progress": conversation.get("_consultation_progress", {
                 "questions_asked": 0,
@@ -79,7 +162,8 @@ class LLMService:
                 "instruction": "Если это медицинская жалоба, задавай по 1–2 вопроса за реплику.",
             }),
             "latest_user_message": latest_user_message,
-            "context": normalize_context(context),
+            "context": normalized_context,
+            "dialogue_continuity": cls._dialogue_continuity(history, normalized_context),
             "history": [
                 {"role": message["role"], "agent_id": message.get("agent_id"), "content": message["content"]}
                 for message in history

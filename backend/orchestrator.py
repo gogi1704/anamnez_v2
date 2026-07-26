@@ -4,6 +4,7 @@ import uuid
 
 from . import database as db
 from .config import settings
+from .lab_results import LabResultsUnavailable, lookup_lab_results
 from .llm import LLMNotConfigured, LLMProviderError, LLMService, llm_service
 from .schemas import AgentResult, ChatResponse, RouteDecision, normalize_context
 
@@ -28,6 +29,28 @@ CRITICAL_RISK = re.compile(
     r"(не могу дышать|задыхаюсь|потер\w* сознани|внезапн\w* парализ|"
     r"сильн\w* боль\w* в груди|неостанавливаем\w* кровотечени|"
     r"хочу покончить с собой|планирую суицид|не хочу жить|лучше бы меня не было)",
+    re.IGNORECASE,
+)
+LAB_RESULTS_REQUEST = re.compile(
+    r"(?:получ\w*|покаж\w*|пришл\w*|найд\w*|откр\w*|хочу|где)\s+"
+    r"(?:мои\s+)?результат\w*(?:\s+(?:анализ\w*|обследован\w*))?|"
+    r"результат\w*\s+(?:моих\s+)?(?:анализ\w*|обследован\w*)",
+    re.IGNORECASE,
+)
+LAB_RESULTS_INTERPRETATION = re.compile(
+    r"\b(?:расшифр\w*|объясн\w*|интерпрет\w*|прокоммент\w*)\b",
+    re.IGNORECASE,
+)
+PROFILE_ANALYSIS_REQUEST = re.compile(
+    r"(?:\b(?:проанализир\w*|разбер\w*|оцен\w*)\b.{0,80}"
+    r"\b(?:анкет\w*|профил\w*\s+здоров\w*|медицинск\w*\s+данн\w*)\b|"
+    r"\b(?:анкет\w*|профил\w*\s+здоров\w*|медицинск\w*\s+данн\w*)\b.{0,80}"
+    r"\b(?:проанализир\w*|разбер\w*|оцен\w*)\b)",
+    re.IGNORECASE,
+)
+OTHER_PERSON_SUBJECT = re.compile(
+    r"\b(?:реб[её]н\w*|сын\w*|доч\w*|мам\w*|пап\w*|муж\w*|жен\w*|"
+    r"бабуш\w*|дедуш\w*|друг\w*|подруг\w*|пациент\w*)\b",
     re.IGNORECASE,
 )
 MEDICAL_AGENTS = {
@@ -66,6 +89,11 @@ class ConversationOrchestrator:
             history, previous_context.get("current_topic", "")
         )
         conversation["_consultation_progress"] = self._consultation_progress(previous_question_count)
+
+        if self._wants_lab_results(user_text, attachments):
+            return self._lab_results_response(
+                conversation, user_message, previous_context, attachment_meta
+            )
 
         if (
             conversation.get("human_status") == "pending"
@@ -112,7 +140,8 @@ class ConversationOrchestrator:
         decision = self._normalize_route(
             self._decide(user_text, history, conversation, previous_context, attachments), previous_agent
         )
-        context = decision.context
+        context = self._apply_topic_transition(previous_context, decision.context)
+        decision.context = context
         previous_topic = " ".join(str(previous_context.get("current_topic", "")).lower().split())
         current_topic = " ".join(str(context.get("current_topic", "")).lower().split())
         genuinely_new_topic = bool(
@@ -313,6 +342,90 @@ class ConversationOrchestrator:
             council_available=target in {"therapist", "cardiologist", "neurologist", "dermatologist", "pediatrician", "psychologist"} and not emergency,
         )
 
+    @staticmethod
+    def _wants_lab_results(text: str, attachments: list[dict] | None = None) -> bool:
+        return bool(
+            not attachments
+            and LAB_RESULTS_REQUEST.search(text)
+            and not LAB_RESULTS_INTERPRETATION.search(text)
+        )
+
+    def _lab_results_response(
+        self,
+        conversation: dict,
+        user_message: dict,
+        context: dict,
+        attachment_meta: list[dict],
+    ) -> ChatResponse:
+        profile = db.get_profile()
+        tube_number = str(profile.get("tube_number", "")).strip()
+        urls: list[str] = []
+        if not tube_number:
+            action = "lab_results_prompt"
+            answer = (
+                "Чтобы найти результаты, нужен номер пробирки с наклейки. "
+                "Введите его в появившемся окне — я сохраню номер в анкете и сразу выполню поиск."
+            )
+        else:
+            try:
+                result = lookup_lab_results(tube_number)
+                urls = list(result.urls)
+                if result.status == "found":
+                    action = "lab_results_found"
+                    links = "\n".join(urls)
+                    answer = (
+                        "Нашла результаты по сохранённому номеру пробирки. "
+                        "Откройте документ по ссылке:\n" + links
+                    )
+                elif result.status == "processing":
+                    action = "lab_results_processing"
+                    answer = (
+                        "Номер пробирки найден, но ссылка на документ пока не добавлена. "
+                        "Вероятно, результаты ещё обрабатываются. Попробуйте проверить позже."
+                    )
+                else:
+                    action = "lab_results_not_found"
+                    answer = (
+                        "По сохранённому номеру пробирки результаты пока не найдены. "
+                        "Проверьте номер в «Моей анкете» или попробуйте позже."
+                    )
+            except (ValueError, LabResultsUnavailable):
+                action = "lab_results_unavailable"
+                answer = (
+                    "Сейчас не удалось обратиться к базе результатов. "
+                    "Номер пробирки сохранён — попробуйте ещё раз немного позже."
+                )
+
+        metadata = {
+            "action": action,
+            "lab_result_urls": urls,
+            "attachments": attachment_meta,
+        }
+        assistant_message = db.add_message(
+            conversation["id"], "assistant", answer, "manager", metadata
+        )
+        human_status = conversation.get("human_status", "none")
+        db.update_conversation(
+            conversation["id"],
+            active_agent="manager",
+            context_summary=json.dumps(context, ensure_ascii=False),
+            status="waiting_human" if human_status == "pending" else "active",
+            human_status=human_status,
+            human_ticket_id=conversation.get("human_ticket_id"),
+            human_channel=conversation.get("human_channel"),
+        )
+        return ChatResponse(
+            conversation_id=conversation["id"],
+            user_message=user_message,
+            assistant_message=assistant_message,
+            agent="manager",
+            handoff_from=None,
+            handoff_reason="Запрос результатов анализов обработан интерфейсом сервиса",
+            action=action,
+            context=context,
+            attachments=attachment_meta,
+        )
+
     def _decide(self, text: str, history: list[dict], conversation: dict, context: dict, attachments: list[dict] | None = None) -> RouteDecision:
         if HUMAN_REQUEST.search(text):
             return RouteDecision("human", "manager", "Пользователь явно запросил человека", context)
@@ -322,6 +435,26 @@ class ConversationOrchestrator:
             return RouteDecision(
                 "emergency", "safety",
                 "Обнаружена формулировка возможной непосредственной угрозы", updated,
+            )
+        if (
+            not attachments
+            and PROFILE_ANALYSIS_REQUEST.search(text)
+            and not OTHER_PERSON_SUBJECT.search(text)
+        ):
+            updated = normalize_context(context)
+            previous_topic = self._normalize_topic(updated.get("current_topic", ""))
+            topic = "анализ медицинской анкеты"
+            updated.update({
+                "current_topic": topic,
+                "topic_relation": "followup" if previous_topic == topic else "new",
+                "user_goal": "получить персональный разбор заполненной анкеты",
+                "open_questions": [],
+            })
+            target = "therapist"
+            action = "continue" if conversation.get("active_agent") == target else "handoff"
+            return RouteDecision(
+                action, target,
+                "Пользователь запросил медицинский анализ своей анкеты", updated,
             )
 
         decision = self.llm.route(history, context, conversation, attachments)
@@ -437,6 +570,47 @@ class ConversationOrchestrator:
             decision.action = "continue"
             decision.reason = "Текущий специалист продолжает ту же тему"
         return decision
+
+    @staticmethod
+    def _normalize_topic(value: object) -> str:
+        return " ".join(str(value or "").casefold().split())
+
+    @classmethod
+    def _apply_topic_transition(cls, previous: dict, current: dict) -> dict:
+        """Не позволяет незавершённым вопросам старой темы управлять новой."""
+        previous = normalize_context(previous)
+        current = normalize_context(current)
+        old_topic = cls._normalize_topic(previous.get("current_topic", ""))
+        new_topic = cls._normalize_topic(current.get("current_topic", ""))
+        is_new = bool(
+            current.get("topic_relation") == "new"
+            and old_topic and new_topic and old_topic != new_topic
+        )
+        if not is_new:
+            return current
+
+        topic_history = list(previous.get("topic_history", []))
+        if previous.get("current_topic"):
+            topic_history.append(str(previous["current_topic"]))
+        deduplicated: list[str] = []
+        for topic in topic_history:
+            if cls._normalize_topic(topic) not in {
+                cls._normalize_topic(item) for item in deduplicated
+            }:
+                deduplicated.append(topic)
+        current["topic_history"] = deduplicated[-8:]
+
+        old_facts = {
+            cls._normalize_topic(item) for item in previous.get("known_facts", [])
+        }
+        current["known_facts"] = [
+            item for item in current.get("known_facts", [])
+            if cls._normalize_topic(item) not in old_facts
+        ]
+        for key in ("answered_questions", "open_questions", "red_flags_checked"):
+            if current.get(key) == previous.get(key):
+                current[key] = []
+        return current
 
     @staticmethod
     def _question_count(text: str) -> int:

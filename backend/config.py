@@ -46,6 +46,16 @@ class Settings:
     auth_link_ttl_seconds: int = int(os.getenv("AUTH_LINK_TTL_SECONDS", "604800"))
     session_ttl_days: int = int(os.getenv("SESSION_TTL_DAYS", "90"))
     session_cookie_name: str = os.getenv("SESSION_COOKIE_NAME", "consilium_session")
+    admin_dashboard_token: str = os.getenv("ADMIN_DASHBOARD_TOKEN", "")
+    lab_results_enabled: bool = env_bool("LAB_RESULTS_ENABLED", False)
+    after_tests_google_credentials: str = os.getenv(
+        "AFTER_TESTS_GOOGLE_CREDENTIALS",
+        "/run/secrets/after-tests-google.json",
+    )
+    after_tests_spreadsheet: str = os.getenv("AFTER_TESTS_SPREADSHEET", "after_tests_db")
+    after_tests_worksheet: str = os.getenv("AFTER_TESTS_WORKSHEET", "tetst_and_results")
+    google_sheets_timeout_seconds: int = int(os.getenv("GOOGLE_SHEETS_TIMEOUT_SECONDS", "15"))
+    lab_results_cache_seconds: int = int(os.getenv("LAB_RESULTS_CACHE_SECONDS", "60"))
 
 
 settings = Settings()

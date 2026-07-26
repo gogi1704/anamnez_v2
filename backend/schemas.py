@@ -14,6 +14,7 @@ URGENCY_LEVELS = {"routine", "soon", "urgent", "emergency"}
 DEFAULT_CONTEXT = {
     "current_topic": "",
     "topic_relation": "unclear",
+    "topic_history": [],
     "user_goal": "",
     "patient": {
         "age": None,
@@ -40,7 +41,10 @@ def normalize_context(value: dict | None) -> dict:
             result[key] = str(value[key] or "")[:500]
     if result["topic_relation"] not in {"same", "followup", "new", "unclear"}:
         result["topic_relation"] = "unclear"
-    for key in ("known_facts", "answered_questions", "open_questions", "red_flags_checked"):
+    for key in (
+        "topic_history", "known_facts", "answered_questions",
+        "open_questions", "red_flags_checked",
+    ):
         if isinstance(value.get(key), list):
             result[key] = [str(item)[:300] for item in value[key][:20]]
     patient = value.get("patient")
@@ -141,6 +145,7 @@ CONTEXT_SCHEMA = {
     "properties": {
         "current_topic": {"type": "string"},
         "topic_relation": {"type": "string", "enum": ["same", "followup", "new", "unclear"]},
+        "topic_history": {"type": "array", "items": {"type": "string"}},
         "user_goal": {"type": "string"},
         "patient": PATIENT_SCHEMA,
         "known_facts": {"type": "array", "items": {"type": "string"}},
@@ -148,7 +153,10 @@ CONTEXT_SCHEMA = {
         "open_questions": {"type": "array", "items": {"type": "string"}},
         "red_flags_checked": {"type": "array", "items": {"type": "string"}},
     },
-    "required": ["current_topic", "topic_relation", "user_goal", "patient", "known_facts", "answered_questions", "open_questions", "red_flags_checked"],
+    "required": [
+        "current_topic", "topic_relation", "topic_history", "user_goal", "patient",
+        "known_facts", "answered_questions", "open_questions", "red_flags_checked",
+    ],
 }
 
 ROUTE_JSON_SCHEMA = {

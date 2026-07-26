@@ -69,6 +69,7 @@
               <button id="menuBodyMapButton" role="menuitem"><i>◉</i><span>Карта тела<small>Отметить область и симптом</small></span></button>
               <button id="menuHealthHistoryButton" role="menuitem"><i>⌁</i><span>История здоровья<small>События и динамика по датам</small></span></button>
               <button id="menuMemoryButton" role="menuitem"><i>◇</i><span>Память обо мне<small>Управлять сохранёнными фактами</small></span></button>
+              <button id="menuDashboardButton" role="menuitem"><i>▦</i><span>Дашборд проекта<small>Статистика для администратора</small></span></button>
               <button class="menu-danger" id="resetUserButton" role="menuitem"><i>↺</i><span>Начать заново<small>Удалить все данные и пройти первый вход</small></span></button>
               <button id="menuFontSizeButton" role="menuitem"><i>А</i><span>Размер текста<small id="menuFontSizeStatus">Обычный</small></span></button>
             </div>
@@ -367,7 +368,7 @@
         <label class="field-label wide">Ваш ID в сервисе<input id="profileChelId" readonly aria-readonly="true"></label>
         <label class="field-label wide">Как к вам обращаться<input id="profileName" maxlength="100" placeholder="Необязательно"></label>
         <label class="field-label">Возраст<input id="profileAge" type="number" min="0" max="120" placeholder="лет"></label>
-        <label class="field-label">Пол для медицинского контекста<select id="profileSex"><option value="">Не указывать</option><option value="female">Женский</option><option value="male">Мужской</option><option value="intersex">Интерсекс</option><option value="other">Другое</option></select></label>
+        <label class="field-label">Пол для медицинского контекста<select id="profileSex"><option value="female">Женский</option><option value="male">Мужской</option></select></label>
         <label class="field-label">Рост<input id="profileHeight" type="number" min="30" max="250" step="0.1" placeholder="см"></label>
         <label class="field-label">Вес<input id="profileWeight" type="number" min="1" max="500" step="0.1" placeholder="кг"></label>
         <label class="field-label">Беременность<select id="profilePregnancy"><option value="not_applicable">Не применимо</option><option value="no">Нет</option><option value="yes">Да</option><option value="possible">Возможна</option><option value="unknown">Не знаю</option></select></label>
@@ -403,11 +404,12 @@
       </div>
       <div class="lab-results-ready hidden" id="labResultsReady">
         <div class="lab-tube-card"><span>Номер пробирки</span><strong id="labSavedTube"></strong><button id="changeLabTubeButton" type="button">Изменить</button></div>
-        <div class="lab-results-placeholder">
-          <span>✓</span>
-          <div><strong>Номер готов для поиска</strong><p>Автоматическое получение результатов подключим на следующем этапе. Сейчас номер уже сохранён и доступен сервису.</p></div>
+        <div class="lab-results-placeholder" id="labResultsState">
+          <span id="labResultsStateIcon">⌕</span>
+          <div><strong id="labResultsStateTitle">Ищу результаты</strong><p id="labResultsStateText">Проверяю номер пробирки в базе лаборатории.</p></div>
         </div>
-        <button class="primary-button" type="button" disabled>Получение результатов появится позже</button>
+        <div class="lab-result-documents hidden" id="labResultDocuments"></div>
+        <button class="primary-button" id="fetchLabResultsButton" type="button">Проверить ещё раз</button>
       </div>
     </div>
   </div>

@@ -34,6 +34,9 @@ tmp/
 *.pfx
 credentials*.json
 service-account*.json
+after-tests-db-*.json
+anamnez-max-*.json
+chelids-*.json
 .DS_Store
 Thumbs.db
 Desktop.ini

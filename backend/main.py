@@ -14,14 +14,26 @@ from urllib.parse import parse_qs, urlparse
 from . import database as db
 from .config import BASE_DIR, settings
 from .llm import LLMNotConfigured
+from .lab_results import LabResultsUnavailable, lookup_lab_results
 from .orchestrator import orchestrator
 from .onboarding import TEST_CATALOG, public_onboarding
 from .prompts import public_agents
 
 
 STATIC_DIR = BASE_DIR / "static"
-ALLOWED_STATIC = {"app.js", "agents.js", "styles.css"}
+ALLOWED_STATIC = {
+    "app.js", "agents.js", "styles.css", "dashboard.js", "dashboard.css",
+}
 SERVER_ERROR_LOG = settings.log_path
+
+
+def admin_token_valid(authorization: str, expected: str | None = None) -> bool:
+    expected = settings.admin_dashboard_token if expected is None else expected
+    authorization = str(authorization or "")
+    if not authorization.startswith("Bearer "):
+        return False
+    supplied = authorization.removeprefix("Bearer ").strip()
+    return bool(expected and supplied and hmac.compare_digest(supplied, expected))
 
 
 def _record_startup_event(message: str) -> None:
@@ -61,6 +73,12 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
             return self._consume_max_login(parse_qs(parsed.query).get("t", [""])[0])
         if path == "/api/health":
             return self._json(200, {"status": "ok"})
+        if path == "/favicon.ico":
+            self.send_response(204)
+            self._send_security_headers()
+            self.send_header("Cache-Control", "public, max-age=86400")
+            self.end_headers()
+            return
         if path == "/api/ready":
             database_ready = False
             try:
@@ -78,15 +96,25 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                 "ai_configured": bool(settings.openai_api_key),
                 "max_auth_configured": max_auth_ready,
             })
-        self._ensure_user_context()
-        if path == "/":
-            return self._send_file(BASE_DIR / "index.html", "text/html; charset=utf-8")
+        if path == "/dashboard":
+            return self._send_file(BASE_DIR / "dashboard.html", "text/html; charset=utf-8")
         if path.startswith("/static/"):
             name = path.removeprefix("/static/")
             if name not in ALLOWED_STATIC:
                 return self._json(404, {"detail": "Файл не найден"})
             mime = mimetypes.guess_type(name)[0] or "application/octet-stream"
             return self._send_file(STATIC_DIR / name, f"{mime}; charset=utf-8")
+        if path == "/api/admin/dashboard":
+            if not settings.admin_dashboard_token:
+                return self._json(503, {
+                    "detail": "Дашборд отключён: задайте ADMIN_DASHBOARD_TOKEN",
+                })
+            if not admin_token_valid(self.headers.get("Authorization", "")):
+                return self._json(401, {"detail": "Неверный токен администратора"})
+            return self._json(200, db.admin_dashboard())
+        self._ensure_user_context()
+        if path == "/":
+            return self._send_file(BASE_DIR / "index.html", "text/html; charset=utf-8")
         if path == "/api/agents":
             return self._json(200, public_agents())
         if path == "/api/me":
@@ -169,6 +197,22 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                 return self._json(200, db.save_profile(self._validate_profile(self._read_json())))
             except (ValueError, TypeError) as exc:
                 return self._json(422, {"detail": str(exc)})
+        if path == "/api/lab-results":
+            tube_number = str(db.get_profile().get("tube_number", "")).strip()
+            if not tube_number:
+                return self._json(422, {
+                    "status": "tube_required",
+                    "detail": "Сначала введите номер пробирки",
+                })
+            try:
+                return self._json(200, lookup_lab_results(tube_number).to_dict())
+            except ValueError as exc:
+                return self._json(422, {"status": "invalid_tube", "detail": str(exc)})
+            except LabResultsUnavailable:
+                return self._json(503, {
+                    "status": "unavailable",
+                    "detail": "Сервис результатов временно недоступен. Попробуйте позже.",
+                })
         if path == "/api/body-symptoms":
             try:
                 return self._json(201, db.add_body_symptom(self._validate_body_symptom(self._read_json())))
@@ -419,7 +463,7 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
         dark_in_eyes = str(payload.get("dark_in_eyes", "unknown"))
         joint_pain = str(payload.get("joint_pain", "unknown"))
         fatigue = str(payload.get("fatigue", "unknown"))
-        if sex not in {"", "female", "male", "intersex", "other"}:
+        if sex not in {"", "female", "male"}:
             raise ValueError("Некорректное значение пола")
         if pregnancy not in {"yes", "no", "possible", "unknown", "not_applicable"}:
             raise ValueError("Некорректное значение беременности")

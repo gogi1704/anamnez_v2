@@ -11,6 +11,7 @@ services:
       - ./data:/app/data
       - ./logs:/app/logs
       - ./backups:/app/backups
+      - ${AFTER_TESTS_GOOGLE_CREDENTIALS_HOST:-/root/anketa_bot_max_web/docs/after-tests-db-e0cd34372c4a.json}:/run/secrets/after-tests-google.json:ro
     restart: unless-stopped
     read_only: true
     tmpfs:

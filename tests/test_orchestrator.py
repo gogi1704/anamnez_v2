@@ -11,8 +11,9 @@ _temp_dir = tempfile.TemporaryDirectory()
 os.environ["DATABASE_PATH"] = str(Path(_temp_dir.name) / "test.db")
 
 from backend import database as db  # noqa: E402
+from backend.lab_results import LabResult, extract_urls, normalize_med_id  # noqa: E402
 from backend.llm import LLMService  # noqa: E402
-from backend.main import ConsiliumHandler  # noqa: E402
+from backend.main import ConsiliumHandler, admin_token_valid  # noqa: E402
 from backend.orchestrator import ConversationOrchestrator  # noqa: E402
 from backend.onboarding import TEST_CATALOG, recommend_test_ids  # noqa: E402
 from backend.prompts import ORCHESTRATOR_PROMPT, PROFILES  # noqa: E402
@@ -351,12 +352,171 @@ class OrchestratorTests(unittest.TestCase):
         runtime = json.loads(LLMService.runtime_context([], normalize_context(None), fake.route_calls[-1]["conversation"]))
         self.assertEqual(runtime["user_profile"]["weight_kg"], 62.0)
 
+    def test_profile_analysis_request_routes_to_therapist_with_derived_summary(self):
+        chel_id = "chel_profile_analysis"
+        db.ensure_user(chel_id)
+        try:
+            db.set_current_chel_id(chel_id)
+            db.save_profile({
+                "age": 40, "sex": "male", "height_cm": 180, "weight_kg": 81,
+                "conditions": ["Гипертония"], "smoking": "former",
+            })
+            fake = FakeLLM()
+            response = ConversationOrchestrator(fake).process(
+                None, "Проанализируй мою медицинскую анкету"
+            )
+            self.assertEqual(response.agent, "therapist")
+            self.assertEqual(fake.route_calls, [])
+
+            runtime = json.loads(LLMService.runtime_context(
+                [], response.context,
+                {"active_agent": "therapist", "_profile": {
+                    "age": 40, "sex": "male", "height_cm": 180,
+                    "weight_kg": 81, "conditions": ["Гипертония"],
+                }},
+            ))
+            self.assertEqual(runtime["profile_analysis"]["derived_indicators"]["bmi"], 25.0)
+            self.assertEqual(
+                runtime["profile_analysis"]["available_fields"]["conditions"],
+                ["Гипертония"],
+            )
+            self.assertIn("аллергии", runtime["profile_analysis"]["missing_fields"])
+            self.assertIn("Не переписывай все ответы подряд", PROFILES["therapist"].prompt)
+        finally:
+            db.ensure_user("chel_test_default")
+            db.set_current_chel_id("chel_test_default")
+
+    def test_runtime_context_marks_questions_that_must_not_be_repeated(self):
+        context = normalize_context({
+            "current_topic": "кашель",
+            "answered_questions": ["Когда начался кашель? — три дня назад"],
+            "open_questions": ["Есть ли одышка?"],
+        })
+        history = [
+            {
+                "role": "assistant", "agent_id": "therapist",
+                "content": "Когда начался кашель? Есть ли температура?",
+                "metadata": {
+                    "missing_information": [
+                        "Когда начался кашель?", "Есть ли температура?",
+                    ],
+                },
+            },
+            {"role": "user", "content": "Три дня назад, температуры нет."},
+        ]
+        runtime = json.loads(LLMService.runtime_context(
+            history, context, {"active_agent": "therapist", "_profile": {}},
+        ))
+        continuity = runtime["dialogue_continuity"]
+        self.assertEqual(
+            continuity["questions_already_asked"],
+            ["Когда начался кашель?", "Есть ли температура?"],
+        )
+        self.assertIn("три дня назад", continuity["questions_already_answered"][0])
+        self.assertEqual(continuity["questions_still_open"], ["Есть ли одышка?"])
+
+    def test_other_person_profile_request_uses_normal_router(self):
+        fake = FakeLLM()
+        ConversationOrchestrator(fake).process(
+            None, "Проанализируй медицинскую анкету моего ребёнка"
+        )
+        self.assertEqual(len(fake.route_calls), 1)
+
+    def test_new_topic_drops_stale_questions_and_keeps_topic_history(self):
+        previous = normalize_context({
+            "current_topic": "головная боль",
+            "known_facts": ["Боль второй день"],
+            "answered_questions": ["Когда началась боль?"],
+            "open_questions": ["Есть ли тошнота?"],
+            "red_flags_checked": ["Потери сознания нет"],
+        })
+        current = normalize_context(previous)
+        current.update({
+            "current_topic": "сыпь на руке",
+            "topic_relation": "new",
+            "user_goal": "понять причину сыпи",
+            "known_facts": ["Боль второй день", "Сыпь появилась сегодня"],
+        })
+        transitioned = ConversationOrchestrator._apply_topic_transition(previous, current)
+        self.assertEqual(transitioned["topic_history"], ["головная боль"])
+        self.assertEqual(transitioned["known_facts"], ["Сыпь появилась сегодня"])
+        self.assertEqual(transitioned["answered_questions"], [])
+        self.assertEqual(transitioned["open_questions"], [])
+        self.assertEqual(transitioned["red_flags_checked"], [])
+
     def test_manager_explains_tube_number_results_flow(self):
         manager_prompt = PROFILES["manager"].prompt
         self.assertIn("«Результаты анализов» находятся в меню функций", manager_prompt)
-        self.assertIn("не просит номер повторно", manager_prompt)
-        self.assertIn("получение результатов пока является заглушкой", manager_prompt)
+        self.assertIn("не просит номер", manager_prompt)
+        self.assertIn("повторно", manager_prompt)
+        self.assertIn("ищет документ в after_tests_db по med_id", manager_prompt)
         self.assertIn("относятся к manager и интерфейсу", ORCHESTRATOR_PROMPT)
+
+    def test_lab_result_helpers_normalize_med_id_and_extract_document_links(self):
+        self.assertEqual(normalize_med_id(" 12345.0 "), "12345")
+        self.assertEqual(normalize_med_id("LAB-2026_42"), "LAB-2026_42")
+        self.assertEqual(
+            extract_urls("https://example.test/a.pdf и https://docs.google.com/document/d/abc"),
+            ("https://example.test/a.pdf", "https://docs.google.com/document/d/abc"),
+        )
+        with self.assertRaises(ValueError):
+            normalize_med_id("../небезопасно")
+
+    def test_text_results_request_asks_for_tube_without_calling_ai(self):
+        chel_id = "chel_lab_without_tube"
+        db.ensure_user(chel_id)
+        try:
+            db.set_current_chel_id(chel_id)
+            fake = FakeLLM()
+            response = ConversationOrchestrator(fake).process(
+                None, "Как получить результаты анализов?"
+            )
+            self.assertEqual(response.action, "lab_results_prompt")
+            self.assertIn("нужен номер пробирки", response.assistant_message["content"])
+            self.assertEqual(fake.route_calls, [])
+            self.assertEqual(fake.answer_calls, [])
+        finally:
+            db.ensure_user("chel_test_default")
+            db.set_current_chel_id("chel_test_default")
+
+    def test_text_results_request_returns_saved_document_without_calling_ai(self):
+        chel_id = "chel_lab_with_tube"
+        db.ensure_user(chel_id)
+        try:
+            db.set_current_chel_id(chel_id)
+            db.save_profile({"tube_number": "MED-42", "sex": "female"})
+            fake = FakeLLM()
+            with patch(
+                "backend.orchestrator.lookup_lab_results",
+                return_value=LabResult("MED-42", "found", ("https://example.test/result.pdf",)),
+            ):
+                response = ConversationOrchestrator(fake).process(
+                    None, "Покажи мои результаты анализов"
+                )
+            self.assertEqual(response.action, "lab_results_found")
+            self.assertIn("https://example.test/result.pdf", response.assistant_message["content"])
+            self.assertEqual(
+                response.assistant_message["metadata"]["lab_result_urls"],
+                ["https://example.test/result.pdf"],
+            )
+            self.assertEqual(fake.route_calls, [])
+            self.assertEqual(fake.answer_calls, [])
+        finally:
+            db.ensure_user("chel_test_default")
+            db.set_current_chel_id("chel_test_default")
+
+    def test_gender_choices_are_limited_to_female_and_male(self):
+        project_root = Path(__file__).resolve().parents[1]
+        index = (project_root / "index.html").read_text(encoding="utf-8")
+        script = (project_root / "static" / "app.js").read_text(encoding="utf-8")
+        profile_select = index.split('id="profileSex"', 1)[1].split("</select>", 1)[0]
+        self.assertIn('value="female"', profile_select)
+        self.assertIn('value="male"', profile_select)
+        self.assertNotIn('value="intersex"', profile_select)
+        self.assertNotIn('value="other"', profile_select)
+        sex_question = script.split("{ key:'sex'", 1)[1].split("},", 1)[0]
+        self.assertNotIn("intersex", sex_question)
+        self.assertNotIn("'other'", sex_question)
 
     def test_layout_prevents_desktop_shell_and_focus_from_scrolling_outside_frame(self):
         project_root = Path(__file__).resolve().parents[1]
@@ -367,6 +527,46 @@ class OrchestratorTests(unittest.TestCase):
         self.assertIn(".app-shell > * { min-width: 0; min-height:0; }", styles)
         self.assertIn(".agent-list { min-width:0; min-height:0; max-height:none; flex:1 1 0;", styles)
         self.assertIn("input.focus({ preventScroll: true })", app_script)
+
+    def test_admin_dashboard_token_is_required_and_compared_exactly(self):
+        expected = "dashboard-secret-" + ("x" * 32)
+        self.assertTrue(admin_token_valid(f"Bearer {expected}", expected))
+        self.assertFalse(admin_token_valid(f"Bearer {expected}x", expected))
+        self.assertFalse(admin_token_valid(expected, expected))
+        self.assertFalse(admin_token_valid("Bearer anything", ""))
+
+    def test_admin_dashboard_aggregates_without_medical_content(self):
+        data = db.admin_dashboard(days=7, limit=20)
+        self.assertEqual(len(data["activity"]), 7)
+        self.assertFalse(data["privacy"]["message_content_included"])
+        self.assertFalse(data["privacy"]["medical_profile_content_included"])
+        self.assertIn("users_total", data["summary"])
+        self.assertIn("human_pending", data["summary"])
+        self.assertEqual(
+            set(data["tables"]),
+            {"users", "conversations", "human_requests"},
+        )
+        user_fields = set(data["tables"]["users"][0]) if data["tables"]["users"] else set()
+        conversation_fields = (
+            set(data["tables"]["conversations"][0])
+            if data["tables"]["conversations"] else set()
+        )
+        for forbidden in {"content", "conditions", "medications", "allergies", "notes"}:
+            self.assertNotIn(forbidden, user_fields)
+            self.assertNotIn(forbidden, conversation_fields)
+
+    def test_dashboard_files_and_admin_menu_entry_exist(self):
+        project_root = Path(__file__).resolve().parents[1]
+        index = (project_root / "index.html").read_text(encoding="utf-8")
+        dashboard = (project_root / "dashboard.html").read_text(encoding="utf-8")
+        script = (project_root / "static" / "dashboard.js").read_text(encoding="utf-8")
+        styles = (project_root / "static" / "dashboard.css").read_text(encoding="utf-8")
+        self.assertIn('id="menuDashboardButton"', index)
+        self.assertIn('id="summaryGrid"', dashboard)
+        self.assertIn('id="usersTable"', dashboard)
+        self.assertIn("sessionStorage", script)
+        self.assertIn("Authorization:`Bearer ${token}`", script)
+        self.assertIn("@media (max-width:700px)", styles)
 
     def test_chel_id_separates_profiles_conversations_memories_and_symptoms(self):
         first_id = "chel_test_first"
@@ -470,7 +670,7 @@ class OrchestratorTests(unittest.TestCase):
         self.assertIn("CONSILIUM_HOST_PORT=8002", docker_env)
         self.assertIn("127.0.0.1:${CONSILIUM_HOST_PORT:-8002}:8000", compose)
         self.assertNotIn("0.0.0.0:${CONSILIUM_HOST_PORT", compose)
-        self.assertEqual(nginx.count("proxy_pass http://127.0.0.1:8002;"), 3)
+        self.assertEqual(nginx.count("proxy_pass http://127.0.0.1:8002;"), 4)
         self.assertNotIn("proxy_pass http://127.0.0.1:8000;", nginx)
         self.assertIn("anketa_bot_max", server_guide)
         self.assertIn("bitrix_connector", server_guide)

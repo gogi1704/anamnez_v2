@@ -1,0 +1,110 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="theme-color" content="#f3f8f5">
+  <title>Дашборд проекта · Консилиум</title>
+  <link rel="icon" href="data:,">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/dashboard.css">
+</head>
+<body>
+  <main class="dashboard-shell">
+    <section class="login-card" id="loginPanel">
+      <div class="brand-mark">К</div>
+      <p class="eyebrow">Консилиум · администрирование</p>
+      <h1>Дашборд проекта</h1>
+      <p>Введите токен администратора из серверного файла <code>.env</code>. Токен хранится только до закрытия этой вкладки.</p>
+      <form id="loginForm">
+        <label>Токен администратора
+          <input id="adminToken" type="password" autocomplete="current-password" required placeholder="ADMIN_DASHBOARD_TOKEN">
+        </label>
+        <button type="submit">Открыть дашборд</button>
+        <span class="form-error hidden" id="loginError" role="alert"></span>
+      </form>
+      <a href="/">← Вернуться в Консилиум</a>
+    </section>
+
+    <div class="dashboard hidden" id="dashboard">
+      <header class="dashboard-header">
+        <div>
+          <p class="eyebrow">Консилиум · аналитика</p>
+          <h1>Состояние проекта</h1>
+          <p id="generatedAt">Загрузка данных…</p>
+        </div>
+        <div class="header-actions">
+          <a class="button secondary" href="/">Открыть приложение</a>
+          <button class="button secondary" id="refreshButton" type="button">Обновить</button>
+          <button class="button danger" id="logoutButton" type="button">Выйти</button>
+        </div>
+      </header>
+
+      <aside class="privacy-note">
+        <span>✓</span>
+        <div><strong>Без текстов медицинских сообщений</strong><small>Дашборд показывает служебные статусы и агрегаты, но не содержимое переписки и медицинской анкеты.</small></div>
+      </aside>
+
+      <section class="summary-grid" id="summaryGrid" aria-label="Основные показатели"></section>
+
+      <section class="analytics-grid">
+        <article class="panel activity-panel">
+          <div class="panel-heading">
+            <div><p class="eyebrow">Последние 14 дней</p><h2>Активность</h2></div>
+            <div class="legend"><span><i class="messages-dot"></i>Сообщения</span><span><i class="conversations-dot"></i>Диалоги</span></div>
+          </div>
+          <div class="activity-chart" id="activityChart"></div>
+        </article>
+
+        <article class="panel">
+          <div class="panel-heading"><div><p class="eyebrow">Нагрузка команды</p><h2>Ответы агентов</h2></div></div>
+          <div class="distribution-list" id="agentDistribution"></div>
+        </article>
+
+        <article class="panel">
+          <div class="panel-heading"><div><p class="eyebrow">Передача человеку</p><h2>Каналы обращений</h2></div></div>
+          <div class="distribution-list" id="channelDistribution"></div>
+        </article>
+      </section>
+
+      <section class="panel table-panel">
+        <div class="panel-heading">
+          <div><p class="eyebrow">Последние записи</p><h2>Пользователи</h2></div>
+          <span class="table-count" id="usersCount"></span>
+        </div>
+        <div class="table-scroll"><table>
+          <thead><tr><th>chel_id</th><th>Первый вход</th><th>Последняя активность</th><th>Анкета</th><th>MAX</th><th>Диалоги</th><th>Сообщения</th></tr></thead>
+          <tbody id="usersTable"></tbody>
+        </table></div>
+      </section>
+
+      <section class="panel table-panel">
+        <div class="panel-heading">
+          <div><p class="eyebrow">Без содержимого переписки</p><h2>Диалоги</h2></div>
+          <span class="table-count" id="conversationsCount"></span>
+        </div>
+        <div class="table-scroll"><table>
+          <thead><tr><th>ID диалога</th><th>chel_id</th><th>Агент</th><th>Статус</th><th>Человек</th><th>Сообщения</th><th>Обновлён</th></tr></thead>
+          <tbody id="conversationsTable"></tbody>
+        </table></div>
+      </section>
+
+      <section class="panel table-panel">
+        <div class="panel-heading">
+          <div><p class="eyebrow">Чат и созвоны</p><h2>Обращения к человеку</h2></div>
+          <span class="table-count" id="requestsCount"></span>
+        </div>
+        <div class="table-scroll"><table>
+          <thead><tr><th>Обращение</th><th>chel_id</th><th>Канал</th><th>Статус</th><th>Телефон</th><th>Обновлено</th></tr></thead>
+          <tbody id="requestsTable"></tbody>
+        </table></div>
+      </section>
+
+      <p class="dashboard-error hidden" id="dashboardError" role="alert"></p>
+    </div>
+  </main>
+  <script src="/static/dashboard.js" defer></script>
+</body>
+</html>

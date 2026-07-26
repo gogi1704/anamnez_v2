@@ -29,5 +29,8 @@ server-error.log
 *.pfx
 credentials*.json
 service-account*.json
+after-tests-db-*.json
+anamnez-max-*.json
+chelids-*.json
 *.lnk
 codex-clipboard-*

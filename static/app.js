@@ -29,7 +29,7 @@ const input = $('#messageInput');
 const onboardingQuestions = [
   { key:'preferred_name', title:'Как к вам обращаться?', lead:'Имя необязательно, но с ним общение будет естественнее.', type:'text', placeholder:'Например, Алексей', optional:true },
   { key:'age', title:'Сколько вам полных лет?', lead:'Возраст помогает специалистам точнее учитывать риски и нормы.', type:'number', min:0, max:120, placeholder:'Возраст' },
-  { key:'sex', title:'Укажите пол для медицинского контекста', lead:'Это важно для интерпретации части симптомов и обследований.', choices:[['female','Женский'],['male','Мужской'],['intersex','Интерсекс'],['other','Другое']] },
+  { key:'sex', title:'Укажите пол для медицинского контекста', lead:'Это важно для интерпретации части симптомов и обследований.', choices:[['female','Женский'],['male','Мужской']] },
   { key:'height_cm', title:'Какой у вас рост?', lead:'Введите значение в сантиметрах.', type:'number', min:30, max:250, step:'0.1', placeholder:'Например, 176' },
   { key:'weight_kg', title:'Какой у вас вес?', lead:'Введите актуальный вес в килограммах.', type:'number', min:1, max:500, step:'0.1', placeholder:'Например, 72' },
   { key:'smoking', title:'Вы курите?', lead:'Учитываются сигареты, электронные сигареты и другие способы употребления никотина.', choices:[['never','Не курю'],['former','Курил(а) раньше'],['current','Курю сейчас']] },
@@ -78,7 +78,7 @@ async function resetUser() {
 }
 
 function activeOnboardingQuestions() {
-  return onboardingQuestions.filter(question => !question.femaleOnly || ['female','intersex','other'].includes(state.onboardingAnswers.sex));
+  return onboardingQuestions.filter(question => !question.femaleOnly || state.onboardingAnswers.sex === 'female');
 }
 
 function seedOnboardingAnswers(profile = {}) {
@@ -411,13 +411,16 @@ async function processMessage(text) {
     if (result.handoff_from) addTimeline(result.handoff_from, 'Маршрут выбран', result.handoff_reason);
     setActiveAgent(result.agent);
     addTimeline(result.agent, result.emergency ? 'Срочная оценка' : 'Агент ответил', result.handoff_reason, 'active');
-    addMessage('agent', result.assistant_message.content, result.agent, result.emergency, result.assistant_message.created_at);
+    addMessage('agent', result.assistant_message.content, result.agent, result.emergency, result.assistant_message.created_at, result.assistant_message.metadata || {});
     state.context = result.context;
     state.urgency = result.urgency || 'routine';
     renderInsights();
     if (result.action !== 'human') toggleAdvancedActions(Boolean(result.council_available));
 
-    if (result.human_escalation) {
+    if (result.action === 'lab_results_prompt') {
+      await openLabResults();
+      $('#taskStatus').textContent = 'Укажите номер пробирки';
+    } else if (result.human_escalation) {
       await openHumanModal(result.human_ticket_id);
       $('#taskStatus').textContent = 'Выберите формат связи · ИИ на связи';
     } else if (result.human_channel_prompt === 'call') {
@@ -887,6 +890,7 @@ function renderLabResults() {
   $('#labTubeError').classList.add('hidden');
   if (tubeNumber) $('#labSavedTube').textContent = tubeNumber;
   else $('#labTubeInput').value = '';
+  $('#labResultDocuments').classList.add('hidden');
 }
 
 async function openLabResults() {
@@ -895,6 +899,7 @@ async function openLabResults() {
   renderLabResults();
   $('#labResultsModal').classList.remove('hidden');
   if (!state.profile?.tube_number?.trim()) requestAnimationFrame(() => $('#labTubeInput').focus());
+  else await fetchLabResults();
 }
 
 function closeLabResults() { $('#labResultsModal').classList.add('hidden'); }
@@ -925,12 +930,56 @@ async function saveLabTube() {
     renderProfileStatus();
     renderLabResults();
     $('#taskStatus').textContent = 'Номер пробирки сохранён';
+    await fetchLabResults();
   } catch (error) {
     $('#labTubeError').textContent = error.message;
     $('#labTubeError').classList.remove('hidden');
   } finally {
     button.disabled = false;
     button.textContent = 'Сохранить и продолжить';
+  }
+}
+
+function setLabResultsState(icon, title, text) {
+  $('#labResultsStateIcon').textContent = icon;
+  $('#labResultsStateTitle').textContent = title;
+  $('#labResultsStateText').textContent = text;
+}
+
+function renderLabResultDocuments(urls) {
+  const container = $('#labResultDocuments');
+  container.innerHTML = urls.map((url, index) =>
+    `<a href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">▤ Открыть документ${urls.length > 1 ? ` ${index + 1}` : ''}</a>`
+  ).join('');
+  container.classList.toggle('hidden', !urls.length);
+}
+
+async function fetchLabResults() {
+  if (!state.profile?.tube_number?.trim()) return;
+  const button = $('#fetchLabResultsButton');
+  button.disabled = true;
+  button.textContent = 'Проверяю…';
+  renderLabResultDocuments([]);
+  setLabResultsState('⌕', 'Ищу результаты', 'Проверяю номер пробирки в базе лаборатории.');
+  try {
+    const result = await api('/api/lab-results', { method:'POST' });
+    if (result.status === 'found' && result.urls?.length) {
+      setLabResultsState('✓', 'Результаты готовы', 'Документ найден. Откройте его по ссылке ниже.');
+      renderLabResultDocuments(result.urls);
+      $('#taskStatus').textContent = 'Результаты анализов найдены';
+    } else if (result.status === 'processing') {
+      setLabResultsState('…', 'Результаты обрабатываются', 'Номер найден, но ссылка на документ пока не добавлена. Попробуйте позже.');
+      $('#taskStatus').textContent = 'Результаты ещё обрабатываются';
+    } else {
+      setLabResultsState('!', 'Результаты пока не найдены', 'Проверьте номер пробирки или повторите поиск позже.');
+      $('#taskStatus').textContent = 'Результаты не найдены';
+    }
+  } catch (error) {
+    setLabResultsState('!', 'Не удалось выполнить поиск', error.message);
+    $('#taskStatus').textContent = 'Ошибка получения результатов';
+  } finally {
+    button.disabled = false;
+    button.textContent = 'Проверить ещё раз';
   }
 }
 
@@ -1146,7 +1195,10 @@ function formatAssistantText(value) {
     /\s*(Обращение H-[A-ZА-Я0-9-]+ уже передано человеку; ожидайте ответа специалиста\.)/giu,
     '\n\n\n$1',
   ).trimStart();
-  return escapeHtml(separated);
+  return escapeHtml(separated).replace(
+    /(https?:\/\/[^\s<]+)/g,
+    '<a class="message-link" href="$1" target="_blank" rel="noopener noreferrer">Открыть документ</a>',
+  );
 }
 function scrollChatToBottom() {
   requestAnimationFrame(() => {
@@ -1229,6 +1281,7 @@ $('#labResultsClose').addEventListener('click', closeLabResults);
 $('#labResultsModal').addEventListener('click', event => { if (event.target.id === 'labResultsModal') closeLabResults(); });
 $('#saveLabTubeButton').addEventListener('click', saveLabTube);
 $('#changeLabTubeButton').addEventListener('click', changeLabTube);
+$('#fetchLabResultsButton').addEventListener('click', fetchLabResults);
 $('#labTubeInput').addEventListener('input', () => $('#labTubeError').classList.add('hidden'));
 $('#profileHeight').addEventListener('input', updateProfileBmi);
 $('#profileWeight').addEventListener('input', updateProfileBmi);
@@ -1267,6 +1320,10 @@ $('#attachButton').addEventListener('click', () => $('#attachmentInput').click()
 $('#attachmentInput').addEventListener('change', async event => { await addAttachments(event.target.files); event.target.value = ''; });
 $('#attachmentList').addEventListener('click', event => { const button = event.target.closest('[data-attachment-remove]'); if (button) { state.attachments.splice(Number(button.dataset.attachmentRemove), 1); renderAttachments(); } });
 $('#newChatButton').addEventListener('click', newConversation);
+$('#menuDashboardButton').addEventListener('click', () => {
+  closeFunctionMenu();
+  window.open('/dashboard', '_blank', 'noopener');
+});
 $('#conversationList').addEventListener('click', event => { const row = event.target.closest('[data-id]'); if (row) openConversation(row.dataset.id); });
 $('#modalClose').addEventListener('click', resumeAfterHuman);
 $('#modalOkay').addEventListener('click', resumeAfterHuman);

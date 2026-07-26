@@ -46,8 +46,11 @@ def main() -> int:
 
     required_files = [
         PROJECT_DIR / "index.html",
+        PROJECT_DIR / "dashboard.html",
         PROJECT_DIR / "static" / "app.js",
         PROJECT_DIR / "static" / "styles.css",
+        PROJECT_DIR / "static" / "dashboard.js",
+        PROJECT_DIR / "static" / "dashboard.css",
         PROJECT_DIR / "backend" / "main.py",
     ]
     missing = [str(path.relative_to(PROJECT_DIR)) for path in required_files if not path.is_file()]
@@ -115,6 +118,20 @@ def main() -> int:
     else:
         warnings.append("Интеграция MAX отключена: BOT_INTEGRATION_SECRET не задан")
 
+    dashboard_token = settings.admin_dashboard_token.strip()
+    if production and (
+        len(dashboard_token) < 32
+        or dashboard_token == "replace-with-another-long-random-secret"
+    ):
+        errors.append(
+            "ADMIN_DASHBOARD_TOKEN должен быть отдельной случайной строкой "
+            "длиной не менее 32 символов"
+        )
+    elif dashboard_token:
+        passed.append("Токен административного дашборда задан (значение скрыто)")
+    else:
+        warnings.append("Административный дашборд отключён: ADMIN_DASHBOARD_TOKEN не задан")
+
     if not 300 <= settings.auth_link_ttl_seconds <= 2_592_000:
         errors.append("AUTH_LINK_TTL_SECONDS должен быть от 300 секунд до 30 дней")
     else:
@@ -123,6 +140,30 @@ def main() -> int:
         errors.append("SESSION_TTL_DAYS должен быть от 1 до 365")
     else:
         passed.append("Срок пользовательской сессии настроен")
+
+    if settings.lab_results_enabled:
+        credentials = Path(settings.after_tests_google_credentials)
+        if not credentials.is_absolute():
+            errors.append("AFTER_TESTS_GOOGLE_CREDENTIALS должен быть абсолютным путём внутри контейнера")
+        elif not credentials.is_file():
+            errors.append(f"Не найден ключ after_tests_db: {credentials}")
+        else:
+            passed.append("Ключ after_tests_db подключён")
+        try:
+            import gspread  # noqa: F401
+            passed.append("Клиент Google Sheets установлен")
+        except ImportError:
+            errors.append("Не установлен gspread: пересоберите Docker-образ")
+        if not settings.after_tests_spreadsheet or not settings.after_tests_worksheet:
+            errors.append("Не заданы AFTER_TESTS_SPREADSHEET и AFTER_TESTS_WORKSHEET")
+        else:
+            passed.append("Таблица и лист результатов настроены")
+        if not 5 <= settings.google_sheets_timeout_seconds <= 60:
+            errors.append("GOOGLE_SHEETS_TIMEOUT_SECONDS должен быть от 5 до 60")
+        if not 0 <= settings.lab_results_cache_seconds <= 3600:
+            errors.append("LAB_RESULTS_CACHE_SECONDS должен быть от 0 до 3600")
+    else:
+        warnings.append("Получение результатов отключено: LAB_RESULTS_ENABLED=0")
 
     if production and not settings.database_path.is_absolute():
         errors.append("DATABASE_PATH в production должен быть абсолютным")
