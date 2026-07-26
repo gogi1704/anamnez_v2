@@ -17,12 +17,15 @@ INCLUDED = [
     "scripts",
     "deploy",
     "tests",
-    "docs",
     "index.html",
     "run.py",
     "requirements.txt",
     "README.md",
     ".env.production.example",
+    ".env.docker.example",
+    ".dockerignore",
+    "Dockerfile",
+    "docker-compose.yml",
 ]
 
 

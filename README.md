@@ -1,126 +1,448 @@
-# Консилиум — мультиагентная AI-система
+# «Консилиум»: установка через GitHub и Docker
 
-Python-приложение, в котором отдельный AI-оркестратор читает контекст диалога и передаёт управление профильным агентам. Сообщения, текущий агент, накопленная сводка и история передач сохраняются в SQLite.
+Инструкция сделана по аналогии с `bitrix_connector` и учитывает текущую схему
+сервера:
 
-## Документы для демонстрации и сервера
+- `anketa_bot_max` уже использует `127.0.0.1:8000`;
+- `bitrix_connector` уже использует `127.0.0.1:8001`;
+- «Консилиум» будет использовать новый порт `127.0.0.1:8002`;
+- внешний HTTPS-трафик принимает существующий Nginx;
+- рекомендуемый адрес: `https://consilium.chelovecbitmax.ru`.
 
-- [Короткая инструкция публикации](docs/QUICK_DEPLOY_RU.md)
-- [Подробное развёртывание и эксплуатация](docs/DEPLOYMENT_RU.md)
-- [Предпубликационный аудит и ограничения](docs/AUDIT_RU.md)
-- [Сценарий презентации руководителю](docs/PRESENTATION_FOR_MANAGER_RU.md)
-- [Авторизация и восстановление входа через MAX](docs/MAX_AUTH_RU.md)
+Старые контейнеры, их `.env`, каталоги и Nginx-конфигурации изменять не
+требуется.
 
-## Архитектура
+> Текущая версия позволяет открыть приложение по обычной ссылке без входа через
+> MAX. Это подходит для демонстрации. До использования реальных медицинских
+> данных необходимо отдельно включить обязательную авторизацию.
 
-1. Пользователь пишет сообщение в веб-интерфейсе.
-2. Детерминированный защитный слой проверяет явный запрос человека и критические формулировки.
-3. AI-оркестратор анализирует структурированный контекст и выбирает действие: `respond`, `continue`, `clarify`, `handoff`, `human` или `emergency`.
-4. Выбранный агент получает собственный системный промпт, JSON-контекст, историю и точное решение маршрута.
-5. Профильный агент возвращает структурированный результат и может сам запросить передачу другому специалисту, человеку или контуру безопасности.
-6. Ответ, обновлённый контекст и все передачи управления сохраняются в SQLite.
-7. При запросе человека менеджер сохраняет контекст, предлагает чат или созвон и
-   оставляет AI-диалог доступным до подключения специалиста.
+## 1. Создать DNS-запись
 
-## Интерактивные возможности
+В панели управления доменом создайте A-запись:
 
-- обязательный mobile-first онбординг для нового пользователя: пошаговая анкета,
-  необязательный выбор из 22 обследований и демонстрационная оплата без списания;
-- выбор обычного, крупного или очень крупного текста перед анкетой с возможностью
-  изменить настройку позже;
-- автоматическое знакомство с возможностями после первого входа и компактное меню
-  функций в верхней панели;
-- «Я правильно понял?» — редактируемая пользователем сводка подтверждённых фактов;
-- карта состояния с темой, открытыми вопросами и уровнем срочности;
-- независимое второе мнение и консилиум из нескольких профильных агентов;
-- загрузка изображений, PDF, TXT и CSV прямо в мультимодальный запрос;
-- управляемая пользователем долговременная память для новых диалогов;
-- центр «Возможности» с описанием всех доступных функций;
-- структурированная анкета пользователя: возраст, пол, рост, вес, беременность,
-  привычки, активность, давление, сахар, усталость, заболевания, лекарства, аллергии
-  и номер пробирки для последующего получения результатов обследований;
-- автоматический уникальный `chel_id`: анкета, онбординг, диалоги, память, карта тела
-  и история здоровья изолированы между браузерными сессиями без запроса телефона;
-- пункт «Начать заново» полностью удаляет данные текущего пользователя, выдаёт
-  новый `chel_id` и возвращает на первый экран онбординга;
-- предпросмотр и редактирование сводки перед передачей человеку;
-- сохранение специальных ответов и состава консилиума в истории диалога.
-
-Оркестратор использует более быстрый `gpt-5.6-luna`, профильные ответы — `gpt-5.6-sol`. Модели можно заменить через переменные окружения.
-
-## Агенты
-
-- менеджер;
-- контроль медицинской безопасности;
-- терапевт;
-- кардиолог;
-- невролог;
-- дерматолог;
-- педиатр;
-- психолог;
-- общий специалист для немедицинских задач.
-
-Промпты находятся в `backend/prompts.py`. Они задают границы компетенции, критерии качества, медицинские красные флаги, правила уточнений и условия передачи. Пользовательские сообщения передаются как недоверенные поля JSON и не смешиваются с системными инструкциями.
-
-## Запуск на Windows
-
-Нужен Python 3.11 или новее. Внешние библиотеки не требуются.
-
-```powershell
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
-Copy-Item .env.example .env
+```text
+consilium.chelovecbitmax.ru → IP_АДРЕС_СЕРВЕРА
 ```
 
-Откройте `.env`, укажите `OPENAI_API_KEY`, затем запустите:
+Дождитесь, пока поддомен начнёт определяться:
 
-```powershell
-.\.venv\Scripts\python.exe run.py
+```bash
+getent hosts consilium.chelovecbitmax.ru
 ```
 
-Интерфейс будет доступен по адресу [http://127.0.0.1:8000](http://127.0.0.1:8000).
-При локальном запуске страница открывается автоматически. Это можно отключить,
-добавив в `.env` строку `AUTO_OPEN_BROWSER=0`.
+## 2. Подключиться и проверить действующие проекты
 
-На Windows также можно просто дважды нажать `start.bat` в папке проекта.
-
-Не вставляйте API-ключ в HTML или JavaScript и не добавляйте `.env` в Git.
-
-## Проверка
-
-```powershell
-python -m unittest discover -s tests -v
+```bash
+ssh root@IP_АДРЕС_СЕРВЕРА
+export DOCKER_API_VERSION=1.43
 ```
 
-Тесты не обращаются к OpenAI: модель заменяется контролируемой заглушкой, а данные записываются во временную SQLite-базу.
+Сохраните состояние перед установкой:
 
-## Основные API
+```bash
+mkdir -p /root/backups/consilium-preinstall
+docker ps --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}' \
+  | tee /root/backups/consilium-preinstall/docker-before.txt
+ss -ltnp | tee /root/backups/consilium-preinstall/ports-before.txt
+nginx -T > /root/backups/consilium-preinstall/nginx-before.txt 2>&1
+nginx -t
+```
 
-- `GET /api/health` — проверка, что веб-процесс отвечает;
-- `GET /api/ready` — готовность базы, AI и MAX-авторизации без раскрытия секретов;
-- `GET /api/agents` — публичный список агентов;
-- `GET /api/me` — текущий анонимный `chel_id`;
-- `POST /api/reset-user` — подтверждённый полный сброс текущего пользователя и выдача нового `chel_id`;
-- `POST /api/auth/max/link` — защищённая выдача одноразовой ссылки MAX-боту;
-- `GET /auth/max?t=...` — обмен одноразовой ссылки на серверную сессию;
-- `POST /api/chat` — сообщение и выполнение агентного маршрута;
-- `POST /api/human-preference` — сохранение выбора: чат со специалистом или созвон;
-- `POST /api/second-opinion` и `POST /api/council` — независимая оценка и консилиум;
-- `POST /api/context` — подтверждение или исправление сводки пользователем;
-- `GET/POST/DELETE /api/memories` — управляемая долговременная память;
-- `GET/POST /api/profile` — анкета, автоматически доступная всем агентам;
-- `GET /api/onboarding` и `POST /api/onboarding/{profile,exams,payment}` — состояние
-  первого входа, анкета, выбор обследований и демо-оплата;
-- `GET /api/handoff-preview/{id}` — сводка перед подключением человека;
-- `GET /api/conversations` — сохранённые диалоги;
-- `GET /api/conversations/{id}` — история, контекст и передачи.
+Проверьте свободный порт:
 
-## Ограничения прототипа
+```bash
+ss -ltnp | grep ':8002 '
+```
 
-- вызов человека пока создаёт честно обозначенную UI-заглушку; заявка и выбранный
-  канал хранятся отдельно от активного AI-диалога в `human_status`,
-  `human_ticket_id` и `human_channel`;
-- оплата обследований является демонстрацией и не подключена к платёжной системе;
-- подтверждённая аутентификация пока отсутствует: `chel_id` хранится в защищённой
-  cookie браузера, поэтому очистка cookie создаст нового пользователя;
-- для медицинского production-продукта потребуются клиническая валидация, аудит, политика хранения чувствительных данных и локализованные номера экстренных служб;
-- система не является медицинским изделием и не заменяет врача.
+До запуска «Консилиума» команда не должна ничего вывести. Если `8002` занят,
+не останавливайте найденный процесс — выберите другой свободный порт и укажите
+его одновременно в `.env` и конфигурации Nginx.
+
+## 3. Загрузить проект из GitHub
+
+### 3.1. Создать отдельный репозиторий
+
+В GitHub создайте новый приватный репозиторий, например `consilium`. Не
+добавляйте при создании README, `.gitignore` или лицензию: эти файлы уже есть
+локально.
+
+Текущий `origin` обязательно проверьте перед первой отправкой:
+
+```powershell
+git remote -v
+```
+
+Он должен указывать именно на новый репозиторий «Консилиума», а не на
+`anketa_bot_max`, `bitrix_connector`, `anamnez_v2` или другой проект.
+
+Если `origin` уже существует, замените его:
+
+```powershell
+git remote set-url origin https://github.com/ВАШ_ЛОГИН/consilium.git
+```
+
+Если `origin` отсутствует:
+
+```powershell
+git remote add origin https://github.com/ВАШ_ЛОГИН/consilium.git
+```
+
+### 3.2. Проверить состав перед отправкой
+
+```powershell
+git status --short --ignored
+git ls-files
+```
+
+В GitHub нельзя отправлять `.env`, базы, логи, `.venv`, `data`, `backups`,
+`dist`, приватные ключи и файлы учётных данных. Файлы с окончанием `.example`
+содержат только шаблоны и должны находиться в репозитории.
+
+Добавьте изменения и ещё раз проверьте список:
+
+```powershell
+git add .
+git status --short
+git diff --cached --name-only
+```
+
+В списке не должно быть `.env`, файлов баз данных, логов, `.venv`, `data`,
+`backups`, `dist`, `.agents`, `.codex`, `.idea` и файлов с ключами.
+
+Если список правильный:
+
+```powershell
+git commit -m "Prepare Consilium Docker deployment"
+git push -u origin master
+```
+
+Не выполняйте `push`, пока `git remote -v` показывает репозиторий другого
+проекта.
+
+### 3.3. Клонировать на сервер
+
+На сервере клонируйте проект в отдельный каталог:
+
+```bash
+cd /root
+git clone ВАША_ССЫЛКА_GITHUB consilium
+cd /root/consilium
+ls -la
+```
+
+Для приватного репозитория используйте SSH deploy key или GitHub Personal
+Access Token с доступом только на чтение этого репозитория. Не записывайте
+GitHub-токен в `.env` приложения и не вставляйте его прямо в команды, которые
+останутся в истории shell.
+
+Должны присутствовать `Dockerfile`, `docker-compose.yml`,
+`.env.docker.example`, `backend`, `static`, `index.html` и `run.py`.
+
+## 4. Создать каталоги данных
+
+Контейнер запускается от пользователя с UID `1000`, как и
+`bitrix_connector`:
+
+```bash
+cd /root/consilium
+mkdir -p data logs backups
+chown -R 1000:1000 data logs backups
+chmod -R u+rwX data logs backups
+```
+
+База будет храниться в `/root/consilium/data/consilium.db`. Пересоздание
+контейнера её не удалит.
+
+## 5. Создать `.env`
+
+```bash
+cd /root/consilium
+cp .env.docker.example .env
+nano .env
+```
+
+Основные параметры:
+
+```dotenv
+APP_ENV=production
+OPENAI_API_KEY=ВАШ_OPENAI_API_KEY
+ORCHESTRATOR_MODEL=gpt-5.6-luna
+SPECIALIST_MODEL=gpt-5.6-sol
+DATABASE_PATH=/app/data/consilium.db
+LOG_PATH=/app/logs/server-error.log
+MAX_HISTORY_MESSAGES=30
+
+RUNNING_IN_DOCKER=1
+HOST=0.0.0.0
+PORT=8000
+CONSILIUM_HOST_PORT=8002
+
+AUTO_OPEN_BROWSER=0
+COOKIE_SECURE=1
+PUBLIC_BASE_URL=https://consilium.chelovecbitmax.ru
+BOT_INTEGRATION_SECRET=ДЛИННЫЙ_СЛУЧАЙНЫЙ_СЕКРЕТ
+AUTH_LINK_TTL_SECONDS=604800
+SESSION_TTL_DAYS=90
+SESSION_COOKIE_NAME=consilium_session
+```
+
+Создайте отдельный секрет для «Консилиума»:
+
+```bash
+openssl rand -hex 32
+```
+
+Вставьте результат в `BOT_INTEGRATION_SECRET`. Не используйте токены или
+секреты `anketa_bot_max` и `bitrix_connector`.
+
+Ограничьте права:
+
+```bash
+chmod 600 /root/consilium/.env
+```
+
+## 6. Проверить Docker Compose
+
+На текущем сервере используется Docker Compose v1, поэтому команды пишутся
+через дефис:
+
+```bash
+cd /root/consilium
+docker-compose version
+docker-compose config
+```
+
+В выводе `docker-compose config` проверьте:
+
+- имя сервиса `consilium`;
+- контейнер `consilium`;
+- публикацию `127.0.0.1:8002:8000`;
+- отдельную сеть `consilium-internal`;
+- отдельные каталоги `/root/consilium/data`, `logs` и `backups`.
+
+Не публикуйте порт как `0.0.0.0:8002:8000` и не добавляйте `8002` в firewall.
+
+## 7. Собрать образ
+
+```bash
+cd /root/consilium
+docker-compose build
+```
+
+Эта команда собирает только образ нового проекта и не пересобирает
+`anketa_bot_max` или `bitrix_connector`.
+
+## 8. Выполнить production-проверку
+
+```bash
+cd /root/consilium
+docker-compose run --rm consilium python scripts/production_check.py
+```
+
+Продолжайте только если в итоговой строке указано `0 ошибок`.
+
+После проверки ещё раз исправьте права, если Docker создал файлы:
+
+```bash
+chown -R 1000:1000 /root/consilium/data /root/consilium/logs /root/consilium/backups
+```
+
+## 9. Запустить контейнер
+
+```bash
+cd /root/consilium
+docker-compose up -d
+docker-compose ps
+docker-compose logs --tail=100 consilium
+```
+
+Проверьте приложение непосредственно на сервере:
+
+```bash
+curl -i http://127.0.0.1:8002/api/health
+curl -i http://127.0.0.1:8002/api/ready
+```
+
+Ожидается HTTP 200. В `docker-compose ps` контейнер должен получить состояние
+`Up (healthy)` после завершения healthcheck.
+
+## 10. Добавить отдельную конфигурацию Nginx
+
+```bash
+cp /root/consilium/deploy/nginx-consilium.conf \
+  /etc/nginx/sites-available/consilium
+nano /etc/nginx/sites-available/consilium
+```
+
+Проверьте две настройки:
+
+```nginx
+server_name consilium.chelovecbitmax.ru;
+proxy_pass http://127.0.0.1:8002;
+```
+
+Не редактируйте существующие файлы Nginx для `anketa_bot_max` и
+`bitrix_connector`.
+
+Активируйте новый сайт:
+
+```bash
+ln -s /etc/nginx/sites-available/consilium \
+  /etc/nginx/sites-enabled/consilium
+nginx -t
+```
+
+Если `nginx -t` показывает ошибку, не перезагружайте Nginx. Удалите только
+новую ссылку и проверьте старые сайты:
+
+```bash
+rm -f /etc/nginx/sites-enabled/consilium
+nginx -t
+```
+
+Если проверка успешна:
+
+```bash
+systemctl reload nginx
+curl -I -H 'Host: consilium.chelovecbitmax.ru' http://127.0.0.1/
+```
+
+`reload` не останавливает работающие соединения Nginx.
+
+## 11. Подключить HTTPS
+
+Когда DNS уже указывает на сервер:
+
+```bash
+certbot --nginx -d consilium.chelovecbitmax.ru
+nginx -t
+systemctl reload nginx
+```
+
+Проверка:
+
+```bash
+curl -I https://consilium.chelovecbitmax.ru/
+curl https://consilium.chelovecbitmax.ru/api/ready
+```
+
+## 12. Проверить, что старые проекты работают
+
+```bash
+docker ps --format 'table {{.Names}}\t{{.Status}}\t{{.Ports}}'
+ss -ltnp | grep -E ':8000 |:8001 |:8002 '
+nginx -t
+curl http://127.0.0.1:8001/health
+curl https://chelovecbitmax.ru/health
+```
+
+Ожидаемая схема:
+
+| Проект | Порт хоста | Состояние |
+|---|---:|---|
+| `anketa_bot_max` | `127.0.0.1:8000` | без изменений |
+| `bitrix_connector` | `127.0.0.1:8001` | без изменений |
+| `consilium` | `127.0.0.1:8002` | новый контейнер |
+
+## 13. Полезные команды
+
+Логи:
+
+```bash
+cd /root/consilium
+docker-compose logs -f consilium
+```
+
+Перезапуск:
+
+```bash
+cd /root/consilium
+docker-compose restart consilium
+```
+
+Проверка:
+
+```bash
+cd /root/consilium
+docker-compose ps
+curl http://127.0.0.1:8002/api/ready
+```
+
+Остановка только «Консилиума»:
+
+```bash
+cd /root/consilium
+docker-compose stop consilium
+```
+
+Команды выполняются из `/root/consilium`, поэтому они не управляют Compose-
+проектом `bitrix_connector`.
+
+## 14. Резервная копия базы
+
+Приложение умеет делать согласованную SQLite-копию без остановки:
+
+```bash
+cd /root/consilium
+docker-compose exec -T consilium \
+  python scripts/backup_database.py --destination /app/backups --keep 14
+ls -lah /root/consilium/backups
+```
+
+Также сохраняйте отдельно:
+
+```text
+/root/consilium/.env
+/root/consilium/data/consilium.db
+/root/consilium/backups/
+```
+
+## 15. Обновление
+
+Перед обновлением:
+
+```bash
+cd /root/consilium
+docker-compose exec -T consilium \
+  python scripts/backup_database.py --destination /app/backups --keep 14
+cp -a /root/consilium /root/consilium-rollback
+```
+
+Получите изменения из GitHub и пересоберите только этот проект:
+
+```bash
+cd /root/consilium
+git status --short
+git pull --ff-only
+docker-compose build
+docker-compose run --rm consilium python scripts/production_check.py
+docker-compose up -d
+docker-compose ps
+curl http://127.0.0.1:8002/api/ready
+```
+
+Не используйте `docker-compose down -v`: параметр `-v` может удалить
+постоянные данные.
+
+## 16. Откат
+
+Если новый проект мешает публикации, отключите только его:
+
+```bash
+cd /root/consilium
+docker-compose stop consilium
+rm -f /etc/nginx/sites-enabled/consilium
+nginx -t
+systemctl reload nginx
+```
+
+После этого проверьте старые проекты:
+
+```bash
+docker ps
+curl http://127.0.0.1:8001/health
+curl https://chelovecbitmax.ru/health
+```
+
+Не выполняйте `docker stop` или `docker rm` без имени контейнера. Не запускайте
+`docker-compose down` из каталогов других проектов.

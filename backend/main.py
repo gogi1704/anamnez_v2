@@ -59,15 +59,6 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
         path = parsed.path
         if path == "/auth/max":
             return self._consume_max_login(parse_qs(parsed.query).get("t", [""])[0])
-        self._ensure_user_context()
-        if path == "/":
-            return self._send_file(BASE_DIR / "index.html", "text/html; charset=utf-8")
-        if path.startswith("/static/"):
-            name = path.removeprefix("/static/")
-            if name not in ALLOWED_STATIC:
-                return self._json(404, {"detail": "Файл не найден"})
-            mime = mimetypes.guess_type(name)[0] or "application/octet-stream"
-            return self._send_file(STATIC_DIR / name, f"{mime}; charset=utf-8")
         if path == "/api/health":
             return self._json(200, {"status": "ok"})
         if path == "/api/ready":
@@ -87,6 +78,15 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                 "ai_configured": bool(settings.openai_api_key),
                 "max_auth_configured": max_auth_ready,
             })
+        self._ensure_user_context()
+        if path == "/":
+            return self._send_file(BASE_DIR / "index.html", "text/html; charset=utf-8")
+        if path.startswith("/static/"):
+            name = path.removeprefix("/static/")
+            if name not in ALLOWED_STATIC:
+                return self._json(404, {"detail": "Файл не найден"})
+            mime = mimetypes.guess_type(name)[0] or "application/octet-stream"
+            return self._send_file(STATIC_DIR / name, f"{mime}; charset=utf-8")
         if path == "/api/agents":
             return self._json(200, public_agents())
         if path == "/api/me":

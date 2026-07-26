@@ -457,6 +457,29 @@ class OrchestratorTests(unittest.TestCase):
         self.assertIn("X-Consilium-Action':'reset-user'", script)
         self.assertIn("localStorage.removeItem('consilium_conversation_id')", script)
 
+    def test_production_port_is_isolated_from_existing_server_projects(self):
+        project_root = Path(__file__).resolve().parents[1]
+        production_env = (project_root / ".env.production.example").read_text(encoding="utf-8")
+        docker_env = (project_root / ".env.docker.example").read_text(encoding="utf-8")
+        compose = (project_root / "docker-compose.yml").read_text(encoding="utf-8")
+        nginx = (project_root / "deploy" / "nginx-consilium.conf").read_text(encoding="utf-8")
+        server_guide = (project_root / "README.md").read_text(encoding="utf-8")
+        self.assertIn("PORT=8002", production_env)
+        self.assertNotIn("PORT=8000", production_env)
+        self.assertIn("HOST=0.0.0.0", docker_env)
+        self.assertIn("CONSILIUM_HOST_PORT=8002", docker_env)
+        self.assertIn("127.0.0.1:${CONSILIUM_HOST_PORT:-8002}:8000", compose)
+        self.assertNotIn("0.0.0.0:${CONSILIUM_HOST_PORT", compose)
+        self.assertEqual(nginx.count("proxy_pass http://127.0.0.1:8002;"), 3)
+        self.assertNotIn("proxy_pass http://127.0.0.1:8000;", nginx)
+        self.assertIn("anketa_bot_max", server_guide)
+        self.assertIn("bitrix_connector", server_guide)
+        main_source = (project_root / "backend" / "main.py").read_text(encoding="utf-8")
+        self.assertLess(
+            main_source.index('if path == "/api/health":'),
+            main_source.index("self._ensure_user_context()"),
+        )
+
     def test_max_login_is_one_time_persistent_and_survives_user_reset(self):
         max_user_id = 987654321
         legacy_chel_id = 4321

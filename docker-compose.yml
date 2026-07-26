@@ -1,0 +1,40 @@
+version: "3.8"
+
+services:
+  consilium:
+    build: .
+    container_name: consilium
+    env_file: .env
+    ports:
+      - "127.0.0.1:${CONSILIUM_HOST_PORT:-8002}:8000"
+    volumes:
+      - ./data:/app/data
+      - ./logs:/app/logs
+      - ./backups:/app/backups
+    restart: unless-stopped
+    read_only: true
+    tmpfs:
+      - /tmp
+    security_opt:
+      - no-new-privileges:true
+    healthcheck:
+      test:
+        - CMD
+        - python
+        - -c
+        - "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=5)"
+      interval: 30s
+      timeout: 8s
+      retries: 3
+      start_period: 20s
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+    networks:
+      - consilium_internal
+
+networks:
+  consilium_internal:
+    name: consilium-internal

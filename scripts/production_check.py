@@ -75,12 +75,19 @@ def main() -> int:
     else:
         errors.append("На сервере требуется APP_ENV=production")
 
+    running_in_docker = os.getenv("RUNNING_IN_DOCKER", "").strip().lower() in {
+        "1", "true", "yes", "on",
+    }
     if settings.host in {"127.0.0.1", "::1", "localhost"}:
         passed.append("Python слушает только локальный интерфейс")
+    elif running_in_docker and settings.host == "0.0.0.0":
+        passed.append("Python слушает интерфейс контейнера; порт хоста ограничивается Docker")
     elif args.allow_development:
         warnings.append(f"HOST={settings.host}; для сервера за Nginx рекомендуется 127.0.0.1")
     else:
-        errors.append("HOST должен быть 127.0.0.1: внешний доступ принимает Nginx")
+        errors.append(
+            "HOST должен быть 127.0.0.1 либо 0.0.0.0 внутри Docker: внешний доступ принимает Nginx"
+        )
 
     if production and settings.auto_open_browser:
         errors.append("На сервере требуется AUTO_OPEN_BROWSER=0")
