@@ -21,6 +21,11 @@ const state = {
   healthHistoryFilter: 'all',
   labDocuments: [],
   identity: null,
+  aiEnabled: true,
+  humanStatus: 'none',
+  lastMessageId: 0,
+  returnToHumanAfterContextEdit: false,
+  contextEditTicketId: null,
 };
 
 const $ = selector => document.querySelector(selector);
@@ -28,6 +33,35 @@ const messages = $('#messages');
 const timeline = $('#timeline');
 const input = $('#messageInput');
 const ANONYMOUS_ACCESS_KEY = 'consilium_anonymous_access';
+let userAudioContext = null;
+
+function unlockUserSound() {
+  if (!userAudioContext) {
+    const AudioContextClass = window.AudioContext || window.webkitAudioContext;
+    if (!AudioContextClass) return null;
+    userAudioContext = new AudioContextClass();
+  }
+  if (userAudioContext.state === 'suspended') userAudioContext.resume().catch(() => {});
+  return userAudioContext;
+}
+
+function playUserMessageSound() {
+  const context = unlockUserSound();
+  if (!context || context.state !== 'running') return;
+  const now = context.currentTime + 0.012;
+  const oscillator = context.createOscillator();
+  const gain = context.createGain();
+  oscillator.type = 'sine';
+  oscillator.frequency.setValueAtTime(760, now);
+  oscillator.frequency.exponentialRampToValueAtTime(940, now + 0.12);
+  gain.gain.setValueAtTime(0.0001, now);
+  gain.gain.exponentialRampToValueAtTime(0.065, now + 0.012);
+  gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.2);
+  oscillator.connect(gain);
+  gain.connect(context.destination);
+  oscillator.start(now);
+  oscillator.stop(now + 0.22);
+}
 
 const onboardingQuestions = [
   { key:'preferred_name', title:'Как к вам обращаться?', lead:'Имя необязательно, но с ним общение будет естественнее.', type:'text', placeholder:'Например, Алексей', optional:true },
@@ -394,8 +428,10 @@ function setActiveAgent(id) {
 
 function addMessage(sender, text, agentId = state.active, urgent = false, createdAt = null, metadata = {}) {
   const agent = AGENTS[agentId] || AGENTS.manager;
+  const humanManager = sender === 'agent' && metadata.sender_type === 'human_manager';
   const wrapper = document.createElement('div');
-  wrapper.className = `message-row ${sender}${urgent ? ' urgent' : ''}`;
+  wrapper.className = `message-row ${sender}${urgent ? ' urgent' : ''}${humanManager ? ' human-manager' : ''}`;
+  if (metadata._message_id) wrapper.dataset.messageId = String(metadata._message_id);
   const date = createdAt ? new Date(createdAt) : new Date();
   const time = new Intl.DateTimeFormat('ru', { hour: '2-digit', minute: '2-digit' }).format(date);
   const attachmentBadges = (metadata.attachments || []).map(item => `<em class="message-file">▱ ${escapeHtml(item.name)}</em>`).join('');
@@ -406,9 +442,27 @@ function addMessage(sender, text, agentId = state.active, urgent = false, create
     ? labDocumentsMarkup(metadata.lab_result_documents || [], 'message') : '';
   wrapper.innerHTML = sender === 'user'
     ? `<div class="bubble user-bubble">${attachmentBadges}<p>${escapeHtml(text)}</p><span>${time}</span></div>`
-    : `<div class="message-avatar">${agent.initials}</div><div><div class="message-author"><strong>${agent.name}</strong><span>${agent.role}</span>${special}${cached}</div><div class="bubble agent-bubble"><p>${formatAssistantText(text)}</p>${labDocuments}<span>${time}</span></div></div>`;
+    : `<div class="message-avatar">${humanManager ? 'Ч' : agent.initials}</div><div><div class="message-author"><strong>${humanManager ? escapeHtml(metadata.manager_name || 'Менеджер') : agent.name}</strong><span>${humanManager ? 'Человек' : agent.role}</span>${special}${cached}</div><div class="bubble agent-bubble"><p>${formatAssistantText(text)}</p>${labDocuments}<span>${time}</span></div></div>`;
   messages.appendChild(wrapper);
   scrollChatToBottom();
+}
+
+function updateChatMode(aiEnabled = true, humanStatus = 'none', humanTicketId = null) {
+  state.aiEnabled = Boolean(aiEnabled);
+  state.humanStatus = humanStatus || 'none';
+  const banner = $('#chatModeBanner');
+  const relevant = !state.aiEnabled || ['pending', 'connected'].includes(state.humanStatus);
+  banner.classList.toggle('hidden', !relevant);
+  banner.classList.toggle('ai-paused', !state.aiEnabled);
+  input.placeholder = state.aiEnabled
+    ? 'Задайте вопрос о здоровье...'
+    : 'Напишите менеджеру...';
+  if (!relevant) return;
+  $('#chatModeIcon').textContent = state.aiEnabled ? '✓' : '♙';
+  $('#chatModeTitle').textContent = state.aiEnabled ? 'Обращение менеджеру открыто' : 'С вами общается менеджер';
+  $('#chatModeText').textContent = state.aiEnabled
+    ? `ИИ продолжает отвечать${humanTicketId ? ` · обращение ${humanTicketId}` : ''}.`
+    : 'ИИ приостановлен. Ваше сообщение сохранится и будет ждать ответа человека.';
 }
 
 function addCouncilResult(result, createdAt = null) {
@@ -471,17 +525,33 @@ async function processMessage(text) {
     $('#typing')?.remove();
     state.conversationId = result.conversation_id;
     localStorage.setItem('consilium_conversation_id', state.conversationId);
-    showHandoff(result.handoff_from, result.agent);
-    if (result.handoff_from) addTimeline(result.handoff_from, 'Подключён специалист', result.handoff_reason);
-    setActiveAgent(result.agent);
-    addTimeline(result.agent, result.emergency ? 'Срочная оценка' : 'Специалист ответил', result.handoff_reason, 'active');
-    addMessage('agent', result.assistant_message.content, result.agent, result.emergency, result.assistant_message.created_at, result.assistant_message.metadata || {});
-    state.context = result.context;
+    state.lastMessageId = Math.max(
+      state.lastMessageId,
+      Number(result.user_message?.id || 0),
+      Number(result.assistant_message?.id || 0),
+    );
+    updateChatMode(result.ai_enabled !== false, result.human_status, result.human_ticket_id);
+    if (result.assistant_message) {
+      showHandoff(result.handoff_from, result.agent);
+      if (result.handoff_from) addTimeline(result.handoff_from, 'Подключён специалист', result.handoff_reason);
+      setActiveAgent(result.agent);
+      addTimeline(result.agent, result.emergency ? 'Срочная оценка' : 'Специалист ответил', result.handoff_reason, 'active');
+      addMessage(
+        'agent', result.assistant_message.content, result.agent, result.emergency,
+        result.assistant_message.created_at,
+        { ...(result.assistant_message.metadata || {}), _message_id:result.assistant_message.id },
+      );
+      playUserMessageSound();
+    }
+    state.context = result.context || state.context;
     state.urgency = result.urgency || 'routine';
     renderInsights();
     if (result.action !== 'human') toggleAdvancedActions(Boolean(result.council_available));
 
-    if (result.action === 'lab_results_prompt') {
+    if (result.action === 'waiting_human') {
+      $('#taskStatus').textContent = 'Сообщение ожидает ответа менеджера';
+      addTimeline('manager', 'Сообщение передано', 'Менеджер увидит его в своей очереди', 'active');
+    } else if (result.action === 'lab_results_prompt') {
       await openLabResults();
       $('#taskStatus').textContent = 'Укажите номер пробирки';
     } else if (result.human_escalation) {
@@ -524,15 +594,9 @@ function renderInsights() {
   const visible = context && (context.current_topic || context.user_goal || context.known_facts?.length);
   const riskBar = $('#headerRiskBar');
   const chatHeader = document.querySelector('.chat-header');
-  $('#insightDock').classList.toggle('hidden', !visible);
   riskBar.classList.toggle('hidden', !visible);
   chatHeader.classList.toggle('has-risk', Boolean(visible));
   if (!visible) return;
-  $('#summaryGoal').textContent = context.user_goal || context.current_topic || 'Контекст разговора';
-  const facts = context.known_facts || [];
-  $('#summaryFacts').innerHTML = facts.length
-    ? facts.slice(0, 6).map(item => `<span class="fact-chip" title="${escapeHtml(item)}">${escapeHtml(item)}</span>`).join('')
-    : '<span class="fact-chip">Пока нет подтверждённых фактов</span>';
   const urgencyMap = { routine: [8, 'Плановая оценка'], soon: [38, 'Стоит заняться в ближайшее время'], urgent: [70, 'Нужна срочная оценка'], emergency: [94, 'Немедленное действие'] };
   const [position, label] = urgencyMap[state.urgency] || urgencyMap.routine;
   riskBar.dataset.urgency = state.urgency || 'routine';
@@ -553,6 +617,44 @@ async function loadConversationList() {
   } catch { $('#conversationList').innerHTML = ''; }
 }
 
+async function syncConversationUpdates() {
+  if (
+    !state.conversationId || state.processing || !state.mainInitialized
+  ) return;
+  try {
+    const data = await api(
+      `/api/conversations/${state.conversationId}/updates?after_id=${state.lastMessageId}`,
+    );
+    updateChatMode(
+      data.ai_enabled, data.human_status, data.human_ticket_id,
+    );
+    let incomingMessageReceived = false;
+    for (const message of data.messages || []) {
+      state.lastMessageId = Math.max(state.lastMessageId, Number(message.id || 0));
+      const exists = messages.querySelector(`[data-message-id="${message.id}"]`);
+      if (exists) continue;
+      addMessage(
+        message.role === 'user' ? 'user' : 'agent',
+        message.content,
+        message.agent_id || 'manager',
+        Boolean(message.metadata?.emergency),
+        message.created_at,
+        { ...(message.metadata || {}), _message_id:message.id },
+      );
+      if (message.role !== 'user') incomingMessageReceived = true;
+      if (message.metadata?.sender_type === 'human_manager') {
+        $('#taskStatus').textContent = 'Менеджер ответил';
+      }
+    }
+    if (incomingMessageReceived) playUserMessageSound();
+  } catch (error) {
+    if (error.message === 'Диалог не найден') {
+      state.conversationId = null;
+      localStorage.removeItem('consilium_conversation_id');
+    }
+  }
+}
+
 async function openConversation(id) {
   if (state.processing) return;
   try {
@@ -561,13 +663,16 @@ async function openConversation(id) {
     localStorage.setItem('consilium_conversation_id', id);
     messages.innerHTML = '';
     resetTimeline();
+    state.lastMessageId = 0;
     data.messages.forEach(message => {
+      state.lastMessageId = Math.max(state.lastMessageId, Number(message.id || 0));
       if (message.metadata?.action === 'council' && message.metadata?.opinions) {
         addCouncilResult({ agents: message.metadata.agents || [], opinions: message.metadata.opinions, message }, message.created_at);
       } else {
         addMessage(
           message.role === 'user' ? 'user' : 'agent', message.content,
-          message.agent_id || 'manager', Boolean(message.metadata?.emergency), message.created_at, message.metadata || {},
+          message.agent_id || 'manager', Boolean(message.metadata?.emergency), message.created_at,
+          { ...(message.metadata || {}), _message_id:message.id },
         );
       }
     });
@@ -577,6 +682,10 @@ async function openConversation(id) {
     const medicalAgents = ['therapist','cardiologist','neurologist','dermatologist','pediatrician','psychologist'];
     const lastAssistant = [...data.messages].reverse().find(item => item.role === 'assistant' && item.metadata?.urgency && medicalAgents.includes(item.agent_id));
     state.urgency = lastAssistant?.metadata?.urgency || 'routine';
+    updateChatMode(
+      data.ai_enabled === undefined ? true : Boolean(data.ai_enabled),
+      data.human_status, data.human_ticket_id,
+    );
     renderInsights();
     toggleAdvancedActions(medicalAgents.includes(data.active_agent) || data.messages.some(item => medicalAgents.includes(item.agent_id)));
     $('#suggestions').classList.add('hidden');
@@ -601,6 +710,8 @@ function newConversation() {
   resetTimeline();
   state.context = null;
   state.urgency = 'routine';
+  state.lastMessageId = 0;
+  updateChatMode(true, 'none', null);
   clearAttachments();
   renderInsights();
   toggleAdvancedActions(false);
@@ -633,7 +744,7 @@ async function openHumanModal(ticketId = null) {
     try {
       const preview = await api(`/api/handoff-preview/${state.conversationId}`);
       const facts = preview.facts?.length ? `<ul>${preview.facts.slice(0, 5).map(item => `<li>${escapeHtml(item)}</li>`).join('')}</ul>` : '<span>Подтверждённые факты пока не собраны.</span>';
-      $('#handoffPreview').innerHTML = `<strong>${escapeHtml(preview.goal || preview.topic || 'Цель обращения')}</strong>${facts}${preview.open_questions?.length ? `<span>Открытых вопросов: ${preview.open_questions.length}</span>` : ''}<button class="preview-edit" id="editHandoffContext">Изменить сводку</button>`;
+      $('#handoffPreview').innerHTML = `<strong>${escapeHtml(preview.goal || preview.topic || 'Цель обращения')}</strong>${facts}${preview.open_questions?.length ? `<span>Открытых вопросов: ${preview.open_questions.length}</span>` : ''}<button class="preview-edit" id="editHandoffContext">Исправить сведения</button>`;
     } catch { $('#handoffPreview').innerHTML = '<span>Контекст диалога будет передан вместе с обращением.</span>'; }
   }
 }
@@ -801,6 +912,7 @@ async function requestCouncil() {
     const result = await api('/api/council', { method: 'POST', body: JSON.stringify({ conversation_id: state.conversationId }) });
     $('#typing')?.remove();
     addCouncilResult(result);
+    playUserMessageSound();
     setActiveAgent('manager');
     result.agents.forEach(agent => addTimeline(agent, 'Мнение учтено', 'Консилиум завершён'));
     $('#taskStatus').textContent = 'Общий вывод консилиума готов';
@@ -829,7 +941,22 @@ async function saveContext() {
     renderInsights();
     $('#contextModal').classList.add('hidden');
     $('#taskStatus').textContent = 'Контекст подтверждён пользователем';
+    if (state.returnToHumanAfterContextEdit) {
+      const ticketId = state.contextEditTicketId;
+      state.returnToHumanAfterContextEdit = false;
+      state.contextEditTicketId = null;
+      await openHumanModal(ticketId);
+    }
   } catch (error) { addSystemError(error.message); }
+}
+
+function closeContextEditor() {
+  $('#contextModal').classList.add('hidden');
+  if (!state.returnToHumanAfterContextEdit) return;
+  const ticketId = state.contextEditTicketId;
+  state.returnToHumanAfterContextEdit = false;
+  state.contextEditTicketId = null;
+  openHumanModal(ticketId);
 }
 
 async function loadMemories() {
@@ -1389,8 +1516,7 @@ $('#councilModalClose').addEventListener('click', closeCouncilModal);
 $('#cancelCouncilButton').addEventListener('click', closeCouncilModal);
 $('#startCouncilButton').addEventListener('click', requestCouncil);
 $('#councilModal').addEventListener('click', event => { if (event.target.id === 'councilModal') closeCouncilModal(); });
-$('#editContextButton').addEventListener('click', openContextEditor);
-$('#contextClose').addEventListener('click', () => $('#contextModal').classList.add('hidden'));
+$('#contextClose').addEventListener('click', closeContextEditor);
 $('#saveContextButton').addEventListener('click', saveContext);
 async function openMemory() { await loadMemories(); $('#memoryModal').classList.remove('hidden'); }
 $('#memoryButton').addEventListener('click', openMemory);
@@ -1485,7 +1611,13 @@ $('#confirmCallButton').addEventListener('click', () => {
   if (phone) chooseHumanChannel('call', phone);
 });
 $('#humanModal').addEventListener('click', event => { if (event.target.id === 'humanModal') resumeAfterHuman(); });
-$('#handoffPreview').addEventListener('click', event => { if (event.target.id === 'editHandoffContext') { closeHumanModal(); openContextEditor(); } });
+$('#handoffPreview').addEventListener('click', event => {
+  if (event.target.id !== 'editHandoffContext') return;
+  state.returnToHumanAfterContextEdit = true;
+  state.contextEditTicketId = $('#ticketNumber').textContent;
+  closeHumanModal();
+  openContextEditor();
+});
 function closeMobileTeam() { document.body.classList.remove('show-team'); }
 $('#mobileTeamButton').addEventListener('click', () => document.body.classList.toggle('show-team'));
 $('#mobileTeamClose').addEventListener('click', closeMobileTeam);
@@ -1541,4 +1673,7 @@ async function init() {
     setAuthStatus(`Не удалось загрузить сервис: ${error.message}`, true);
   }
 }
+setInterval(syncConversationUpdates, 3000);
+document.addEventListener('pointerdown', unlockUserSound, {once:true});
+document.addEventListener('keydown', unlockUserSound, {once:true});
 init();

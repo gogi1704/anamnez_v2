@@ -16,7 +16,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY backend ./backend
 COPY static ./static
 COPY scripts ./scripts
-COPY index.html dashboard.html run.py ./
+COPY index.html dashboard.html manager.html run.py ./
 
 RUN useradd --create-home --uid 1000 appuser \
     && mkdir -p /app/data /app/logs /app/backups \

@@ -180,6 +180,9 @@ class ConversationOrchestrator:
             handoff_from = previous_agent
 
         if action == "human":
+            if human_status == "closed":
+                human_ticket_id = None
+                human_channel = None
             human_ticket_id, answer = self._prepare_human_handoff(
                 history, context, decision, conversation, human_status, human_ticket_id, human_channel
             )

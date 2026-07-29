@@ -1,5 +1,6 @@
 import json
 import hashlib
+import hmac
 import secrets
 import sqlite3
 import threading
@@ -63,6 +64,40 @@ def reset_current_user(preserve_identity: bool = False) -> None:
 
 def _token_hash(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
+
+
+def _staff_login(value: str) -> str:
+    login = str(value or "").strip().lower()
+    if not 4 <= len(login) <= 64 or any(
+        char not in "abcdefghijklmnopqrstuvwxyz0123456789._-" for char in login
+    ):
+        raise ValueError("Логин: 4–64 символа, латинские буквы, цифры, точка, дефис или _")
+    return login
+
+
+def _password_hash(password: str) -> str:
+    password = str(password or "")
+    if len(password) < 6 or len(password) > 256:
+        raise ValueError("Пароль должен содержать от 6 до 256 символов")
+    salt = secrets.token_bytes(16)
+    digest = hashlib.scrypt(
+        password.encode("utf-8"), salt=salt, n=2**14, r=8, p=1, dklen=32,
+    )
+    return f"scrypt$16384$8$1${salt.hex()}${digest.hex()}"
+
+
+def _password_valid(password: str, encoded: str) -> bool:
+    try:
+        algorithm, n, r, p, salt, expected = encoded.split("$")
+        if algorithm != "scrypt":
+            return False
+        digest = hashlib.scrypt(
+            str(password or "").encode("utf-8"), salt=bytes.fromhex(salt),
+            n=int(n), r=int(r), p=int(p), dklen=32,
+        )
+        return hmac.compare_digest(digest.hex(), expected)
+    except (ValueError, TypeError):
+        return False
 
 
 def _max_chel_id(legacy_chel_id: int) -> str:
@@ -595,6 +630,483 @@ def admin_table(
     }
 
 
+def _manager_message(row: sqlite3.Row) -> dict:
+    item = dict(row)
+    try:
+        item["metadata"] = json.loads(item.get("metadata") or "{}")
+    except json.JSONDecodeError:
+        item["metadata"] = {}
+    return item
+
+
+def _manager_profile(conn: sqlite3.Connection, chel_id: str) -> dict:
+    row = conn.execute(
+        "SELECT * FROM user_profile WHERE chel_id = ?", (chel_id,),
+    ).fetchone()
+    if not row:
+        return {
+            "chel_id": chel_id, "preferred_name": "", "age": None, "sex": "",
+            "height_cm": None, "weight_kg": None, "pregnancy": "not_applicable",
+            "conditions": [], "medications": [], "allergies": [],
+            "smoking": "unknown", "alcohol": "unknown", "activity": "unknown",
+            "blood_pressure": "unknown", "blood_sugar": "unknown",
+            "dark_in_eyes": "unknown", "joint_pain": "unknown", "fatigue": "unknown",
+            "tube_number": "", "notes": "", "updated_at": None,
+        }
+    result = dict(row)
+    for key in ("conditions", "medications", "allergies"):
+        try:
+            result[key] = json.loads(result.get(key) or "[]")
+        except json.JSONDecodeError:
+            result[key] = []
+    return result
+
+
+def admin_list_staff() -> list[dict]:
+    with connection() as conn:
+        rows = conn.execute(
+            """SELECT id, display_name, login, is_active, created_at, updated_at,
+            last_login_at FROM staff_users ORDER BY is_active DESC, display_name"""
+        ).fetchall()
+    result = []
+    for row in rows:
+        item = dict(row)
+        item["is_active"] = bool(item["is_active"])
+        result.append(item)
+    return result
+
+
+def admin_create_staff(display_name: str, login: str, password: str) -> dict:
+    display_name = " ".join(str(display_name or "").split())[:80]
+    if len(display_name) < 2:
+        raise ValueError("Укажите имя менеджера")
+    login = _staff_login(login)
+    encoded = _password_hash(password)
+    now = utc_now()
+    try:
+        with _write_lock, connection() as conn:
+            cursor = conn.execute(
+                """INSERT INTO staff_users
+                (display_name, login, password_hash, is_active, created_at, updated_at)
+                VALUES (?, ?, ?, 1, ?, ?)""",
+                (display_name, login, encoded, now, now),
+            )
+            conn.commit()
+            staff_id = cursor.lastrowid
+    except sqlite3.IntegrityError as exc:
+        raise ValueError("Менеджер с таким логином уже существует") from exc
+    return next(item for item in admin_list_staff() if item["id"] == staff_id)
+
+
+def admin_update_staff(
+    staff_id: int, *, display_name: str | None = None,
+    password: str | None = None, is_active: bool | None = None,
+) -> dict | None:
+    updates: list[str] = []
+    params: list = []
+    if display_name is not None:
+        name = " ".join(str(display_name).split())[:80]
+        if len(name) < 2:
+            raise ValueError("Укажите имя менеджера")
+        updates.append("display_name = ?")
+        params.append(name)
+    if password is not None and str(password):
+        updates.append("password_hash = ?")
+        params.append(_password_hash(password))
+    if is_active is not None:
+        updates.append("is_active = ?")
+        params.append(int(bool(is_active)))
+    if not updates:
+        raise ValueError("Нет изменений")
+    updates.append("updated_at = ?")
+    params.append(utc_now())
+    params.append(int(staff_id))
+    with _write_lock, connection() as conn:
+        cursor = conn.execute(
+            f"UPDATE staff_users SET {', '.join(updates)} WHERE id = ?", tuple(params),
+        )
+        if not cursor.rowcount:
+            return None
+        if is_active is False or password:
+            conn.execute(
+                "UPDATE staff_sessions SET revoked_at = ? WHERE staff_user_id = ? AND revoked_at IS NULL",
+                (utc_now(), int(staff_id)),
+            )
+        conn.commit()
+    return next(item for item in admin_list_staff() if item["id"] == int(staff_id))
+
+
+def authenticate_staff(login: str, password: str) -> dict | None:
+    try:
+        normalized = _staff_login(login)
+    except ValueError:
+        normalized = ""
+    with connection() as conn:
+        row = conn.execute(
+            "SELECT * FROM staff_users WHERE login = ?", (normalized,),
+        ).fetchone()
+    encoded = row["password_hash"] if row else _password_hash("dummy-password-value")
+    valid = _password_valid(password, encoded)
+    if not row or not valid or not row["is_active"]:
+        return None
+    now = datetime.now(timezone.utc)
+    expires_at = now + timedelta(hours=12)
+    token = secrets.token_urlsafe(32)
+    with _write_lock, connection() as conn:
+        conn.execute(
+            """INSERT INTO staff_sessions
+            (token_hash, staff_user_id, created_at, last_seen_at, expires_at)
+            VALUES (?, ?, ?, ?, ?)""",
+            (_token_hash(token), row["id"], now.isoformat(), now.isoformat(), expires_at.isoformat()),
+        )
+        conn.execute(
+            "UPDATE staff_users SET last_login_at = ?, updated_at = ? WHERE id = ?",
+            (now.isoformat(), now.isoformat(), row["id"]),
+        )
+        conn.commit()
+    return {
+        "token": token, "expires_at": expires_at.isoformat(),
+        "user": {"id": row["id"], "display_name": row["display_name"], "login": row["login"]},
+    }
+
+
+def get_staff_session(token: str) -> dict | None:
+    if not token:
+        return None
+    now = datetime.now(timezone.utc)
+    with _write_lock, connection() as conn:
+        row = conn.execute(
+            """SELECT s.token_hash, s.expires_at, s.revoked_at, u.id, u.display_name,
+            u.login, u.is_active FROM staff_sessions s
+            JOIN staff_users u ON u.id = s.staff_user_id WHERE s.token_hash = ?""",
+            (_token_hash(token),),
+        ).fetchone()
+        if (
+            not row or row["revoked_at"] or not row["is_active"]
+            or datetime.fromisoformat(row["expires_at"]) <= now
+        ):
+            return None
+        conn.execute(
+            "UPDATE staff_sessions SET last_seen_at = ? WHERE token_hash = ?",
+            (now.isoformat(), row["token_hash"]),
+        )
+        conn.commit()
+    return {"id": row["id"], "display_name": row["display_name"], "login": row["login"]}
+
+
+def revoke_staff_session(token: str) -> None:
+    if not token:
+        return
+    with _write_lock, connection() as conn:
+        conn.execute(
+            "UPDATE staff_sessions SET revoked_at = ? WHERE token_hash = ?",
+            (utc_now(), _token_hash(token)),
+        )
+        conn.commit()
+
+
+def manager_list_conversations(
+    query: str = "", queue: str = "open", limit: int = 100,
+) -> list[dict]:
+    """Return the human-support queue. This deliberately contains sensitive data."""
+    query = " ".join(str(query or "").split())[:120]
+    queue = str(queue or "open")
+    if queue not in {"open", "all", "ai_off"}:
+        raise ValueError("Неизвестный фильтр очереди")
+    limit = max(10, min(250, int(limit)))
+    escaped = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    pattern = f"%{escaped}%"
+    where = ["c.chel_id NOT IN ('chel_legacy', 'chel_test_default')"]
+    params: list = []
+    if queue == "open":
+        where.append("(c.human_ticket_id IS NOT NULL OR c.ai_enabled = 0)")
+        where.append("c.human_status IN ('pending', 'connected')")
+    elif queue == "ai_off":
+        where.append("c.ai_enabled = 0")
+    if query:
+        where.append("""(
+            c.id LIKE ? ESCAPE '\\' OR c.chel_id LIKE ? ESCAPE '\\'
+            OR COALESCE(c.human_ticket_id, '') LIKE ? ESCAPE '\\'
+            OR COALESCE(p.preferred_name, '') LIKE ? ESCAPE '\\'
+            OR COALESCE(c.human_phone, '') LIKE ? ESCAPE '\\'
+        )""")
+        params.extend([pattern] * 5)
+    where_sql = " AND ".join(where)
+    with connection() as conn:
+        rows = conn.execute(
+            f"""SELECT c.id, c.chel_id, c.title, c.active_agent, c.status,
+                c.ai_enabled, c.human_status, c.human_ticket_id,
+                COALESCE(c.human_channel, '') AS human_channel,
+                c.human_phone, c.created_at, c.updated_at,
+                COALESCE(p.preferred_name, '') AS preferred_name,
+                (SELECT content FROM messages lm
+                 WHERE lm.conversation_id = c.id ORDER BY lm.id DESC LIMIT 1) AS last_message,
+                (SELECT COUNT(*) FROM messages um
+                 WHERE um.conversation_id = c.id AND um.role = 'user'
+                   AND um.id > COALESCE((
+                     SELECT MAX(hm.id) FROM messages hm
+                     WHERE hm.conversation_id = c.id
+                       AND json_extract(hm.metadata, '$.sender_type') = 'human_manager'
+                   ), 0)) AS unanswered_user_messages
+            FROM conversations c
+            LEFT JOIN user_profile p ON p.chel_id = c.chel_id
+            WHERE {where_sql}
+            ORDER BY CASE WHEN c.ai_enabled = 0 THEN 0 ELSE 1 END,
+                     c.updated_at DESC LIMIT ?""",
+            tuple(params + [limit]),
+        ).fetchall()
+    result = []
+    for row in rows:
+        item = dict(row)
+        item["ai_enabled"] = bool(item["ai_enabled"])
+        item["last_message"] = str(item.get("last_message") or "")[:180]
+        result.append(item)
+    return result
+
+
+def manager_conversation_detail(conversation_id: str) -> dict | None:
+    """Return a complete manager view for one conversation and its owner."""
+    with connection() as conn:
+        conversation_row = conn.execute(
+            "SELECT * FROM conversations WHERE id = ?", (conversation_id,),
+        ).fetchone()
+        if not conversation_row:
+            return None
+        conversation = dict(conversation_row)
+        conversation["ai_enabled"] = bool(conversation.get("ai_enabled", 1))
+        chel_id = conversation["chel_id"]
+        messages = [
+            _manager_message(row) for row in conn.execute(
+                "SELECT * FROM messages WHERE conversation_id = ? ORDER BY id",
+                (conversation_id,),
+            ).fetchall()
+        ]
+        symptoms = [
+            dict(row) for row in conn.execute(
+                "SELECT * FROM body_symptoms WHERE chel_id = ? ORDER BY created_at DESC LIMIT 100",
+                (chel_id,),
+            ).fetchall()
+        ]
+        memories = [
+            dict(row) for row in conn.execute(
+                "SELECT * FROM memories WHERE chel_id = ? ORDER BY updated_at DESC LIMIT 100",
+                (chel_id,),
+            ).fetchall()
+        ]
+        onboarding_row = conn.execute(
+            "SELECT * FROM onboarding_state WHERE chel_id = ?", (chel_id,),
+        ).fetchone()
+        onboarding = dict(onboarding_row) if onboarding_row else {}
+        try:
+            onboarding["selected_tests"] = json.loads(onboarding.get("selected_tests") or "[]")
+        except json.JSONDecodeError:
+            onboarding["selected_tests"] = []
+        interpretations = []
+        for row in conn.execute(
+            """SELECT med_id, scope_key, source_urls, interpretation, agent_id,
+                created_at, updated_at FROM lab_interpretations
+            WHERE chel_id = ? ORDER BY updated_at DESC LIMIT 50""",
+            (chel_id,),
+        ).fetchall():
+            item = dict(row)
+            try:
+                item["source_urls"] = json.loads(item.get("source_urls") or "[]")
+            except json.JSONDecodeError:
+                item["source_urls"] = []
+            interpretations.append(item)
+        identities = [
+            dict(row) for row in conn.execute(
+                """SELECT provider, provider_user_id, access_status, last_login_at
+                FROM external_identities WHERE chel_id = ? ORDER BY provider""",
+                (chel_id,),
+            ).fetchall()
+        ]
+        actions = []
+        for row in conn.execute(
+            """SELECT manager_name, action, details, created_at FROM manager_actions
+            WHERE conversation_id = ? ORDER BY id DESC LIMIT 50""",
+            (conversation_id,),
+        ).fetchall():
+            item = dict(row)
+            try:
+                item["details"] = json.loads(item.get("details") or "{}")
+            except json.JSONDecodeError:
+                item["details"] = {}
+            actions.append(item)
+
+    lab_documents: list[dict] = []
+    seen_urls: set[str] = set()
+    for message in messages:
+        metadata = message.get("metadata") or {}
+        for document in metadata.get("lab_result_documents", []) or []:
+            url = str(document.get("url") or "")
+            if url and url not in seen_urls:
+                seen_urls.add(url)
+                lab_documents.append(document)
+    profile = _manager_profile_from_value(conversation["chel_id"])
+    return {
+        "conversation": conversation,
+        "messages": messages,
+        "profile": profile,
+        "symptoms": symptoms,
+        "memories": memories,
+        "onboarding": onboarding,
+        "lab": {
+            "tube_number": profile.get("tube_number", ""),
+            "documents": lab_documents,
+            "interpretations": interpretations,
+        },
+        "identities": identities,
+        "manager_actions": actions,
+    }
+
+
+def _manager_profile_from_value(chel_id: str) -> dict:
+    with connection() as conn:
+        return _manager_profile(conn, chel_id)
+
+
+def manager_add_reply(
+    conversation_id: str, content: str, manager_name: str,
+) -> dict:
+    content = str(content or "").strip()
+    manager_name = " ".join(str(manager_name or "").split())[:80] or "Менеджер"
+    if not content or len(content) > 12_000:
+        raise ValueError("Ответ должен содержать от 1 до 12000 символов")
+    now = utc_now()
+    metadata = {
+        "sender_type": "human_manager",
+        "manager_name": manager_name,
+        "action": "manager_reply",
+    }
+    with _write_lock, connection() as conn:
+        conversation = conn.execute(
+            "SELECT id FROM conversations WHERE id = ?", (conversation_id,),
+        ).fetchone()
+        if not conversation:
+            raise ValueError("Диалог не найден")
+        cursor = conn.execute(
+            """INSERT INTO messages
+            (conversation_id, role, agent_id, content, metadata, created_at)
+            VALUES (?, 'assistant', 'manager', ?, ?, ?)""",
+            (conversation_id, content, json.dumps(metadata, ensure_ascii=False), now),
+        )
+        conn.execute(
+            """UPDATE conversations SET human_status = 'connected',
+            status = 'waiting_human', updated_at = ? WHERE id = ?""",
+            (now, conversation_id),
+        )
+        conn.execute(
+            """INSERT INTO manager_actions
+            (conversation_id, manager_name, action, details, created_at)
+            VALUES (?, ?, 'reply', ?, ?)""",
+            (conversation_id, manager_name, json.dumps({"message_id": cursor.lastrowid}), now),
+        )
+        conn.commit()
+        row = conn.execute(
+            "SELECT * FROM messages WHERE id = ?", (cursor.lastrowid,),
+        ).fetchone()
+    return _manager_message(row)
+
+
+def manager_set_ai_enabled(
+    conversation_id: str, enabled: bool, manager_name: str,
+) -> dict | None:
+    manager_name = " ".join(str(manager_name or "").split())[:80] or "Менеджер"
+    now = utc_now()
+    with _write_lock, connection() as conn:
+        cursor = conn.execute(
+            """UPDATE conversations SET ai_enabled = ?, human_status = CASE
+                WHEN ? = 0 THEN 'connected'
+                WHEN human_ticket_id IS NOT NULL THEN 'pending'
+                ELSE human_status END,
+                status = CASE WHEN ? = 0 THEN 'waiting_human' ELSE 'active' END,
+                updated_at = ? WHERE id = ?""",
+            (int(bool(enabled)), int(bool(enabled)), int(bool(enabled)), now, conversation_id),
+        )
+        if not cursor.rowcount:
+            return None
+        conn.execute(
+            """INSERT INTO manager_actions
+            (conversation_id, manager_name, action, details, created_at)
+            VALUES (?, ?, 'ai_mode', ?, ?)""",
+            (
+                conversation_id, manager_name,
+                json.dumps({"ai_enabled": bool(enabled)}, ensure_ascii=False), now,
+            ),
+        )
+        conn.commit()
+        row = conn.execute(
+            "SELECT * FROM conversations WHERE id = ?", (conversation_id,),
+        ).fetchone()
+    result = dict(row)
+    result["ai_enabled"] = bool(result["ai_enabled"])
+    return result
+
+
+def manager_close_conversation(
+    conversation_id: str, manager_name: str,
+) -> dict | None:
+    manager_name = " ".join(str(manager_name or "").split())[:80] or "Менеджер"
+    now = utc_now()
+    with _write_lock, connection() as conn:
+        previous = conn.execute(
+            """SELECT human_status, human_ticket_id, human_channel, ai_enabled
+            FROM conversations WHERE id = ?""",
+            (conversation_id,),
+        ).fetchone()
+        if not previous:
+            return None
+        conn.execute(
+            """UPDATE conversations SET ai_enabled = 1, human_status = 'closed',
+            status = 'active', updated_at = ? WHERE id = ?""",
+            (now, conversation_id),
+        )
+        conn.execute(
+            """INSERT INTO manager_actions
+            (conversation_id, manager_name, action, details, created_at)
+            VALUES (?, ?, 'close', ?, ?)""",
+            (
+                conversation_id, manager_name,
+                json.dumps({
+                    "human_status_before": previous["human_status"],
+                    "human_ticket_id": previous["human_ticket_id"],
+                    "human_channel": previous["human_channel"],
+                    "ai_enabled_before": bool(previous["ai_enabled"]),
+                }, ensure_ascii=False),
+                now,
+            ),
+        )
+        conn.commit()
+        row = conn.execute(
+            "SELECT * FROM conversations WHERE id = ?", (conversation_id,),
+        ).fetchone()
+    result = dict(row)
+    result["ai_enabled"] = bool(result["ai_enabled"])
+    return result
+
+
+def add_user_message_waiting_for_manager(
+    conversation_id: str, content: str, attachments: list[dict] | None = None,
+) -> tuple[dict, dict]:
+    """Persist a user message without invoking AI when a manager paused it."""
+    conversation = get_conversation(conversation_id)
+    if not conversation:
+        raise ValueError("Диалог не найден")
+    if bool(conversation.get("ai_enabled", 1)):
+        raise ValueError("ИИ включён для этого диалога")
+    attachment_meta = [
+        {"name": item.get("name"), "type": item.get("type")}
+        for item in (attachments or [])
+    ]
+    message = add_message(
+        conversation_id, "user", content,
+        metadata={"attachments": attachment_meta, "awaiting_manager": True},
+    )
+    updated = get_conversation(conversation_id)
+    return message, updated
+
+
 @contextmanager
 def connection():
     settings.database_path.parent.mkdir(parents=True, exist_ok=True)
@@ -624,6 +1136,7 @@ def init_db() -> None:
                 active_agent TEXT NOT NULL DEFAULT 'manager',
                 context_summary TEXT NOT NULL DEFAULT '',
                 status TEXT NOT NULL DEFAULT 'active',
+                ai_enabled INTEGER NOT NULL DEFAULT 1,
                 human_status TEXT NOT NULL DEFAULT 'none',
                 human_ticket_id TEXT,
                 human_channel TEXT,
@@ -651,6 +1164,37 @@ def init_db() -> None:
                 reason TEXT NOT NULL,
                 created_at TEXT NOT NULL,
                 FOREIGN KEY(conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
+            );
+
+            CREATE TABLE IF NOT EXISTS manager_actions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                conversation_id TEXT NOT NULL,
+                manager_name TEXT NOT NULL,
+                action TEXT NOT NULL,
+                details TEXT NOT NULL DEFAULT '{}',
+                created_at TEXT NOT NULL,
+                FOREIGN KEY(conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
+            );
+
+            CREATE TABLE IF NOT EXISTS staff_users (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                display_name TEXT NOT NULL,
+                login TEXT NOT NULL UNIQUE,
+                password_hash TEXT NOT NULL,
+                is_active INTEGER NOT NULL DEFAULT 1,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                last_login_at TEXT
+            );
+
+            CREATE TABLE IF NOT EXISTS staff_sessions (
+                token_hash TEXT PRIMARY KEY,
+                staff_user_id INTEGER NOT NULL,
+                created_at TEXT NOT NULL,
+                last_seen_at TEXT NOT NULL,
+                expires_at TEXT NOT NULL,
+                revoked_at TEXT,
+                FOREIGN KEY(staff_user_id) REFERENCES staff_users(id) ON DELETE CASCADE
             );
 
             CREATE TABLE IF NOT EXISTS memories (
@@ -792,6 +1336,8 @@ def init_db() -> None:
             conn.execute("ALTER TABLE conversations ADD COLUMN human_channel TEXT")
         if "human_phone" not in columns:
             conn.execute("ALTER TABLE conversations ADD COLUMN human_phone TEXT")
+        if "ai_enabled" not in columns:
+            conn.execute("ALTER TABLE conversations ADD COLUMN ai_enabled INTEGER NOT NULL DEFAULT 1")
 
         memory_columns = {row[1] for row in conn.execute("PRAGMA table_info(memories)").fetchall()}
         if "chel_id" not in memory_columns:
@@ -866,6 +1412,10 @@ def init_db() -> None:
             conn.execute("ALTER TABLE onboarding_state ADD COLUMN font_size TEXT NOT NULL DEFAULT 'standard'")
 
         conn.execute("CREATE INDEX IF NOT EXISTS idx_conversations_chel_id ON conversations(chel_id, updated_at)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_conversations_human_queue ON conversations(human_status, updated_at)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_messages_conversation_id ON messages(conversation_id, id)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_manager_actions_conversation_id ON manager_actions(conversation_id, created_at)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_staff_sessions_user ON staff_sessions(staff_user_id, expires_at)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_memories_chel_id ON memories(chel_id, updated_at)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_body_symptoms_chel_id ON body_symptoms(chel_id, created_at)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_external_identities_chel_id ON external_identities(chel_id)")
@@ -948,6 +1498,26 @@ def list_messages(conversation_id: str, limit: int | None = None) -> list[dict]:
     for row in rows:
         item = dict(row)
         item["metadata"] = json.loads(item["metadata"] or "{}")
+        result.append(item)
+    return result
+
+
+def list_messages_after(conversation_id: str, after_id: int = 0) -> list[dict]:
+    with connection() as conn:
+        rows = conn.execute(
+            """SELECT m.* FROM messages m
+            JOIN conversations c ON c.id = m.conversation_id
+            WHERE m.conversation_id = ? AND c.chel_id = ? AND m.id > ?
+            ORDER BY m.id ASC LIMIT 200""",
+            (conversation_id, current_chel_id(), max(0, int(after_id))),
+        ).fetchall()
+    result = []
+    for row in rows:
+        item = dict(row)
+        try:
+            item["metadata"] = json.loads(item["metadata"] or "{}")
+        except json.JSONDecodeError:
+            item["metadata"] = {}
         result.append(item)
     return result
 

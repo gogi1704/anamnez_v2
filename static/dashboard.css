@@ -27,6 +27,21 @@ button:hover,.button:hover { background:var(--green-dark); }
 .login-card > a { display:inline-block; margin-top:22px; color:var(--green); font-size:13px; font-weight:700; text-decoration:none; }
 .form-error,.dashboard-error { color:var(--danger); font-size:13px; }
 .dashboard { display:grid; gap:20px; }
+.admin-tabs { display:flex; gap:8px; padding:6px; border:1px solid var(--line); border-radius:15px; background:#fff; }
+.admin-tabs button { min-height:38px; color:var(--muted); background:transparent; }
+.admin-tabs button:hover,.admin-tabs button.active { color:#fff; background:var(--green); }
+.dashboard.show-managers > :not(.dashboard-header):not(.admin-tabs):not(.manager-admin):not(.dashboard-error) { display:none!important; }
+.manager-admin { display:grid; grid-template-columns:minmax(300px,420px) minmax(0,1fr); gap:20px; }
+.manager-create-form { display:grid; gap:12px; margin-top:18px; }
+.manager-form-status { margin:12px 0 0; color:var(--green); font-size:12px; }.manager-form-status.error { color:var(--danger); }
+.staff-list { display:grid; gap:9px; }
+.staff-card { display:grid; grid-template-columns:minmax(0,1fr) auto; gap:12px; align-items:center; padding:13px; border:1px solid var(--line); border-radius:13px; }
+.staff-card strong,.staff-card small { display:block; }.staff-card small { margin-top:3px; color:var(--muted); }
+.staff-card-actions { display:flex; flex-wrap:wrap; justify-content:flex-end; gap:7px; }
+.staff-card-actions button { min-height:34px; padding:0 10px; font-size:11px; }
+.staff-card-actions .reset-password { color:var(--green); border:1px solid #c9dbd1; background:#fff; }
+.staff-card-actions .toggle-staff { color:var(--danger); border:1px solid #ead0d0; background:#fff; }
+.staff-card.inactive { opacity:.62; }.staff-card.inactive .toggle-staff { color:var(--green); border-color:#c9dbd1; }
 .dashboard-header { display:flex; align-items:flex-end; justify-content:space-between; gap:22px; padding:12px 2px 6px; }
 .dashboard-header p:last-child { margin:10px 0 0; color:var(--muted); font-size:13px; }
 .header-actions { display:flex; flex-wrap:wrap; gap:9px; }
@@ -110,6 +125,7 @@ tbody tr:hover { background:#f8fbf9; }
   .table-pagination span { min-width:90px; }
   .privacy-note { align-items:flex-start; }
 }
+@media (max-width:900px) { .manager-admin { grid-template-columns:1fr; } }
 @media (max-width:390px) {
   .summary-grid { grid-template-columns:1fr; }
   .header-actions { grid-template-columns:1fr; }

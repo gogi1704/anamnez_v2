@@ -48,10 +48,13 @@ def main() -> int:
     required_files = [
         PROJECT_DIR / "index.html",
         PROJECT_DIR / "dashboard.html",
+        PROJECT_DIR / "manager.html",
         PROJECT_DIR / "static" / "app.js",
         PROJECT_DIR / "static" / "styles.css",
         PROJECT_DIR / "static" / "dashboard.js",
         PROJECT_DIR / "static" / "dashboard.css",
+        PROJECT_DIR / "static" / "manager.js",
+        PROJECT_DIR / "static" / "manager.css",
         PROJECT_DIR / "backend" / "main.py",
     ]
     missing = [str(path.relative_to(PROJECT_DIR)) for path in required_files if not path.is_file()]
@@ -129,9 +132,9 @@ def main() -> int:
             "длиной не менее 32 символов"
         )
     elif dashboard_token:
-        passed.append("Токен административного дашборда задан (значение скрыто)")
+        passed.append("Токен админ-панели задан (значение скрыто)")
     else:
-        warnings.append("Административный дашборд отключён: ADMIN_DASHBOARD_TOKEN не задан")
+        warnings.append("Админ-панель отключена: ADMIN_DASHBOARD_TOKEN не задан")
 
     if not 300 <= settings.auth_link_ttl_seconds <= 2_592_000:
         errors.append("AUTH_LINK_TTL_SECONDS должен быть от 300 секунд до 30 дней")

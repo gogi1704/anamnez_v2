@@ -34,6 +34,8 @@ const summaryCards = [
 ];
 
 let refreshTimer;
+let staffItems = [];
+let activeAdminView = 'dashboard';
 const tableStates = {
   users:{apiName:'users',prefix:'users',offset:0,limit:25,total:0,query:''},
   conversations:{apiName:'conversations',prefix:'conversations',offset:0,limit:25,total:0,query:''},
@@ -215,9 +217,14 @@ function renderDashboard(data) {
   $('#generatedAt').textContent = `Данные обновлены ${formatDate(data.generated_at)} · автообновление раз в минуту`;
 }
 
-async function adminFetch(path, token = sessionStorage.getItem(TOKEN_KEY)) {
+async function adminFetch(path, token = sessionStorage.getItem(TOKEN_KEY), options = {}) {
   const response = await fetch(path, {
-    headers:{Authorization:`Bearer ${token || ''}`},
+    ...options,
+    headers:{
+      Authorization:`Bearer ${token || ''}`,
+      'Content-Type':'application/json',
+      ...(options.headers || {}),
+    },
     cache:'no-store',
   });
   const data = await response.json().catch(() => ({}));
@@ -227,6 +234,110 @@ async function adminFetch(path, token = sessionStorage.getItem(TOKEN_KEY)) {
     throw error;
   }
   return data;
+}
+
+function showManagerStatus(message, error = false) {
+  const status = $('#managerFormStatus');
+  status.textContent = message;
+  status.classList.toggle('error', error);
+  status.classList.toggle('hidden', !message);
+}
+
+function renderStaff(items) {
+  staffItems = items;
+  $('#staffCount').textContent = `${items.length} сотрудников`;
+  $('#staffList').innerHTML = items.length ? items.map(item => `
+    <article class="staff-card ${item.is_active ? '' : 'inactive'}" data-staff-id="${item.id}">
+      <div><strong>${escapeHtml(item.display_name)}</strong><small>Логин: ${escapeHtml(item.login)} · ${item.is_active ? 'доступ активен' : 'доступ отключён'}</small><small>Последний вход: ${escapeHtml(formatDate(item.last_login_at))}</small></div>
+      <div class="staff-card-actions">
+        <button class="reset-password" data-staff-action="name" type="button">Изменить имя</button>
+        <button class="reset-password" data-staff-action="password" type="button">Новый пароль</button>
+        <button class="toggle-staff" data-staff-action="toggle" data-active="${item.is_active}" type="button">${item.is_active ? 'Отключить' : 'Включить'}</button>
+      </div>
+    </article>`).join('') : '<p class="form-error">Менеджеры ещё не созданы</p>';
+}
+
+function escapeHtml(value) {
+  return String(value ?? '').replace(/[&<>"']/g, char => ({
+    '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;',
+  }[char]));
+}
+
+async function loadStaff() {
+  renderStaff(await adminFetch('/api/admin/managers'));
+}
+
+function showAdminView(view) {
+  activeAdminView = view === 'managers' ? 'managers' : 'dashboard';
+  const managersVisible = activeAdminView === 'managers';
+  $('#dashboard').classList.toggle('show-managers', managersVisible);
+  $('#managerAdminView').classList.toggle('hidden', !managersVisible);
+  $('#dashboardTab').classList.toggle('active', !managersVisible);
+  $('#managersTab').classList.toggle('active', managersVisible);
+  if (managersVisible) loadStaff().catch(showDashboardError);
+}
+
+async function createManager(event) {
+  event.preventDefault();
+  showManagerStatus('');
+  const form = $('#managerCreateForm');
+  const button = form.querySelector('button[type="submit"]');
+  button.disabled = true;
+  try {
+    await adminFetch('/api/admin/managers', undefined, {
+      method:'POST',
+      body:JSON.stringify({
+        display_name:$('#staffDisplayName').value.trim(),
+        login:$('#staffLogin').value.trim(),
+        password:$('#staffPassword').value,
+      }),
+    });
+    form.reset();
+    showManagerStatus('Менеджер создан. Теперь он может войти на странице /manager.');
+    await loadStaff();
+  } catch (error) {
+    showManagerStatus(error.message, true);
+  } finally {
+    button.disabled = false;
+  }
+}
+
+async function updateManager(event) {
+  const button = event.target.closest('[data-staff-action]');
+  if (!button) return;
+  const card = button.closest('[data-staff-id]');
+  const manager = staffItems.find(item => item.id === Number(card?.dataset.staffId));
+  if (!manager) return;
+  const action = button.dataset.staffAction;
+  const payload = {};
+  if (action === 'name') {
+    const displayName = window.prompt('Новое имя менеджера', manager.display_name);
+    if (displayName === null) return;
+    payload.display_name = displayName.trim();
+  } else if (action === 'password') {
+    const password = window.prompt('Новый пароль (не короче 6 символов)');
+    if (password === null) return;
+    payload.password = password;
+  } else if (action === 'toggle') {
+    if (manager.is_active && !window.confirm(`Отключить доступ для ${manager.display_name}? Его активные сеансы будут завершены.`)) return;
+    payload.is_active = !manager.is_active;
+  }
+  button.disabled = true;
+  showManagerStatus('');
+  try {
+    await adminFetch(`/api/admin/managers/${manager.id}`, undefined, {
+      method:'POST',
+      body:JSON.stringify(payload),
+    });
+    showManagerStatus(action === 'password'
+      ? 'Пароль изменён. Все прежние сеансы менеджера завершены.'
+      : 'Данные менеджера обновлены.');
+    await loadStaff();
+  } catch (error) {
+    showManagerStatus(error.message, true);
+  } finally {
+    button.disabled = false;
+  }
 }
 
 function renderTablePage(state) {
@@ -295,6 +406,7 @@ function showDashboardError(error) {
 function showLogin(message = '') {
   clearInterval(refreshTimer);
   $('#dashboard').classList.add('hidden');
+  showAdminView('dashboard');
   $('#loginPanel').classList.remove('hidden');
   $('#loginError').textContent = message;
   $('#loginError').classList.toggle('hidden',!message);
@@ -317,6 +429,7 @@ async function loadDashboard(token = sessionStorage.getItem(TOKEN_KEY)) {
     showDashboard();
     renderDashboard(data);
     await loadAllTables();
+    if (activeAdminView === 'managers') await loadStaff();
     clearInterval(refreshTimer);
     refreshTimer = setInterval(() => loadDashboard(),60000);
   } catch (error) {
@@ -342,6 +455,10 @@ $('#logoutButton').addEventListener('click', () => {
   $('#adminToken').value = '';
   showLogin();
 });
+$('#dashboardTab').addEventListener('click', () => showAdminView('dashboard'));
+$('#managersTab').addEventListener('click', () => showAdminView('managers'));
+$('#managerCreateForm').addEventListener('submit', createManager);
+$('#staffList').addEventListener('click', updateManager);
 
 Object.keys(tableStates).forEach(bindTableControls);
 loadDashboard();

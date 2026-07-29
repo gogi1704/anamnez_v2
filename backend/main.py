@@ -23,8 +23,10 @@ from .prompts import public_agents
 STATIC_DIR = BASE_DIR / "static"
 ALLOWED_STATIC = {
     "app.js", "agents.js", "styles.css", "dashboard.js", "dashboard.css",
+    "manager.js", "manager.css",
 }
 SERVER_ERROR_LOG = settings.log_path
+MANAGER_SESSION_COOKIE = "consilium_manager_session"
 
 
 def admin_token_valid(authorization: str, expected: str | None = None) -> bool:
@@ -97,8 +99,10 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                 "messenger_auth_configured": messenger_auth_ready,
                 "max_auth_configured": messenger_auth_ready,
             })
-        if path == "/dashboard":
+        if path in {"/dashboard", "/admin"}:
             return self._send_file(BASE_DIR / "dashboard.html", "text/html; charset=utf-8")
+        if path == "/manager":
+            return self._send_file(BASE_DIR / "manager.html", "text/html; charset=utf-8")
         if path.startswith("/static/"):
             name = path.removeprefix("/static/")
             if name not in ALLOWED_STATIC:
@@ -106,12 +110,8 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
             mime = mimetypes.guess_type(name)[0] or "application/octet-stream"
             return self._send_file(STATIC_DIR / name, f"{mime}; charset=utf-8")
         if path in {"/api/admin/dashboard", "/api/admin/table"}:
-            if not settings.admin_dashboard_token:
-                return self._json(503, {
-                    "detail": "Дашборд отключён: задайте ADMIN_DASHBOARD_TOKEN",
-                })
-            if not admin_token_valid(self.headers.get("Authorization", "")):
-                return self._json(401, {"detail": "Неверный токен администратора"})
+            if not self._admin_authorized():
+                return
             if path == "/api/admin/dashboard":
                 return self._json(200, db.admin_dashboard())
             query = parse_qs(parsed.query)
@@ -124,6 +124,33 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                 ))
             except (ValueError, TypeError):
                 return self._json(422, {"detail": "Некорректные параметры таблицы"})
+        if path == "/api/admin/managers":
+            if not self._admin_authorized():
+                return
+            return self._json(200, db.admin_list_staff())
+        if path.startswith("/api/manager/"):
+            manager = self._manager_authorized()
+            if not manager:
+                return
+            if path == "/api/manager/me":
+                return self._json(200, manager)
+            if path == "/api/manager/conversations":
+                query = parse_qs(parsed.query)
+                try:
+                    return self._json(200, db.manager_list_conversations(
+                        query.get("query", [""])[0],
+                        query.get("queue", ["open"])[0],
+                        int(query.get("limit", ["100"])[0]),
+                    ))
+                except (ValueError, TypeError) as exc:
+                    return self._json(422, {"detail": str(exc)})
+            conversation_id = path.removeprefix("/api/manager/conversations/").strip("/")
+            if conversation_id and "/" not in conversation_id:
+                detail = db.manager_conversation_detail(conversation_id)
+                if not detail:
+                    return self._json(404, {"detail": "Диалог не найден"})
+                return self._json(200, detail)
+            return self._json(404, {"detail": "Маршрут панели менеджера не найден"})
         self._ensure_user_context()
         if path == "/":
             return self._send_file(BASE_DIR / "index.html", "text/html; charset=utf-8")
@@ -170,6 +197,24 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
             })
         if path == "/api/conversations":
             return self._json(200, db.list_conversations())
+        if path.startswith("/api/conversations/") and path.endswith("/updates"):
+            conversation_id = path.removeprefix("/api/conversations/").removesuffix("/updates").strip("/")
+            item = db.get_conversation(conversation_id)
+            if not item:
+                return self._json(404, {"detail": "Диалог не найден"})
+            query = parse_qs(parsed.query)
+            try:
+                after_id = int(query.get("after_id", ["0"])[0])
+            except (ValueError, TypeError):
+                return self._json(422, {"detail": "Некорректный идентификатор сообщения"})
+            return self._json(200, {
+                "conversation_id": conversation_id,
+                "ai_enabled": bool(item.get("ai_enabled", 1)),
+                "human_status": item.get("human_status", "none"),
+                "human_ticket_id": item.get("human_ticket_id"),
+                "human_channel": item.get("human_channel"),
+                "messages": db.list_messages_after(conversation_id, after_id),
+            })
         if path.startswith("/api/conversations/"):
             conversation_id = path.removeprefix("/api/conversations/")
             item = db.get_conversation(conversation_id)
@@ -180,10 +225,105 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         path = urlparse(self.path).path
+        if path == "/api/manager/login":
+            try:
+                payload = self._read_json()
+                authenticated = db.authenticate_staff(
+                    str(payload.get("login", "")), str(payload.get("password", "")),
+                )
+                if not authenticated:
+                    return self._json(401, {"detail": "Неверный логин или пароль"})
+                self._manager_session_to_set = authenticated["token"]
+                return self._json(200, authenticated["user"])
+            except (ValueError, json.JSONDecodeError, UnicodeDecodeError):
+                return self._json(401, {"detail": "Неверный логин или пароль"})
+        if path == "/api/manager/logout":
+            if self.headers.get("X-Consilium-Manager") != "1":
+                return self._json(403, {"detail": "Запрос менеджера не подтверждён"})
+            token = self._manager_cookie()
+            db.revoke_staff_session(token)
+            self._clear_manager_session = True
+            return self._json(200, {"status": "logged_out"})
+        if path == "/api/admin/managers":
+            if not self._admin_authorized():
+                return
+            try:
+                payload = self._read_json()
+                return self._json(201, db.admin_create_staff(
+                    str(payload.get("display_name", "")),
+                    str(payload.get("login", "")),
+                    str(payload.get("password", "")),
+                ))
+            except (ValueError, json.JSONDecodeError, UnicodeDecodeError) as exc:
+                return self._json(422, {"detail": str(exc)})
+        if path.startswith("/api/admin/managers/"):
+            if not self._admin_authorized():
+                return
+            try:
+                staff_id = int(path.removeprefix("/api/admin/managers/").strip("/"))
+                payload = self._read_json()
+                if "is_active" in payload and not isinstance(payload["is_active"], bool):
+                    raise ValueError("is_active должен быть true или false")
+                item = db.admin_update_staff(
+                    staff_id,
+                    display_name=payload.get("display_name"),
+                    password=payload.get("password"),
+                    is_active=payload.get("is_active"),
+                )
+                if not item:
+                    return self._json(404, {"detail": "Менеджер не найден"})
+                return self._json(200, item)
+            except (ValueError, TypeError, json.JSONDecodeError, UnicodeDecodeError) as exc:
+                return self._json(422, {"detail": str(exc)})
         if path == "/api/auth/max/link":
             return self._create_max_auth_link()
         if path == "/api/auth/messenger/link":
             return self._create_messenger_auth_link()
+        if path.startswith("/api/manager/conversations/"):
+            manager = self._manager_authorized()
+            if not manager:
+                return
+            suffix = path.removeprefix("/api/manager/conversations/")
+            if suffix.endswith("/close"):
+                conversation_id = suffix.removesuffix("/close").strip("/")
+                conversation = db.manager_close_conversation(
+                    conversation_id, manager["display_name"],
+                )
+                if not conversation:
+                    return self._json(404, {"detail": "Диалог не найден"})
+                return self._json(200, {"conversation": conversation})
+            if suffix.endswith("/reply"):
+                conversation_id = suffix.removesuffix("/reply").strip("/")
+                try:
+                    payload = self._read_json()
+                    message = db.manager_add_reply(
+                        conversation_id,
+                        str(payload.get("message", "")),
+                        manager["display_name"],
+                    )
+                    return self._json(201, {
+                        "message": message,
+                        "conversation": db.manager_conversation_detail(conversation_id)["conversation"],
+                    })
+                except (ValueError, TypeError, json.JSONDecodeError, UnicodeDecodeError) as exc:
+                    return self._json(422, {"detail": str(exc)})
+            if suffix.endswith("/ai-mode"):
+                conversation_id = suffix.removesuffix("/ai-mode").strip("/")
+                try:
+                    payload = self._read_json()
+                    if not isinstance(payload.get("enabled"), bool):
+                        raise ValueError("Передайте enabled=true или enabled=false")
+                    conversation = db.manager_set_ai_enabled(
+                        conversation_id,
+                        payload["enabled"],
+                        manager["display_name"],
+                    )
+                    if not conversation:
+                        return self._json(404, {"detail": "Диалог не найден"})
+                    return self._json(200, {"conversation": conversation})
+                except (ValueError, TypeError, json.JSONDecodeError, UnicodeDecodeError) as exc:
+                    return self._json(422, {"detail": str(exc)})
+            return self._json(404, {"detail": "Маршрут панели менеджера не найден"})
         self._ensure_user_context()
         if path == "/api/auth/messenger/start":
             return self._start_messenger_auth()
@@ -352,8 +492,34 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                 return self._json(422, {"detail": "Сообщение должно содержать от 1 до 12000 символов"})
             if not message:
                 message = "Проанализируй прикреплённый файл и объясни, что в нём важно."
+            conversation_id = str(payload.get("conversation_id") or "")
+            conversation = db.get_conversation(conversation_id) if conversation_id else None
+            if conversation and not bool(conversation.get("ai_enabled", 1)):
+                user_message, updated = db.add_user_message_waiting_for_manager(
+                    conversation_id, message, attachments,
+                )
+                return self._json(202, {
+                    "conversation_id": conversation_id,
+                    "user_message": user_message,
+                    "assistant_message": None,
+                    "agent": "manager",
+                    "action": "waiting_human",
+                    "queued_for_human": True,
+                    "ai_enabled": False,
+                    "human_status": updated.get("human_status", "connected"),
+                    "human_ticket_id": updated.get("human_ticket_id"),
+                    "context": json.loads(updated.get("context_summary") or "{}"),
+                    "attachments": [
+                        {"name": item.get("name"), "type": item.get("type")}
+                        for item in attachments
+                    ],
+                })
             result = orchestrator.process(payload.get("conversation_id"), message, attachments)
-            return self._json(200, result.to_dict())
+            response = result.to_dict()
+            saved = db.get_conversation(result.conversation_id) or {}
+            response["ai_enabled"] = bool(saved.get("ai_enabled", 1))
+            response["human_status"] = saved.get("human_status", "none")
+            return self._json(200, response)
         except LLMNotConfigured as exc:
             return self._json(503, {"detail": str(exc)})
         except (json.JSONDecodeError, UnicodeDecodeError):
@@ -647,6 +813,36 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
             raise ValueError("Слишком большой запрос")
         return json.loads(self.rfile.read(length).decode("utf-8"))
 
+    def _admin_authorized(self) -> bool:
+        if not settings.admin_dashboard_token:
+            self._json(503, {
+                "detail": "Панель отключена: задайте ADMIN_DASHBOARD_TOKEN",
+            })
+            return False
+        if not admin_token_valid(self.headers.get("Authorization", "")):
+            self._json(401, {"detail": "Неверный токен администратора"})
+            return False
+        return True
+
+    def _manager_cookie(self) -> str:
+        cookie = SimpleCookie()
+        try:
+            cookie.load(self.headers.get("Cookie", ""))
+        except CookieError:
+            return ""
+        value = cookie.get(MANAGER_SESSION_COOKIE)
+        return value.value if value else ""
+
+    def _manager_authorized(self) -> dict | None:
+        manager = db.get_staff_session(self._manager_cookie())
+        if not manager:
+            self._json(401, {"detail": "Войдите под учётной записью менеджера"})
+            return None
+        if self.command != "GET" and self.headers.get("X-Consilium-Manager") != "1":
+            self._json(403, {"detail": "Запрос менеджера не подтверждён"})
+            return None
+        return manager
+
     @staticmethod
     def _validate_body_symptom(payload: dict) -> dict:
         regions = {
@@ -718,6 +914,7 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
         self._send_identity_cookie()
+        self._send_manager_cookie()
         self.end_headers()
         self.wfile.write(body)
 
@@ -778,6 +975,22 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
             "Max-Age=31536000",
             "HttpOnly",
             "SameSite=Lax",
+        ]
+        if settings.cookie_secure or self.headers.get("X-Forwarded-Proto", "").lower() == "https":
+            parts.append("Secure")
+        self.send_header("Set-Cookie", "; ".join(parts))
+
+    def _send_manager_cookie(self) -> None:
+        token = getattr(self, "_manager_session_to_set", "")
+        clear = getattr(self, "_clear_manager_session", False)
+        if not token and not clear:
+            return
+        parts = [
+            f"{MANAGER_SESSION_COOKIE}={token}",
+            "Path=/",
+            f"Max-Age={0 if clear else 43200}",
+            "HttpOnly",
+            "SameSite=Strict",
         ]
         if settings.cookie_secure or self.headers.get("X-Forwarded-Proto", "").lower() == "https":
             parts.append("Secure")

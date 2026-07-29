@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
   <meta name="theme-color" content="#f3f8f5">
-  <title>Дашборд проекта · Консилиум</title>
+  <title>Админ-панель · Консилиум</title>
   <link rel="icon" href="data:,">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -16,16 +16,16 @@
     <section class="login-card" id="loginPanel">
       <div class="brand-mark">К</div>
       <p class="eyebrow">Консилиум · администрирование</p>
-      <h1>Дашборд проекта</h1>
+      <h1>Админ-панель</h1>
       <p>Введите токен администратора из серверного файла <code>.env</code>. Токен хранится только до закрытия этой вкладки.</p>
       <form id="loginForm">
         <label>Токен администратора
           <input id="adminToken" type="password" autocomplete="current-password" required placeholder="ADMIN_DASHBOARD_TOKEN">
         </label>
-        <button type="submit">Открыть дашборд</button>
+        <button type="submit">Открыть админ-панель</button>
         <span class="form-error hidden" id="loginError" role="alert"></span>
       </form>
-      <a href="/">← Вернуться в Консилиум</a>
+      <a href="/manager">Открыть панель менеджера →</a>
     </section>
 
     <div class="dashboard hidden" id="dashboard">
@@ -36,11 +36,34 @@
           <p id="generatedAt">Загрузка данных…</p>
         </div>
         <div class="header-actions">
+          <a class="button secondary" href="/manager">Панель менеджера</a>
           <a class="button secondary" href="/">Открыть приложение</a>
           <button class="button secondary" id="refreshButton" type="button">Обновить</button>
           <button class="button danger" id="logoutButton" type="button">Выйти</button>
         </div>
       </header>
+
+      <nav class="admin-tabs" aria-label="Разделы админ-панели">
+        <button class="active" id="dashboardTab" type="button">Дашборд</button>
+        <button id="managersTab" type="button">Управление менеджерами</button>
+      </nav>
+
+      <section class="manager-admin hidden" id="managerAdminView">
+        <article class="panel manager-create-panel">
+          <div class="panel-heading"><div><p class="eyebrow">Новая учётная запись</p><h2>Добавить менеджера</h2></div></div>
+          <form id="managerCreateForm" class="manager-create-form">
+            <label>Имя менеджера<input id="staffDisplayName" maxlength="80" autocomplete="off" placeholder="Ольга Иванова" required></label>
+            <label>Логин<input id="staffLogin" maxlength="64" autocomplete="off" placeholder="olga.ivanova" required></label>
+            <label>Пароль<input id="staffPassword" type="text" minlength="6" maxlength="256" autocomplete="off" spellcheck="false" placeholder="Не короче 6 символов" required></label>
+            <button type="submit">Создать менеджера</button>
+          </form>
+          <p class="manager-form-status hidden" id="managerFormStatus" role="status"></p>
+        </article>
+        <article class="panel table-panel">
+          <div class="panel-heading"><div><p class="eyebrow">Доступ к /manager</p><h2>Менеджеры</h2></div><span class="table-count" id="staffCount"></span></div>
+          <div class="staff-list" id="staffList"></div>
+        </article>
+      </section>
 
       <aside class="privacy-note">
         <span>✓</span>

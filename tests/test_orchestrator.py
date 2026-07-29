@@ -192,6 +192,17 @@ class OrchestratorTests(unittest.TestCase):
         self.assertEqual(first.human_ticket_id, repeated.human_ticket_id)
         self.assertIn("уже подготовлено", repeated.assistant_message["content"])
 
+    def test_closed_human_request_gets_new_ticket_when_requested_again(self):
+        service = ConversationOrchestrator(FakeLLM())
+        first = service.process(None, "Позови человека")
+        db.set_human_channel(first.conversation_id, "chat")
+        closed = db.manager_close_conversation(first.conversation_id, "Ольга")
+        self.assertEqual(closed["human_status"], "closed")
+
+        repeated = service.process(first.conversation_id, "Позови человека снова")
+        self.assertNotEqual(first.human_ticket_id, repeated.human_ticket_id)
+        self.assertIsNone(repeated.human_channel)
+
     def test_human_channel_is_persisted_without_closing_ai_dialogue(self):
         service = ConversationOrchestrator(FakeLLM())
         result = service.process(None, "Позови человека")
@@ -769,10 +780,151 @@ class OrchestratorTests(unittest.TestCase):
         self.assertIn('id="usersTable"', dashboard)
         self.assertIn('id="usersSearch"', dashboard)
         self.assertIn('id="conversationsNext"', dashboard)
+        self.assertIn('id="managerCreateForm"', dashboard)
+        self.assertIn('id="staffList"', dashboard)
+        self.assertIn('id="staffPassword" type="text" minlength="6"', dashboard)
         self.assertIn("sessionStorage", script)
         self.assertIn("Authorization:`Bearer ${token || ''}`", script)
         self.assertIn("/api/admin/table", script)
+        self.assertIn("/api/admin/managers", script)
         self.assertIn("@media (max-width:700px)", styles)
+
+    def test_admin_can_create_authenticate_and_disable_manager(self):
+        with self.assertRaises(ValueError):
+            db.admin_create_staff("Короткий пароль", "short.pass", "12345")
+        created = db.admin_create_staff("Ольга Иванова", "olga.test", "123456")
+        self.assertEqual(created["login"], "olga.test")
+        self.assertNotIn("password_hash", created)
+        self.assertIsNone(db.authenticate_staff("olga.test", "wrong-password"))
+
+        authenticated = db.authenticate_staff("OLGA.TEST", "123456")
+        self.assertEqual(authenticated["user"]["display_name"], "Ольга Иванова")
+        self.assertEqual(
+            db.get_staff_session(authenticated["token"])["login"], "olga.test",
+        )
+
+        updated = db.admin_update_staff(
+            created["id"], display_name="Ольга", password="654321",
+        )
+        self.assertEqual(updated["display_name"], "Ольга")
+        self.assertIsNone(db.get_staff_session(authenticated["token"]))
+        next_login = db.authenticate_staff("olga.test", "654321")
+        self.assertIsNotNone(next_login)
+
+        disabled = db.admin_update_staff(created["id"], is_active=False)
+        self.assertFalse(disabled["is_active"])
+        self.assertIsNone(db.get_staff_session(next_login["token"]))
+        self.assertIsNone(db.authenticate_staff("olga.test", "654321"))
+
+    def test_manager_can_pause_ai_read_context_and_reply_in_same_chat(self):
+        chel_id = "chel_manager_flow_1234"
+        db.ensure_user(chel_id)
+        try:
+            db.set_current_chel_id(chel_id)
+            db.save_profile({
+                "preferred_name": "Тестовый пользователь", "age": 38,
+                "sex": "male", "conditions": ["Гипертония"],
+                "medications": ["Назначенный препарат"], "allergies": ["Пыльца"],
+                "tube_number": "MED-777",
+            })
+            db.add_body_symptom({
+                "region": "Грудь", "symptom_type": "Боль", "intensity": 4,
+                "notes": "После нагрузки",
+            })
+            conversation = db.create_conversation("Нужна консультация")
+            db.add_message(conversation["id"], "user", "Хочу поговорить с менеджером")
+            db.update_conversation(
+                conversation["id"], active_agent="manager", context_summary="{}",
+                status="waiting_human", human_status="pending",
+                human_ticket_id="H-MGR001", human_channel="chat",
+            )
+
+            paused = db.manager_set_ai_enabled(
+                conversation["id"], False, "Ольга",
+            )
+            self.assertFalse(paused["ai_enabled"])
+            queued, updated = db.add_user_message_waiting_for_manager(
+                conversation["id"], "Жду ответа человека",
+            )
+            self.assertTrue(queued["metadata"]["awaiting_manager"])
+            self.assertFalse(updated["ai_enabled"])
+
+            reply = db.manager_add_reply(
+                conversation["id"], "Здравствуйте, я подключилась к диалогу.", "Ольга",
+            )
+            self.assertEqual(reply["metadata"]["sender_type"], "human_manager")
+            self.assertEqual(reply["metadata"]["manager_name"], "Ольга")
+            detail = db.manager_conversation_detail(conversation["id"])
+            self.assertEqual(detail["profile"]["preferred_name"], "Тестовый пользователь")
+            self.assertEqual(detail["profile"]["tube_number"], "MED-777")
+            self.assertEqual(detail["symptoms"][0]["region"], "Грудь")
+            self.assertEqual(detail["conversation"]["human_status"], "connected")
+            self.assertFalse(detail["conversation"]["ai_enabled"])
+            self.assertTrue(any(
+                item["action"] == "ai_mode" for item in detail["manager_actions"]
+            ))
+
+            updates = db.list_messages_after(conversation["id"], queued["id"])
+            self.assertEqual(updates[-1]["content"], "Здравствуйте, я подключилась к диалогу.")
+            self.assertEqual(updates[-1]["metadata"]["sender_type"], "human_manager")
+
+            queue = db.manager_list_conversations("Тестовый", "ai_off")
+            self.assertEqual(queue[0]["id"], conversation["id"])
+            self.assertGreaterEqual(queue[0]["unanswered_user_messages"], 0)
+
+            closed = db.manager_close_conversation(conversation["id"], "Ольга")
+            self.assertEqual(closed["human_status"], "closed")
+            self.assertTrue(closed["ai_enabled"])
+            self.assertNotIn(
+                conversation["id"],
+                [item["id"] for item in db.manager_list_conversations("", "open")],
+            )
+            self.assertIn(
+                conversation["id"],
+                [item["id"] for item in db.manager_list_conversations("", "all")],
+            )
+            closed_detail = db.manager_conversation_detail(conversation["id"])
+            self.assertTrue(any(
+                item["action"] == "close" for item in closed_detail["manager_actions"]
+            ))
+        finally:
+            db.reset_current_user()
+            db.ensure_user("chel_test_default")
+            db.set_current_chel_id("chel_test_default")
+
+    def test_manager_panel_and_user_mode_indicator_exist(self):
+        project_root = Path(__file__).resolve().parents[1]
+        manager = (project_root / "manager.html").read_text(encoding="utf-8")
+        manager_script = (project_root / "static" / "manager.js").read_text(encoding="utf-8")
+        app = (project_root / "static" / "app.js").read_text(encoding="utf-8")
+        index = (project_root / "index.html").read_text(encoding="utf-8")
+        dockerfile = (project_root / "Dockerfile").read_text(encoding="utf-8")
+        self.assertIn('id="requestList"', manager)
+        self.assertIn('id="managerMessages"', manager)
+        self.assertIn('id="profileDetails"', manager)
+        self.assertIn('id="aiEnabled"', manager)
+        self.assertIn('id="closeRequestButton"', manager)
+        self.assertIn('id="managerLogin"', manager)
+        self.assertIn('id="managerPassword"', manager)
+        self.assertIn("/api/manager/login", manager_script)
+        self.assertIn("/api/manager/me", manager_script)
+        self.assertNotIn("ADMIN_DASHBOARD_TOKEN", manager_script)
+        self.assertIn("/api/manager/conversations/", manager_script)
+        self.assertIn("/close", manager_script)
+        self.assertIn("playManagerSignal('request')", manager_script)
+        self.assertIn("playManagerSignal('message')", manager_script)
+        self.assertIn("previous && !item.ai_enabled", manager_script)
+        self.assertIn("sender_type === 'human_manager'", manager_script)
+        self.assertIn('id="chatModeBanner"', index)
+        self.assertNotIn("Я правильно понял?", index)
+        self.assertNotIn('id="insightDock"', index)
+        self.assertIn("Проверьте обращение перед отправкой", index)
+        self.assertIn('id="editHandoffContext"', app)
+        self.assertIn("returnToHumanAfterContextEdit", app)
+        self.assertIn("/updates?after_id=", app)
+        self.assertIn("Сообщение ожидает ответа менеджера", app)
+        self.assertIn("playUserMessageSound()", app)
+        self.assertIn("index.html dashboard.html manager.html", dockerfile)
 
     def test_chel_id_separates_profiles_conversations_memories_and_symptoms(self):
         first_id = "chel_test_first"
@@ -879,7 +1031,7 @@ class OrchestratorTests(unittest.TestCase):
         self.assertIn("CONSILIUM_HOST_PORT=8002", docker_env)
         self.assertIn("127.0.0.1:${CONSILIUM_HOST_PORT:-8002}:8000", compose)
         self.assertNotIn("0.0.0.0:${CONSILIUM_HOST_PORT", compose)
-        self.assertEqual(nginx.count("proxy_pass http://127.0.0.1:8002;"), 4)
+        self.assertEqual(nginx.count("proxy_pass http://127.0.0.1:8002;"), 5)
         self.assertNotIn("proxy_pass http://127.0.0.1:8000;", nginx)
         self.assertIn("anketa_bot_max", server_guide)
         self.assertIn("bitrix_connector", server_guide)

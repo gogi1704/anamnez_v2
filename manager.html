@@ -1,0 +1,118 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>Консилиум — панель менеджера</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="/static/manager.css">
+</head>
+<body>
+  <main class="login-shell" id="loginShell">
+    <form class="login-card" id="loginForm">
+      <div class="brand-mark">К</div>
+      <span class="eyebrow">РАБОЧЕЕ МЕСТО</span>
+      <h1>Панель менеджера</h1>
+      <p>Очередь обращений, диалоги и данные пользователя в одном окне.</p>
+      <label>Логин<input id="managerLogin" maxlength="64" autocomplete="username" placeholder="manager.ivan" required></label>
+      <label>Пароль<input id="managerPassword" type="password" autocomplete="current-password" placeholder="Ваш пароль" required></label>
+      <button type="submit">Войти</button>
+      <p class="form-error hidden" id="loginError" role="alert"></p>
+      <small>Учётную запись создаёт администратор. Панель содержит медицинские и персональные данные — не оставляйте её открытой на общем устройстве.</small>
+    </form>
+  </main>
+
+  <main class="manager-app hidden" id="managerApp">
+    <aside class="queue-panel">
+      <header class="queue-header">
+        <div class="brand"><span>К</span><div><strong>Консилиум</strong><small>Панель менеджера</small></div></div>
+        <button class="icon-button" id="logoutButton" title="Выйти" aria-label="Выйти">↪</button>
+      </header>
+      <div class="manager-identity">
+        <span class="manager-avatar" id="managerAvatar">М</span>
+        <div><strong id="managerDisplayName">Менеджер</strong><small>на связи</small></div>
+      </div>
+      <div class="queue-tools">
+        <label class="search-field"><span>⌕</span><input id="queueSearch" type="search" placeholder="Имя, ID или обращение"></label>
+        <div class="queue-filters" id="queueFilters">
+          <button class="active" data-queue="open">Открытые</button>
+          <button data-queue="ai_off">ИИ выключен</button>
+          <button data-queue="all">Все</button>
+        </div>
+      </div>
+      <div class="queue-summary"><strong id="queueCount">0 обращений</strong><span id="queueUpdated"></span></div>
+      <nav class="request-list" id="requestList" aria-label="Обращения пользователей"></nav>
+    </aside>
+
+    <section class="manager-chat">
+      <div class="empty-workspace" id="emptyWorkspace">
+        <span>⌁</span>
+        <h2>Выберите обращение</h2>
+        <p>Слева находятся пользователи, которые попросили подключить человека, и чаты с выключенным ИИ.</p>
+      </div>
+      <div class="chat-workspace hidden" id="chatWorkspace">
+        <header class="chat-header">
+          <button class="mobile-back" id="mobileQueueButton" aria-label="Открыть очередь">☰</button>
+          <div class="user-avatar" id="chatAvatar">П</div>
+          <div class="chat-heading">
+            <strong id="chatUserName">Пользователь</strong>
+            <span id="chatTicket">Без номера обращения</span>
+          </div>
+          <label class="ai-switch" id="aiSwitchLabel">
+            <span><strong id="aiSwitchTitle">ИИ отвечает</strong><small id="aiSwitchHint">Следующие вопросы получит ИИ</small></span>
+            <input id="aiEnabled" type="checkbox" role="switch">
+            <i aria-hidden="true"></i>
+          </label>
+          <button class="profile-toggle" id="profileToggle" aria-label="Данные пользователя">Данные</button>
+        </header>
+        <div class="mode-notice" id="managerModeNotice">
+          <span id="managerModeText"></span>
+          <button class="close-request-button" id="closeRequestButton" type="button" aria-label="Закрыть обращение">Закрыть обращение</button>
+        </div>
+        <section class="manager-messages" id="managerMessages" aria-live="polite"></section>
+        <form class="manager-composer" id="managerReplyForm">
+          <textarea id="managerReply" rows="1" maxlength="12000" placeholder="Напишите ответ пользователю..." required></textarea>
+          <div><span>Enter — отправить · Shift+Enter — новая строка</span><button type="submit">Отправить</button></div>
+        </form>
+      </div>
+    </section>
+
+    <aside class="user-panel" id="userPanel">
+      <header>
+        <div><span class="eyebrow">КАРТОЧКА ПОЛЬЗОВАТЕЛЯ</span><h2 id="profileName">Пользователь</h2></div>
+        <button class="icon-button" id="profileClose" aria-label="Закрыть данные">×</button>
+      </header>
+      <div class="user-panel-scroll">
+        <section class="identity-card" id="identityCard"></section>
+        <section class="detail-section">
+          <h3>Анкета</h3>
+          <div class="detail-grid" id="profileDetails"></div>
+        </section>
+        <section class="detail-section">
+          <h3>Заболевания, лекарства и аллергии</h3>
+          <div id="medicalDetails"></div>
+        </section>
+        <section class="detail-section">
+          <h3>Симптомы</h3>
+          <div class="stack-list" id="symptomDetails"></div>
+        </section>
+        <section class="detail-section">
+          <h3>Анализы и обследования</h3>
+          <div class="stack-list" id="labDetails"></div>
+        </section>
+        <section class="detail-section">
+          <h3>Память и цели</h3>
+          <div class="stack-list" id="memoryDetails"></div>
+        </section>
+      </div>
+    </aside>
+    <button class="panel-backdrop" id="panelBackdrop" aria-label="Закрыть боковую панель"></button>
+  </main>
+
+  <div class="toast hidden" id="managerToast" role="status"></div>
+  <script src="/static/manager.js" defer></script>
+</body>
+</html>

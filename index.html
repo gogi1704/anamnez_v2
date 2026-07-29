@@ -128,12 +128,9 @@
         <span class="mini-avatar specialist" id="handoffTo">КД</span>
         <p id="handoffText">Мария передаёт диалог специалисту</p>
       </section>
-
-      <section class="insight-dock hidden" id="insightDock" aria-label="Контекст разговора">
-        <article class="insight-card summary-card">
-          <div class="insight-heading"><span class="insight-icon">✓</span><div><strong>Я правильно понял?</strong><small id="summaryGoal">Контекст разговора</small></div><button id="editContextButton">Изменить</button></div>
-          <div class="fact-list" id="summaryFacts"></div>
-        </article>
+      <section class="chat-mode-banner hidden" id="chatModeBanner" aria-live="polite">
+        <span id="chatModeIcon">♙</span>
+        <div><strong id="chatModeTitle">Менеджер подключён</strong><p id="chatModeText"></p></div>
       </section>
 
       <section class="messages" id="messages" aria-live="polite" aria-label="Сообщения"></section>
@@ -213,7 +210,11 @@
       <div class="modal-icon">♙</div>
       <h2 id="humanTitle">Как продолжить со специалистом?</h2>
       <p>Контекст разговора подготовлен, поэтому не придётся всё рассказывать заново. Выберите удобный формат — реальное подключение оператора в этой демоверсии пока работает как заглушка.</p>
-      <div class="handoff-preview" id="handoffPreview"><span>Подготавливаю сводку…</span></div>
+      <div class="handoff-review">
+        <strong>Проверьте обращение перед отправкой</strong>
+        <p>Если что-то указано неточно, исправьте сведения — специалист получит обновлённую версию.</p>
+        <div class="handoff-preview" id="handoffPreview"><span>Подготавливаю сводку…</span></div>
+      </div>
       <div class="ticket"><span>Номер обращения</span><strong id="ticketNumber">H-000000</strong></div>
       <div class="human-options" aria-label="Способ связи">
         <button class="human-option" id="humanChatButton">
