@@ -53,6 +53,7 @@ def reset_current_user(preserve_identity: bool = False) -> None:
         conn.execute("DELETE FROM conversations WHERE chel_id = ?", (chel_id,))
         conn.execute("DELETE FROM memories WHERE chel_id = ?", (chel_id,))
         conn.execute("DELETE FROM body_symptoms WHERE chel_id = ?", (chel_id,))
+        conn.execute("DELETE FROM lab_interpretations WHERE chel_id = ?", (chel_id,))
         conn.execute("DELETE FROM user_profile WHERE chel_id = ?", (chel_id,))
         conn.execute("DELETE FROM onboarding_state WHERE chel_id = ?", (chel_id,))
         if not preserve_identity:
@@ -68,36 +69,100 @@ def _max_chel_id(legacy_chel_id: int) -> str:
     return f"chel_max_{legacy_chel_id:012d}"
 
 
-def create_max_login(max_user_id: int, legacy_chel_id: int) -> dict:
-    """Create a time-limited one-time login token for a verified MAX user."""
-    if max_user_id <= 0 or legacy_chel_id <= 0:
-        raise ValueError("MAX ID и chel_id должны быть положительными числами")
+def _messenger_provider(value: str) -> str:
+    provider = str(value or "").strip().lower()
+    if provider not in {"telegram", "max"}:
+        raise ValueError("Поддерживаются только Telegram и MAX")
+    return provider
+
+
+def create_auth_intent(provider: str) -> dict:
+    """Create a short-lived token that lets a messenger bind the current browser user."""
+    provider = _messenger_provider(provider)
+    now = datetime.now(timezone.utc)
+    expires_at = now + timedelta(seconds=settings.auth_intent_ttl_seconds)
+    raw_token = secrets.token_urlsafe(32)
+    chel_id = current_chel_id()
+    with _write_lock, connection() as conn:
+        if not conn.execute("SELECT 1 FROM users WHERE chel_id = ?", (chel_id,)).fetchone():
+            raise ValueError("Пользователь не найден")
+        conn.execute(
+            """INSERT INTO auth_intents
+            (token_hash, chel_id, provider, expires_at, created_at)
+            VALUES (?, ?, ?, ?, ?)""",
+            (_token_hash(raw_token), chel_id, provider, expires_at.isoformat(), now.isoformat()),
+        )
+        conn.execute(
+            "DELETE FROM auth_intents WHERE expires_at < ? OR used_at IS NOT NULL",
+            ((now - timedelta(days=1)).isoformat(),),
+        )
+        conn.commit()
+    return {
+        "token": raw_token,
+        "chel_id": chel_id,
+        "provider": provider,
+        "expires_at": expires_at.isoformat(),
+    }
+
+
+def create_messenger_login(
+    provider: str,
+    provider_user_id: str | int,
+    intent_token: str = "",
+    legacy_chel_id: int | None = None,
+) -> dict:
+    """Bind a verified messenger identity and issue a one-time Consilium login."""
+    provider = _messenger_provider(provider)
+    external_id = str(provider_user_id or "").strip()
+    if not external_id or len(external_id) > 128:
+        raise ValueError("Не указан идентификатор пользователя мессенджера")
+    if legacy_chel_id is not None and int(legacy_chel_id) <= 0:
+        raise ValueError("chel_id должен быть положительным числом")
+
     now = datetime.now(timezone.utc)
     expires_at = now + timedelta(seconds=settings.auth_link_ttl_seconds)
     raw_token = secrets.token_urlsafe(32)
     with _write_lock, connection() as conn:
+        intent = None
+        if intent_token:
+            intent = conn.execute(
+                "SELECT * FROM auth_intents WHERE token_hash = ?",
+                (_token_hash(intent_token),),
+            ).fetchone()
+            if (
+                not intent
+                or intent["used_at"]
+                or intent["provider"] != provider
+                or datetime.fromisoformat(intent["expires_at"]) <= now
+            ):
+                raise ValueError("Запрос авторизации недействителен или устарел")
         identity = conn.execute(
             """SELECT * FROM external_identities
-            WHERE provider = 'max' AND provider_user_id = ?""",
-            (str(max_user_id),),
+            WHERE provider = ? AND provider_user_id = ?""",
+            (provider, external_id),
         ).fetchone()
         if identity:
             if identity["access_status"] != "active":
-                raise PermissionError("Доступ к Консилиуму для пользователя не активен")
+                raise PermissionError("Доступ к Консилиуму для этого пользователя не активен")
             chel_id = identity["chel_id"]
             conn.execute(
                 "UPDATE external_identities SET last_login_at = ? WHERE id = ?",
                 (now.isoformat(), identity["id"]),
             )
         else:
-            chel_id = _max_chel_id(legacy_chel_id)
-            collision = conn.execute(
-                """SELECT provider_user_id FROM external_identities
-                WHERE provider = 'max' AND chel_id = ?""",
-                (chel_id,),
-            ).fetchone()
-            if collision and collision["provider_user_id"] != str(max_user_id):
-                raise ValueError("Этот chel_id уже привязан к другому MAX-пользователю")
+            if intent:
+                chel_id = intent["chel_id"]
+            elif provider == "max" and legacy_chel_id is not None:
+                chel_id = _max_chel_id(int(legacy_chel_id))
+                collision = conn.execute(
+                    """SELECT provider_user_id FROM external_identities
+                    WHERE provider = 'max' AND chel_id = ?""",
+                    (chel_id,),
+                ).fetchone()
+                if collision and collision["provider_user_id"] != external_id:
+                    raise ValueError("Этот chel_id уже привязан к другому MAX-пользователю")
+            else:
+                chel_id = f"chel_{secrets.token_hex(16)}"
             conn.execute(
                 """INSERT INTO users (chel_id, created_at, last_seen_at)
                 VALUES (?, ?, ?) ON CONFLICT(chel_id) DO UPDATE SET last_seen_at=excluded.last_seen_at""",
@@ -106,20 +171,39 @@ def create_max_login(max_user_id: int, legacy_chel_id: int) -> dict:
             conn.execute(
                 """INSERT INTO external_identities
                 (provider, provider_user_id, chel_id, legacy_chel_id, access_status, created_at, last_login_at)
-                VALUES ('max', ?, ?, ?, 'active', ?, ?)""",
-                (str(max_user_id), chel_id, legacy_chel_id, now.isoformat(), now.isoformat()),
+                VALUES (?, ?, ?, ?, 'active', ?, ?)""",
+                (
+                    provider, external_id, chel_id, legacy_chel_id,
+                    now.isoformat(), now.isoformat(),
+                ),
             )
+        if intent:
+            updated = conn.execute(
+                """UPDATE auth_intents SET used_at = ?
+                WHERE token_hash = ? AND used_at IS NULL""",
+                (now.isoformat(), intent["token_hash"]),
+            )
+            if updated.rowcount != 1:
+                raise ValueError("Запрос авторизации уже использован")
         conn.execute(
             """INSERT INTO login_tokens (token_hash, chel_id, expires_at, created_at)
             VALUES (?, ?, ?, ?)""",
             (_token_hash(raw_token), chel_id, expires_at.isoformat(), now.isoformat()),
         )
         conn.execute(
-            "DELETE FROM login_tokens WHERE expires_at < ? OR used_at IS NOT NULL",
+            """DELETE FROM login_tokens
+            WHERE expires_at < ? AND used_at IS NULL""",
             ((now - timedelta(days=1)).isoformat(),),
         )
         conn.commit()
     return {"token": raw_token, "chel_id": chel_id, "expires_at": expires_at.isoformat()}
+
+
+def create_max_login(max_user_id: int, legacy_chel_id: int) -> dict:
+    """Backward-compatible login API for the existing MAX integration."""
+    if max_user_id <= 0 or legacy_chel_id <= 0:
+        raise ValueError("MAX ID и chel_id должны быть положительными числами")
+    return create_messenger_login("max", max_user_id, legacy_chel_id=legacy_chel_id)
 
 
 def consume_login_token(raw_token: str) -> dict | None:
@@ -160,6 +244,19 @@ def consume_login_token(raw_token: str) -> dict | None:
     }
 
 
+def get_consumed_login_owner(raw_token: str) -> str | None:
+    """Return the owner of an already-used link without authenticating anyone."""
+    if not raw_token:
+        return None
+    with connection() as conn:
+        token = conn.execute(
+            """SELECT chel_id FROM login_tokens
+            WHERE token_hash = ? AND used_at IS NOT NULL""",
+            (_token_hash(raw_token),),
+        ).fetchone()
+    return token["chel_id"] if token else None
+
+
 def get_session_chel_id(session_value: str) -> str | None:
     if not session_value:
         return None
@@ -197,6 +294,17 @@ def current_external_identity() -> dict | None:
     return dict(row) if row else None
 
 
+def current_external_identities() -> list[dict]:
+    with connection() as conn:
+        rows = conn.execute(
+            """SELECT provider, provider_user_id, access_status, created_at, last_login_at
+            FROM external_identities
+            WHERE chel_id = ? AND access_status = 'active' ORDER BY id""",
+            (current_chel_id(),),
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
 def admin_dashboard(days: int = 14, limit: int = 100) -> dict:
     """Return privacy-conscious aggregate analytics without message or profile text."""
     days = max(7, min(90, int(days)))
@@ -215,7 +323,7 @@ def admin_dashboard(days: int = 14, limit: int = 100) -> dict:
                 f"SELECT COUNT(*) FROM users WHERE {real_users} AND last_seen_at >= ?",
                 ((now - timedelta(days=7)).isoformat(),),
             ),
-            "max_users": scalar(
+            "messenger_users": scalar(
                 """SELECT COUNT(DISTINCT e.chel_id) FROM external_identities e
                 WHERE e.access_status = 'active'
                   AND e.chel_id NOT IN ('chel_legacy', 'chel_test_default')"""
@@ -308,7 +416,7 @@ def admin_dashboard(days: int = 14, limit: int = 100) -> dict:
             dict(row) for row in conn.execute(
                 f"""SELECT u.chel_id, u.created_at, u.last_seen_at,
                     COALESCE(o.status, 'not_started') AS onboarding_status,
-                    CASE WHEN e.id IS NULL THEN 0 ELSE 1 END AS max_linked,
+                    COALESCE(GROUP_CONCAT(DISTINCT e.provider), '') AS messengers,
                     COUNT(DISTINCT c.id) AS conversations,
                     COUNT(DISTINCT m.id) AS messages
                 FROM users u
@@ -365,6 +473,125 @@ def admin_dashboard(days: int = 14, limit: int = 100) -> dict:
             "message_content_included": False,
             "medical_profile_content_included": False,
         },
+    }
+
+
+def admin_table(
+    name: str, query: str = "", limit: int = 25, offset: int = 0,
+) -> dict:
+    """Search and paginate a strict allowlist of non-medical admin table views."""
+    name = str(name or "").strip()
+    if name not in {"users", "conversations", "human_requests"}:
+        raise ValueError("Неизвестная таблица дашборда")
+    query = " ".join(str(query or "").split())[:120]
+    limit = max(10, min(100, int(limit)))
+    offset = max(0, min(1_000_000, int(offset)))
+    escaped = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
+    pattern = f"%{escaped}%"
+
+    with connection() as conn:
+        if name == "users":
+            where = """u.chel_id NOT IN ('chel_legacy', 'chel_test_default')"""
+            params: list = []
+            if query:
+                where += """ AND (
+                    u.chel_id LIKE ? ESCAPE '\\'
+                    OR COALESCE(o.status, 'not_started') LIKE ? ESCAPE '\\'
+                    OR COALESCE(e.provider, 'нет') LIKE ? ESCAPE '\\'
+                )"""
+                params.extend([pattern, pattern, pattern])
+            total = conn.execute(
+                f"""SELECT COUNT(DISTINCT u.chel_id)
+                FROM users u
+                LEFT JOIN onboarding_state o ON o.chel_id = u.chel_id
+                LEFT JOIN external_identities e
+                  ON e.chel_id = u.chel_id AND e.access_status = 'active'
+                WHERE {where}""",
+                tuple(params),
+            ).fetchone()[0]
+            rows = [
+                dict(row) for row in conn.execute(
+                    f"""SELECT u.chel_id, u.created_at, u.last_seen_at,
+                        COALESCE(o.status, 'not_started') AS onboarding_status,
+                        COALESCE(GROUP_CONCAT(DISTINCT e.provider), '') AS messengers,
+                        COUNT(DISTINCT c.id) AS conversations,
+                        COUNT(DISTINCT m.id) AS messages
+                    FROM users u
+                    LEFT JOIN onboarding_state o ON o.chel_id = u.chel_id
+                    LEFT JOIN external_identities e
+                      ON e.chel_id = u.chel_id AND e.access_status = 'active'
+                    LEFT JOIN conversations c ON c.chel_id = u.chel_id
+                    LEFT JOIN messages m ON m.conversation_id = c.id
+                    WHERE {where}
+                    GROUP BY u.chel_id ORDER BY u.last_seen_at DESC LIMIT ? OFFSET ?""",
+                    tuple(params + [limit, offset]),
+                ).fetchall()
+            ]
+        elif name == "conversations":
+            where = """c.chel_id NOT IN ('chel_legacy', 'chel_test_default')"""
+            params = []
+            if query:
+                where += """ AND (
+                    c.id LIKE ? ESCAPE '\\' OR c.chel_id LIKE ? ESCAPE '\\'
+                    OR c.active_agent LIKE ? ESCAPE '\\' OR c.status LIKE ? ESCAPE '\\'
+                    OR c.human_status LIKE ? ESCAPE '\\'
+                    OR COALESCE(c.human_channel, '') LIKE ? ESCAPE '\\'
+                    OR COALESCE(c.human_ticket_id, '') LIKE ? ESCAPE '\\'
+                )"""
+                params.extend([pattern] * 7)
+            total = conn.execute(
+                f"SELECT COUNT(*) FROM conversations c WHERE {where}",
+                tuple(params),
+            ).fetchone()[0]
+            rows = [
+                dict(row) for row in conn.execute(
+                    f"""SELECT c.id, c.chel_id, c.active_agent, c.status,
+                        c.human_status, COALESCE(c.human_channel, '') AS human_channel,
+                        c.created_at, c.updated_at, COUNT(m.id) AS messages
+                    FROM conversations c
+                    LEFT JOIN messages m ON m.conversation_id = c.id
+                    WHERE {where}
+                    GROUP BY c.id ORDER BY c.updated_at DESC LIMIT ? OFFSET ?""",
+                    tuple(params + [limit, offset]),
+                ).fetchall()
+            ]
+        else:
+            where = """c.human_ticket_id IS NOT NULL
+                AND c.chel_id NOT IN ('chel_legacy', 'chel_test_default')"""
+            params = []
+            if query:
+                where += """ AND (
+                    c.human_ticket_id LIKE ? ESCAPE '\\' OR c.chel_id LIKE ? ESCAPE '\\'
+                    OR c.human_status LIKE ? ESCAPE '\\'
+                    OR COALESCE(c.human_channel, '') LIKE ? ESCAPE '\\'
+                    OR COALESCE(c.human_phone, '') LIKE ? ESCAPE '\\'
+                )"""
+                params.extend([pattern] * 5)
+            total = conn.execute(
+                f"SELECT COUNT(*) FROM conversations c WHERE {where}",
+                tuple(params),
+            ).fetchone()[0]
+            rows = []
+            for row in conn.execute(
+                f"""SELECT c.human_ticket_id AS ticket_id, c.chel_id,
+                    c.human_status, COALESCE(c.human_channel, '') AS channel,
+                    c.human_phone, c.created_at, c.updated_at
+                FROM conversations c WHERE {where}
+                ORDER BY c.updated_at DESC LIMIT ? OFFSET ?""",
+                tuple(params + [limit, offset]),
+            ).fetchall():
+                item = dict(row)
+                phone = str(item.pop("human_phone") or "")
+                item["phone"] = f"•••• {phone[-4:]}" if len(phone) >= 4 else ""
+                rows.append(item)
+
+    return {
+        "table": name,
+        "query": query,
+        "limit": limit,
+        "offset": offset,
+        "total": int(total or 0),
+        "rows": rows,
     }
 
 
@@ -493,6 +720,16 @@ def init_db() -> None:
                 FOREIGN KEY(chel_id) REFERENCES users(chel_id) ON DELETE CASCADE
             );
 
+            CREATE TABLE IF NOT EXISTS auth_intents (
+                token_hash TEXT PRIMARY KEY,
+                chel_id TEXT NOT NULL,
+                provider TEXT NOT NULL,
+                expires_at TEXT NOT NULL,
+                used_at TEXT,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY(chel_id) REFERENCES users(chel_id) ON DELETE CASCADE
+            );
+
             CREATE TABLE IF NOT EXISTS user_sessions (
                 session_hash TEXT PRIMARY KEY,
                 chel_id TEXT NOT NULL,
@@ -517,6 +754,21 @@ def init_db() -> None:
                 status TEXT NOT NULL DEFAULT 'active',
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS lab_interpretations (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                chel_id TEXT NOT NULL,
+                med_id TEXT NOT NULL,
+                scope_key TEXT NOT NULL,
+                source_urls TEXT NOT NULL DEFAULT '[]',
+                profile_fingerprint TEXT NOT NULL,
+                interpretation TEXT NOT NULL,
+                agent_id TEXT NOT NULL DEFAULT 'therapist',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                UNIQUE(chel_id, med_id, scope_key, profile_fingerprint),
+                FOREIGN KEY(chel_id) REFERENCES users(chel_id) ON DELETE CASCADE
             );
             """
         )
@@ -618,7 +870,12 @@ def init_db() -> None:
         conn.execute("CREATE INDEX IF NOT EXISTS idx_body_symptoms_chel_id ON body_symptoms(chel_id, created_at)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_external_identities_chel_id ON external_identities(chel_id)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_login_tokens_chel_id ON login_tokens(chel_id, expires_at)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_auth_intents_chel_id ON auth_intents(chel_id, expires_at)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_user_sessions_chel_id ON user_sessions(chel_id, expires_at)")
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_lab_interpretations_lookup "
+            "ON lab_interpretations(chel_id, med_id, scope_key, profile_fingerprint)"
+        )
 
         # Preserve tickets created by earlier versions without rewriting messages.
         conversations = conn.execute("SELECT id, status, human_status, human_ticket_id FROM conversations").fetchall()
@@ -1004,6 +1261,65 @@ def save_profile(profile: dict) -> dict:
         )
         conn.commit()
     return get_profile()
+
+
+def profile_fingerprint(profile: dict | None = None) -> str:
+    """Stable cache key for profile fields that can change lab interpretation."""
+    source = dict(profile or get_profile())
+    for key in ("chel_id", "tube_number", "updated_at"):
+        source.pop(key, None)
+    payload = json.dumps(source, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def get_lab_interpretation(
+    med_id: str,
+    scope_key: str,
+    profile_hash: str,
+) -> dict | None:
+    with connection() as conn:
+        row = conn.execute(
+            """SELECT * FROM lab_interpretations
+            WHERE chel_id = ? AND med_id = ? AND scope_key = ? AND profile_fingerprint = ?""",
+            (current_chel_id(), med_id, scope_key, profile_hash),
+        ).fetchone()
+    if not row:
+        return None
+    result = dict(row)
+    try:
+        result["source_urls"] = json.loads(result["source_urls"] or "[]")
+    except json.JSONDecodeError:
+        result["source_urls"] = []
+    return result
+
+
+def save_lab_interpretation(
+    med_id: str,
+    scope_key: str,
+    source_urls: list[str],
+    profile_hash: str,
+    interpretation: str,
+    agent_id: str = "therapist",
+) -> dict:
+    now = utc_now()
+    with _write_lock, connection() as conn:
+        conn.execute(
+            """INSERT INTO lab_interpretations
+            (chel_id, med_id, scope_key, source_urls, profile_fingerprint,
+             interpretation, agent_id, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(chel_id, med_id, scope_key, profile_fingerprint)
+            DO UPDATE SET source_urls=excluded.source_urls,
+              interpretation=excluded.interpretation, agent_id=excluded.agent_id,
+              updated_at=excluded.updated_at""",
+            (
+                current_chel_id(), med_id, scope_key,
+                json.dumps(source_urls, ensure_ascii=False), profile_hash,
+                interpretation[:30000], agent_id, now, now,
+            ),
+        )
+        conn.commit()
+    return get_lab_interpretation(med_id, scope_key, profile_hash)
 
 
 def get_onboarding() -> dict:

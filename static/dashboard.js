@@ -13,11 +13,19 @@ const statusNames = {
   active:'Активен', waiting_human:'Ожидает человека', pending:'Ожидает',
   none:'Нет', chat:'Чат', call:'Созвон', not_selected:'Не выбран',
 };
+const searchAliases = {
+  'завершена':'complete','завершено':'complete','анкета':'questionnaire',
+  'не начата':'not_started','активен':'active','активный':'active',
+  'ожидает':'pending','созвон':'call','звонок':'call','чат':'chat',
+  'менеджер':'manager','терапевт':'therapist','кардиолог':'cardiologist',
+  'невролог':'neurologist','дерматолог':'dermatologist',
+  'педиатр':'pediatrician','психолог':'psychologist',
+};
 const summaryCards = [
   ['users_total','Пользователи','за всё время'],
   ['users_active_7d','Активные','за последние 7 дней'],
   ['onboarding_complete','Завершили старт','анкета и обследования'],
-  ['max_users','Связаны с MAX','надёжная идентификация'],
+  ['messenger_users','Связаны с мессенджером','надёжная идентификация'],
   ['profiles_with_tube','С номером пробирки','могут получать результаты'],
   ['conversations_total','Диалоги','без текстов сообщений'],
   ['messages_total','Сообщения','входящие и ответы ИИ'],
@@ -26,6 +34,11 @@ const summaryCards = [
 ];
 
 let refreshTimer;
+const tableStates = {
+  users:{apiName:'users',prefix:'users',offset:0,limit:25,total:0,query:''},
+  conversations:{apiName:'conversations',prefix:'conversations',offset:0,limit:25,total:0,query:''},
+  requests:{apiName:'human_requests',prefix:'requests',offset:0,limit:25,total:0,query:''},
+};
 
 function formatDate(value, dateOnly = false) {
   if (!value) return '—';
@@ -124,17 +137,30 @@ function renderDistribution(rootSelector, items, labelKey, valueKey, labels = {}
   }
 }
 
-function renderUsers(items) {
+function emptyTable(root, columns) {
+  const row = document.createElement('tr');
+  row.className = 'table-empty';
+  const cell = document.createElement('td');
+  cell.colSpan = columns;
+  cell.textContent = 'Ничего не найдено';
+  row.append(cell);
+  root.append(row);
+}
+
+function renderUsers(items, total = items.length) {
   const root = $('#usersTable');
   root.replaceChildren();
-  $('#usersCount').textContent = `${items.length} записей`;
+  $('#usersCount').textContent = `${total} записей`;
+  if (!items.length) emptyTable(root,7);
   for (const item of items) {
     const row = document.createElement('tr');
     textCell(row,item.chel_id,item.chel_id);
     textCell(row,formatDate(item.created_at));
     textCell(row,formatDate(item.last_seen_at));
     statusCell(row,item.onboarding_status,['complete']);
-    statusCell(row,item.max_linked ? 'Связан' : 'Нет',item.max_linked ? ['Связан'] : []);
+    const messengerNames = String(item.messengers || '').split(',').filter(Boolean)
+      .map(value => value === 'telegram' ? 'Telegram' : value.toUpperCase());
+    statusCell(row,messengerNames.join(' + ') || 'Нет',messengerNames.length ? ['Связан'] : []);
     textCell(row,item.conversations);
     textCell(row,item.messages);
     root.append(row);
@@ -146,10 +172,11 @@ function shortId(value) {
   return text.length > 16 ? `${text.slice(0,8)}…${text.slice(-6)}` : text;
 }
 
-function renderConversations(items) {
+function renderConversations(items, total = items.length) {
   const root = $('#conversationsTable');
   root.replaceChildren();
-  $('#conversationsCount').textContent = `${items.length} записей`;
+  $('#conversationsCount').textContent = `${total} записей`;
+  if (!items.length) emptyTable(root,7);
   for (const item of items) {
     const row = document.createElement('tr');
     textCell(row,shortId(item.id),item.id);
@@ -163,10 +190,11 @@ function renderConversations(items) {
   }
 }
 
-function renderRequests(items) {
+function renderRequests(items, total = items.length) {
   const root = $('#requestsTable');
   root.replaceChildren();
-  $('#requestsCount').textContent = `${items.length} записей`;
+  $('#requestsCount').textContent = `${total} записей`;
+  if (!items.length) emptyTable(root,6);
   for (const item of items) {
     const row = document.createElement('tr');
     textCell(row,item.ticket_id);
@@ -184,10 +212,84 @@ function renderDashboard(data) {
   renderActivity(data.activity || []);
   renderDistribution('#agentDistribution',data.agents || [],'agent','messages',agentNames);
   renderDistribution('#channelDistribution',data.human_channels || [],'channel','requests',statusNames);
-  renderUsers(data.tables?.users || []);
-  renderConversations(data.tables?.conversations || []);
-  renderRequests(data.tables?.human_requests || []);
   $('#generatedAt').textContent = `Данные обновлены ${formatDate(data.generated_at)} · автообновление раз в минуту`;
+}
+
+async function adminFetch(path, token = sessionStorage.getItem(TOKEN_KEY)) {
+  const response = await fetch(path, {
+    headers:{Authorization:`Bearer ${token || ''}`},
+    cache:'no-store',
+  });
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) {
+    const error = new Error(data.detail || `Ошибка сервера: ${response.status}`);
+    error.status = response.status;
+    throw error;
+  }
+  return data;
+}
+
+function renderTablePage(state) {
+  const page = Math.floor(state.offset / state.limit) + 1;
+  const pages = Math.max(1,Math.ceil(state.total / state.limit));
+  $(`#${state.prefix}Page`).textContent = `Страница ${page} из ${pages}`;
+  $(`#${state.prefix}Prev`).disabled = state.offset <= 0;
+  $(`#${state.prefix}Next`).disabled = state.offset + state.limit >= state.total;
+}
+
+async function loadTable(key, reset = false) {
+  const state = tableStates[key];
+  if (reset) state.offset = 0;
+  const input = $(`#${state.prefix}Search`);
+  state.query = input.value.trim();
+  const apiQuery = searchAliases[state.query.toLocaleLowerCase('ru-RU')] || state.query;
+  const params = new URLSearchParams({
+    name:state.apiName,query:apiQuery,
+    limit:String(state.limit),offset:String(state.offset),
+  });
+  const data = await adminFetch(`/api/admin/table?${params}`);
+  state.total = data.total;
+  state.offset = data.offset;
+  if (key === 'users') renderUsers(data.rows,data.total);
+  else if (key === 'conversations') renderConversations(data.rows,data.total);
+  else renderRequests(data.rows,data.total);
+  renderTablePage(state);
+}
+
+async function loadAllTables() {
+  await Promise.all(Object.keys(tableStates).map(key => loadTable(key)));
+}
+
+function bindTableControls(key) {
+  const state = tableStates[key];
+  const input = $(`#${state.prefix}Search`);
+  let debounce;
+  input.addEventListener('input', () => {
+    clearTimeout(debounce);
+    debounce = setTimeout(() => loadTable(key,true).catch(showDashboardError),300);
+  });
+  $(`#${state.prefix}Clear`).addEventListener('click', () => {
+    input.value = '';
+    loadTable(key,true).catch(showDashboardError);
+    input.focus();
+  });
+  $(`#${state.prefix}Prev`).addEventListener('click', () => {
+    state.offset = Math.max(0,state.offset-state.limit);
+    loadTable(key).catch(showDashboardError);
+  });
+  $(`#${state.prefix}Next`).addEventListener('click', () => {
+    if (state.offset + state.limit < state.total) state.offset += state.limit;
+    loadTable(key).catch(showDashboardError);
+  });
+}
+
+function showDashboardError(error) {
+  if (error.status === 401) {
+    sessionStorage.removeItem(TOKEN_KEY);
+    return showLogin(error.message);
+  }
+  $('#dashboardError').textContent = error.message;
+  $('#dashboardError').classList.remove('hidden');
 }
 
 function showLogin(message = '') {
@@ -210,29 +312,20 @@ async function loadDashboard(token = sessionStorage.getItem(TOKEN_KEY)) {
   button.disabled = true;
   $('#dashboardError').classList.add('hidden');
   try {
-    const response = await fetch('/api/admin/dashboard', {
-      headers:{Authorization:`Bearer ${token}`},
-      cache:'no-store',
-    });
-    const data = await response.json().catch(() => ({}));
-    if (!response.ok) {
-      if (response.status === 401) {
-        sessionStorage.removeItem(TOKEN_KEY);
-        return showLogin(data.detail || 'Неверный токен');
-      }
-      throw new Error(data.detail || `Ошибка сервера: ${response.status}`);
-    }
+    const data = await adminFetch('/api/admin/dashboard',token);
     sessionStorage.setItem(TOKEN_KEY,token);
     showDashboard();
     renderDashboard(data);
+    await loadAllTables();
     clearInterval(refreshTimer);
     refreshTimer = setInterval(() => loadDashboard(),60000);
   } catch (error) {
-    if ($('#dashboard').classList.contains('hidden')) showLogin(error.message);
-    else {
-      $('#dashboardError').textContent = error.message;
-      $('#dashboardError').classList.remove('hidden');
+    if (error.status === 401) {
+      sessionStorage.removeItem(TOKEN_KEY);
+      return showLogin(error.message);
     }
+    if ($('#dashboard').classList.contains('hidden')) showLogin(error.message);
+    else showDashboardError(error);
   } finally {
     button.disabled = false;
   }
@@ -250,4 +343,5 @@ $('#logoutButton').addEventListener('click', () => {
   showLogin();
 });
 
+Object.keys(tableStates).forEach(bindTableControls);
 loadDashboard();

@@ -11,7 +11,9 @@ _temp_dir = tempfile.TemporaryDirectory()
 os.environ["DATABASE_PATH"] = str(Path(_temp_dir.name) / "test.db")
 
 from backend import database as db  # noqa: E402
-from backend.lab_results import LabResult, extract_urls, normalize_med_id  # noqa: E402
+from backend.lab_results import (  # noqa: E402
+    LabResult, extract_urls, lab_result_documents, normalize_med_id,
+)
 from backend.llm import LLMService  # noqa: E402
 from backend.main import ConsiliumHandler, admin_token_valid  # noqa: E402
 from backend.orchestrator import ConversationOrchestrator  # noqa: E402
@@ -24,6 +26,7 @@ class FakeLLM:
     def __init__(self):
         self.route_calls = []
         self.answer_calls = []
+        self.interpret_calls = []
 
     def route(self, history, context, conversation, attachments=None):
         self.route_calls.append({"history": history, "context": context, "conversation": dict(conversation)})
@@ -45,6 +48,17 @@ class FakeLLM:
 
     def synthesize_council(self, history, context, opinions, conversation):
         return "Общий вывод консилиума"
+
+    def interpret_lab_results(self, profile, documents, *, scope_label):
+        self.interpret_calls.append({
+            "profile": dict(profile),
+            "documents": [dict(item) for item in documents],
+            "scope_label": scope_label,
+        })
+        return (
+            "Общий вывод: результаты сопоставлены с анкетой.\n\n"
+            "Отклонения: тестовая расшифровка."
+        )
 
 
 class StickyHumanLLM(FakeLLM):
@@ -452,6 +466,29 @@ class OrchestratorTests(unittest.TestCase):
         self.assertIn("ищет документ в after_tests_db по med_id", manager_prompt)
         self.assertIn("относятся к manager и интерфейсу", ORCHESTRATOR_PROMPT)
 
+    def test_user_language_and_supported_topics_are_clear(self):
+        project_root = Path(__file__).resolve().parents[1]
+        index = (project_root / "index.html").read_text(encoding="utf-8")
+        script = (project_root / "static" / "app.js").read_text(encoding="utf-8")
+        public_ui = index + script
+
+        self.assertIn("Я Мария, ваш ИИ-менеджер", script)
+        self.assertIn("Задавайте вопросы о здоровье, питании, спорте", script)
+        self.assertNotIn("AI-оркестратор", public_ui)
+        self.assertNotIn("Команда агентов", public_ui)
+        self.assertNotIn("План проекта", public_ui)
+        self.assertIn("Здоровье и образ жизни", public_ui)
+
+        manager_prompt = PROFILES["manager"].prompt
+        lifestyle_prompt = PROFILES["general"].prompt
+        self.assertIn("медицине, симптомах, профилактике", manager_prompt)
+        self.assertIn("спорте, физических нагрузках", manager_prompt)
+        self.assertIn("работе самого сервиса", manager_prompt)
+        self.assertIn("не решай постороннюю задачу", manager_prompt)
+        self.assertIn("спорт, нагрузки, восстановление, сон, питание", ORCHESTRATOR_PROMPT)
+        self.assertIn("respond + manager", ORCHESTRATOR_PROMPT)
+        self.assertIn("Не выполняй задачи про программирование", lifestyle_prompt)
+
     def test_lab_result_helpers_normalize_med_id_and_extract_document_links(self):
         self.assertEqual(normalize_med_id(" 12345.0 "), "12345")
         self.assertEqual(normalize_med_id("LAB-2026_42"), "LAB-2026_42")
@@ -461,6 +498,17 @@ class OrchestratorTests(unittest.TestCase):
         )
         with self.assertRaises(ValueError):
             normalize_med_id("../небезопасно")
+        documents = lab_result_documents([
+            "https://docs.google.com/document/d/document-123/edit",
+            "https://drive.google.com/file/d/file-456/view",
+        ])
+        self.assertEqual(len(documents), 2)
+        self.assertEqual(
+            documents[0]["analysis_url"],
+            "https://docs.google.com/document/d/document-123/export/pdf",
+        )
+        self.assertIn("export=download", documents[1]["analysis_url"])
+        self.assertNotEqual(documents[0]["id"], documents[1]["id"])
 
     def test_text_results_request_asks_for_tube_without_calling_ai(self):
         chel_id = "chel_lab_without_tube"
@@ -499,11 +547,127 @@ class OrchestratorTests(unittest.TestCase):
                 response.assistant_message["metadata"]["lab_result_urls"],
                 ["https://example.test/result.pdf"],
             )
+            self.assertEqual(
+                response.assistant_message["metadata"]["lab_result_documents"][0]["url"],
+                "https://example.test/result.pdf",
+            )
             self.assertEqual(fake.route_calls, [])
             self.assertEqual(fake.answer_calls, [])
         finally:
             db.ensure_user("chel_test_default")
             db.set_current_chel_id("chel_test_default")
+
+    def test_send_analyses_to_chat_phrase_returns_document_cards(self):
+        chel_id = "chel_lab_send_to_chat"
+        db.ensure_user(chel_id)
+        try:
+            db.set_current_chel_id(chel_id)
+            db.save_profile({"tube_number": "MED-CHAT", "sex": "male"})
+            fake = FakeLLM()
+            with patch(
+                "backend.orchestrator.lookup_lab_results",
+                return_value=LabResult(
+                    "MED-CHAT",
+                    "found",
+                    ("https://example.test/one.pdf", "https://example.test/two.pdf"),
+                ),
+            ):
+                response = ConversationOrchestrator(fake).process(
+                    None, "Пришли мои анализы в чат"
+                )
+            documents = response.assistant_message["metadata"]["lab_result_documents"]
+            self.assertEqual(response.action, "lab_results_found")
+            self.assertEqual(len(documents), 2)
+            self.assertEqual(documents[1]["title"], "Результаты анализов · документ 2")
+            self.assertEqual(fake.route_calls, [])
+        finally:
+            db.set_current_chel_id(chel_id)
+            db.reset_current_user()
+            db.ensure_user("chel_test_default")
+            db.set_current_chel_id("chel_test_default")
+
+    def test_lab_interpretation_uses_profile_and_persistent_cache(self):
+        chel_id = "chel_lab_interpret_cache"
+        db.ensure_user(chel_id)
+        try:
+            db.set_current_chel_id(chel_id)
+            db.save_profile({
+                "tube_number": "MED-CACHE",
+                "sex": "female",
+                "age": 42,
+                "conditions": ["Гипертония"],
+            })
+            fake = FakeLLM()
+            service = ConversationOrchestrator(fake)
+            lab_result = LabResult(
+                "MED-CACHE",
+                "found",
+                ("https://example.test/result-a.pdf", "https://example.test/result-b.pdf"),
+            )
+            with patch("backend.orchestrator.lookup_lab_results", return_value=lab_result):
+                first = service.process(None, "Расшифруй мои анализы")
+                second = service.interpret_lab_results(first.conversation_id, "all")
+
+            self.assertEqual(first.action, "lab_interpretation")
+            self.assertFalse(first.assistant_message["metadata"]["interpretation_cached"])
+            self.assertTrue(second.assistant_message["metadata"]["interpretation_cached"])
+            self.assertEqual(len(fake.interpret_calls), 1)
+            self.assertEqual(fake.interpret_calls[0]["profile"]["age"], 42)
+            self.assertEqual(len(fake.interpret_calls[0]["documents"]), 2)
+
+            document_id = lab_result_documents(lab_result.urls)[0]["id"]
+            with patch("backend.orchestrator.lookup_lab_results", return_value=lab_result):
+                single = service.interpret_lab_results(first.conversation_id, document_id)
+            self.assertEqual(len(fake.interpret_calls), 2)
+            self.assertEqual(
+                single.assistant_message["metadata"]["lab_result_urls"],
+                ["https://example.test/result-a.pdf"],
+            )
+
+            db.save_profile({
+                **db.get_profile(),
+                "tube_number": "MED-CACHE",
+                "age": 43,
+            })
+            with patch("backend.orchestrator.lookup_lab_results", return_value=lab_result):
+                refreshed = service.interpret_lab_results(first.conversation_id, "all")
+            self.assertFalse(refreshed.assistant_message["metadata"]["interpretation_cached"])
+            self.assertEqual(len(fake.interpret_calls), 3)
+        finally:
+            db.set_current_chel_id(chel_id)
+            db.reset_current_user()
+            db.ensure_user("chel_test_default")
+            db.set_current_chel_id("chel_test_default")
+
+    def test_lab_interpretation_request_uses_file_urls_and_disables_provider_storage(self):
+        service = LLMService()
+        captured = {}
+
+        def fake_request(payload):
+            captured.update(payload)
+            return {
+                "output": [{
+                    "type": "message",
+                    "content": [{"type": "output_text", "text": "Готовая расшифровка"}],
+                }],
+            }
+
+        with patch.object(service, "_request", side_effect=fake_request):
+            answer = service.interpret_lab_results(
+                {"age": 35, "sex": "male", "tube_number": "SECRET"},
+                [{
+                    "url": "https://example.test/view",
+                    "analysis_url": "https://example.test/result.pdf",
+                    "title": "Документ",
+                }],
+                scope_label="Один документ",
+            )
+        self.assertEqual(answer, "Готовая расшифровка")
+        self.assertFalse(captured["store"])
+        content = captured["input"][0]["content"]
+        self.assertEqual(content[1]["type"], "input_file")
+        self.assertEqual(content[1]["file_url"], "https://example.test/result.pdf")
+        self.assertNotIn("SECRET", json.dumps(content, ensure_ascii=False))
 
     def test_gender_choices_are_limited_to_female_and_male(self):
         project_root = Path(__file__).resolve().parents[1]
@@ -517,6 +681,18 @@ class OrchestratorTests(unittest.TestCase):
         sex_question = script.split("{ key:'sex'", 1)[1].split("},", 1)[0]
         self.assertNotIn("intersex", sex_question)
         self.assertNotIn("'other'", sex_question)
+
+    def test_lab_documents_have_individual_and_combined_interpretation_controls(self):
+        project_root = Path(__file__).resolve().parents[1]
+        index = (project_root / "index.html").read_text(encoding="utf-8")
+        script = (project_root / "static" / "app.js").read_text(encoding="utf-8")
+        styles = (project_root / "static" / "styles.css").read_text(encoding="utf-8")
+        self.assertIn("расшифровать по одному или все вместе", index)
+        self.assertIn('data-lab-interpret="${escapeAttr(document.id)}"', script)
+        self.assertIn('data-lab-interpret="all"', script)
+        self.assertIn("/api/lab-results/interpret", script)
+        self.assertIn(".lab-document-card", styles)
+        self.assertIn(".lab-interpret-all", styles)
 
     def test_layout_prevents_desktop_shell_and_focus_from_scrolling_outside_frame(self):
         project_root = Path(__file__).resolve().parents[1]
@@ -555,6 +731,33 @@ class OrchestratorTests(unittest.TestCase):
             self.assertNotIn(forbidden, user_fields)
             self.assertNotIn(forbidden, conversation_fields)
 
+    def test_admin_table_searches_full_allowlisted_views(self):
+        chel_id = "chel_dashboard_search_1234"
+        db.ensure_user(chel_id)
+        try:
+            db.set_current_chel_id(chel_id)
+            conversation = db.create_conversation("Скрытый медицинский заголовок")
+            db.add_message(
+                conversation["id"], "user",
+                "Этот медицинский текст не должен попасть в дашборд",
+            )
+            users = db.admin_table("users","dashboard_search",limit=10)
+            conversations = db.admin_table(
+                "conversations",conversation["id"][:12],limit=10,
+            )
+            self.assertEqual(users["total"],1)
+            self.assertEqual(users["rows"][0]["chel_id"],chel_id)
+            self.assertEqual(conversations["total"],1)
+            self.assertNotIn("content",conversations["rows"][0])
+            self.assertNotIn("title",conversations["rows"][0])
+            self.assertEqual(db.admin_table("users","%")["total"],0)
+            with self.assertRaises(ValueError):
+                db.admin_table("messages","")
+        finally:
+            db.reset_current_user()
+            db.ensure_user("chel_test_default")
+            db.set_current_chel_id("chel_test_default")
+
     def test_dashboard_files_and_admin_menu_entry_exist(self):
         project_root = Path(__file__).resolve().parents[1]
         index = (project_root / "index.html").read_text(encoding="utf-8")
@@ -564,8 +767,11 @@ class OrchestratorTests(unittest.TestCase):
         self.assertIn('id="menuDashboardButton"', index)
         self.assertIn('id="summaryGrid"', dashboard)
         self.assertIn('id="usersTable"', dashboard)
+        self.assertIn('id="usersSearch"', dashboard)
+        self.assertIn('id="conversationsNext"', dashboard)
         self.assertIn("sessionStorage", script)
-        self.assertIn("Authorization:`Bearer ${token}`", script)
+        self.assertIn("Authorization:`Bearer ${token || ''}`", script)
+        self.assertIn("/api/admin/table", script)
         self.assertIn("@media (max-width:700px)", styles)
 
     def test_chel_id_separates_profiles_conversations_memories_and_symptoms(self):
@@ -636,7 +842,10 @@ class OrchestratorTests(unittest.TestCase):
                 self.assertEqual(conn.execute(
                     "SELECT COUNT(*) FROM handoffs WHERE conversation_id = ?", (conversation["id"],)
                 ).fetchone()[0], 0)
-                for table in ("memories", "body_symptoms", "user_profile", "onboarding_state"):
+                for table in (
+                    "memories", "body_symptoms", "lab_interpretations",
+                    "user_profile", "onboarding_state",
+                ):
                     self.assertEqual(conn.execute(
                         f"SELECT COUNT(*) FROM {table} WHERE chel_id = ?", (reset_id,)
                     ).fetchone()[0], 0)
@@ -736,6 +945,149 @@ class OrchestratorTests(unittest.TestCase):
         with self.assertRaises(PermissionError):
             db.create_max_login(920000001, 56001)
 
+    def test_messenger_identity_keeps_anonymous_profile_and_restores_it(self):
+        anonymous_chel_id = "chel_auth_test_profile"
+        try:
+            db.ensure_user(anonymous_chel_id)
+            db.set_current_chel_id(anonymous_chel_id)
+            db.save_profile({"preferred_name": "Сохранённая анкета"})
+            intent = db.create_auth_intent("telegram")
+            login = db.create_messenger_login(
+                "telegram", "tg-user-1001", intent_token=intent["token"],
+            )
+            self.assertEqual(login["chel_id"], anonymous_chel_id)
+            self.assertEqual(db.get_profile()["preferred_name"], "Сохранённая анкета")
+
+            other_browser = "chel_auth_test_other_browser"
+            db.ensure_user(other_browser)
+            db.set_current_chel_id(other_browser)
+            second_intent = db.create_auth_intent("telegram")
+            restored = db.create_messenger_login(
+                "telegram", "tg-user-1001", intent_token=second_intent["token"],
+            )
+            self.assertEqual(restored["chel_id"], anonymous_chel_id)
+            session = db.consume_login_token(restored["token"])
+            self.assertEqual(db.get_session_chel_id(session["session"]), anonymous_chel_id)
+        finally:
+            db.ensure_user("chel_test_default")
+            db.set_current_chel_id("chel_test_default")
+
+    def test_used_messenger_link_remains_bound_to_its_owner(self):
+        login = db.create_messenger_login("telegram", "tg-repeat-link-owner")
+        session = db.consume_login_token(login["token"])
+        self.assertEqual(
+            db.get_consumed_login_owner(login["token"]),
+            login["chel_id"],
+        )
+        self.assertEqual(
+            db.get_session_chel_id(session["session"]),
+            login["chel_id"],
+        )
+        self.assertIsNone(db.consume_login_token(login["token"]))
+
+        # Creating another link must not delete the ownership marker.
+        db.create_messenger_login("telegram", "tg-repeat-link-cleanup")
+        self.assertEqual(
+            db.get_consumed_login_owner(login["token"]),
+            login["chel_id"],
+        )
+
+    def test_reused_link_only_accepts_matching_browser_session(self):
+        class FakeHandler:
+            def __init__(self, cookie):
+                self.headers = {"Cookie": cookie}
+                self.status = None
+                self.response_headers = {}
+
+            def send_response(self, status):
+                self.status = status
+
+            def _send_security_headers(self):
+                pass
+
+            def send_header(self, name, value):
+                self.response_headers[name] = value
+
+            def end_headers(self):
+                pass
+
+        with (
+            patch.object(db, "consume_login_token", return_value=None),
+            patch.object(db, "get_consumed_login_owner", return_value="chel_owner"),
+            patch.object(db, "get_session_chel_id", return_value="chel_owner"),
+            patch.object(db, "set_current_chel_id") as set_current,
+        ):
+            handler = FakeHandler("consilium_session=matching-session")
+            ConsiliumHandler._consume_messenger_login(handler, "used-token")
+            self.assertEqual(handler.status, 303)
+            self.assertEqual(handler.response_headers["Location"], "/")
+            set_current.assert_called_once_with("chel_owner")
+
+        with (
+            patch.object(db, "consume_login_token", return_value=None),
+            patch.object(db, "get_consumed_login_owner", return_value="chel_owner"),
+            patch.object(db, "get_session_chel_id", return_value=None),
+        ):
+            handler = FakeHandler("")
+            ConsiliumHandler._consume_messenger_login(handler, "used-token")
+            self.assertEqual(handler.status, 303)
+            self.assertEqual(
+                handler.response_headers["Location"],
+                "/?auth=messenger_required",
+            )
+
+    def test_one_user_can_link_telegram_and_max(self):
+        chel_id = "chel_auth_test_two_messengers"
+        try:
+            db.ensure_user(chel_id)
+            db.set_current_chel_id(chel_id)
+            telegram_intent = db.create_auth_intent("telegram")
+            telegram = db.create_messenger_login(
+                "telegram", "tg-user-2001", intent_token=telegram_intent["token"],
+            )
+            max_intent = db.create_auth_intent("max")
+            max_login = db.create_messenger_login(
+                "max", "max-user-2001", intent_token=max_intent["token"],
+            )
+            self.assertEqual(telegram["chel_id"], chel_id)
+            self.assertEqual(max_login["chel_id"], chel_id)
+            self.assertEqual(
+                {item["provider"] for item in db.current_external_identities()},
+                {"telegram", "max"},
+            )
+        finally:
+            db.ensure_user("chel_test_default")
+            db.set_current_chel_id("chel_test_default")
+
+    def test_auth_intent_is_provider_specific_and_one_time(self):
+        chel_id = "chel_auth_test_intent"
+        try:
+            db.ensure_user(chel_id)
+            db.set_current_chel_id(chel_id)
+            intent = db.create_auth_intent("telegram")
+            with self.assertRaisesRegex(ValueError, "недействителен"):
+                db.create_messenger_login("max", "max-user-3001", intent_token=intent["token"])
+            db.create_messenger_login("telegram", "tg-user-3001", intent_token=intent["token"])
+            with self.assertRaisesRegex(ValueError, "недействителен"):
+                db.create_messenger_login("telegram", "tg-user-3002", intent_token=intent["token"])
+        finally:
+            db.ensure_user("chel_test_default")
+            db.set_current_chel_id("chel_test_default")
+
+    def test_auth_screen_explains_messenger_and_anonymous_access(self):
+        project_root = Path(__file__).resolve().parents[1]
+        index = (project_root / "index.html").read_text(encoding="utf-8")
+        script = (project_root / "static" / "app.js").read_text(encoding="utf-8")
+        self.assertIn('id="authGate"', index)
+        self.assertIn('id="telegramAuthButton"', index)
+        self.assertIn('id="maxAuthButton"', index)
+        self.assertIn('id="anonymousAuthButton"', index)
+        self.assertIn('id="anonymousWarning"', index)
+        self.assertIn("consilium_anonymous_access", script)
+        self.assertIn("=== identity.chel_id", script)
+        self.assertIn("/api/auth/messenger/start", script)
+        self.assertIn("identity.authenticated", script)
+
     def test_auth_token_is_redacted_from_application_log(self):
         fake_handler = type("FakeHandler", (), {"address_string": lambda self: "127.0.0.1"})()
         with patch("builtins.print") as output:
@@ -745,6 +1097,11 @@ class OrchestratorTests(unittest.TestCase):
         logged = output.call_args.args[0]
         self.assertNotIn("super-secret-token", logged)
         self.assertIn("[REDACTED]", logged)
+        with patch("builtins.print") as output:
+            ConsiliumHandler.log_message(
+                fake_handler, '%s', "GET /auth/messenger?t=another-secret HTTP/1.1"
+            )
+        self.assertNotIn("another-secret", output.call_args.args[0])
 
     def test_onboarding_state_and_lifestyle_profile_are_persisted(self):
         appearance = db.save_onboarding(status="questionnaire", font_size="large")

@@ -7,6 +7,7 @@ import os
 import sqlite3
 import sys
 from pathlib import Path
+from urllib.parse import urlparse
 
 PROJECT_DIR = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(PROJECT_DIR))
@@ -114,9 +115,9 @@ def main() -> int:
     ):
         errors.append("BOT_INTEGRATION_SECRET должен быть случайной строкой длиной не менее 32 символов")
     elif integration_secret:
-        passed.append("Секрет интеграции MAX задан (значение скрыто)")
+        passed.append("Секрет интеграции с мессенджерами задан (значение скрыто)")
     else:
-        warnings.append("Интеграция MAX отключена: BOT_INTEGRATION_SECRET не задан")
+        warnings.append("Интеграция с мессенджерами отключена: BOT_INTEGRATION_SECRET не задан")
 
     dashboard_token = settings.admin_dashboard_token.strip()
     if production and (
@@ -136,6 +137,25 @@ def main() -> int:
         errors.append("AUTH_LINK_TTL_SECONDS должен быть от 300 секунд до 30 дней")
     else:
         passed.append("Срок одноразовой ссылки настроен")
+    if not 300 <= settings.auth_intent_ttl_seconds <= 2_592_000:
+        errors.append("AUTH_INTENT_TTL_SECONDS должен быть от 300 секунд до 30 дней")
+    else:
+        passed.append("Срок запроса привязки мессенджера настроен")
+
+    for provider, template in (
+        ("Telegram", settings.telegram_bot_auth_url),
+        ("MAX", settings.max_bot_auth_url),
+    ):
+        if not template:
+            warnings.append(f"Бот {provider} пока не подключён")
+            continue
+        parsed = urlparse(template)
+        if "{token}" not in template or parsed.scheme not in {"http", "https"}:
+            errors.append(f"Ссылка на бота {provider} должна быть http(s)-адресом с {{token}}")
+        elif production and parsed.scheme != "https":
+            errors.append(f"Ссылка на бота {provider} в production должна использовать https://")
+        else:
+            passed.append(f"Ссылка на бота {provider} настроена")
     if not 1 <= settings.session_ttl_days <= 365:
         errors.append("SESSION_TTL_DAYS должен быть от 1 до 365")
     else:

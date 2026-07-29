@@ -4,13 +4,52 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="light">
-  <title>Консилиум — мультиагентный помощник</title>
+  <title>Консилиум — персональный помощник по здоровью</title>
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="/static/styles.css">
 </head>
 <body>
+  <main class="auth-gate hidden" id="authGate" aria-live="polite">
+    <section class="auth-card">
+      <div class="auth-brand"><span>К</span><div><strong>Консилиум</strong><small>Ваше личное пространство здоровья</small></div></div>
+      <span class="auth-kicker">БЕЗ ПАРОЛЯ</span>
+      <h1>Войдите через удобный мессенджер</h1>
+      <p class="auth-lead">Так анкета, история диалогов и результаты останутся доступны на другом устройстве и после очистки браузера.</p>
+      <div class="auth-options">
+        <button class="messenger-auth telegram" id="telegramAuthButton" type="button">
+          <span aria-hidden="true">➤</span><div><strong>Продолжить с Telegram</strong><small>Подтверждение через бота</small></div>
+        </button>
+        <button class="messenger-auth max" id="maxAuthButton" type="button">
+          <span aria-hidden="true">М</span><div><strong>Продолжить с MAX</strong><small>Подтверждение через бота</small></div>
+        </button>
+        <button class="anonymous-auth" id="anonymousAuthButton" type="button">Войти анонимно</button>
+      </div>
+      <p class="auth-status hidden" id="authStatus" role="status"></p>
+      <p class="auth-note">Консилиум не получает пароль от мессенджера. Сохраняется только его технический ID для восстановления доступа.</p>
+    </section>
+  </main>
+
+  <div class="auth-warning-backdrop hidden" id="anonymousWarning" role="dialog" aria-modal="true" aria-labelledby="anonymousWarningTitle">
+    <section class="auth-warning-card">
+      <button class="auth-warning-close" id="anonymousWarningClose" type="button" aria-label="Закрыть">×</button>
+      <span class="auth-warning-icon" aria-hidden="true">!</span>
+      <h2 id="anonymousWarningTitle">Продолжить без мессенджера?</h2>
+      <p>Данные будут связаны только с этим браузером.</p>
+      <ul>
+        <li>после очистки cookies доступ может потеряться;</li>
+        <li>на другом телефоне или компьютере история не откроется;</li>
+        <li>восстановить анонимный профиль служба поддержки не сможет.</li>
+      </ul>
+      <p class="auth-warning-hint">Мессенджер можно будет привязать позже без повторного заполнения анкеты.</p>
+      <div class="auth-warning-actions">
+        <button id="anonymousWarningCancel" type="button">Назад</button>
+        <button id="anonymousWarningConfirm" type="button">Понимаю, продолжить</button>
+      </div>
+    </section>
+  </div>
+
   <main class="onboarding hidden" id="onboarding" aria-live="polite">
     <header class="onboarding-brand"><span>К</span><div><strong>Консилиум</strong><small>Персональный старт</small></div><b id="onboardingStage">Анкета</b></header>
     <section class="onboarding-card">
@@ -22,15 +61,15 @@
   </main>
 
   <div class="app-shell hidden" id="appShell">
-    <aside class="sidebar" aria-label="Команда агентов">
+    <aside class="sidebar" aria-label="Команда специалистов">
       <button class="sidebar-close" id="mobileTeamClose" aria-label="Закрыть список команды">×</button>
       <div class="brand">
         <div class="brand-mark" aria-hidden="true">К</div>
-        <div><strong>Консилиум</strong><span>AI-команда</span></div>
+        <div><strong>Консилиум</strong><span>Команда специалистов</span></div>
       </div>
 
       <div class="team-heading">
-        <span>Команда</span><span class="count" id="onlineCount">9 агентов</span>
+        <span>Команда</span><span class="count" id="onlineCount">9 специалистов</span>
       </div>
       <nav class="agent-list" id="agentList"></nav>
 
@@ -50,7 +89,7 @@
       <header class="chat-header">
         <div class="active-avatar" id="headerAvatar">МН</div>
         <div class="chat-title">
-          <div><strong id="headerName">Мария</strong><span class="role" id="headerRole">Менеджер</span></div>
+          <div><strong id="headerName">Мария</strong><span class="role" id="headerRole">ИИ-менеджер</span></div>
           <span class="online"><i></i>на связи</span>
         </div>
         <div class="header-actions">
@@ -59,7 +98,7 @@
             <button class="header-action-button" id="functionMenuButton" aria-label="Открыть меню функций" aria-expanded="false" title="Функции"><span>☰</span></button>
             <div class="function-menu hidden" id="functionMenu" role="menu">
               <strong>Функции</strong>
-              <button id="mobileTeamButton" role="menuitem"><i>⌘</i><span>Команда агентов<small>Посмотреть специалистов</small></span></button>
+              <button id="mobileTeamButton" role="menuitem"><i>⌘</i><span>Команда специалистов<small>Посмотреть врачей и консультантов</small></span></button>
               <button id="newChatButton" role="menuitem"><i>＋</i><span>Новый диалог<small>Начать с чистого контекста</small></span></button>
               <button id="humanButton" role="menuitem"><i>♙</i><span>Позвать человека<small>Чат или созвон</small></span></button>
               <button class="hidden" id="secondOpinionButton" role="menuitem"><i>Ⅱ</i><span>Второе мнение<small>Независимая оценка</small></span></button>
@@ -101,13 +140,13 @@
 
       <div class="suggestions" id="suggestions">
         <button data-prompt="У меня второй день болит голова">Болит голова</button>
-        <button data-prompt="Помоги составить план проекта">План проекта</button>
+        <button data-prompt="Помоги составить здоровый рацион">Здоровое питание</button>
         <button data-prompt="Я хочу поговорить с человеком">Позвать человека</button>
       </div>
 
       <form class="composer" id="chatForm">
         <label class="sr-only" for="messageInput">Сообщение</label>
-        <textarea id="messageInput" rows="1" placeholder="Опишите задачу или симптомы..." autocomplete="off"></textarea>
+        <textarea id="messageInput" rows="1" placeholder="Задайте вопрос о здоровье..." autocomplete="off"></textarea>
         <input class="sr-only" type="file" id="attachmentInput" accept="image/jpeg,image/png,image/webp,image/gif,application/pdf,text/plain,text/csv" multiple>
         <button type="button" class="attach-button" id="attachButton" aria-label="Прикрепить файл">＋</button>
         <button type="submit" class="send-button" aria-label="Отправить">
@@ -130,8 +169,8 @@
       <div class="timeline" id="timeline">
         <div class="empty-state">
           <div class="empty-icon">⌁</div>
-          <strong>Здесь появится маршрут</strong>
-          <p>Вы увидите, какой агент принял задачу и кому передал управление.</p>
+          <strong>Здесь появятся следующие шаги</strong>
+          <p>Покажем, кто из специалистов помогает и что происходит дальше.</p>
         </div>
       </div>
       <div class="safety-card">
@@ -202,7 +241,7 @@
     <div class="modal context-modal">
       <button class="modal-close" id="contextClose" aria-label="Закрыть">×</button>
       <div class="modal-icon">✓</div><h2 id="contextTitle">Что я понял из разговора</h2>
-      <p>Один факт на строку. Исправления сразу попадут в контекст всех агентов.</p>
+      <p>Один факт на строку. Исправления сразу будут учтены всеми специалистами.</p>
       <label class="field-label">Цель разговора<input id="contextGoal" maxlength="500"></label>
       <label class="field-label">Подтверждённые факты<textarea id="contextFacts" rows="6"></textarea></label>
       <label class="field-label">Что ещё нужно выяснить<textarea id="contextQuestions" rows="4"></textarea></label>
@@ -214,7 +253,7 @@
     <div class="modal memory-modal">
       <button class="modal-close" id="memoryClose" aria-label="Закрыть">×</button>
       <div class="modal-icon">◇</div><h2 id="memoryTitle">Память обо мне</h2>
-      <p>Агенты используют эти сведения в новых диалогах. Добавляйте только то, что действительно хотите сохранять.</p>
+      <p>Специалисты учитывают эти сведения в новых диалогах. Добавляйте только то, что действительно хотите сохранять.</p>
       <div class="memory-form"><select id="memoryCategory"><option value="preference">Предпочтение</option><option value="health">Здоровье</option><option value="constraint">Ограничение</option><option value="goal">Цель</option></select><input id="memoryText" maxlength="500" placeholder="Например: отвечать коротко и по пунктам"><button id="addMemoryButton">Добавить</button></div>
       <div class="memory-list" id="memoryList"></div>
     </div>
@@ -233,7 +272,7 @@
         <article class="capability-card"><i>◫</i><span><strong>Дополнительные обследования</strong><small>22 набора анализов, персональные отметки и демо-оплата</small></span></article>
         <article class="capability-card"><i>◎</i><span><strong>Живой консилиум</strong><small>Несколько профильных мнений и общий вывод</small></span></article>
         <article class="capability-card"><i>Ⅱ</i><span><strong>Второе мнение</strong><small>Независимая оценка другого специалиста</small></span></article>
-        <article class="capability-card"><i>✓</i><span><strong>Проверяемый контекст</strong><small>Исправляйте, что агенты поняли из разговора</small></span></article>
+        <article class="capability-card"><i>✓</i><span><strong>Проверяемый контекст</strong><small>Исправляйте, что специалисты поняли из разговора</small></span></article>
         <article class="capability-card"><i>⌁</i><span><strong>Карта состояния</strong><small>Тема, открытые вопросы и уровень срочности</small></span></article>
         <article class="capability-card"><i>▱</i><span><strong>Фото и документы</strong><small>Изображения, PDF, TXT и CSV до 4 МБ</small></span></article>
         <article class="capability-card"><i>◇</i><span><strong>Управляемая память</strong><small>Сохраняйте и удаляйте важные предпочтения</small></span></article>
@@ -247,7 +286,7 @@
     <div class="modal body-map-modal">
       <button class="modal-close" id="bodyMapClose" aria-label="Закрыть">×</button>
       <div class="modal-icon">◉</div><h2 id="bodyMapTitle">Интерактивная карта тела</h2>
-      <p>Нажмите на область, затем опишите ощущение. Сохранённая отметка будет доступна всем медицинским агентам.</p>
+      <p>Нажмите на область, затем опишите ощущение. Сохранённая отметка будет доступна всем врачам сервиса.</p>
       <div class="body-map-layout">
         <section class="body-picker">
           <div class="body-view-tabs" role="tablist" aria-label="Вид тела">
@@ -363,7 +402,7 @@
     <div class="modal profile-modal">
       <button class="modal-close" id="profileClose" aria-label="Закрыть">×</button>
       <div class="modal-icon">♙</div><h2 id="profileTitle">Моя анкета</h2>
-      <p>Эти данные будут учитываться агентами, когда вопрос касается вас. Если вы спрашиваете о другом человеке, укажите это в сообщении.</p>
+      <p>Эти данные будут учитываться специалистами, когда вопрос касается вас. Если вы спрашиваете о другом человеке, укажите это в сообщении.</p>
       <div class="profile-grid">
         <label class="field-label wide">Ваш ID в сервисе<input id="profileChelId" readonly aria-readonly="true"></label>
         <label class="field-label wide">Как к вам обращаться<input id="profileName" maxlength="100" placeholder="Необязательно"></label>
@@ -394,7 +433,7 @@
       <button class="modal-close" id="labResultsClose" aria-label="Закрыть">×</button>
       <div class="modal-icon">▤</div>
       <h2 id="labResultsTitle">Результаты анализов</h2>
-      <p>Для поиска используется номер с наклейки на пробирке. После сохранения повторно вводить его не придётся.</p>
+      <p>Для поиска используется номер с наклейки на пробирке. Результаты можно открыть, отправить в чат и расшифровать по одному или все вместе с учётом вашей анкеты.</p>
       <div class="lab-tube-step hidden" id="labTubeStep">
         <strong>Введите номер пробирки</strong>
         <p>Проверьте символы на наклейке и введите номер без сокращений.</p>

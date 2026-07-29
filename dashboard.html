@@ -74,10 +74,15 @@
           <div><p class="eyebrow">Последние записи</p><h2>Пользователи</h2></div>
           <span class="table-count" id="usersCount"></span>
         </div>
+        <div class="table-tools">
+          <label class="table-search">Поиск пользователей<input id="usersSearch" type="search" placeholder="chel_id, статус, Telegram или MAX"></label>
+          <button class="table-clear" id="usersClear" type="button">Очистить</button>
+        </div>
         <div class="table-scroll"><table>
-          <thead><tr><th>chel_id</th><th>Первый вход</th><th>Последняя активность</th><th>Анкета</th><th>MAX</th><th>Диалоги</th><th>Сообщения</th></tr></thead>
+          <thead><tr><th>chel_id</th><th>Первый вход</th><th>Последняя активность</th><th>Анкета</th><th>Мессенджеры</th><th>Диалоги</th><th>Сообщения</th></tr></thead>
           <tbody id="usersTable"></tbody>
         </table></div>
+        <div class="table-pagination"><button id="usersPrev" type="button">← Назад</button><span id="usersPage"></span><button id="usersNext" type="button">Дальше →</button></div>
       </section>
 
       <section class="panel table-panel">
@@ -85,10 +90,15 @@
           <div><p class="eyebrow">Без содержимого переписки</p><h2>Диалоги</h2></div>
           <span class="table-count" id="conversationsCount"></span>
         </div>
+        <div class="table-tools">
+          <label class="table-search">Поиск диалогов<input id="conversationsSearch" type="search" placeholder="ID, chel_id, агент, статус или обращение"></label>
+          <button class="table-clear" id="conversationsClear" type="button">Очистить</button>
+        </div>
         <div class="table-scroll"><table>
           <thead><tr><th>ID диалога</th><th>chel_id</th><th>Агент</th><th>Статус</th><th>Человек</th><th>Сообщения</th><th>Обновлён</th></tr></thead>
           <tbody id="conversationsTable"></tbody>
         </table></div>
+        <div class="table-pagination"><button id="conversationsPrev" type="button">← Назад</button><span id="conversationsPage"></span><button id="conversationsNext" type="button">Дальше →</button></div>
       </section>
 
       <section class="panel table-panel">
@@ -96,10 +106,15 @@
           <div><p class="eyebrow">Чат и созвоны</p><h2>Обращения к человеку</h2></div>
           <span class="table-count" id="requestsCount"></span>
         </div>
+        <div class="table-tools">
+          <label class="table-search">Поиск обращений<input id="requestsSearch" type="search" placeholder="Номер обращения, chel_id, канал или телефон"></label>
+          <button class="table-clear" id="requestsClear" type="button">Очистить</button>
+        </div>
         <div class="table-scroll"><table>
           <thead><tr><th>Обращение</th><th>chel_id</th><th>Канал</th><th>Статус</th><th>Телефон</th><th>Обновлено</th></tr></thead>
           <tbody id="requestsTable"></tbody>
         </table></div>
+        <div class="table-pagination"><button id="requestsPrev" type="button">← Назад</button><span id="requestsPage"></span><button id="requestsNext" type="button">Дальше →</button></div>
       </section>
 
       <p class="dashboard-error hidden" id="dashboardError" role="alert"></p>

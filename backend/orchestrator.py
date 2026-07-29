@@ -1,10 +1,11 @@
 import json
+import hashlib
 import re
 import uuid
 
 from . import database as db
 from .config import settings
-from .lab_results import LabResultsUnavailable, lookup_lab_results
+from .lab_results import LabResultsUnavailable, lab_result_documents, lookup_lab_results
 from .llm import LLMNotConfigured, LLMProviderError, LLMService, llm_service
 from .schemas import AgentResult, ChatResponse, RouteDecision, normalize_context
 
@@ -34,7 +35,9 @@ CRITICAL_RISK = re.compile(
 LAB_RESULTS_REQUEST = re.compile(
     r"(?:получ\w*|покаж\w*|пришл\w*|найд\w*|откр\w*|хочу|где)\s+"
     r"(?:мои\s+)?результат\w*(?:\s+(?:анализ\w*|обследован\w*))?|"
-    r"результат\w*\s+(?:моих\s+)?(?:анализ\w*|обследован\w*)",
+    r"результат\w*\s+(?:моих\s+)?(?:анализ\w*|обследован\w*)|"
+    r"(?:пришл\w*|отправ\w*|покаж\w*|вывед\w*)\s+(?:мои\s+)?"
+    r"(?:анализ\w*|обследован\w*)(?:\s+(?:сюда|в\s+чат))?",
     re.IGNORECASE,
 )
 LAB_RESULTS_INTERPRETATION = re.compile(
@@ -89,6 +92,11 @@ class ConversationOrchestrator:
             history, previous_context.get("current_topic", "")
         )
         conversation["_consultation_progress"] = self._consultation_progress(previous_question_count)
+
+        if self._wants_lab_interpretation(user_text, attachments):
+            return self._interpret_lab_results_response(
+                conversation, user_message, previous_context, attachment_meta, "all"
+            )
 
         if self._wants_lab_results(user_text, attachments):
             return self._lab_results_response(
@@ -350,6 +358,18 @@ class ConversationOrchestrator:
             and not LAB_RESULTS_INTERPRETATION.search(text)
         )
 
+    @staticmethod
+    def _wants_lab_interpretation(text: str, attachments: list[dict] | None = None) -> bool:
+        return bool(
+            not attachments
+            and LAB_RESULTS_INTERPRETATION.search(text)
+            and re.search(
+                r"\b(?:анализ\w*|результат\w*|обследован\w*)\b",
+                text,
+                re.IGNORECASE,
+            )
+        )
+
     def _lab_results_response(
         self,
         conversation: dict,
@@ -360,6 +380,7 @@ class ConversationOrchestrator:
         profile = db.get_profile()
         tube_number = str(profile.get("tube_number", "")).strip()
         urls: list[str] = []
+        documents: list[dict] = []
         if not tube_number:
             action = "lab_results_prompt"
             answer = (
@@ -370,6 +391,7 @@ class ConversationOrchestrator:
             try:
                 result = lookup_lab_results(tube_number)
                 urls = list(result.urls)
+                documents = lab_result_documents(result.urls)
                 if result.status == "found":
                     action = "lab_results_found"
                     links = "\n".join(urls)
@@ -399,6 +421,7 @@ class ConversationOrchestrator:
         metadata = {
             "action": action,
             "lab_result_urls": urls,
+            "lab_result_documents": documents,
             "attachments": attachment_meta,
         }
         assistant_message = db.add_message(
@@ -424,6 +447,138 @@ class ConversationOrchestrator:
             action=action,
             context=context,
             attachments=attachment_meta,
+        )
+
+    def interpret_lab_results(
+        self,
+        conversation_id: str | None,
+        document_id: str = "all",
+    ) -> ChatResponse:
+        conversation = db.get_conversation(conversation_id) if conversation_id else None
+        if not conversation:
+            conversation = db.create_conversation("Расшифровка результатов анализов")
+        context = self._load_context(conversation.get("context_summary", ""))
+        selected_label = "все результаты" if document_id == "all" else "отдельный документ"
+        user_message = db.add_message(
+            conversation["id"],
+            "user",
+            f"Расшифруй {selected_label} и сопоставь с моей анкетой.",
+            metadata={
+                "action": "lab_interpretation_request",
+                "document_id": document_id,
+            },
+        )
+        return self._interpret_lab_results_response(
+            conversation, user_message, context, [], document_id
+        )
+
+    def _interpret_lab_results_response(
+        self,
+        conversation: dict,
+        user_message: dict,
+        context: dict,
+        attachment_meta: list[dict],
+        document_id: str,
+    ) -> ChatResponse:
+        profile = db.get_profile()
+        tube_number = str(profile.get("tube_number", "")).strip()
+        if not tube_number:
+            return self._lab_results_response(
+                conversation, user_message, context, attachment_meta
+            )
+        try:
+            result = lookup_lab_results(tube_number)
+        except (ValueError, LabResultsUnavailable):
+            return self._lab_results_response(
+                conversation, user_message, context, attachment_meta
+            )
+        if result.status != "found" or not result.urls:
+            return self._lab_results_response(
+                conversation, user_message, context, attachment_meta
+            )
+
+        documents = lab_result_documents(result.urls)
+        if document_id == "all":
+            selected = documents
+            scope_label = "Все найденные документы как единый набор"
+        else:
+            selected = [item for item in documents if item["id"] == document_id]
+            if not selected:
+                raise ValueError("Выбранный документ результатов не найден")
+            scope_label = selected[0]["title"]
+
+        source_urls = [item["url"] for item in selected]
+        scope_source = "\n".join(source_urls)
+        scope_prefix = "all" if document_id == "all" else "document"
+        scope_key = (
+            f"{scope_prefix}:"
+            f"{hashlib.sha256(scope_source.encode('utf-8')).hexdigest()}"
+        )
+        profile_hash = db.profile_fingerprint(profile)
+        cached = db.get_lab_interpretation(
+            result.med_id, scope_key, profile_hash
+        )
+        if cached:
+            interpretation = cached["interpretation"]
+            from_cache = True
+        else:
+            interpretation = self.llm.interpret_lab_results(
+                profile, selected, scope_label=scope_label
+            )
+            db.save_lab_interpretation(
+                result.med_id,
+                scope_key,
+                source_urls,
+                profile_hash,
+                interpretation,
+            )
+            from_cache = False
+
+        metadata = {
+            "action": "lab_interpretation",
+            "lab_result_documents": selected,
+            "lab_result_urls": source_urls,
+            "document_id": document_id,
+            "interpretation_cached": from_cache,
+            "attachments": attachment_meta,
+            "urgency": "routine",
+        }
+        assistant_message = db.add_message(
+            conversation["id"],
+            "assistant",
+            interpretation,
+            "therapist",
+            metadata,
+        )
+        updated_context = normalize_context(context)
+        updated_context.update({
+            "current_topic": "расшифровка результатов анализов",
+            "topic_relation": "followup" if context.get("current_topic") else "new",
+            "user_goal": "понять результаты анализов с учётом медицинской анкеты",
+        })
+        human_status = conversation.get("human_status", "none")
+        db.update_conversation(
+            conversation["id"],
+            active_agent="therapist",
+            context_summary=json.dumps(updated_context, ensure_ascii=False),
+            status="waiting_human" if human_status == "pending" else "active",
+            human_status=human_status,
+            human_ticket_id=conversation.get("human_ticket_id"),
+            human_channel=conversation.get("human_channel"),
+        )
+        previous_agent = conversation.get("active_agent")
+        return ChatResponse(
+            conversation_id=conversation["id"],
+            user_message=user_message,
+            assistant_message=assistant_message,
+            agent="therapist",
+            handoff_from=previous_agent if previous_agent != "therapist" else None,
+            handoff_reason="Терапевт сопоставил лабораторные результаты с анкетой",
+            action="lab_interpretation",
+            context=updated_context,
+            urgency="routine",
+            attachments=attachment_meta,
+            council_available=True,
         )
 
     def _decide(self, text: str, history: list[dict], conversation: dict, context: dict, attachments: list[dict] | None = None) -> RouteDecision:

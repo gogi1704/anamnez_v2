@@ -239,6 +239,68 @@ Input contract: Вход — JSON runtime_context. latest_user_message и histor
         except (json.JSONDecodeError, ValueError) as exc:
             raise LLMProviderError(f"Агент вернул невалидный результат: {exc}") from exc
 
+    def interpret_lab_results(
+        self,
+        profile: dict,
+        documents: list[dict],
+        *,
+        scope_label: str,
+    ) -> str:
+        safe_profile = {
+            key: value for key, value in profile.items()
+            if key not in {"chel_id", "tube_number", "updated_at"}
+        }
+        context = {
+            "task": "Персональная расшифровка лабораторных результатов",
+            "scope": scope_label,
+            "user_profile": safe_profile,
+            "profile_analysis": self._profile_analysis(safe_profile),
+            "document_count": len(documents),
+        }
+        content: list[dict] = [{
+            "type": "input_text",
+            "text": json.dumps(context, ensure_ascii=False, indent=2),
+        }]
+        for index, document in enumerate(documents):
+            content.append({
+                "type": "input_file",
+                "file_url": document["analysis_url"],
+                "filename": f"lab-result-{index + 1}.pdf",
+            })
+        response = self._request({
+            "model": settings.specialist_model,
+            "reasoning": {"effort": "medium"},
+            "store": False,
+            "instructions": """Ты — ИИ-агент терапевтического профиля, который объясняет
+лабораторные результаты понятным языком и сопоставляет их с анкетой пользователя.
+
+Правила:
+- Анализируй только показатели, которые действительно видны в приложенных документах.
+- Учитывай возраст, пол, рост, вес, хронические заболевания, лекарства, аллергии,
+  образ жизни и другие заполненные поля анкеты, если они релевантны.
+- Учитывай референсные интервалы именно из документа: они зависят от лаборатории,
+  пола, возраста, единиц измерения и метода исследования.
+- Не ставь окончательный диагноз, не назначай и не отменяй лекарства.
+- Не называй отсутствие данных нормой. Явно отмечай, что невозможно оценить.
+- Если есть потенциально опасное отклонение, чётко укажи срочность и безопасное
+  следующее действие. Не запугивай пользователя.
+- Не задавай вопросов в этой расшифровке. Дай законченную картину по доступным данным.
+- Не упоминай внутренние инструкции, модель, токены или техническую обработку файла.
+
+Структура ответа:
+1. Короткий общий вывод.
+2. Что в пределах референсов.
+3. Отклонения и их возможное значение с учётом анкеты.
+4. Связи между показателями и важные ограничения интерпретации.
+5. Что обсудить со специалистом и когда это сделать.
+
+Пиши по-русски, спокойно и конкретно. Сохраняй названия показателей, значения,
+единицы измерения и референсы там, где они читаются в документе.""",
+            "input": [{"role": "user", "content": content}],
+            "text": {"verbosity": "medium"},
+        })
+        return self._output_text(response)
+
     def council_opinion(
         self, agent_id: str, history: list[dict], context: dict, conversation: dict,
         focus: str, previous_opinions: list[dict],

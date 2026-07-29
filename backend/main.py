@@ -9,7 +9,7 @@ import webbrowser
 from http.cookies import CookieError, SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, quote, urlparse
 
 from . import database as db
 from .config import BASE_DIR, settings
@@ -69,8 +69,8 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
     def do_GET(self) -> None:
         parsed = urlparse(self.path)
         path = parsed.path
-        if path == "/auth/max":
-            return self._consume_max_login(parse_qs(parsed.query).get("t", [""])[0])
+        if path in {"/auth/max", "/auth/messenger"}:
+            return self._consume_messenger_login(parse_qs(parsed.query).get("t", [""])[0])
         if path == "/api/health":
             return self._json(200, {"status": "ok"})
         if path == "/favicon.ico":
@@ -86,15 +86,16 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                     database_ready = conn.execute("SELECT 1").fetchone()[0] == 1
             except Exception:
                 database_ready = False
-            max_auth_ready = bool(settings.bot_integration_secret) and (
+            messenger_auth_ready = bool(settings.bot_integration_secret) and (
                 settings.app_env != "production" or settings.public_base_url.startswith("https://")
             )
-            ready = database_ready and bool(settings.openai_api_key) and max_auth_ready
+            ready = database_ready and bool(settings.openai_api_key) and messenger_auth_ready
             return self._json(200 if ready else 503, {
                 "status": "ready" if ready else "not_ready",
                 "database": "ok" if database_ready else "error",
                 "ai_configured": bool(settings.openai_api_key),
-                "max_auth_configured": max_auth_ready,
+                "messenger_auth_configured": messenger_auth_ready,
+                "max_auth_configured": messenger_auth_ready,
             })
         if path == "/dashboard":
             return self._send_file(BASE_DIR / "dashboard.html", "text/html; charset=utf-8")
@@ -104,25 +105,41 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                 return self._json(404, {"detail": "Файл не найден"})
             mime = mimetypes.guess_type(name)[0] or "application/octet-stream"
             return self._send_file(STATIC_DIR / name, f"{mime}; charset=utf-8")
-        if path == "/api/admin/dashboard":
+        if path in {"/api/admin/dashboard", "/api/admin/table"}:
             if not settings.admin_dashboard_token:
                 return self._json(503, {
                     "detail": "Дашборд отключён: задайте ADMIN_DASHBOARD_TOKEN",
                 })
             if not admin_token_valid(self.headers.get("Authorization", "")):
                 return self._json(401, {"detail": "Неверный токен администратора"})
-            return self._json(200, db.admin_dashboard())
+            if path == "/api/admin/dashboard":
+                return self._json(200, db.admin_dashboard())
+            query = parse_qs(parsed.query)
+            try:
+                return self._json(200, db.admin_table(
+                    query.get("name", [""])[0],
+                    query.get("query", [""])[0],
+                    int(query.get("limit", ["25"])[0]),
+                    int(query.get("offset", ["0"])[0]),
+                ))
+            except (ValueError, TypeError):
+                return self._json(422, {"detail": "Некорректные параметры таблицы"})
         self._ensure_user_context()
         if path == "/":
             return self._send_file(BASE_DIR / "index.html", "text/html; charset=utf-8")
         if path == "/api/agents":
             return self._json(200, public_agents())
         if path == "/api/me":
-            identity = db.current_external_identity()
+            identities = db.current_external_identities()
             return self._json(200, {
                 "chel_id": db.current_chel_id(),
-                "authenticated": bool(identity),
-                "provider": identity["provider"] if identity else None,
+                "authenticated": bool(identities),
+                "provider": identities[0]["provider"] if identities else None,
+                "providers": [identity["provider"] for identity in identities],
+                "messengers": {
+                    "telegram": {"configured": bool(settings.telegram_bot_auth_url)},
+                    "max": {"configured": bool(settings.max_bot_auth_url)},
+                },
             })
         if path == "/api/memories":
             return self._json(200, db.list_memories())
@@ -165,7 +182,11 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
         path = urlparse(self.path).path
         if path == "/api/auth/max/link":
             return self._create_max_auth_link()
+        if path == "/api/auth/messenger/link":
+            return self._create_messenger_auth_link()
         self._ensure_user_context()
+        if path == "/api/auth/messenger/start":
+            return self._start_messenger_auth()
         if path == "/api/conversations":
             return self._json(201, db.create_conversation())
         if path == "/api/reset-user":
@@ -197,6 +218,24 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                 return self._json(200, db.save_profile(self._validate_profile(self._read_json())))
             except (ValueError, TypeError) as exc:
                 return self._json(422, {"detail": str(exc)})
+        if path == "/api/lab-results/interpret":
+            if db.get_onboarding()["status"] != "complete":
+                return self._json(403, {"detail": "Сначала завершите короткую анкету"})
+            try:
+                payload = self._read_json()
+                result = orchestrator.interpret_lab_results(
+                    payload.get("conversation_id"),
+                    str(payload.get("document_id", "all")),
+                )
+                return self._json(200, result.to_dict())
+            except LLMNotConfigured as exc:
+                return self._json(503, {"detail": str(exc)})
+            except ValueError as exc:
+                return self._json(422, {"detail": str(exc)})
+            except Exception as exc:
+                return self._json(502, {
+                    "detail": f"Не удалось расшифровать результаты: {exc}",
+                })
         if path == "/api/lab-results":
             tube_number = str(db.get_profile().get("tube_number", "")).strip()
             if not tube_number:
@@ -346,11 +385,96 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
         except PermissionError as exc:
             return self._json(403, {"detail": str(exc)})
 
-    def _consume_max_login(self, token: str) -> None:
+    def _create_messenger_auth_link(self) -> None:
+        configured_secret = settings.bot_integration_secret
+        authorization = self.headers.get("Authorization", "")
+        supplied_secret = authorization.removeprefix("Bearer ").strip()
+        if not configured_secret:
+            return self._json(503, {"detail": "Интеграция с мессенджерами не настроена"})
+        if not supplied_secret or not hmac.compare_digest(supplied_secret, configured_secret):
+            return self._json(401, {"detail": "Неверные данные интеграции"})
+        try:
+            payload = self._read_json()
+            login = db.create_messenger_login(
+                provider=str(payload.get("provider", "")),
+                provider_user_id=payload.get("provider_user_id", ""),
+                intent_token=str(payload.get("intent_token", "")),
+                legacy_chel_id=payload.get("legacy_chel_id"),
+            )
+            return self._json(201, {
+                "auth_url": f"{settings.public_base_url}/auth/messenger?t={login['token']}",
+                "expires_at": login["expires_at"],
+                "chel_id": login["chel_id"],
+            })
+        except (ValueError, TypeError) as exc:
+            return self._json(422, {"detail": str(exc)})
+        except PermissionError as exc:
+            return self._json(403, {"detail": str(exc)})
+
+    def _start_messenger_auth(self) -> None:
+        try:
+            payload = self._read_json()
+            provider = str(payload.get("provider", "")).strip().lower()
+            templates = {
+                "telegram": settings.telegram_bot_auth_url,
+                "max": settings.max_bot_auth_url,
+            }
+            if provider not in templates:
+                raise ValueError("Выберите Telegram или MAX")
+            template = templates[provider]
+            if not template:
+                return self._json(503, {
+                    "detail": f"Бот {provider.upper() if provider == 'max' else 'Telegram'} пока не подключён",
+                    "provider": provider,
+                    "configured": False,
+                })
+            if "{token}" not in template or urlparse(template).scheme not in {"http", "https"}:
+                return self._json(503, {
+                    "detail": f"Ссылка на бота {provider} настроена некорректно",
+                    "provider": provider,
+                    "configured": False,
+                })
+            intent = db.create_auth_intent(provider)
+            bot_url = template.replace("{token}", quote(intent["token"], safe=""))
+            return self._json(201, {
+                "provider": provider,
+                "bot_url": bot_url,
+                "expires_at": intent["expires_at"],
+                "configured": True,
+            })
+        except (ValueError, TypeError) as exc:
+            return self._json(422, {"detail": str(exc)})
+
+    def _consume_messenger_login(self, token: str) -> None:
         login = db.consume_login_token(token)
         if not login:
+            owner_chel_id = db.get_consumed_login_owner(token)
+            cookie = SimpleCookie()
+            try:
+                cookie.load(self.headers.get("Cookie", ""))
+            except CookieError:
+                cookie = SimpleCookie()
+            session_cookie = cookie.get(settings.session_cookie_name)
+            session_chel_id = db.get_session_chel_id(
+                session_cookie.value if session_cookie else ""
+            )
+            if owner_chel_id and session_chel_id == owner_chel_id:
+                db.set_current_chel_id(owner_chel_id)
+                self.send_response(303)
+                self._send_security_headers()
+                self.send_header("Location", "/")
+                self.send_header("Cache-Control", "no-store")
+                self.end_headers()
+                return
+            if owner_chel_id:
+                self.send_response(303)
+                self._send_security_headers()
+                self.send_header("Location", "/?auth=messenger_required")
+                self.send_header("Cache-Control", "no-store")
+                self.end_headers()
+                return
             return self._json(400, {
-                "detail": "Ссылка недействительна или уже использована. Вернитесь в MAX и получите новую.",
+                "detail": "Ссылка недействительна. Вернитесь в мессенджер и получите новую.",
             })
         db.set_current_chel_id(login["chel_id"])
         self.send_response(303)
@@ -361,7 +485,12 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
         self.send_header(
             "Set-Cookie",
             "chel_id=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax"
-            + ("; Secure" if settings.cookie_secure else ""),
+            + (
+                "; Secure"
+                if settings.cookie_secure
+                or self.headers.get("X-Forwarded-Proto", "").lower() == "https"
+                else ""
+            ),
         )
         self.end_headers()
 
@@ -670,7 +799,7 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
 
     def log_message(self, format: str, *args) -> None:
         message = format % args
-        message = re.sub(r"(/auth/max\?t=)[^ ]+", r"\1[REDACTED]", message)
+        message = re.sub(r"(/auth/(?:max|messenger)\?t=)[^ ]+", r"\1[REDACTED]", message)
         print(f"{self.address_string()} — {message}")
 
 

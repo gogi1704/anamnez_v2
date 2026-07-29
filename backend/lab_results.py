@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import hashlib
 import re
 import threading
 import time
 from dataclasses import dataclass
 from pathlib import Path
+from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
 from .config import settings
 
@@ -28,7 +30,49 @@ class LabResult:
     urls: tuple[str, ...] = ()
 
     def to_dict(self) -> dict:
-        return {"med_id": self.med_id, "status": self.status, "urls": list(self.urls)}
+        documents = lab_result_documents(self.urls)
+        return {
+            "med_id": self.med_id,
+            "status": self.status,
+            "urls": list(self.urls),
+            "documents": documents,
+        }
+
+
+def _google_document_export_url(url: str) -> str:
+    """Convert a shared Google editor/Drive URL into a model-readable file URL."""
+    parsed = urlparse(url)
+    host = (parsed.hostname or "").casefold()
+    path = parsed.path
+    if host == "docs.google.com":
+        match = re.search(r"/(document|spreadsheets|presentation)/d/([^/]+)", path)
+        if match:
+            kind, document_id = match.groups()
+            export_format = "pdf"
+            if kind == "spreadsheets":
+                return f"https://docs.google.com/spreadsheets/d/{document_id}/export?format={export_format}"
+            return f"https://docs.google.com/{kind}/d/{document_id}/export/{export_format}"
+    if host == "drive.google.com":
+        match = re.search(r"/file/d/([^/]+)", path)
+        file_id = match.group(1) if match else parse_qs(parsed.query).get("id", [""])[0]
+        if file_id:
+            return f"https://drive.google.com/uc?{urlencode({'export': 'download', 'id': file_id})}"
+    return urlunparse(parsed)
+
+
+def lab_result_documents(urls: tuple[str, ...] | list[str]) -> list[dict]:
+    documents: list[dict] = []
+    total = len(urls)
+    for index, raw_url in enumerate(urls):
+        url = str(raw_url)
+        documents.append({
+            "id": hashlib.sha256(url.encode("utf-8")).hexdigest()[:16],
+            "index": index,
+            "title": f"Результаты анализов{f' · документ {index + 1}' if total > 1 else ''}",
+            "url": url,
+            "analysis_url": _google_document_export_url(url),
+        })
+    return documents
 
 
 def normalize_med_id(value: object) -> str:

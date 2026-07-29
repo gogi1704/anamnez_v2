@@ -19,12 +19,15 @@ const state = {
   selectedSymptomType: null,
   healthHistory: [],
   healthHistoryFilter: 'all',
+  labDocuments: [],
+  identity: null,
 };
 
 const $ = selector => document.querySelector(selector);
 const messages = $('#messages');
 const timeline = $('#timeline');
 const input = $('#messageInput');
+const ANONYMOUS_ACCESS_KEY = 'consilium_anonymous_access';
 
 const onboardingQuestions = [
   { key:'preferred_name', title:'Как к вам обращаться?', lead:'Имя необязательно, но с ним общение будет естественнее.', type:'text', placeholder:'Например, Алексей', optional:true },
@@ -55,6 +58,63 @@ async function api(path, options = {}) {
   if (!response.ok) throw new Error(data.detail || `Ошибка сервера: ${response.status}`);
   return data;
 }
+
+function setAuthStatus(message = '', error = false) {
+  const status = $('#authStatus');
+  status.textContent = message;
+  status.classList.toggle('hidden', !message);
+  status.classList.toggle('error', Boolean(error));
+}
+
+function showAuthGate() {
+  $('#authGate').classList.remove('hidden');
+  $('#onboarding').classList.add('hidden');
+  $('#appShell').classList.add('hidden');
+}
+
+function closeAnonymousWarning() {
+  $('#anonymousWarning').classList.add('hidden');
+}
+
+async function startApplication() {
+  $('#authGate').classList.add('hidden');
+  closeAnonymousWarning();
+  await loadOnboarding();
+}
+
+async function startMessengerAuth(provider) {
+  const button = provider === 'telegram' ? $('#telegramAuthButton') : $('#maxAuthButton');
+  button.disabled = true;
+  setAuthStatus('');
+  try {
+    const result = await api('/api/auth/messenger/start', {
+      method:'POST',
+      body:JSON.stringify({ provider }),
+    });
+    window.location.assign(result.bot_url);
+  } catch (error) {
+    setAuthStatus(`${error.message}. Анонимный вход уже доступен, а подключение бота можно завершить позже.`, true);
+    button.disabled = false;
+  }
+}
+
+$('#telegramAuthButton').addEventListener('click', () => startMessengerAuth('telegram'));
+$('#maxAuthButton').addEventListener('click', () => startMessengerAuth('max'));
+$('#anonymousAuthButton').addEventListener('click', () => $('#anonymousWarning').classList.remove('hidden'));
+$('#anonymousWarningClose').addEventListener('click', closeAnonymousWarning);
+$('#anonymousWarningCancel').addEventListener('click', closeAnonymousWarning);
+$('#anonymousWarning').addEventListener('click', event => {
+  if (event.target === $('#anonymousWarning')) closeAnonymousWarning();
+});
+$('#anonymousWarningConfirm').addEventListener('click', async () => {
+  localStorage.setItem(ANONYMOUS_ACCESS_KEY, state.identity?.chel_id || '');
+  try {
+    await startApplication();
+  } catch (error) {
+    showAuthGate();
+    setAuthStatus(`Не удалось открыть Консилиум: ${error.message}`, true);
+  }
+});
 
 async function resetUser() {
   const confirmed = window.confirm(
@@ -231,7 +291,7 @@ async function demoPayment() {
   try {
     state.onboarding = await api('/api/onboarding/payment', { method:'POST', body:'{}' });
     setOnboardingMeta('Готово', 100);
-    $('#onboardingContent').innerHTML = `<div class="success-mark">✓</div><h1>Всё готово</h1><p class="onboarding-lead">Анкета сохранена, выбранные обследования добавлены в демо-заказ. Теперь агенты будут учитывать ваши данные в подходящих вопросах.</p><div class="onboarding-actions"><button type="button" class="onboarding-next" data-onboarding-action="open-app">Открыть Консилиум</button></div>`;
+    $('#onboardingContent').innerHTML = `<div class="success-mark">✓</div><h1>Всё готово</h1><p class="onboarding-lead">Анкета сохранена, выбранные обследования добавлены в демо-заказ. Теперь специалисты будут учитывать ваши данные в подходящих вопросах.</p><div class="onboarding-actions"><button type="button" class="onboarding-next" data-onboarding-action="open-app">Открыть Консилиум</button></div>`;
   } catch (error) { showOnboardingError(error.message); }
 }
 
@@ -310,7 +370,7 @@ $('#onboardingContent').addEventListener('focusin', event => {
 });
 
 function renderAgentList() {
-  const groups = [['coordination', 'Координация'], ['medical', 'Медицина'], ['general', 'Другие задачи']];
+  const groups = [['coordination', 'Помощь'], ['medical', 'Медицина'], ['general', 'Здоровье и образ жизни']];
   $('#agentList').innerHTML = groups.map(([group, title]) => `
     <div class="agent-group-label">${title}</div>
     ${Object.values(AGENTS).filter(a => a.group === group).map(agent => `
@@ -340,9 +400,13 @@ function addMessage(sender, text, agentId = state.active, urgent = false, create
   const time = new Intl.DateTimeFormat('ru', { hour: '2-digit', minute: '2-digit' }).format(date);
   const attachmentBadges = (metadata.attachments || []).map(item => `<em class="message-file">▱ ${escapeHtml(item.name)}</em>`).join('');
   const special = metadata.action === 'second_opinion' ? '<b class="special-label">Второе мнение</b>' : '';
+  const cached = metadata.action === 'lab_interpretation' && metadata.interpretation_cached
+    ? '<b class="special-label">Сохранённая расшифровка</b>' : '';
+  const labDocuments = sender === 'agent'
+    ? labDocumentsMarkup(metadata.lab_result_documents || [], 'message') : '';
   wrapper.innerHTML = sender === 'user'
     ? `<div class="bubble user-bubble">${attachmentBadges}<p>${escapeHtml(text)}</p><span>${time}</span></div>`
-    : `<div class="message-avatar">${agent.initials}</div><div><div class="message-author"><strong>${agent.name}</strong><span>${agent.role}</span>${special}</div><div class="bubble agent-bubble"><p>${formatAssistantText(text)}</p><span>${time}</span></div></div>`;
+    : `<div class="message-avatar">${agent.initials}</div><div><div class="message-author"><strong>${agent.name}</strong><span>${agent.role}</span>${special}${cached}</div><div class="bubble agent-bubble"><p>${formatAssistantText(text)}</p>${labDocuments}<span>${time}</span></div></div>`;
   messages.appendChild(wrapper);
   scrollChatToBottom();
 }
@@ -366,7 +430,7 @@ function showTyping(agentId = 'manager') {
 }
 
 function resetTimeline() {
-  timeline.innerHTML = `<div class="empty-state"><div class="empty-icon">⌁</div><strong>Здесь появится маршрут</strong><p>Вы увидите, какой агент принял задачу и кому передал управление.</p></div>`;
+  timeline.innerHTML = `<div class="empty-state"><div class="empty-icon">⌁</div><strong>Здесь появятся следующие шаги</strong><p>Покажем, кто из специалистов помогает и что происходит дальше.</p></div>`;
 }
 
 function addTimeline(agentId, title, detail, status = 'done') {
@@ -391,12 +455,12 @@ function showHandoff(fromId, toId) {
 async function processMessage(text) {
   if (state.processing) return;
   state.processing = true;
-  $('#taskStatus').textContent = 'AI-оркестратор анализирует';
+  $('#taskStatus').textContent = 'Подбираю подходящего специалиста';
   $('#suggestions').classList.add('hidden');
   const outgoingAttachments = [...state.attachments];
   addMessage('user', text || 'Прикреплён файл для анализа', state.active, false, null, { attachments: outgoingAttachments });
   clearAttachments();
-  addTimeline('manager', 'Запрос принят', 'Оркестратор читает контекст и выбирает действие');
+  addTimeline('manager', 'Изучаю вопрос', 'Учитываю контекст и выбираю, кто лучше поможет');
   showTyping('manager');
 
   try {
@@ -408,9 +472,9 @@ async function processMessage(text) {
     state.conversationId = result.conversation_id;
     localStorage.setItem('consilium_conversation_id', state.conversationId);
     showHandoff(result.handoff_from, result.agent);
-    if (result.handoff_from) addTimeline(result.handoff_from, 'Маршрут выбран', result.handoff_reason);
+    if (result.handoff_from) addTimeline(result.handoff_from, 'Подключён специалист', result.handoff_reason);
     setActiveAgent(result.agent);
-    addTimeline(result.agent, result.emergency ? 'Срочная оценка' : 'Агент ответил', result.handoff_reason, 'active');
+    addTimeline(result.agent, result.emergency ? 'Срочная оценка' : 'Специалист ответил', result.handoff_reason, 'active');
     addMessage('agent', result.assistant_message.content, result.agent, result.emergency, result.assistant_message.created_at, result.assistant_message.metadata || {});
     state.context = result.context;
     state.urgency = result.urgency || 'routine';
@@ -543,7 +607,7 @@ function newConversation() {
   setActiveAgent('manager');
   $('#suggestions').classList.remove('hidden');
   $('#taskStatus').textContent = 'Ожидает задачу';
-  addMessage('agent', 'Здравствуйте! Я Мария, менеджер команды. Опишите задачу — AI-оркестратор подключит подходящего специалиста, а контекст диалога сохранится.', 'manager');
+  addMessage('agent', 'Здравствуйте! Я Мария, ваш ИИ-менеджер. Задавайте вопросы о здоровье, питании, спорте или возможностях сервиса — я помогу разобраться и при необходимости подключу подходящего специалиста.', 'manager');
   loadConversationList();
 }
 
@@ -828,7 +892,7 @@ function updateProfileBmi() {
   const height = Number($('#profileHeight').value);
   const weight = Number($('#profileWeight').value);
   $('#profileBmi').textContent = height > 0 && weight > 0
-    ? `Расчётный ИМТ: ${(weight / ((height / 100) ** 2)).toFixed(1)}. Агенты учтут его только вместе с остальными данными.`
+    ? `Расчётный ИМТ: ${(weight / ((height / 100) ** 2)).toFixed(1)}. Специалисты учтут его только вместе с остальными данными.`
     : 'ИМТ появится после заполнения роста и веса';
 }
 
@@ -854,7 +918,7 @@ async function saveProfile() {
     state.profile = await api('/api/profile', { method:'POST', body:JSON.stringify(payload) });
     renderProfileStatus();
     $('#profileModal').classList.add('hidden');
-    $('#taskStatus').textContent = 'Анкета сохранена · агенты учтут её в ответах';
+    $('#taskStatus').textContent = 'Анкета сохранена · специалисты учтут её в ответах';
   } catch (error) { addSystemError(error.message); }
 }
 
@@ -946,12 +1010,34 @@ function setLabResultsState(icon, title, text) {
   $('#labResultsStateText').textContent = text;
 }
 
-function renderLabResultDocuments(urls) {
+function normalizeLabDocuments(items = []) {
+  return items.map((item, index) => typeof item === 'string'
+    ? { id:`legacy-${index}`, index, title:`Результаты анализов${items.length > 1 ? ` · документ ${index + 1}` : ''}`, url:item }
+    : item
+  ).filter(item => item?.url && item?.id);
+}
+
+function labDocumentsMarkup(items, placement = 'modal') {
+  const documents = normalizeLabDocuments(items);
+  if (!documents.length) return '';
+  const cards = documents.map((document, index) => `
+    <article class="lab-document-card">
+      <a href="${escapeAttr(document.url)}" target="_blank" rel="noopener noreferrer">
+        <i>▤</i><span><strong>${escapeHtml(document.title || `Документ ${index + 1}`)}</strong><small>Открыть оригинал</small></span>
+      </a>
+      <button type="button" data-lab-interpret="${escapeAttr(document.id)}">Расшифровать</button>
+    </article>`).join('');
+  const allButton = documents.length > 1
+    ? '<button class="lab-interpret-all" type="button" data-lab-interpret="all">Расшифровать все вместе</button>'
+    : '';
+  return `<div class="lab-document-list" data-placement="${placement}">${cards}${allButton}<small class="lab-ai-note">ИИ сопоставит показатели с вашей анкетой. Это не заменяет заключение врача.</small></div>`;
+}
+
+function renderLabResultDocuments(documents) {
   const container = $('#labResultDocuments');
-  container.innerHTML = urls.map((url, index) =>
-    `<a href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">▤ Открыть документ${urls.length > 1 ? ` ${index + 1}` : ''}</a>`
-  ).join('');
-  container.classList.toggle('hidden', !urls.length);
+  state.labDocuments = normalizeLabDocuments(documents);
+  container.innerHTML = labDocumentsMarkup(state.labDocuments);
+  container.classList.toggle('hidden', !state.labDocuments.length);
 }
 
 async function fetchLabResults() {
@@ -964,8 +1050,8 @@ async function fetchLabResults() {
   try {
     const result = await api('/api/lab-results', { method:'POST' });
     if (result.status === 'found' && result.urls?.length) {
-      setLabResultsState('✓', 'Результаты готовы', 'Документ найден. Откройте его по ссылке ниже.');
-      renderLabResultDocuments(result.urls);
+      setLabResultsState('✓', 'Результаты готовы', 'Откройте оригинал или попросите ИИ расшифровать один документ либо весь набор.');
+      renderLabResultDocuments(result.documents || result.urls);
       $('#taskStatus').textContent = 'Результаты анализов найдены';
     } else if (result.status === 'processing') {
       setLabResultsState('…', 'Результаты обрабатываются', 'Номер найден, но ссылка на документ пока не добавлена. Попробуйте позже.');
@@ -980,6 +1066,63 @@ async function fetchLabResults() {
   } finally {
     button.disabled = false;
     button.textContent = 'Проверить ещё раз';
+  }
+}
+
+async function interpretLabResults(documentId, sourceButton) {
+  if (state.processing) return;
+  state.processing = true;
+  const buttons = document.querySelectorAll('[data-lab-interpret]');
+  buttons.forEach(button => { button.disabled = true; });
+  const originalText = sourceButton?.textContent;
+  if (sourceButton) sourceButton.textContent = 'Расшифровываю…';
+  $('#taskStatus').textContent = 'Терапевт анализирует результаты и анкету';
+  try {
+    const result = await api('/api/lab-results/interpret', {
+      method:'POST',
+      body:JSON.stringify({
+        conversation_id:state.conversationId,
+        document_id:documentId,
+      }),
+    });
+    state.conversationId = result.conversation_id;
+    localStorage.setItem('consilium_conversation_id', state.conversationId);
+    closeLabResults();
+    addMessage(
+      'user',
+      result.user_message.content,
+      state.active,
+      false,
+      result.user_message.created_at,
+      result.user_message.metadata || {},
+    );
+    showHandoff(result.handoff_from, result.agent);
+    setActiveAgent(result.agent);
+    addMessage(
+      'agent',
+      result.assistant_message.content,
+      result.agent,
+      Boolean(result.emergency),
+      result.assistant_message.created_at,
+      result.assistant_message.metadata || {},
+    );
+    state.context = result.context;
+    state.urgency = result.urgency || 'routine';
+    renderInsights();
+    toggleAdvancedActions(Boolean(result.council_available));
+    if (result.action === 'lab_results_prompt') await openLabResults();
+    $('#taskStatus').textContent = result.assistant_message.metadata?.interpretation_cached
+      ? 'Показана сохранённая расшифровка'
+      : 'Расшифровка готова';
+    await loadConversationList();
+  } catch (error) {
+    addSystemError(error.message);
+    $('#taskStatus').textContent = 'Не удалось расшифровать результаты';
+  } finally {
+    state.processing = false;
+    buttons.forEach(button => { button.disabled = false; });
+    if (sourceButton && originalText) sourceButton.textContent = originalText;
+    focusChatInput();
   }
 }
 
@@ -1000,7 +1143,7 @@ async function deleteMemory(id) {
 
 const durationLabels = { minutes:'Несколько минут', hours:'Несколько часов', days:'Несколько дней', weeks:'Несколько недель', months:'Несколько месяцев' };
 const patternLabels = { constant:'Постоянно', episodes:'Приступами', movement:'При движении', touch:'При прикосновении', unknown:'Не уверен(а)' };
-const agentLabels = { manager:'Менеджер', safety:'Контроль безопасности', therapist:'Терапевт', cardiologist:'Кардиолог', neurologist:'Невролог', dermatologist:'Дерматолог', pediatrician:'Педиатр', psychologist:'Психолог', general:'Общий специалист' };
+const agentLabels = { manager:'ИИ-менеджер', safety:'Контроль безопасности', therapist:'Терапевт', cardiologist:'Кардиолог', neurologist:'Невролог', dermatologist:'Дерматолог', pediatrician:'Педиатр', psychologist:'Психолог', general:'Здоровье и образ жизни' };
 
 async function loadBodySymptoms() {
   try { state.bodySymptoms = await api('/api/body-symptoms'); }
@@ -1090,7 +1233,7 @@ async function saveBodySymptom() {
     });
     await loadBodySymptoms();
     resetBodySymptomForm();
-    $('#taskStatus').textContent = 'Симптом добавлен в историю · агенты учтут его';
+    $('#taskStatus').textContent = 'Симптом добавлен в историю · специалисты учтут его';
     closeBodyMap();
     await openHealthHistory('symptom');
   } catch (error) {
@@ -1115,7 +1258,7 @@ function healthEventMarkup(item) {
     meta = `<span>Интенсивность: ${details.intensity}/10</span><span>${patternLabels[details.pattern] || details.pattern}</span>${details.duration ? `<span>${durationLabels[details.duration] || details.duration}</span>` : ''}${details.notes ? `<span>${escapeHtml(details.notes)}</span>` : ''}`;
     actions = `<button data-symptom-status="${details.id}" data-next-status="${details.status === 'active' ? 'resolved' : 'active'}">${details.status === 'active' ? 'Отметить улучшение' : 'Вернуть в активные'}</button><button class="danger" data-symptom-delete="${details.id}">Удалить</button>`;
   } else if (item.type === 'consultation') {
-    summary = `Специалист: ${agentLabels[details.agent_id] || details.agent_id || 'медицинский агент'}`;
+    summary = `Специалист: ${agentLabels[details.agent_id] || details.agent_id || 'врач-консультант'}`;
     actions = `<button data-history-conversation="${escapeHtml(details.conversation_id)}">Открыть диалог</button>`;
   } else if (item.type === 'document') {
     summary = item.summary || 'Добавлен медицинский документ';
@@ -1282,6 +1425,12 @@ $('#labResultsModal').addEventListener('click', event => { if (event.target.id =
 $('#saveLabTubeButton').addEventListener('click', saveLabTube);
 $('#changeLabTubeButton').addEventListener('click', changeLabTube);
 $('#fetchLabResultsButton').addEventListener('click', fetchLabResults);
+function handleLabInterpretClick(event) {
+  const button = event.target.closest('[data-lab-interpret]');
+  if (button) interpretLabResults(button.dataset.labInterpret, button);
+}
+$('#labResultDocuments').addEventListener('click', handleLabInterpretClick);
+messages.addEventListener('click', handleLabInterpretClick);
 $('#labTubeInput').addEventListener('input', () => $('#labTubeError').classList.add('hidden'));
 $('#profileHeight').addEventListener('input', updateProfileBmi);
 $('#profileWeight').addEventListener('input', updateProfileBmi);
@@ -1346,6 +1495,7 @@ document.addEventListener('click', event => {
 });
 document.addEventListener('keydown', event => {
   if (event.key !== 'Escape') return;
+  closeAnonymousWarning();
   closeMobileTeam();
   closeCouncilModal();
   closeFunctionMenu();
@@ -1369,10 +1519,26 @@ async function initMainApp() {
 }
 
 async function init() {
-  try { await loadOnboarding(); }
+  try {
+    const identity = await api('/api/me');
+    state.identity = identity;
+    const messengerLoginRequired = new URLSearchParams(window.location.search)
+      .get('auth') === 'messenger_required';
+    if (identity.authenticated) {
+      localStorage.removeItem(ANONYMOUS_ACCESS_KEY);
+      await startApplication();
+    } else if (messengerLoginRequired) {
+      showAuthGate();
+      setAuthStatus('Эта ссылка принадлежит другому пользователю. Войдите через свой мессенджер.', true);
+    } else if (localStorage.getItem(ANONYMOUS_ACCESS_KEY) === identity.chel_id) {
+      await startApplication();
+    } else {
+      showAuthGate();
+    }
+  }
   catch (error) {
-    $('#onboarding').classList.remove('hidden');
-    $('#onboardingContent').innerHTML = `<h1>Не удалось загрузить анкету</h1><p class="onboarding-lead">${escapeHtml(error.message)}</p><div class="onboarding-actions"><button class="onboarding-next" onclick="location.reload()">Повторить</button></div>`;
+    showAuthGate();
+    setAuthStatus(`Не удалось загрузить сервис: ${error.message}`, true);
   }
 }
 init();
