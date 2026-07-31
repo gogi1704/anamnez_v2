@@ -7,7 +7,7 @@ import threading
 import uuid
 from contextlib import contextmanager
 from contextvars import ContextVar
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 
 from .config import settings
 
@@ -39,6 +39,119 @@ def ensure_user(chel_id: str) -> dict:
         conn.commit()
         row = conn.execute("SELECT * FROM users WHERE chel_id = ?", (chel_id,)).fetchone()
     return dict(row)
+
+
+def classify_user_agent(user_agent: str) -> dict:
+    """Turn a browser User-Agent into coarse, privacy-conscious audience fields."""
+    raw = " ".join(str(user_agent or "").split())[:500]
+    value = raw.lower()
+    if any(marker in value for marker in (
+        "bot", "crawler", "spider", "slurp", "headlesschrome", "lighthouse",
+    )):
+        device_type = "bot"
+        operating_system = "Bot"
+    elif "android" in value:
+        device_type = "android"
+        operating_system = "Android"
+    elif any(marker in value for marker in ("iphone", "ipad", "ipod")) or (
+        "macintosh" in value and "mobile/" in value
+    ):
+        device_type = "ios"
+        operating_system = "iOS"
+    elif "windows" in value:
+        device_type = "desktop"
+        operating_system = "Windows"
+    elif "cros" in value:
+        device_type = "desktop"
+        operating_system = "ChromeOS"
+    elif "macintosh" in value or "mac os x" in value:
+        device_type = "desktop"
+        operating_system = "macOS"
+    elif "linux" in value or "x11" in value:
+        device_type = "desktop"
+        operating_system = "Linux"
+    else:
+        device_type = "other"
+        operating_system = "Другое"
+
+    if "samsungbrowser/" in value:
+        browser = "Samsung Internet"
+    elif any(marker in value for marker in ("edg/", "edga/", "edgios/")):
+        browser = "Edge"
+    elif "opr/" in value or "opera" in value:
+        browser = "Opera"
+    elif "crios/" in value or "chrome/" in value:
+        browser = "Chrome"
+    elif "fxios/" in value or "firefox/" in value:
+        browser = "Firefox"
+    elif "safari/" in value:
+        browser = "Safari"
+    else:
+        browser = "Другое"
+    return {
+        "device_type": device_type,
+        "operating_system": operating_system,
+        "browser": browser,
+        "user_agent": raw,
+    }
+
+
+def record_device_access(user_agent: str) -> dict | None:
+    """Count one application page opening for the current user and device."""
+    classified = classify_user_agent(user_agent)
+    if classified["device_type"] == "bot":
+        return None
+    chel_id = current_chel_id()
+    now = utc_now()
+    with _write_lock, connection() as conn:
+        conn.execute(
+            """INSERT INTO user_device_stats
+            (chel_id, device_type, operating_system, browser, user_agent,
+             first_seen_at, last_seen_at, visit_count)
+            VALUES (?, ?, ?, ?, ?, ?, ?, 1)
+            ON CONFLICT(chel_id, device_type, operating_system, browser)
+            DO UPDATE SET user_agent = excluded.user_agent,
+                last_seen_at = excluded.last_seen_at,
+                visit_count = user_device_stats.visit_count + 1""",
+            (
+                chel_id,
+                classified["device_type"],
+                classified["operating_system"],
+                classified["browser"],
+                classified["user_agent"],
+                now,
+                now,
+            ),
+        )
+        conn.commit()
+        row = conn.execute(
+            """SELECT * FROM user_device_stats
+            WHERE chel_id = ? AND device_type = ? AND operating_system = ? AND browser = ?""",
+            (
+                chel_id,
+                classified["device_type"],
+                classified["operating_system"],
+                classified["browser"],
+            ),
+        ).fetchone()
+    return dict(row)
+
+
+def current_device() -> dict:
+    """Return the most recently used device without exposing the raw User-Agent."""
+    with connection() as conn:
+        row = conn.execute(
+            """SELECT device_type, operating_system, browser, last_seen_at
+            FROM user_device_stats WHERE chel_id = ?
+            ORDER BY last_seen_at DESC LIMIT 1""",
+            (current_chel_id(),),
+        ).fetchone()
+    return dict(row) if row else {
+        "device_type": "other",
+        "operating_system": "Другое",
+        "browser": "Другое",
+        "last_seen_at": None,
+    }
 
 
 def user_exists(chel_id: str) -> bool:
@@ -446,6 +559,52 @@ def admin_dashboard(days: int = 14, limit: int = 100) -> dict:
                 GROUP BY channel ORDER BY value DESC"""
             ).fetchall()
         ]
+        devices = [
+            {
+                "device_type": row["device_type"],
+                "users": int(row["users"]),
+                "visits": int(row["visits"]),
+            }
+            for row in conn.execute(
+                """SELECT device_type, COUNT(DISTINCT chel_id) AS users,
+                    SUM(visit_count) AS visits
+                FROM user_device_stats
+                WHERE chel_id NOT IN ('chel_legacy', 'chel_test_default')
+                GROUP BY device_type ORDER BY users DESC, visits DESC"""
+            ).fetchall()
+        ]
+        operating_systems = [
+            {
+                "operating_system": row["operating_system"],
+                "users": int(row["users"]),
+                "visits": int(row["visits"]),
+            }
+            for row in conn.execute(
+                """SELECT operating_system, COUNT(DISTINCT chel_id) AS users,
+                    SUM(visit_count) AS visits
+                FROM user_device_stats
+                WHERE chel_id NOT IN ('chel_legacy', 'chel_test_default')
+                GROUP BY operating_system ORDER BY users DESC, visits DESC"""
+            ).fetchall()
+        ]
+        browsers = [
+            {
+                "browser": row["browser"],
+                "users": int(row["users"]),
+                "visits": int(row["visits"]),
+            }
+            for row in conn.execute(
+                """SELECT browser, COUNT(DISTINCT chel_id) AS users,
+                    SUM(visit_count) AS visits
+                FROM user_device_stats
+                WHERE chel_id NOT IN ('chel_legacy', 'chel_test_default')
+                GROUP BY browser ORDER BY users DESC, visits DESC"""
+            ).fetchall()
+        ]
+        summary["tracked_devices"] = scalar(
+            """SELECT COUNT(DISTINCT chel_id) FROM user_device_stats
+            WHERE chel_id NOT IN ('chel_legacy', 'chel_test_default')"""
+        )
 
         users = [
             dict(row) for row in conn.execute(
@@ -499,6 +658,9 @@ def admin_dashboard(days: int = 14, limit: int = 100) -> dict:
         "activity": activity,
         "agents": agents,
         "human_channels": human_channels,
+        "devices": devices,
+        "operating_systems": operating_systems,
+        "browsers": browsers,
         "tables": {
             "users": users,
             "conversations": conversations,
@@ -511,23 +673,54 @@ def admin_dashboard(days: int = 14, limit: int = 100) -> dict:
     }
 
 
+def _admin_date(value: str, field_name: str) -> str:
+    normalized = str(value or "").strip()
+    if not normalized:
+        return ""
+    try:
+        return date.fromisoformat(normalized).isoformat()
+    except ValueError as exc:
+        raise ValueError(f"{field_name} должна быть датой в формате ГГГГ-ММ-ДД") from exc
+
+
 def admin_table(
-    name: str, query: str = "", limit: int = 25, offset: int = 0,
+    name: str,
+    query: str = "",
+    limit: int = 25,
+    offset: int = 0,
+    created_from: str = "",
+    created_to: str = "",
 ) -> dict:
     """Search and paginate a strict allowlist of non-medical admin table views."""
     name = str(name or "").strip()
-    if name not in {"users", "conversations", "human_requests"}:
+    if name not in {"users", "conversations", "human_requests", "devices"}:
         raise ValueError("Неизвестная таблица дашборда")
     query = " ".join(str(query or "").split())[:120]
     limit = max(10, min(100, int(limit)))
     offset = max(0, min(1_000_000, int(offset)))
     escaped = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
     pattern = f"%{escaped}%"
+    created_from = _admin_date(created_from, "Начальная дата")
+    created_to = _admin_date(created_to, "Конечная дата")
+    if created_from and created_to and created_from > created_to:
+        raise ValueError("Начальная дата не может быть позже конечной")
+    overall_total = None
+    period_total = None
 
     with connection() as conn:
         if name == "users":
             where = """u.chel_id NOT IN ('chel_legacy', 'chel_test_default')"""
             params: list = []
+            period_where = where
+            period_params: list = []
+            if created_from:
+                period_where += " AND SUBSTR(u.created_at, 1, 10) >= ?"
+                period_params.append(created_from)
+            if created_to:
+                period_where += " AND SUBSTR(u.created_at, 1, 10) <= ?"
+                period_params.append(created_to)
+            where = period_where
+            params.extend(period_params)
             if query:
                 where += """ AND (
                     u.chel_id LIKE ? ESCAPE '\\'
@@ -535,6 +728,14 @@ def admin_table(
                     OR COALESCE(e.provider, 'нет') LIKE ? ESCAPE '\\'
                 )"""
                 params.extend([pattern, pattern, pattern])
+            overall_total = conn.execute(
+                """SELECT COUNT(*) FROM users
+                WHERE chel_id NOT IN ('chel_legacy', 'chel_test_default')"""
+            ).fetchone()[0]
+            period_total = conn.execute(
+                f"SELECT COUNT(*) FROM users u WHERE {period_where}",
+                tuple(period_params),
+            ).fetchone()[0]
             total = conn.execute(
                 f"""SELECT COUNT(DISTINCT u.chel_id)
                 FROM users u
@@ -590,7 +791,7 @@ def admin_table(
                     tuple(params + [limit, offset]),
                 ).fetchall()
             ]
-        else:
+        elif name == "human_requests":
             where = """c.human_ticket_id IS NOT NULL
                 AND c.chel_id NOT IN ('chel_legacy', 'chel_test_default')"""
             params = []
@@ -619,6 +820,30 @@ def admin_table(
                 phone = str(item.pop("human_phone") or "")
                 item["phone"] = f"•••• {phone[-4:]}" if len(phone) >= 4 else ""
                 rows.append(item)
+        else:
+            where = """d.chel_id NOT IN ('chel_legacy', 'chel_test_default')"""
+            params = []
+            if query:
+                where += """ AND (
+                    d.chel_id LIKE ? ESCAPE '\\'
+                    OR d.device_type LIKE ? ESCAPE '\\'
+                    OR d.operating_system LIKE ? ESCAPE '\\'
+                    OR d.browser LIKE ? ESCAPE '\\'
+                )"""
+                params.extend([pattern] * 4)
+            total = conn.execute(
+                f"SELECT COUNT(*) FROM user_device_stats d WHERE {where}",
+                tuple(params),
+            ).fetchone()[0]
+            rows = [
+                dict(row) for row in conn.execute(
+                    f"""SELECT d.chel_id, d.device_type, d.operating_system,
+                        d.browser, d.first_seen_at, d.last_seen_at, d.visit_count
+                    FROM user_device_stats d WHERE {where}
+                    ORDER BY d.last_seen_at DESC LIMIT ? OFFSET ?""",
+                    tuple(params + [limit, offset]),
+                ).fetchall()
+            ]
 
     return {
         "table": name,
@@ -626,6 +851,10 @@ def admin_table(
         "limit": limit,
         "offset": offset,
         "total": int(total or 0),
+        "overall_total": int(overall_total or 0) if overall_total is not None else None,
+        "period_total": int(period_total or 0) if period_total is not None else None,
+        "created_from": created_from,
+        "created_to": created_to,
         "rows": rows,
     }
 
@@ -734,6 +963,99 @@ def admin_update_staff(
             )
         conn.commit()
     return next(item for item in admin_list_staff() if item["id"] == int(staff_id))
+
+
+def admin_delete_staff(staff_id: int) -> bool:
+    """Permanently remove a manager account and all of its active sessions."""
+    with _write_lock, connection() as conn:
+        cursor = conn.execute(
+            "DELETE FROM staff_users WHERE id = ?", (int(staff_id),),
+        )
+        conn.commit()
+    return bool(cursor.rowcount)
+
+
+def list_examinations() -> list[dict]:
+    with connection() as conn:
+        rows = conn.execute(
+            """SELECT id, name, description, includes, price, created_at, updated_at
+            FROM examination_catalog ORDER BY created_at, name"""
+        ).fetchall()
+    return [dict(row) for row in rows]
+
+
+def _validate_examination(
+    name: str, description: str, includes: str, price,
+) -> tuple[str, str, str, int]:
+    name = " ".join(str(name or "").split())[:140]
+    description = " ".join(str(description or "").split())[:1200]
+    includes = " ".join(str(includes or "").split())[:1200]
+    if len(name) < 2:
+        raise ValueError("Название должно содержать минимум 2 символа")
+    if len(description) < 5:
+        raise ValueError("Добавьте понятное описание обследования")
+    try:
+        normalized_price = int(price)
+    except (ValueError, TypeError) as exc:
+        raise ValueError("Цена должна быть целым числом") from exc
+    if normalized_price < 0 or normalized_price > 10_000_000:
+        raise ValueError("Цена должна быть от 0 до 10 000 000 рублей")
+    return name, description, includes, normalized_price
+
+
+def admin_create_examination(
+    name: str, description: str, includes: str, price,
+) -> dict:
+    name, description, includes, price = _validate_examination(
+        name, description, includes, price,
+    )
+    examination_id = f"exam_{secrets.token_hex(8)}"
+    now = utc_now()
+    with _write_lock, connection() as conn:
+        conn.execute(
+            """INSERT INTO examination_catalog
+            (id, name, description, includes, price, created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?)""",
+            (examination_id, name, description, includes, price, now, now),
+        )
+        conn.commit()
+        row = conn.execute(
+            "SELECT * FROM examination_catalog WHERE id = ?", (examination_id,),
+        ).fetchone()
+    return dict(row)
+
+
+def admin_update_examination(
+    examination_id: str, name: str, description: str, includes: str, price,
+) -> dict | None:
+    examination_id = str(examination_id or "").strip()
+    name, description, includes, price = _validate_examination(
+        name, description, includes, price,
+    )
+    with _write_lock, connection() as conn:
+        cursor = conn.execute(
+            """UPDATE examination_catalog
+            SET name = ?, description = ?, includes = ?, price = ?, updated_at = ?
+            WHERE id = ?""",
+            (name, description, includes, price, utc_now(), examination_id),
+        )
+        if not cursor.rowcount:
+            return None
+        conn.commit()
+        row = conn.execute(
+            "SELECT * FROM examination_catalog WHERE id = ?", (examination_id,),
+        ).fetchone()
+    return dict(row)
+
+
+def admin_delete_examination(examination_id: str) -> bool:
+    examination_id = str(examination_id or "").strip()
+    with _write_lock, connection() as conn:
+        cursor = conn.execute(
+            "DELETE FROM examination_catalog WHERE id = ?", (examination_id,),
+        )
+        conn.commit()
+    return bool(cursor.rowcount)
 
 
 def authenticate_staff(login: str, password: str) -> dict | None:
@@ -1129,6 +1451,20 @@ def init_db() -> None:
                 last_seen_at TEXT NOT NULL
             );
 
+            CREATE TABLE IF NOT EXISTS user_device_stats (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                chel_id TEXT NOT NULL,
+                device_type TEXT NOT NULL,
+                operating_system TEXT NOT NULL,
+                browser TEXT NOT NULL,
+                user_agent TEXT NOT NULL DEFAULT '',
+                first_seen_at TEXT NOT NULL,
+                last_seen_at TEXT NOT NULL,
+                visit_count INTEGER NOT NULL DEFAULT 1,
+                UNIQUE(chel_id, device_type, operating_system, browser),
+                FOREIGN KEY(chel_id) REFERENCES users(chel_id) ON DELETE CASCADE
+            );
+
             CREATE TABLE IF NOT EXISTS conversations (
                 id TEXT PRIMARY KEY,
                 chel_id TEXT NOT NULL DEFAULT 'chel_legacy',
@@ -1242,6 +1578,16 @@ def init_db() -> None:
                 FOREIGN KEY(chel_id) REFERENCES users(chel_id) ON DELETE CASCADE
             );
 
+            CREATE TABLE IF NOT EXISTS examination_catalog (
+                id TEXT PRIMARY KEY,
+                name TEXT NOT NULL,
+                description TEXT NOT NULL,
+                includes TEXT NOT NULL DEFAULT '',
+                price INTEGER NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            );
+
             CREATE TABLE IF NOT EXISTS external_identities (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 provider TEXT NOT NULL,
@@ -1325,6 +1671,17 @@ def init_db() -> None:
             "INSERT OR IGNORE INTO users (chel_id, created_at, last_seen_at) VALUES ('chel_test_default', ?, ?)",
             (now, now),
         )
+        from .onboarding import TEST_CATALOG
+        for examination in TEST_CATALOG:
+            conn.execute(
+                """INSERT OR IGNORE INTO examination_catalog
+                (id, name, description, includes, price, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    examination["id"], examination["name"], examination["description"],
+                    examination.get("includes", ""), int(examination["price"]), now, now,
+                ),
+            )
         columns = {row[1] for row in conn.execute("PRAGMA table_info(conversations)").fetchall()}
         if "chel_id" not in columns:
             conn.execute("ALTER TABLE conversations ADD COLUMN chel_id TEXT NOT NULL DEFAULT 'chel_legacy'")
@@ -1412,6 +1769,10 @@ def init_db() -> None:
             conn.execute("ALTER TABLE onboarding_state ADD COLUMN font_size TEXT NOT NULL DEFAULT 'standard'")
 
         conn.execute("CREATE INDEX IF NOT EXISTS idx_conversations_chel_id ON conversations(chel_id, updated_at)")
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_user_device_stats_audience "
+            "ON user_device_stats(device_type, operating_system, browser, last_seen_at)"
+        )
         conn.execute("CREATE INDEX IF NOT EXISTS idx_conversations_human_queue ON conversations(human_status, updated_at)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_messages_conversation_id ON messages(conversation_id, id)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_manager_actions_conversation_id ON manager_actions(conversation_id, created_at)")

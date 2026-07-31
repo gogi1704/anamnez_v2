@@ -17,7 +17,7 @@ from backend.lab_results import (  # noqa: E402
 from backend.llm import LLMService  # noqa: E402
 from backend.main import ConsiliumHandler, admin_token_valid  # noqa: E402
 from backend.orchestrator import ConversationOrchestrator  # noqa: E402
-from backend.onboarding import TEST_CATALOG, recommend_test_ids  # noqa: E402
+from backend.onboarding import TEST_CATALOG, public_onboarding, recommend_test_ids  # noqa: E402
 from backend.prompts import ORCHESTRATOR_PROMPT, PROFILES  # noqa: E402
 from backend.schemas import AgentResult, RouteDecision, normalize_context  # noqa: E402
 
@@ -476,6 +476,10 @@ class OrchestratorTests(unittest.TestCase):
         self.assertIn("повторно", manager_prompt)
         self.assertIn("ищет документ в after_tests_db по med_id", manager_prompt)
         self.assertIn("относятся к manager и интерфейсу", ORCHESTRATOR_PROMPT)
+        self.assertIn("current_device", manager_prompt)
+        self.assertIn("На экран Домой", manager_prompt)
+        self.assertIn("Установить приложение", manager_prompt)
+        self.assertIn("ярлыке, рабочем столе", ORCHESTRATOR_PROMPT)
 
     def test_user_language_and_supported_topics_are_clear(self):
         project_root = Path(__file__).resolve().parents[1]
@@ -729,6 +733,8 @@ class OrchestratorTests(unittest.TestCase):
         self.assertFalse(data["privacy"]["medical_profile_content_included"])
         self.assertIn("users_total", data["summary"])
         self.assertIn("human_pending", data["summary"])
+        self.assertIn("tracked_devices", data["summary"])
+        self.assertIn("devices", data)
         self.assertEqual(
             set(data["tables"]),
             {"users", "conversations", "human_requests"},
@@ -769,6 +775,98 @@ class OrchestratorTests(unittest.TestCase):
             db.ensure_user("chel_test_default")
             db.set_current_chel_id("chel_test_default")
 
+    def test_admin_users_table_filters_registration_dates_and_returns_counts(self):
+        january_id = "chel_date_filter_january"
+        february_id = "chel_date_filter_february"
+        db.ensure_user(january_id)
+        db.ensure_user(february_id)
+        try:
+            with db.connection() as conn:
+                conn.execute(
+                    "UPDATE users SET created_at = ? WHERE chel_id = ?",
+                    ("2099-01-15T10:00:00+00:00", january_id),
+                )
+                conn.execute(
+                    "UPDATE users SET created_at = ? WHERE chel_id = ?",
+                    ("2099-02-20T10:00:00+00:00", february_id),
+                )
+                conn.commit()
+
+            result = db.admin_table(
+                "users", "date_filter", limit=10,
+                created_from="2099-02-01", created_to="2099-02-28",
+            )
+            self.assertGreaterEqual(result["overall_total"], 2)
+            self.assertEqual(result["period_total"], 1)
+            self.assertEqual(result["total"], 1)
+            self.assertEqual(result["rows"][0]["chel_id"], february_id)
+            self.assertEqual(result["created_from"], "2099-02-01")
+            self.assertEqual(result["created_to"], "2099-02-28")
+
+            no_search_match = db.admin_table(
+                "users", "january", limit=10,
+                created_from="2099-02-01", created_to="2099-02-28",
+            )
+            self.assertEqual(no_search_match["period_total"], 1)
+            self.assertEqual(no_search_match["total"], 0)
+            with self.assertRaises(ValueError):
+                db.admin_table(
+                    "users", created_from="2099-03-01", created_to="2099-02-01",
+                )
+        finally:
+            with db.connection() as conn:
+                conn.execute(
+                    "DELETE FROM users WHERE chel_id IN (?, ?)",
+                    (january_id, february_id),
+                )
+                conn.commit()
+
+    def test_device_statistics_classify_and_aggregate_page_openings(self):
+        chel_id = "chel_device_stats_1234"
+        android_ua = (
+            "Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 "
+            "Chrome/126.0.0.0 Mobile Safari/537.36"
+        )
+        iphone_ua = (
+            "Mozilla/5.0 (iPhone; CPU iPhone OS 17_5 like Mac OS X) "
+            "AppleWebKit/605.1.15 Version/17.5 Mobile/15E148 Safari/604.1"
+        )
+        windows_ua = (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 Chrome/126.0.0.0 Safari/537.36 Edg/126.0"
+        )
+        self.assertEqual(db.classify_user_agent(iphone_ua)["device_type"], "ios")
+        self.assertEqual(db.classify_user_agent(windows_ua)["browser"], "Edge")
+        self.assertEqual(db.classify_user_agent("Googlebot/2.1")["device_type"], "bot")
+        db.ensure_user(chel_id)
+        try:
+            db.set_current_chel_id(chel_id)
+            db.record_device_access(android_ua)
+            db.record_device_access(android_ua)
+            db.record_device_access(windows_ua)
+            devices = db.admin_table("devices", chel_id, limit=10)
+            self.assertEqual(devices["total"], 2)
+            android = next(
+                item for item in devices["rows"] if item["device_type"] == "android"
+            )
+            self.assertEqual(android["operating_system"], "Android")
+            self.assertEqual(android["browser"], "Chrome")
+            self.assertEqual(android["visit_count"], 2)
+            self.assertEqual(db.current_device()["operating_system"], "Windows")
+            dashboard = db.admin_dashboard(days=7)
+            self.assertTrue(any(
+                item["operating_system"] == "Android"
+                for item in dashboard["operating_systems"]
+            ))
+            self.assertTrue(any(
+                item["browser"] == "Edge" for item in dashboard["browsers"]
+            ))
+            self.assertIsNone(db.record_device_access("Googlebot/2.1"))
+        finally:
+            db.reset_current_user()
+            db.ensure_user("chel_test_default")
+            db.set_current_chel_id("chel_test_default")
+
     def test_dashboard_files_and_admin_menu_entry_exist(self):
         project_root = Path(__file__).resolve().parents[1]
         index = (project_root / "index.html").read_text(encoding="utf-8")
@@ -779,14 +877,37 @@ class OrchestratorTests(unittest.TestCase):
         self.assertIn('id="summaryGrid"', dashboard)
         self.assertIn('id="usersTable"', dashboard)
         self.assertIn('id="usersSearch"', dashboard)
+        self.assertIn('id="usersTotalCount"', dashboard)
+        self.assertIn('id="usersPeriodCount"', dashboard)
+        self.assertIn('id="usersPeriod"', dashboard)
+        self.assertIn('id="usersDateFrom"', dashboard)
+        self.assertIn('id="usersDateTo"', dashboard)
         self.assertIn('id="conversationsNext"', dashboard)
+        self.assertIn('id="deviceDistribution"', dashboard)
+        self.assertIn('id="osDistribution"', dashboard)
+        self.assertIn('id="browserDistribution"', dashboard)
+        self.assertIn('id="devicesTable"', dashboard)
+        self.assertIn("renderDevices", script)
+        self.assertIn("created_from", script)
+        self.assertIn("Новых за период", script)
         self.assertIn('id="managerCreateForm"', dashboard)
+        self.assertIn('id="examinationsTab"', dashboard)
+        self.assertIn('id="examinationForm"', dashboard)
+        self.assertIn('id="examinationName"', dashboard)
+        self.assertIn('id="examinationDescription"', dashboard)
+        self.assertIn('id="examinationPrice"', dashboard)
+        self.assertIn('id="examinationList"', dashboard)
         self.assertIn('id="staffList"', dashboard)
         self.assertIn('id="staffPassword" type="text" minlength="6"', dashboard)
         self.assertIn("sessionStorage", script)
         self.assertIn("Authorization:`Bearer ${token || ''}`", script)
         self.assertIn("/api/admin/table", script)
         self.assertIn("/api/admin/managers", script)
+        self.assertIn("/api/admin/examinations", script)
+        self.assertIn("saveExamination", script)
+        self.assertIn("manageExamination", script)
+        self.assertIn('data-staff-action="delete"', script)
+        self.assertIn("method:'DELETE'", script)
         self.assertIn("@media (max-width:700px)", styles)
 
     def test_admin_can_create_authenticate_and_disable_manager(self):
@@ -815,6 +936,50 @@ class OrchestratorTests(unittest.TestCase):
         self.assertFalse(disabled["is_active"])
         self.assertIsNone(db.get_staff_session(next_login["token"]))
         self.assertIsNone(db.authenticate_staff("olga.test", "654321"))
+        self.assertTrue(db.admin_delete_staff(created["id"]))
+        self.assertFalse(db.admin_delete_staff(created["id"]))
+        self.assertFalse(any(
+            item["id"] == created["id"] for item in db.admin_list_staff()
+        ))
+
+    def test_admin_can_create_update_and_delete_examinations(self):
+        with self.assertRaises(ValueError):
+            db.admin_create_examination("Т", "Коротко", "", -1)
+        created = db.admin_create_examination(
+            "Тестовый комплекс",
+            "Описание тестового комплекса для проверки каталога.",
+            "Анализ A, анализ B",
+            2750,
+        )
+        self.assertTrue(created["id"].startswith("exam_"))
+        self.assertEqual(created["price"], 2750)
+        self.assertTrue(any(
+            item["id"] == created["id"] for item in db.list_examinations()
+        ))
+
+        updated = db.admin_update_examination(
+            created["id"],
+            "Обновлённый комплекс",
+            "Новое подробное описание обследования.",
+            "Анализ C",
+            3100,
+        )
+        self.assertEqual(updated["name"], "Обновлённый комплекс")
+        self.assertEqual(updated["price"], 3100)
+        payload = public_onboarding(
+            {"status": "exams", "selected_tests": []},
+            {},
+            db.list_examinations(),
+        )
+        self.assertTrue(any(
+            item["id"] == created["id"] for item in payload["tests"]
+        ))
+
+        self.assertTrue(db.admin_delete_examination(created["id"]))
+        self.assertFalse(db.admin_delete_examination(created["id"]))
+        self.assertFalse(any(
+            item["id"] == created["id"] for item in db.list_examinations()
+        ))
 
     def test_manager_can_pause_ai_read_context_and_reply_in_same_chat(self):
         chel_id = "chel_manager_flow_1234"
@@ -1018,6 +1183,66 @@ class OrchestratorTests(unittest.TestCase):
         self.assertIn("X-Consilium-Action':'reset-user'", script)
         self.assertIn("localStorage.removeItem('consilium_conversation_id')", script)
 
+    def test_exam_offer_explains_choices_and_confirms_skipping(self):
+        project_root = Path(__file__).resolve().parents[1]
+        script = (project_root / "static" / "app.js").read_text(encoding="utf-8")
+        styles = (project_root / "static" / "styles.css").read_text(encoding="utf-8")
+        self.assertIn("Нажимая «Посмотреть варианты»", script)
+        self.assertIn("Позже анкету также можно отредактировать", script)
+        self.assertIn('data-onboarding-action="review-exam-skip"', script)
+        self.assertIn("Сдавая дополнительные обследования, вы получаете", script)
+        self.assertIn("Всё равно отказаться", script)
+        self.assertIn('data-onboarding-action="confirm-skip-exams"', script)
+        self.assertNotIn("Мы можем показать наборы из проекта медосмотров", script)
+        self.assertIn(".exam-skip { width:100%; min-height:44px;", styles)
+        self.assertIn("border:1px solid #b9c7c0", styles)
+
+    def test_pregnancy_question_is_not_in_initial_questionnaire(self):
+        project_root = Path(__file__).resolve().parents[1]
+        index = (project_root / "index.html").read_text(encoding="utf-8")
+        script = (project_root / "static" / "app.js").read_text(encoding="utf-8")
+        questionnaire = script.split("const onboardingQuestions = [", 1)[1].split(
+            "];", 1,
+        )[0]
+        self.assertNotIn("key:'pregnancy'", questionnaire)
+        self.assertNotIn("Есть ли беременность?", questionnaire)
+        self.assertNotIn('id="profilePregnancy"', index)
+        self.assertNotIn("Беременность<select", index)
+        self.assertIn("pregnancy:'not_applicable'", script)
+
+    def test_user_app_is_installable_pwa_without_caching_api_data(self):
+        project_root = Path(__file__).resolve().parents[1]
+        index = (project_root / "index.html").read_text(encoding="utf-8")
+        script = (project_root / "static" / "app.js").read_text(encoding="utf-8")
+        worker = (project_root / "service-worker.js").read_text(encoding="utf-8")
+        manifest = json.loads(
+            (project_root / "manifest.webmanifest").read_text(encoding="utf-8")
+        )
+
+        self.assertEqual(manifest["display"], "standalone")
+        self.assertEqual(manifest["start_url"], "/")
+        self.assertEqual(
+            {icon["sizes"] for icon in manifest["icons"]},
+            {"192x192", "512x512"},
+        )
+        self.assertIn('rel="manifest"', index)
+        self.assertIn('rel="apple-touch-icon"', index)
+        self.assertIn('id="menuInstallAppButton"', index)
+        self.assertIn('id="installAppModal"', index)
+        self.assertIn("beforeinstallprompt", script)
+        self.assertIn("navigator.serviceWorker.register('/service-worker.js')", script)
+        self.assertIn("registration.update()", script)
+        self.assertIn("controllerchange", script)
+        self.assertIn("url.pathname.startsWith('/api/')", worker)
+        self.assertIn("url.pathname.startsWith('/auth/')", worker)
+        self.assertIn("consilium-shell-v5", worker)
+        self.assertIn("fetch(request)", worker)
+        self.assertIn("/static/app.js?v=20260730-5", index)
+        self.assertLess(
+            index.index('id="menuInstallAppButton"'),
+            index.index('id="menuFontSizeButton"'),
+        )
+
     def test_production_port_is_isolated_from_existing_server_projects(self):
         project_root = Path(__file__).resolve().parents[1]
         production_env = (project_root / ".env.production.example").read_text(encoding="utf-8")
@@ -1030,11 +1255,19 @@ class OrchestratorTests(unittest.TestCase):
         self.assertIn("HOST=0.0.0.0", docker_env)
         self.assertIn("CONSILIUM_HOST_PORT=8002", docker_env)
         self.assertIn("127.0.0.1:${CONSILIUM_HOST_PORT:-8002}:8000", compose)
+        self.assertIn("external: true", compose)
         self.assertNotIn("0.0.0.0:${CONSILIUM_HOST_PORT", compose)
         self.assertEqual(nginx.count("proxy_pass http://127.0.0.1:8002;"), 5)
         self.assertNotIn("proxy_pass http://127.0.0.1:8000;", nginx)
+        self.assertIn("examinations(?:/[A-Za-z0-9_-]+)?", nginx)
         self.assertIn("anketa_bot_max", server_guide)
         self.assertIn("bitrix_connector", server_guide)
+        deployment_check = (
+            project_root / "scripts" / "deployment_bundle_check.py"
+        ).read_text(encoding="utf-8")
+        self.assertIn("consilium-telegram-bot", deployment_check)
+        self.assertIn("consilium-max-bot", deployment_check)
+        self.assertIn("--check-env", deployment_check)
         main_source = (project_root / "backend" / "main.py").read_text(encoding="utf-8")
         self.assertLess(
             main_source.index('if path == "/api/health":'),

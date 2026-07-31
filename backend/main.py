@@ -16,14 +16,15 @@ from .config import BASE_DIR, settings
 from .llm import LLMNotConfigured
 from .lab_results import LabResultsUnavailable, lookup_lab_results
 from .orchestrator import orchestrator
-from .onboarding import TEST_CATALOG, public_onboarding
+from .onboarding import public_onboarding
 from .prompts import public_agents
 
 
 STATIC_DIR = BASE_DIR / "static"
 ALLOWED_STATIC = {
     "app.js", "agents.js", "styles.css", "dashboard.js", "dashboard.css",
-    "manager.js", "manager.css",
+    "manager.js", "manager.css", "icon-192.png", "icon-512.png",
+    "icon-maskable-512.png", "apple-touch-icon.png",
 }
 SERVER_ERROR_LOG = settings.log_path
 MANAGER_SESSION_COOKIE = "consilium_manager_session"
@@ -103,6 +104,16 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
             return self._send_file(BASE_DIR / "dashboard.html", "text/html; charset=utf-8")
         if path == "/manager":
             return self._send_file(BASE_DIR / "manager.html", "text/html; charset=utf-8")
+        if path == "/manifest.webmanifest":
+            return self._send_file(
+                BASE_DIR / "manifest.webmanifest",
+                "application/manifest+json; charset=utf-8",
+            )
+        if path == "/service-worker.js":
+            return self._send_file(
+                BASE_DIR / "service-worker.js",
+                "application/javascript; charset=utf-8",
+            )
         if path.startswith("/static/"):
             name = path.removeprefix("/static/")
             if name not in ALLOWED_STATIC:
@@ -121,6 +132,8 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                     query.get("query", [""])[0],
                     int(query.get("limit", ["25"])[0]),
                     int(query.get("offset", ["0"])[0]),
+                    query.get("created_from", [""])[0],
+                    query.get("created_to", [""])[0],
                 ))
             except (ValueError, TypeError):
                 return self._json(422, {"detail": "Некорректные параметры таблицы"})
@@ -128,6 +141,10 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
             if not self._admin_authorized():
                 return
             return self._json(200, db.admin_list_staff())
+        if path == "/api/admin/examinations":
+            if not self._admin_authorized():
+                return
+            return self._json(200, db.list_examinations())
         if path.startswith("/api/manager/"):
             manager = self._manager_authorized()
             if not manager:
@@ -153,6 +170,7 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
             return self._json(404, {"detail": "Маршрут панели менеджера не найден"})
         self._ensure_user_context()
         if path == "/":
+            db.record_device_access(self.headers.get("User-Agent", ""))
             return self._send_file(BASE_DIR / "index.html", "text/html; charset=utf-8")
         if path == "/api/agents":
             return self._json(200, public_agents())
@@ -177,7 +195,9 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
         if path == "/api/health-history":
             return self._json(200, db.list_health_history())
         if path == "/api/onboarding":
-            return self._json(200, public_onboarding(db.get_onboarding(), db.get_profile()))
+            return self._json(200, public_onboarding(
+                db.get_onboarding(), db.get_profile(), db.list_examinations(),
+            ))
         if path.startswith("/api/handoff-preview/"):
             conversation_id = path.removeprefix("/api/handoff-preview/")
             item = db.get_conversation(conversation_id)
@@ -255,6 +275,37 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                     str(payload.get("password", "")),
                 ))
             except (ValueError, json.JSONDecodeError, UnicodeDecodeError) as exc:
+                return self._json(422, {"detail": str(exc)})
+        if path == "/api/admin/examinations":
+            if not self._admin_authorized():
+                return
+            try:
+                payload = self._read_json()
+                return self._json(201, db.admin_create_examination(
+                    payload.get("name", ""),
+                    payload.get("description", ""),
+                    payload.get("includes", ""),
+                    payload.get("price"),
+                ))
+            except (ValueError, TypeError, json.JSONDecodeError, UnicodeDecodeError) as exc:
+                return self._json(422, {"detail": str(exc)})
+        if path.startswith("/api/admin/examinations/"):
+            if not self._admin_authorized():
+                return
+            try:
+                examination_id = path.removeprefix("/api/admin/examinations/").strip("/")
+                payload = self._read_json()
+                item = db.admin_update_examination(
+                    examination_id,
+                    payload.get("name", ""),
+                    payload.get("description", ""),
+                    payload.get("includes", ""),
+                    payload.get("price"),
+                )
+                if not item:
+                    return self._json(404, {"detail": "Обследование не найдено"})
+                return self._json(200, item)
+            except (ValueError, TypeError, json.JSONDecodeError, UnicodeDecodeError) as exc:
                 return self._json(422, {"detail": str(exc)})
         if path.startswith("/api/admin/managers/"):
             if not self._admin_authorized():
@@ -411,7 +462,9 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
             try:
                 profile = db.save_profile(self._validate_profile(self._read_json(), required=True))
                 state = db.save_onboarding(status="exams", selected_tests=[], payment_status="none")
-                return self._json(200, public_onboarding(state, profile))
+                return self._json(200, public_onboarding(
+                    state, profile, db.list_examinations(),
+                ))
             except (ValueError, TypeError) as exc:
                 return self._json(422, {"detail": str(exc)})
         if path == "/api/onboarding/appearance":
@@ -423,13 +476,15 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                 current = db.get_onboarding()
                 next_status = "questionnaire" if current["status"] == "appearance" else current["status"]
                 state = db.save_onboarding(status=next_status, font_size=font_size)
-                return self._json(200, public_onboarding(state, db.get_profile()))
+                return self._json(200, public_onboarding(
+                    state, db.get_profile(), db.list_examinations(),
+                ))
             except (ValueError, TypeError) as exc:
                 return self._json(422, {"detail": str(exc)})
         if path == "/api/onboarding/exams":
             try:
                 payload = self._read_json()
-                allowed = {item["id"] for item in TEST_CATALOG}
+                allowed = {item["id"] for item in db.list_examinations()}
                 selected = list(dict.fromkeys(str(item) for item in payload.get("selected_tests", [])))
                 if any(item not in allowed for item in selected):
                     raise ValueError("Выбран неизвестный набор обследований")
@@ -438,7 +493,9 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                     selected_tests=selected,
                     payment_status="pending" if selected else "skipped",
                 )
-                return self._json(200, public_onboarding(state, db.get_profile()))
+                return self._json(200, public_onboarding(
+                    state, db.get_profile(), db.list_examinations(),
+                ))
             except (ValueError, TypeError) as exc:
                 return self._json(422, {"detail": str(exc)})
         if path == "/api/onboarding/payment":
@@ -446,13 +503,17 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
             if state["status"] != "payment" or not state["selected_tests"]:
                 return self._json(422, {"detail": "Сначала выберите обследования"})
             state = db.save_onboarding(status="complete", payment_status="demo_paid")
-            return self._json(200, public_onboarding(state, db.get_profile()))
+            return self._json(200, public_onboarding(
+                state, db.get_profile(), db.list_examinations(),
+            ))
         if path == "/api/onboarding/intro-seen":
             state = db.get_onboarding()
             if state["status"] != "complete":
                 return self._json(422, {"detail": "Сначала завершите анкету"})
             state = db.save_onboarding(status="complete", intro_seen=True)
-            return self._json(200, public_onboarding(state, db.get_profile()))
+            return self._json(200, public_onboarding(
+                state, db.get_profile(), db.list_examinations(),
+            ))
         if path == "/api/context":
             try:
                 payload = self._read_json()
@@ -886,8 +947,25 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
         }
 
     def do_DELETE(self) -> None:
-        self._ensure_user_context()
         path = urlparse(self.path).path
+        if path.startswith("/api/admin/managers/"):
+            if not self._admin_authorized():
+                return
+            try:
+                staff_id = int(path.removeprefix("/api/admin/managers/").strip("/"))
+            except ValueError:
+                return self._json(400, {"detail": "Некорректный идентификатор менеджера"})
+            if db.admin_delete_staff(staff_id):
+                return self._json(200, {"deleted": staff_id})
+            return self._json(404, {"detail": "Менеджер не найден"})
+        if path.startswith("/api/admin/examinations/"):
+            if not self._admin_authorized():
+                return
+            examination_id = path.removeprefix("/api/admin/examinations/").strip("/")
+            if db.admin_delete_examination(examination_id):
+                return self._json(200, {"deleted": examination_id})
+            return self._json(404, {"detail": "Обследование не найдено"})
+        self._ensure_user_context()
         if path.startswith("/api/memories/"):
             try:
                 memory_id = int(path.removeprefix("/api/memories/"))

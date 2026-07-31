@@ -9,7 +9,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/static/dashboard.css">
+  <link rel="stylesheet" href="/static/dashboard.css?v=20260731-6">
 </head>
 <body>
   <main class="dashboard-shell">
@@ -46,6 +46,7 @@
       <nav class="admin-tabs" aria-label="Разделы админ-панели">
         <button class="active" id="dashboardTab" type="button">Дашборд</button>
         <button id="managersTab" type="button">Управление менеджерами</button>
+        <button id="examinationsTab" type="button">Дополнительные обследования</button>
       </nav>
 
       <section class="manager-admin hidden" id="managerAdminView">
@@ -62,6 +63,34 @@
         <article class="panel table-panel">
           <div class="panel-heading"><div><p class="eyebrow">Доступ к /manager</p><h2>Менеджеры</h2></div><span class="table-count" id="staffCount"></span></div>
           <div class="staff-list" id="staffList"></div>
+        </article>
+      </section>
+
+      <section class="examination-admin hidden" id="examinationAdminView">
+        <article class="panel examination-form-panel">
+          <div class="panel-heading">
+            <div><p class="eyebrow">Каталог для пользователей</p><h2 id="examinationFormTitle">Добавить обследование</h2></div>
+          </div>
+          <form id="examinationForm" class="examination-form">
+            <input id="examinationId" type="hidden">
+            <label>Название<input id="examinationName" maxlength="140" placeholder="Например, Витамины и микроэлементы" required></label>
+            <label>Описание<textarea id="examinationDescription" maxlength="1200" rows="4" placeholder="Кому и для чего может быть полезен набор" required></textarea></label>
+            <label>Что входит<textarea id="examinationIncludes" maxlength="1200" rows="3" placeholder="Перечислите анализы и исследования"></textarea></label>
+            <label>Цена, ₽<input id="examinationPrice" type="number" min="0" max="10000000" step="1" inputmode="numeric" placeholder="3500" required></label>
+            <div class="examination-form-actions">
+              <button type="button" class="button secondary hidden" id="cancelExaminationEdit">Отменить редактирование</button>
+              <button type="submit" id="saveExaminationButton">Добавить обследование</button>
+            </div>
+          </form>
+          <p class="manager-form-status hidden" id="examinationFormStatus" role="status"></p>
+        </article>
+
+        <article class="panel examination-list-panel">
+          <div class="panel-heading">
+            <div><p class="eyebrow">Показываются на этапе анкеты</p><h2>Каталог обследований</h2></div>
+            <span class="table-count" id="examinationsCount"></span>
+          </div>
+          <div class="examination-list" id="examinationList"></div>
         </article>
       </section>
 
@@ -90,22 +119,73 @@
           <div class="panel-heading"><div><p class="eyebrow">Передача человеку</p><h2>Каналы обращений</h2></div></div>
           <div class="distribution-list" id="channelDistribution"></div>
         </article>
+
+        <article class="panel">
+          <div class="panel-heading"><div><p class="eyebrow">Аудитория</p><h2>Устройства пользователей</h2></div></div>
+          <div class="distribution-list" id="deviceDistribution"></div>
+        </article>
+
+        <article class="panel">
+          <div class="panel-heading"><div><p class="eyebrow">Аудитория</p><h2>Операционные системы</h2></div></div>
+          <div class="distribution-list" id="osDistribution"></div>
+        </article>
+
+        <article class="panel">
+          <div class="panel-heading"><div><p class="eyebrow">Аудитория</p><h2>Браузеры</h2></div></div>
+          <div class="distribution-list" id="browserDistribution"></div>
+        </article>
       </section>
 
       <section class="panel table-panel">
         <div class="panel-heading">
           <div><p class="eyebrow">Последние записи</p><h2>Пользователи</h2></div>
-          <span class="table-count" id="usersCount"></span>
+          <div class="user-counts" aria-live="polite">
+            <span class="table-count" id="usersTotalCount"></span>
+            <span class="table-count period-count" id="usersPeriodCount"></span>
+            <span class="table-count found-count" id="usersCount"></span>
+          </div>
         </div>
-        <div class="table-tools">
+        <div class="user-period-tools">
+          <label class="table-search period-select">Период регистрации
+            <select id="usersPeriod">
+              <option value="all">Всё время</option>
+              <option value="today">Сегодня</option>
+              <option value="7">Последние 7 дней</option>
+              <option value="30">Последние 30 дней</option>
+              <option value="90">Последние 90 дней</option>
+              <option value="custom">Выбрать даты</option>
+            </select>
+          </label>
+          <div class="custom-period hidden" id="usersCustomPeriod">
+            <label class="table-search">С даты<input id="usersDateFrom" type="date"></label>
+            <label class="table-search">По дату<input id="usersDateTo" type="date"></label>
+          </div>
+        </div>
+        <div class="table-tools users-table-tools">
           <label class="table-search">Поиск пользователей<input id="usersSearch" type="search" placeholder="chel_id, статус, Telegram или MAX"></label>
-          <button class="table-clear" id="usersClear" type="button">Очистить</button>
+          <button class="table-clear" id="usersClear" type="button">Сбросить фильтры</button>
         </div>
         <div class="table-scroll"><table>
           <thead><tr><th>chel_id</th><th>Первый вход</th><th>Последняя активность</th><th>Анкета</th><th>Мессенджеры</th><th>Диалоги</th><th>Сообщения</th></tr></thead>
           <tbody id="usersTable"></tbody>
         </table></div>
         <div class="table-pagination"><button id="usersPrev" type="button">← Назад</button><span id="usersPage"></span><button id="usersNext" type="button">Дальше →</button></div>
+      </section>
+
+      <section class="panel table-panel">
+        <div class="panel-heading">
+          <div><p class="eyebrow">Без IP-адресов</p><h2>Устройства</h2></div>
+          <span class="table-count" id="devicesCount"></span>
+        </div>
+        <div class="table-tools">
+          <label class="table-search">Поиск устройств<input id="devicesSearch" type="search" placeholder="chel_id, ПК, Android, iOS, ОС или браузер"></label>
+          <button class="table-clear" id="devicesClear" type="button">Очистить</button>
+        </div>
+        <div class="table-scroll"><table>
+          <thead><tr><th>chel_id</th><th>Устройство</th><th>ОС</th><th>Браузер</th><th>Первый вход</th><th>Последний вход</th><th>Открытия</th></tr></thead>
+          <tbody id="devicesTable"></tbody>
+        </table></div>
+        <div class="table-pagination"><button id="devicesPrev" type="button">← Назад</button><span id="devicesPage"></span><button id="devicesNext" type="button">Дальше →</button></div>
       </section>
 
       <section class="panel table-panel">
@@ -143,6 +223,6 @@
       <p class="dashboard-error hidden" id="dashboardError" role="alert"></p>
     </div>
   </main>
-  <script src="/static/dashboard.js" defer></script>
+  <script src="/static/dashboard.js?v=20260731-6" defer></script>
 </body>
 </html>

@@ -71,6 +71,15 @@ def _profile_for_ai() -> dict:
     }
 
 
+def _device_for_ai() -> dict:
+    device = db.current_device()
+    return {
+        "device_type": device.get("device_type", "other"),
+        "operating_system": device.get("operating_system", "Другое"),
+        "browser": device.get("browser", "Другое"),
+    }
+
+
 class ConversationOrchestrator:
     def __init__(self, llm: LLMService = llm_service) -> None:
         self.llm = llm
@@ -82,6 +91,7 @@ class ConversationOrchestrator:
         conversation_id = conversation["id"]
         conversation["_memories"] = [{"category": item["category"], "content": item["content"]} for item in db.list_memories()[:20]]
         conversation["_profile"] = _profile_for_ai()
+        conversation["_device"] = _device_for_ai()
         conversation["_body_symptoms"] = db.list_body_symptoms(status="active", limit=20)
         previous_agent = conversation["active_agent"]
         attachment_meta = [{"name": item.get("name"), "type": item.get("type")} for item in (attachments or [])]
@@ -633,6 +643,7 @@ class ConversationOrchestrator:
             raise ValueError("Диалог не найден")
         conversation["_memories"] = [{"category": item["category"], "content": item["content"]} for item in db.list_memories()[:20]]
         conversation["_profile"] = _profile_for_ai()
+        conversation["_device"] = _device_for_ai()
         conversation["_body_symptoms"] = db.list_body_symptoms(status="active", limit=20)
         context = self._load_context(conversation.get("context_summary", ""))
         history = db.list_messages(conversation_id, settings.max_history_messages)
@@ -652,6 +663,7 @@ class ConversationOrchestrator:
             raise ValueError("Диалог не найден")
         conversation["_memories"] = [{"category": item["category"], "content": item["content"]} for item in db.list_memories()[:20]]
         conversation["_profile"] = _profile_for_ai()
+        conversation["_device"] = _device_for_ai()
         conversation["_body_symptoms"] = db.list_body_symptoms(status="active", limit=20)
         context = self._load_context(conversation.get("context_summary", ""))
         history = db.list_messages(conversation_id, settings.max_history_messages)

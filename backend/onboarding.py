@@ -84,10 +84,16 @@ def recommend_test_ids(profile: dict) -> list[str]:
     return list(dict.fromkeys(result))
 
 
-def public_onboarding(state: dict, profile: dict) -> dict:
+def public_onboarding(
+    state: dict, profile: dict, tests: list[dict] | None = None,
+) -> dict:
+    catalog = TEST_CATALOG if tests is None else tests
+    available_ids = {item["id"] for item in catalog}
     return {
         **state,
         "profile": profile,
-        "tests": TEST_CATALOG,
-        "recommended_test_ids": recommend_test_ids(profile),
+        "tests": catalog,
+        "recommended_test_ids": [
+            item for item in recommend_test_ids(profile) if item in available_ids
+        ],
     }

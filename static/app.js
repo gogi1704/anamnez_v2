@@ -33,7 +33,119 @@ const messages = $('#messages');
 const timeline = $('#timeline');
 const input = $('#messageInput');
 const ANONYMOUS_ACCESS_KEY = 'consilium_anonymous_access';
+const INSTALL_DISMISSED_KEY = 'consilium_install_dismissed_at';
+const INSTALL_REOFFER_AFTER_MS = 7 * 24 * 60 * 60 * 1000;
 let userAudioContext = null;
+let deferredInstallPrompt = null;
+let installOfferTimer = null;
+
+function isIosDevice() {
+  return /iphone|ipad|ipod/i.test(navigator.userAgent)
+    || (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+}
+
+function isInstalledApp() {
+  return window.matchMedia('(display-mode: standalone)').matches
+    || window.navigator.standalone === true;
+}
+
+function updateInstallMenu() {
+  const button = $('#menuInstallAppButton');
+  if (!button) return;
+  button.classList.toggle('hidden', isInstalledApp());
+  const status = $('#menuInstallAppStatus');
+  if (status) {
+    status.textContent = isIosDevice()
+      ? 'Добавить на экран «Домой»'
+      : 'Открывать как приложение';
+  }
+}
+
+function closeInstallApp({ dismissed = false } = {}) {
+  $('#installAppModal').classList.add('hidden');
+  if (dismissed) localStorage.setItem(INSTALL_DISMISSED_KEY, String(Date.now()));
+}
+
+function openInstallApp() {
+  closeFunctionMenu();
+  if (isInstalledApp()) return;
+  const ios = isIosDevice();
+  const hasNativePrompt = Boolean(deferredInstallPrompt);
+  $('#iosInstallSteps').classList.toggle('hidden', !ios);
+  $('#installAppConfirmButton').classList.toggle('hidden', !ios && !hasNativePrompt);
+  $('#installAppConfirmButton').textContent = ios ? 'Понятно' : 'Добавить';
+  $('#installAppDescription').textContent = ios
+    ? 'На iPhone ярлык добавляется через меню Safari. После этого Консилиум будет открываться отдельным окном.'
+    : hasNativePrompt
+      ? 'Сервис будет открываться отдельным окном, почти как обычное приложение. Скачивать его из магазина не нужно.'
+      : 'Откройте меню браузера и выберите «Установить приложение» или «Добавить на главный экран».';
+  $('#installAppModal').classList.remove('hidden');
+}
+
+function scheduleInstallOffer() {
+  clearTimeout(installOfferTimer);
+  if (
+    isInstalledApp()
+    || state.onboarding?.status !== 'complete'
+    || !state.mainInitialized
+    || (!isIosDevice() && !deferredInstallPrompt)
+  ) return;
+  const dismissedAt = Number(localStorage.getItem(INSTALL_DISMISSED_KEY) || 0);
+  if (Date.now() - dismissedAt < INSTALL_REOFFER_AFTER_MS) return;
+  installOfferTimer = setTimeout(() => {
+    if (
+      $('#capabilitiesModal').classList.contains('hidden')
+      && $('#installAppModal').classList.contains('hidden')
+    ) openInstallApp();
+  }, 1800);
+}
+
+async function confirmInstallApp() {
+  if (isIosDevice()) {
+    closeInstallApp({ dismissed: true });
+    return;
+  }
+  if (!deferredInstallPrompt) return;
+  const prompt = deferredInstallPrompt;
+  deferredInstallPrompt = null;
+  await prompt.prompt();
+  const choice = await prompt.userChoice;
+  if (choice.outcome !== 'accepted') {
+    localStorage.setItem(INSTALL_DISMISSED_KEY, String(Date.now()));
+  }
+  closeInstallApp();
+  updateInstallMenu();
+}
+
+window.addEventListener('beforeinstallprompt', event => {
+  event.preventDefault();
+  deferredInstallPrompt = event;
+  updateInstallMenu();
+  scheduleInstallOffer();
+});
+
+window.addEventListener('appinstalled', () => {
+  deferredInstallPrompt = null;
+  localStorage.removeItem(INSTALL_DISMISSED_KEY);
+  closeInstallApp();
+  updateInstallMenu();
+});
+
+if ('serviceWorker' in navigator) {
+  let reloadingForServiceWorkerUpdate = false;
+  navigator.serviceWorker.addEventListener('controllerchange', () => {
+    if (reloadingForServiceWorkerUpdate) return;
+    reloadingForServiceWorkerUpdate = true;
+    window.location.reload();
+  });
+  window.addEventListener('load', () => {
+    navigator.serviceWorker.register('/service-worker.js')
+      .then(registration => registration.update())
+      .catch(error => {
+        console.warn('Не удалось подключить режим приложения', error);
+      });
+  });
+}
 
 function unlockUserSound() {
   if (!userAudioContext) {
@@ -80,7 +192,6 @@ const onboardingQuestions = [
   { key:'conditions', title:'Есть хронические заболевания?', lead:'Напишите по одному на строку. Если нет — этот шаг можно пропустить.', type:'textarea', placeholder:'Например:\nГипертония\nАстма', optional:true, list:true },
   { key:'medications', title:'Какие лекарства принимаете постоянно?', lead:'Название и дозировка, если известна. Шаг можно пропустить.', type:'textarea', placeholder:'По одному препарату на строку', optional:true, list:true },
   { key:'allergies', title:'Есть аллергии?', lead:'Укажите лекарства, продукты или другие известные аллергены. Шаг можно пропустить.', type:'textarea', placeholder:'По одному аллергену на строку', optional:true, list:true },
-  { key:'pregnancy', title:'Есть ли беременность?', lead:'Этот вопрос показывается только когда он может быть релевантен.', choices:[['no','Нет'],['yes','Да'],['possible','Возможна'],['unknown','Не знаю']], femaleOnly:true },
 ];
 
 async function api(path, options = {}) {
@@ -172,7 +283,7 @@ async function resetUser() {
 }
 
 function activeOnboardingQuestions() {
-  return onboardingQuestions.filter(question => !question.femaleOnly || state.onboardingAnswers.sex === 'female');
+  return onboardingQuestions;
 }
 
 function seedOnboardingAnswers(profile = {}) {
@@ -291,7 +402,7 @@ async function nextQuestion() {
 
 function renderExamOffer() {
   setOnboardingMeta('Обследования', 72);
-  $('#onboardingContent').innerHTML = `<span class="onboarding-kicker">Необязательный шаг</span><h1>Хотите дополнить картину обследованиями?</h1><p class="onboarding-lead">Мы можем показать наборы из проекта медосмотров с учётом ответов анкеты. Это предварительная подборка: необходимость анализов и их интерпретацию стоит обсудить с врачом.</p><div class="exam-intro"><span>◎</span><div><strong>Можно отказаться</strong><br>Чат с консилиумом откроется в любом случае.</div></div><div class="onboarding-actions"><button type="button" class="onboarding-back" data-onboarding-action="question-back">Изменить анкету</button><button type="button" class="onboarding-next" data-onboarding-action="start-exams">Посмотреть варианты</button></div><button type="button" class="exam-skip" data-onboarding-action="skip-exams">Пропустить и открыть Консилиум</button>`;
+  $('#onboardingContent').innerHTML = `<span class="onboarding-kicker">Необязательный шаг</span><h1>Хотите дополнить картину обследованиями?</h1><div class="exam-offer-guide"><p><strong>Нажимая «Посмотреть варианты»</strong>, вы увидите наборы обследований, подобранные с учётом ответов анкеты.</p><p>Перед выбором можно вернуться и изменить ответы. Позже анкету также можно отредактировать в разделе «Моя анкета».</p><p>Вы можете пропустить дополнительные обследования — Консилиум всё равно откроется.</p></div><div class="onboarding-actions"><button type="button" class="onboarding-back" data-onboarding-action="question-back">Изменить анкету</button><button type="button" class="onboarding-next" data-onboarding-action="start-exams">Посмотреть варианты</button></div><button type="button" class="exam-skip" data-onboarding-action="review-exam-skip">Пропустить и открыть Консилиум</button>`;
 }
 
 function renderExamSelection() {
@@ -299,7 +410,12 @@ function renderExamSelection() {
   const recommended = new Set(state.onboarding.recommended_test_ids || []);
   const cards = state.onboarding.tests.map(test => `<label class="exam-card ${state.selectedTests.has(test.id) ? 'selected' : ''}" data-test-card="${test.id}"><input type="checkbox" ${state.selectedTests.has(test.id) ? 'checked' : ''}><span class="exam-check">✓</span>${recommended.has(test.id) ? '<small class="recommended-badge">Подходит по анкете</small>' : ''}<strong>${test.name}</strong><b>${test.price.toLocaleString('ru')} ₽</b><small>${test.description}</small><em>${test.includes}</em></label>`).join('');
   const total = state.onboarding.tests.filter(test => state.selectedTests.has(test.id)).reduce((sum,test) => sum + test.price, 0);
-  $('#onboardingContent').innerHTML = `<span class="onboarding-kicker">Выбор анализов</span><h1>Выберите интересующие наборы</h1><p class="onboarding-lead">Рекомендации отмечены по ответам анкеты и не являются назначением.</p><div class="exam-list">${cards}</div><div class="exam-total"><span>Выбрано: ${state.selectedTests.size}</span><strong>${total.toLocaleString('ru')} ₽</strong></div><div class="onboarding-actions"><button type="button" class="onboarding-back" data-onboarding-action="exam-offer">Назад</button><button type="button" class="onboarding-next" data-onboarding-action="continue-payment" ${state.selectedTests.size ? '' : 'disabled'}>К демо-оплате</button></div><button type="button" class="exam-skip" data-onboarding-action="skip-exams">Ничего не выбирать</button>`;
+  $('#onboardingContent').innerHTML = `<span class="onboarding-kicker">Выбор анализов</span><h1>Выберите интересующие наборы</h1><p class="onboarding-lead">Рекомендации отмечены по ответам анкеты и не являются назначением.</p><div class="exam-list">${cards}</div><div class="exam-total"><span>Выбрано: ${state.selectedTests.size}</span><strong>${total.toLocaleString('ru')} ₽</strong></div><div class="onboarding-actions"><button type="button" class="onboarding-back" data-onboarding-action="exam-offer">Назад</button><button type="button" class="onboarding-next" data-onboarding-action="continue-payment" ${state.selectedTests.size ? '' : 'disabled'}>К демо-оплате</button></div><button type="button" class="exam-skip" data-onboarding-action="review-exam-skip">Ничего не выбирать</button>`;
+}
+
+function renderExamSkipConfirmation() {
+  setOnboardingMeta('Обследования', 76);
+  $('#onboardingContent').innerHTML = `<span class="onboarding-kicker">Перед тем как продолжить</span><h1>Что дают дополнительные обследования?</h1><p class="onboarding-lead">Сдавая дополнительные обследования, вы получаете:</p><ul class="exam-benefits"><li><span>✓</span><div><strong>Больше информации за один визит</strong><small>Во время медосмотра дополнительные показатели можно проверить без отдельной поездки в лабораторию.</small></div></li><li><span>✓</span><div><strong>Возможность заметить скрытые изменения раньше</strong><small>Некоторые отклонения долго не проявляются заметными симптомами.</small></div></li><li><span>✓</span><div><strong>Результаты онлайн</strong><small>Готовые документы можно получить в Консилиуме по номеру пробирки.</small></div></li><li><span>✓</span><div><strong>Понятную расшифровку</strong><small>Результаты можно сопоставить с анкетой и обсудить со специалистом.</small></div></li></ul><p class="exam-benefits-note">Обследования остаются добровольными. Эта подборка не заменяет назначение врача.</p><div class="onboarding-actions skip-decision-actions"><button type="button" class="exam-refuse" data-onboarding-action="confirm-skip-exams">Всё равно отказаться</button><button type="button" class="onboarding-next" data-onboarding-action="start-exams">Выбрать обследования</button></div>`;
 }
 
 async function submitExamSelection(skip = false) {
@@ -349,6 +465,7 @@ async function openMainApp() {
   $('#appShell').classList.remove('hidden');
   if (!state.mainInitialized) await initMainApp();
   if (!state.onboarding?.intro_seen) requestAnimationFrame(openCapabilities);
+  else scheduleInstallOffer();
 }
 
 $('#onboardingContent').addEventListener('click', event => {
@@ -379,7 +496,8 @@ $('#onboardingContent').addEventListener('click', event => {
   else if (action === 'question-back') { state.onboardingStep = activeOnboardingQuestions().length - 1; renderQuestion(); }
   else if (action === 'start-exams') renderExamSelection();
   else if (action === 'exam-offer') renderExamOffer();
-  else if (action === 'skip-exams') submitExamSelection(true);
+  else if (action === 'review-exam-skip') renderExamSkipConfirmation();
+  else if (action === 'confirm-skip-exams') submitExamSelection(true);
   else if (action === 'continue-payment') submitExamSelection(false);
   else if (action === 'back-to-exams') renderExamSelection();
   else if (action === 'pay-demo') demoPayment();
@@ -894,10 +1012,12 @@ async function updateFontSize(size) {
 
 async function closeCapabilities() {
   $('#capabilitiesModal').classList.add('hidden');
-  if (state.onboarding?.status !== 'complete' || state.onboarding.intro_seen) return;
-  try {
-    state.onboarding = await api('/api/onboarding/intro-seen', { method:'POST', body:'{}' });
-  } catch (error) { console.warn('Не удалось сохранить просмотр возможностей', error); }
+  if (state.onboarding?.status === 'complete' && !state.onboarding.intro_seen) {
+    try {
+      state.onboarding = await api('/api/onboarding/intro-seen', { method:'POST', body:'{}' });
+    } catch (error) { console.warn('Не удалось сохранить просмотр возможностей', error); }
+  }
+  scheduleInstallOffer();
 }
 
 async function requestCouncil() {
@@ -998,7 +1118,6 @@ function openProfile() {
   $('#profileSex').value = profile.sex || '';
   $('#profileHeight').value = profile.height_cm ?? '';
   $('#profileWeight').value = profile.weight_kg ?? '';
-  $('#profilePregnancy').value = profile.pregnancy || 'not_applicable';
   $('#profileSmoking').value = profile.smoking || 'unknown';
   $('#profileAlcohol').value = profile.alcohol || 'unknown';
   $('#profileActivity').value = profile.activity || 'unknown';
@@ -1031,7 +1150,8 @@ async function saveProfile() {
   const payload = {
     preferred_name: $('#profileName').value.trim(), age: $('#profileAge').value,
     sex: $('#profileSex').value, height_cm: $('#profileHeight').value,
-    weight_kg: $('#profileWeight').value, pregnancy: $('#profilePregnancy').value,
+    weight_kg: $('#profileWeight').value,
+    pregnancy: state.profile?.pregnancy || 'not_applicable',
     smoking: $('#profileSmoking').value, conditions: profileLines('#profileConditions'),
     alcohol: $('#profileAlcohol').value, activity: $('#profileActivity').value,
     blood_pressure: $('#profilePressure').value, blood_sugar: $('#profileSugar').value,
@@ -1540,6 +1660,13 @@ $('#menuLabResultsButton').addEventListener('click', openLabResults);
 $('#menuBodyMapButton').addEventListener('click', openBodyMap);
 $('#menuHealthHistoryButton').addEventListener('click', () => openHealthHistory());
 $('#menuMemoryButton').addEventListener('click', openMemory);
+$('#menuInstallAppButton').addEventListener('click', openInstallApp);
+$('#installAppClose').addEventListener('click', () => closeInstallApp({ dismissed:true }));
+$('#installAppLaterButton').addEventListener('click', () => closeInstallApp({ dismissed:true }));
+$('#installAppConfirmButton').addEventListener('click', confirmInstallApp);
+$('#installAppModal').addEventListener('click', event => {
+  if (event.target.id === 'installAppModal') closeInstallApp({ dismissed:true });
+});
 $('#resetUserButton').addEventListener('click', resetUser);
 $('#profileButton').addEventListener('click', openProfile);
 $('#bodyMapButton').addEventListener('click', openBodyMap);
@@ -1631,6 +1758,7 @@ document.addEventListener('keydown', event => {
   closeMobileTeam();
   closeCouncilModal();
   closeFunctionMenu();
+  closeInstallApp();
   closeFontSizeModal();
   closeLabResults();
   closeBodyMap();
@@ -1640,6 +1768,7 @@ document.addEventListener('keydown', event => {
 
 async function initMainApp() {
   state.mainInitialized = true;
+  updateInstallMenu();
   renderAgentList();
   await checkHealth();
   await loadMemories();

@@ -13,6 +13,9 @@ const statusNames = {
   active:'Активен', waiting_human:'Ожидает человека', pending:'Ожидает',
   none:'Нет', chat:'Чат', call:'Созвон', not_selected:'Не выбран',
 };
+const deviceNames = {
+  desktop:'ПК', android:'Android', ios:'iOS', other:'Другое',
+};
 const searchAliases = {
   'завершена':'complete','завершено':'complete','анкета':'questionnaire',
   'не начата':'not_started','активен':'active','активный':'active',
@@ -20,12 +23,14 @@ const searchAliases = {
   'менеджер':'manager','терапевт':'therapist','кардиолог':'cardiologist',
   'невролог':'neurologist','дерматолог':'dermatologist',
   'педиатр':'pediatrician','психолог':'psychologist',
+  'пк':'desktop','компьютер':'desktop','айфон':'ios',
 };
 const summaryCards = [
   ['users_total','Пользователи','за всё время'],
   ['users_active_7d','Активные','за последние 7 дней'],
   ['onboarding_complete','Завершили старт','анкета и обследования'],
   ['messenger_users','Связаны с мессенджером','надёжная идентификация'],
+  ['tracked_devices','Определено устройство','уникальные пользователи'],
   ['profiles_with_tube','С номером пробирки','могут получать результаты'],
   ['conversations_total','Диалоги','без текстов сообщений'],
   ['messages_total','Сообщения','входящие и ответы ИИ'],
@@ -35,9 +40,11 @@ const summaryCards = [
 
 let refreshTimer;
 let staffItems = [];
+let examinationItems = [];
 let activeAdminView = 'dashboard';
 const tableStates = {
-  users:{apiName:'users',prefix:'users',offset:0,limit:25,total:0,query:''},
+  users:{apiName:'users',prefix:'users',offset:0,limit:25,total:0,query:'',createdFrom:'',createdTo:''},
+  devices:{apiName:'devices',prefix:'devices',offset:0,limit:25,total:0,query:''},
   conversations:{apiName:'conversations',prefix:'conversations',offset:0,limit:25,total:0,query:''},
   requests:{apiName:'human_requests',prefix:'requests',offset:0,limit:25,total:0,query:''},
 };
@@ -149,10 +156,15 @@ function emptyTable(root, columns) {
   root.append(row);
 }
 
-function renderUsers(items, total = items.length) {
+function renderUsers(items, total = items.length, counts = {}) {
   const root = $('#usersTable');
   root.replaceChildren();
-  $('#usersCount').textContent = `${total} записей`;
+  const overall = Number(counts.overallTotal ?? total);
+  const period = Number(counts.periodTotal ?? total);
+  $('#usersTotalCount').textContent = `Всего: ${overall.toLocaleString('ru-RU')}`;
+  $('#usersPeriodCount').textContent = `Новых за период: ${period.toLocaleString('ru-RU')}`;
+  $('#usersCount').textContent = `Найдено: ${Number(total).toLocaleString('ru-RU')}`;
+  $('#usersCount').classList.toggle('hidden',!counts.filterActive);
   if (!items.length) emptyTable(root,7);
   for (const item of items) {
     const row = document.createElement('tr');
@@ -192,6 +204,24 @@ function renderConversations(items, total = items.length) {
   }
 }
 
+function renderDevices(items, total = items.length) {
+  const root = $('#devicesTable');
+  root.replaceChildren();
+  $('#devicesCount').textContent = `${total} записей`;
+  if (!items.length) emptyTable(root,7);
+  for (const item of items) {
+    const row = document.createElement('tr');
+    textCell(row,item.chel_id,item.chel_id);
+    textCell(row,deviceNames[item.device_type] || item.device_type || 'Другое');
+    textCell(row,item.operating_system);
+    textCell(row,item.browser);
+    textCell(row,formatDate(item.first_seen_at));
+    textCell(row,formatDate(item.last_seen_at));
+    textCell(row,Number(item.visit_count || 0).toLocaleString('ru-RU'));
+    root.append(row);
+  }
+}
+
 function renderRequests(items, total = items.length) {
   const root = $('#requestsTable');
   root.replaceChildren();
@@ -214,6 +244,9 @@ function renderDashboard(data) {
   renderActivity(data.activity || []);
   renderDistribution('#agentDistribution',data.agents || [],'agent','messages',agentNames);
   renderDistribution('#channelDistribution',data.human_channels || [],'channel','requests',statusNames);
+  renderDistribution('#deviceDistribution',data.devices || [],'device_type','users',deviceNames);
+  renderDistribution('#osDistribution',data.operating_systems || [],'operating_system','users');
+  renderDistribution('#browserDistribution',data.browsers || [],'browser','users');
   $('#generatedAt').textContent = `Данные обновлены ${formatDate(data.generated_at)} · автообновление раз в минуту`;
 }
 
@@ -253,6 +286,7 @@ function renderStaff(items) {
         <button class="reset-password" data-staff-action="name" type="button">Изменить имя</button>
         <button class="reset-password" data-staff-action="password" type="button">Новый пароль</button>
         <button class="toggle-staff" data-staff-action="toggle" data-active="${item.is_active}" type="button">${item.is_active ? 'Отключить' : 'Включить'}</button>
+        <button class="delete-staff" data-staff-action="delete" type="button">Удалить</button>
       </div>
     </article>`).join('') : '<p class="form-error">Менеджеры ещё не созданы</p>';
 }
@@ -267,14 +301,56 @@ async function loadStaff() {
   renderStaff(await adminFetch('/api/admin/managers'));
 }
 
+function showExaminationStatus(message, error = false) {
+  const status = $('#examinationFormStatus');
+  status.textContent = message;
+  status.classList.toggle('error', error);
+  status.classList.toggle('hidden', !message);
+}
+
+function resetExaminationForm() {
+  $('#examinationForm').reset();
+  $('#examinationId').value = '';
+  $('#examinationFormTitle').textContent = 'Добавить обследование';
+  $('#saveExaminationButton').textContent = 'Добавить обследование';
+  $('#cancelExaminationEdit').classList.add('hidden');
+}
+
+function renderExaminations(items) {
+  examinationItems = items;
+  $('#examinationsCount').textContent = `${items.length} позиций`;
+  $('#examinationList').innerHTML = items.length ? items.map(item => `
+    <article class="examination-admin-card" data-examination-id="${escapeHtml(item.id)}">
+      <div class="examination-card-heading">
+        <strong>${escapeHtml(item.name)}</strong>
+        <b>${Number(item.price || 0).toLocaleString('ru-RU')} ₽</b>
+      </div>
+      <p>${escapeHtml(item.description)}</p>
+      <small><b>Состав:</b> ${escapeHtml(item.includes || 'Не указан')}</small>
+      <div class="examination-card-actions">
+        <button type="button" class="edit-examination" data-examination-action="edit">Изменить</button>
+        <button type="button" class="delete-examination" data-examination-action="delete">Удалить</button>
+      </div>
+    </article>`).join('') : '<p class="form-error">В каталоге пока нет обследований</p>';
+}
+
+async function loadExaminations() {
+  renderExaminations(await adminFetch('/api/admin/examinations'));
+}
+
 function showAdminView(view) {
-  activeAdminView = view === 'managers' ? 'managers' : 'dashboard';
+  activeAdminView = ['managers','examinations'].includes(view) ? view : 'dashboard';
   const managersVisible = activeAdminView === 'managers';
+  const examinationsVisible = activeAdminView === 'examinations';
   $('#dashboard').classList.toggle('show-managers', managersVisible);
+  $('#dashboard').classList.toggle('show-examinations', examinationsVisible);
   $('#managerAdminView').classList.toggle('hidden', !managersVisible);
-  $('#dashboardTab').classList.toggle('active', !managersVisible);
+  $('#examinationAdminView').classList.toggle('hidden', !examinationsVisible);
+  $('#dashboardTab').classList.toggle('active', activeAdminView === 'dashboard');
   $('#managersTab').classList.toggle('active', managersVisible);
+  $('#examinationsTab').classList.toggle('active', examinationsVisible);
   if (managersVisible) loadStaff().catch(showDashboardError);
+  if (examinationsVisible) loadExaminations().catch(showDashboardError);
 }
 
 async function createManager(event) {
@@ -321,21 +397,103 @@ async function updateManager(event) {
   } else if (action === 'toggle') {
     if (manager.is_active && !window.confirm(`Отключить доступ для ${manager.display_name}? Его активные сеансы будут завершены.`)) return;
     payload.is_active = !manager.is_active;
+  } else if (action === 'delete') {
+    if (!window.confirm(
+      `Удалить менеджера ${manager.display_name} (${manager.login}) навсегда? ` +
+      'Его активные сеансы будут завершены. История ответов в диалогах сохранится.'
+    )) return;
   }
   button.disabled = true;
   showManagerStatus('');
   try {
-    await adminFetch(`/api/admin/managers/${manager.id}`, undefined, {
-      method:'POST',
-      body:JSON.stringify(payload),
-    });
-    showManagerStatus(action === 'password'
-      ? 'Пароль изменён. Все прежние сеансы менеджера завершены.'
-      : 'Данные менеджера обновлены.');
+    if (action === 'delete') {
+      await adminFetch(`/api/admin/managers/${manager.id}`, undefined, {method:'DELETE'});
+      showManagerStatus('Менеджер удалён. История его ответов в пользовательских диалогах сохранена.');
+    } else {
+      await adminFetch(`/api/admin/managers/${manager.id}`, undefined, {
+        method:'POST',
+        body:JSON.stringify(payload),
+      });
+      showManagerStatus(action === 'password'
+        ? 'Пароль изменён. Все прежние сеансы менеджера завершены.'
+        : 'Данные менеджера обновлены.');
+    }
     await loadStaff();
   } catch (error) {
     showManagerStatus(error.message, true);
   } finally {
+    button.disabled = false;
+  }
+}
+
+async function saveExamination(event) {
+  event.preventDefault();
+  const examinationId = $('#examinationId').value;
+  const button = $('#saveExaminationButton');
+  button.disabled = true;
+  showExaminationStatus('');
+  const payload = {
+    name:$('#examinationName').value.trim(),
+    description:$('#examinationDescription').value.trim(),
+    includes:$('#examinationIncludes').value.trim(),
+    price:$('#examinationPrice').value,
+  };
+  try {
+    await adminFetch(
+      examinationId
+        ? `/api/admin/examinations/${encodeURIComponent(examinationId)}`
+        : '/api/admin/examinations',
+      undefined,
+      {method:'POST',body:JSON.stringify(payload)},
+    );
+    showExaminationStatus(
+      examinationId ? 'Обследование обновлено.' : 'Обследование добавлено в каталог.',
+    );
+    resetExaminationForm();
+    await loadExaminations();
+  } catch (error) {
+    showExaminationStatus(error.message, true);
+  } finally {
+    button.disabled = false;
+  }
+}
+
+async function manageExamination(event) {
+  const button = event.target.closest('[data-examination-action]');
+  if (!button) return;
+  const card = button.closest('[data-examination-id]');
+  const item = examinationItems.find(
+    examination => examination.id === card?.dataset.examinationId,
+  );
+  if (!item) return;
+  if (button.dataset.examinationAction === 'edit') {
+    $('#examinationId').value = item.id;
+    $('#examinationName').value = item.name;
+    $('#examinationDescription').value = item.description;
+    $('#examinationIncludes').value = item.includes || '';
+    $('#examinationPrice').value = item.price;
+    $('#examinationFormTitle').textContent = 'Изменить обследование';
+    $('#saveExaminationButton').textContent = 'Сохранить изменения';
+    $('#cancelExaminationEdit').classList.remove('hidden');
+    showExaminationStatus('');
+    $('#examinationForm').scrollIntoView({behavior:'smooth',block:'start'});
+    return;
+  }
+  if (!window.confirm(
+    `Удалить обследование «${item.name}»? Оно исчезнет из выбора пользователей.`
+  )) return;
+  button.disabled = true;
+  try {
+    await adminFetch(
+      `/api/admin/examinations/${encodeURIComponent(item.id)}`,
+      undefined,
+      {method:'DELETE'},
+    );
+    if ($('#examinationId').value === item.id) resetExaminationForm();
+    showExaminationStatus('Обследование удалено из каталога.');
+    await loadExaminations();
+  } catch (error) {
+    showExaminationStatus(error.message, true);
     button.disabled = false;
   }
 }
@@ -358,10 +516,21 @@ async function loadTable(key, reset = false) {
     name:state.apiName,query:apiQuery,
     limit:String(state.limit),offset:String(state.offset),
   });
+  if (key === 'users') {
+    state.createdFrom = $('#usersDateFrom').value;
+    state.createdTo = $('#usersDateTo').value;
+    if (state.createdFrom) params.set('created_from',state.createdFrom);
+    if (state.createdTo) params.set('created_to',state.createdTo);
+  }
   const data = await adminFetch(`/api/admin/table?${params}`);
   state.total = data.total;
   state.offset = data.offset;
-  if (key === 'users') renderUsers(data.rows,data.total);
+  if (key === 'users') renderUsers(data.rows,data.total,{
+    overallTotal:data.overall_total,
+    periodTotal:data.period_total,
+    filterActive:Boolean(state.query || state.createdFrom || state.createdTo),
+  });
+  else if (key === 'devices') renderDevices(data.rows,data.total);
   else if (key === 'conversations') renderConversations(data.rows,data.total);
   else renderRequests(data.rows,data.total);
   renderTablePage(state);
@@ -381,6 +550,7 @@ function bindTableControls(key) {
   });
   $(`#${state.prefix}Clear`).addEventListener('click', () => {
     input.value = '';
+    if (key === 'users') resetUserPeriod();
     loadTable(key,true).catch(showDashboardError);
     input.focus();
   });
@@ -392,6 +562,36 @@ function bindTableControls(key) {
     if (state.offset + state.limit < state.total) state.offset += state.limit;
     loadTable(key).catch(showDashboardError);
   });
+}
+
+function inputDate(date) {
+  const year = date.getFullYear();
+  const month = String(date.getMonth()+1).padStart(2,'0');
+  const day = String(date.getDate()).padStart(2,'0');
+  return `${year}-${month}-${day}`;
+}
+
+function setUserPeriod(value) {
+  const custom = value === 'custom';
+  $('#usersCustomPeriod').classList.toggle('hidden',!custom);
+  if (custom) return;
+  const from = $('#usersDateFrom');
+  const to = $('#usersDateTo');
+  if (value === 'all') {
+    from.value = '';
+    to.value = '';
+    return;
+  }
+  const today = new Date();
+  const first = new Date(today);
+  if (value !== 'today') first.setDate(first.getDate()-(Number(value)-1));
+  from.value = inputDate(first);
+  to.value = inputDate(today);
+}
+
+function resetUserPeriod() {
+  $('#usersPeriod').value = 'all';
+  setUserPeriod('all');
 }
 
 function showDashboardError(error) {
@@ -430,6 +630,7 @@ async function loadDashboard(token = sessionStorage.getItem(TOKEN_KEY)) {
     renderDashboard(data);
     await loadAllTables();
     if (activeAdminView === 'managers') await loadStaff();
+    if (activeAdminView === 'examinations') await loadExaminations();
     clearInterval(refreshTimer);
     refreshTimer = setInterval(() => loadDashboard(),60000);
   } catch (error) {
@@ -457,8 +658,27 @@ $('#logoutButton').addEventListener('click', () => {
 });
 $('#dashboardTab').addEventListener('click', () => showAdminView('dashboard'));
 $('#managersTab').addEventListener('click', () => showAdminView('managers'));
+$('#examinationsTab').addEventListener('click', () => showAdminView('examinations'));
 $('#managerCreateForm').addEventListener('submit', createManager);
 $('#staffList').addEventListener('click', updateManager);
+$('#examinationForm').addEventListener('submit', saveExamination);
+$('#examinationList').addEventListener('click', manageExamination);
+$('#cancelExaminationEdit').addEventListener('click', () => {
+  resetExaminationForm();
+  showExaminationStatus('');
+});
+
+$('#usersPeriod').addEventListener('change', event => {
+  setUserPeriod(event.target.value);
+  if (event.target.value !== 'custom') loadTable('users',true).catch(showDashboardError);
+});
+for (const selector of ['#usersDateFrom','#usersDateTo']) {
+  $(selector).addEventListener('change', () => {
+    $('#usersPeriod').value = 'custom';
+    $('#usersCustomPeriod').classList.remove('hidden');
+    loadTable('users',true).catch(showDashboardError);
+  });
+}
 
 Object.keys(tableStates).forEach(bindTableControls);
 loadDashboard();

@@ -32,6 +32,7 @@ tmp/
 *.key
 *.p12
 *.pfx
+*.docx
 credentials*.json
 service-account*.json
 after-tests-db-*.json

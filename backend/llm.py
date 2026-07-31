@@ -154,6 +154,11 @@ class LLMService:
             "user_memory": conversation.get("_memories", []),
             "user_profile": profile,
             "profile_analysis": cls._profile_analysis(profile),
+            "current_device": conversation.get("_device", {
+                "device_type": "other",
+                "operating_system": "Другое",
+                "browser": "Другое",
+            }),
             "active_body_symptoms": conversation.get("_body_symptoms", []),
             "consultation_progress": conversation.get("_consultation_progress", {
                 "questions_asked": 0,

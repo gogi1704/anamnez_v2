@@ -38,4 +38,5 @@ services:
 
 networks:
   consilium_internal:
+    external: true
     name: consilium-internal
