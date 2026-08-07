@@ -16,6 +16,11 @@ const statusNames = {
 const deviceNames = {
   desktop:'ПК', android:'Android', ios:'iOS', other:'Другое',
 };
+const operationNames = {
+  routing:'Выбор специалиста', agent_response:'Ответ ИИ-агента',
+  lab_interpretation:'Расшифровка анализов', council_opinion:'Мнение консилиума',
+  council_summary:'Итог консилиума', other:'Другой запрос',
+};
 const searchAliases = {
   'завершена':'complete','завершено':'complete','анкета':'questionnaire',
   'не начата':'not_started','активен':'active','активный':'active',
@@ -39,9 +44,14 @@ const summaryCards = [
 ];
 
 let refreshTimer;
+let dashboardLoading = false;
 let staffItems = [];
 let examinationItems = [];
 let activeAdminView = 'dashboard';
+let analyticsRecentPage = 1;
+let analyticsFunnelMode = 'start';
+let latestAnalyticsData = null;
+const expandedFunnelRows = new Set();
 const tableStates = {
   users:{apiName:'users',prefix:'users',offset:0,limit:25,total:0,query:'',createdFrom:'',createdTo:''},
   devices:{apiName:'devices',prefix:'devices',offset:0,limit:25,total:0,query:''},
@@ -57,6 +67,16 @@ function formatDate(value, dateOnly = false) {
     ? {day:'2-digit',month:'2-digit'}
     : {day:'2-digit',month:'2-digit',year:'2-digit',hour:'2-digit',minute:'2-digit'}
   ).format(date);
+}
+
+function formatTokens(value) {
+  return Number(value || 0).toLocaleString('ru-RU');
+}
+
+function formatUsd(value, compact = false) {
+  const amount = Number(value || 0);
+  const digits = compact && Math.abs(amount) >= 0.01 ? 4 : 6;
+  return `$${amount.toLocaleString('en-US',{minimumFractionDigits:digits,maximumFractionDigits:digits})}`;
 }
 
 function textCell(row, value, title = '') {
@@ -250,6 +270,152 @@ function renderDashboard(data) {
   $('#generatedAt').textContent = `Данные обновлены ${formatDate(data.generated_at)} · автообновление раз в минуту`;
 }
 
+function renderCostSummary(data) {
+  const summary = data.summary || {};
+  const allTime = data.all_time || {};
+  const cards = [
+    ['Расход за период',formatUsd(summary.total_cost_usd,true),'по выбранному периоду'],
+    ['Расход за всё время',formatUsd(allTime.total_cost_usd,true),'с момента установки учёта'],
+    ['Всего токенов',formatTokens(summary.total_tokens),'входные и выходные'],
+    ['Запросы к ИИ',formatTokens(summary.requests),'успешные ответы API'],
+    ['Кешированные',formatTokens(summary.cached_input_tokens),'входные токены со скидкой'],
+    ['Выходные',formatTokens(summary.output_tokens),`reasoning: ${formatTokens(summary.reasoning_tokens)}`],
+  ];
+  const root = $('#costSummaryGrid');
+  root.replaceChildren();
+  for (const [label,value,note] of cards) {
+    const card = document.createElement('article');
+    card.className = 'summary-card';
+    const name = document.createElement('span');
+    const amount = document.createElement('strong');
+    const helper = document.createElement('small');
+    name.textContent = label;
+    amount.textContent = value;
+    helper.textContent = note;
+    card.append(name,amount,helper);
+    root.append(card);
+  }
+  if (Number(summary.unpriced_requests || 0) > 0) {
+    const warning = document.createElement('p');
+    warning.className = 'cost-warning';
+    warning.textContent = `${formatTokens(summary.unpriced_requests)} запросов не вошли в стоимость: для их модели нет тарифа в справочнике.`;
+    root.append(warning);
+  }
+}
+
+function renderCostChart(items) {
+  const root = $('#costDailyChart');
+  root.replaceChildren();
+  const max = Math.max(0.000000001,...items.map(item => Number(item.total_cost_usd || 0)));
+  root.style.setProperty('--cost-days',Math.max(7,items.length));
+  for (const item of items) {
+    const day = document.createElement('div');
+    day.className = 'cost-day';
+    const bar = document.createElement('i');
+    const amount = Number(item.total_cost_usd || 0);
+    bar.style.height = `${amount ? Math.max(3,amount/max*100) : 1}%`;
+    bar.title = `${formatDate(`${item.date}T00:00:00Z`,true)} · ${formatUsd(amount)} · ${formatTokens(item.total_tokens)} токенов`;
+    const label = document.createElement('small');
+    label.textContent = formatDate(`${item.date}T00:00:00Z`,true);
+    day.append(bar,label);
+    root.append(day);
+  }
+}
+
+function renderCostOperations(items) {
+  const root = $('#costOperationDistribution');
+  root.replaceChildren();
+  const max = Math.max(0.000000001,...items.map(item => Number(item.total_cost_usd || 0)));
+  if (!items.length) {
+    const empty = document.createElement('p');
+    empty.className = 'form-error';
+    empty.textContent = 'Пока нет данных';
+    root.append(empty);
+    return;
+  }
+  for (const item of items) {
+    const row = document.createElement('div');
+    row.className = 'distribution-row cost-operation-row';
+    const label = document.createElement('span');
+    label.textContent = operationNames[item.operation] || item.operation;
+    const progress = document.createElement('div');
+    progress.className = 'progress';
+    const bar = document.createElement('i');
+    bar.style.width = `${Number(item.total_cost_usd || 0)/max*100}%`;
+    progress.append(bar);
+    const value = document.createElement('b');
+    value.textContent = formatUsd(item.total_cost_usd);
+    value.title = `${formatTokens(item.requests)} запросов · ${formatTokens(item.total_tokens)} токенов`;
+    row.append(label,progress,value);
+    root.append(row);
+  }
+}
+
+function renderCostModels(items) {
+  const root = $('#costModelsTable');
+  root.replaceChildren();
+  if (!items.length) emptyTable(root,7);
+  for (const item of items) {
+    const row = document.createElement('tr');
+    textCell(row,item.model);
+    textCell(row,formatTokens(item.requests));
+    textCell(row,formatTokens(item.input_tokens));
+    textCell(row,formatTokens(item.cached_input_tokens));
+    textCell(row,formatTokens(item.output_tokens));
+    textCell(row,formatTokens(item.total_tokens));
+    textCell(row,item.pricing_known ? formatUsd(item.total_cost_usd) : 'Тариф не задан');
+    root.append(row);
+  }
+}
+
+function renderCostRecent(items) {
+  const root = $('#costRecentTable');
+  root.replaceChildren();
+  $('#costRequestsCount').textContent = `${formatTokens(items.length)} последних`;
+  if (!items.length) emptyTable(root,10);
+  for (const item of items) {
+    const row = document.createElement('tr');
+    textCell(row,formatDate(item.created_at));
+    textCell(row,operationNames[item.operation] || item.operation);
+    textCell(row,item.model);
+    textCell(row,shortId(item.chel_id),item.chel_id);
+    textCell(row,formatTokens(item.input_tokens));
+    textCell(row,formatTokens(item.cached_input_tokens));
+    textCell(row,formatTokens(item.output_tokens));
+    textCell(row,formatTokens(item.reasoning_tokens));
+    textCell(row,formatTokens(item.total_tokens));
+    textCell(row,item.pricing_known ? formatUsd(item.total_cost_usd) : '—');
+    root.append(row);
+  }
+}
+
+function renderPricing(items) {
+  const root = $('#costPricingList');
+  root.replaceChildren();
+  for (const item of items) {
+    const card = document.createElement('div');
+    card.className = 'pricing-card';
+    const model = document.createElement('strong');
+    const rates = document.createElement('span');
+    model.textContent = item.model;
+    rates.textContent = `вход $${item.input} · кеш $${item.cached_input} · выход $${item.output}`;
+    card.append(model,rates);
+    root.append(card);
+  }
+}
+
+async function loadCosts() {
+  const period = $('#costsPeriod').value;
+  const data = await adminFetch(`/api/admin/ai-costs?period=${encodeURIComponent(period)}&limit=100`);
+  renderCostSummary(data);
+  renderCostChart(data.daily || []);
+  renderCostOperations(data.by_operation || []);
+  renderCostModels(data.by_model || []);
+  renderCostRecent(data.recent || []);
+  renderPricing(data.pricing || []);
+  $('#costsNotice').textContent = `${data.notice} Обновлено ${formatDate(data.generated_at)}.`;
+}
+
 async function adminFetch(path, token = sessionStorage.getItem(TOKEN_KEY), options = {}) {
   const response = await fetch(path, {
     ...options,
@@ -279,16 +445,65 @@ function showManagerStatus(message, error = false) {
 function renderStaff(items) {
   staffItems = items;
   $('#staffCount').textContent = `${items.length} сотрудников`;
-  $('#staffList').innerHTML = items.length ? items.map(item => `
+  $('#staffList').innerHTML = items.length ? items.map(item => {
+    const initial = escapeHtml(String(item.display_name || 'М').trim().charAt(0).toUpperCase() || 'М');
+    const telegramLinked = Boolean(item.telegram_id);
+    const maxLinked = Boolean(item.max_id);
+    return `
     <article class="staff-card ${item.is_active ? '' : 'inactive'}" data-staff-id="${item.id}">
-      <div><strong>${escapeHtml(item.display_name)}</strong><small>Логин: ${escapeHtml(item.login)} · ${item.is_active ? 'доступ активен' : 'доступ отключён'}</small><small>Последний вход: ${escapeHtml(formatDate(item.last_login_at))}</small></div>
-      <div class="staff-card-actions">
-        <button class="reset-password" data-staff-action="name" type="button">Изменить имя</button>
-        <button class="reset-password" data-staff-action="password" type="button">Новый пароль</button>
-        <button class="toggle-staff" data-staff-action="toggle" data-active="${item.is_active}" type="button">${item.is_active ? 'Отключить' : 'Включить'}</button>
-        <button class="delete-staff" data-staff-action="delete" type="button">Удалить</button>
+      <header class="staff-card-header">
+        <div class="staff-identity">
+          <span class="staff-avatar" aria-hidden="true">${initial}</span>
+          <div>
+            <strong>${escapeHtml(item.display_name)}</strong>
+            <small>Логин: ${escapeHtml(item.login)}</small>
+          </div>
+        </div>
+        <span class="staff-access-status ${item.is_active ? 'active' : 'disabled'}">${item.is_active ? 'Доступ активен' : 'Доступ отключён'}</span>
+      </header>
+
+      <div class="staff-card-content">
+        <section class="staff-info-section" aria-label="Мессенджеры">
+          <h3>Мессенджеры</h3>
+          <div class="staff-channel-row">
+            <span class="staff-channel-badge telegram" aria-hidden="true">TG</span>
+            <div><strong>Telegram</strong><small>${escapeHtml(item.telegram_id || 'Не привязан')}</small></div>
+            <button class="staff-inline-action" data-staff-action="telegram-link" type="button">${telegramLinked ? 'Перепривязать' : 'Привязать'}</button>
+          </div>
+          <div class="staff-channel-row">
+            <span class="staff-channel-badge max" aria-hidden="true">MAX</span>
+            <div><strong>MAX</strong><small>${escapeHtml(item.max_id || 'Не привязан')}</small></div>
+            <button class="staff-inline-action" data-staff-action="max-link" type="button">${maxLinked ? 'Перепривязать' : 'Привязать'}</button>
+          </div>
+          <button class="staff-text-action" data-staff-action="messenger-ids" type="button">Изменить ID вручную</button>
+        </section>
+
+        <section class="staff-info-section" aria-label="Уведомления">
+          <h3>Уведомления</h3>
+          <div class="staff-setting-row">
+            <div><strong>Новые обращения</strong><small>Сигнал при каждом новом обращении</small></div>
+            <button class="staff-switch ${item.notify_new_requests ? 'is-on' : ''}" data-staff-action="requests" aria-pressed="${item.notify_new_requests}" type="button">${item.notify_new_requests ? 'Включены' : 'Выключены'}</button>
+          </div>
+          <div class="staff-setting-row">
+            <div><strong>Сообщения без ИИ</strong><small>Сигнал, когда пользователь ждёт человека</small></div>
+            <button class="staff-switch ${item.notify_new_messages ? 'is-on' : ''}" data-staff-action="messages" aria-pressed="${item.notify_new_messages}" type="button">${item.notify_new_messages ? 'Включены' : 'Выключены'}</button>
+          </div>
+          <p class="staff-last-login">Последний вход: <strong>${escapeHtml(formatDate(item.last_login_at))}</strong></p>
+        </section>
       </div>
-    </article>`).join('') : '<p class="form-error">Менеджеры ещё не созданы</p>';
+
+      <footer class="staff-card-actions">
+        <div class="staff-main-actions">
+          <button class="reset-password" data-staff-action="name" type="button">Изменить имя</button>
+          <button class="reset-password" data-staff-action="password" type="button">Новый пароль</button>
+        </div>
+        <div class="staff-danger-actions">
+          <button class="toggle-staff" data-staff-action="toggle" data-active="${item.is_active}" type="button">${item.is_active ? 'Отключить' : 'Включить'}</button>
+          <button class="delete-staff" data-staff-action="delete" type="button">Удалить</button>
+        </div>
+      </footer>
+    </article>`;
+  }).join('') : '<p class="form-error">Менеджеры ещё не созданы</p>';
 }
 
 function escapeHtml(value) {
@@ -338,19 +553,177 @@ async function loadExaminations() {
   renderExaminations(await adminFetch('/api/admin/examinations'));
 }
 
+const analyticsEventNames = {
+  registration_completed:'Регистрация завершена', appearance_completed:'Размер текста выбран',
+  questionnaire_started:'Вход в анкету', questionnaire_completed:'Выход из анкеты',
+  examinations_offer_viewed:'Предложение обследований', examinations_opened:'Список обследований открыт',
+  examinations_selection_completed:'Выбор обследований завершён', onboarding_completed:'Старт завершён',
+  capabilities_viewed:'Возможности показаны', chat_opened:'Чат открыт', first_message_sent:'Первое сообщение',
+  human_requested:'Запрошен человек', api_error:'Ошибка API', javascript_error:'Ошибка браузера',
+};
+
+function fillAnalyticsSelect(selector, values, emptyLabel) {
+  const select = $(selector);
+  const current = select.value;
+  select.replaceChildren(new Option(emptyLabel,''), ...values.map(value => new Option(
+    selector === '#analyticsDevice' ? (deviceNames[value] || value) : value, value,
+  )));
+  if ([...select.options].some(option => option.value === current)) select.value = current;
+}
+
+function renderAnalyticsFunnel(items = []) {
+  const funnel = $('#analyticsFunnel');
+  funnel.replaceChildren();
+  const fromPrevious = analyticsFunnelMode === 'previous';
+  $('#funnelFromStart').classList.toggle('active', !fromPrevious);
+  $('#funnelFromPrevious').classList.toggle('active', fromPrevious);
+  $('#funnelFromStart').setAttribute('aria-selected', String(!fromPrevious));
+  $('#funnelFromPrevious').setAttribute('aria-selected', String(fromPrevious));
+  for (const item of items) {
+    const percent = fromPrevious ? item.from_previous : item.from_start;
+    const stage = document.createElement('section'); stage.className = 'funnel-stage';
+    const expandable = Boolean(item.details?.length);
+    const row = document.createElement(expandable ? 'button' : 'div'); row.className = `funnel-row${expandable ? ' funnel-row-button' : ''}`;
+    if (expandable) row.type = 'button';
+    const label = document.createElement('span'); label.className = 'funnel-label'; label.textContent = item.label;
+    if (expandable) {
+      const chevron = document.createElement('i'); chevron.className = 'funnel-chevron'; chevron.textContent = '⌄'; label.append(chevron);
+      row.setAttribute('aria-expanded', String(expandedFunnelRows.has(item.event_name)));
+    }
+    const progress = document.createElement('div'); progress.className = 'progress';
+    const bar = document.createElement('i'); bar.style.width = `${Math.max(0,percent || 0)}%`; progress.append(bar);
+    const users = document.createElement('b'); users.textContent = Number(item.users || 0).toLocaleString('ru-RU');
+    const conversion = document.createElement('small'); conversion.className = 'funnel-conversion';
+    conversion.textContent = `${percent || 0}% ${fromPrevious ? 'от предыдущего' : 'от начала'}`;
+    const dropoff = document.createElement('small'); dropoff.className = 'dropoff'; dropoff.textContent = item.dropoff ? `−${item.dropoff}` : '—';
+    row.append(label,progress,users,conversion,dropoff); stage.append(row);
+    if (expandable) {
+      const details = document.createElement('div'); details.className = 'funnel-breakdown';
+      details.classList.toggle('hidden', !expandedFunnelRows.has(item.event_name));
+      const max = Math.max(1,...item.details.map(detail => Number(detail.users || 0)));
+      for (const detail of item.details) {
+        const detailRow = document.createElement('div'); detailRow.className = 'funnel-breakdown-row';
+        const detailLabel = document.createElement('span'); detailLabel.textContent = detail.label;
+        const detailProgress = document.createElement('div'); detailProgress.className = 'progress';
+        const detailBar = document.createElement('i'); detailBar.style.width = `${Number(detail.users || 0) / max * 100}%`; detailProgress.append(detailBar);
+        const detailUsers = document.createElement('b'); detailUsers.textContent = Number(detail.users || 0).toLocaleString('ru-RU'); detailUsers.title = 'Уникальные пользователи';
+        const detailEvents = document.createElement('small'); detailEvents.textContent = `${Number(detail.events || 0).toLocaleString('ru-RU')} нажатий`;
+        detailRow.append(detailLabel,detailProgress,detailUsers,detailEvents); details.append(detailRow);
+      }
+      row.addEventListener('click', () => {
+        if (expandedFunnelRows.has(item.event_name)) expandedFunnelRows.delete(item.event_name);
+        else expandedFunnelRows.add(item.event_name);
+        const open = expandedFunnelRows.has(item.event_name);
+        row.setAttribute('aria-expanded', String(open)); details.classList.toggle('hidden', !open);
+      });
+      stage.append(details);
+    }
+    funnel.append(stage);
+  }
+}
+
+function renderAnalytics(data) {
+  latestAnalyticsData = data;
+  const summary = $('#analyticsSummary');
+  summary.replaceChildren();
+  for (const [label,value,note] of [
+    ['Пользователи',data.summary.users,'завершили выбор регистрации'],
+    ['Посетители',data.summary.visitors,'включая экран входа'],
+    ['Сессии',data.summary.sessions,'визиты в сервис'],
+    ['События',data.summary.events,'технические действия'],
+  ]) {
+    const card = document.createElement('article'); card.className = 'analytics-metric';
+    const title = document.createElement('span'); title.textContent = label;
+    const number = document.createElement('strong'); number.textContent = Number(value || 0).toLocaleString('ru-RU');
+    const helper = document.createElement('small'); helper.textContent = note;
+    card.append(title,number,helper); summary.append(card);
+  }
+
+  renderAnalyticsFunnel(data.funnel || []);
+
+  const daily = $('#analyticsDaily'); daily.replaceChildren();
+  const maxDaily = Math.max(1,...(data.daily || []).map(item => Number(item.users || 0)));
+  for (const item of data.daily || []) {
+    const day = document.createElement('div'); day.className = 'analytics-day';
+    const bar = document.createElement('i'); bar.style.height = `${Math.max(2,Number(item.users || 0)/maxDaily*100)}%`; bar.title = `${item.users} пользователей`;
+    const label = document.createElement('small'); label.textContent = formatDate(`${item.date}T00:00:00Z`,true);
+    day.append(bar,label); daily.append(day);
+  }
+  if (!(data.daily || []).length) daily.textContent = 'Пока нет данных';
+  renderDistribution('#analyticsDevices',data.devices || [],'label','users',deviceNames);
+  renderDistribution('#analyticsRegistrations',data.registrations || [],'label','users');
+  renderDistribution('#analyticsSources',data.sources || [],'label','users');
+
+  const questions = $('#analyticsQuestionsChart'); questions.replaceChildren();
+  if (!(data.questions || []).length) {
+    const empty = document.createElement('p'); empty.className = 'form-error'; empty.textContent = 'Пока нет данных по заполнению анкеты'; questions.append(empty);
+  }
+  for (const item of data.questions || []) {
+    const row = document.createElement('div'); row.className = 'questionnaire-row';
+    const heading = document.createElement('div'); heading.className = 'questionnaire-row-heading';
+    const label = document.createElement('strong'); label.textContent = item.label;
+    const conversion = document.createElement('b'); conversion.textContent = `${item.conversion}%`;
+    heading.append(label,conversion);
+    const track = document.createElement('div'); track.className = 'questionnaire-track';
+    const answered = document.createElement('i'); answered.style.width = `${Math.max(0,Math.min(100,item.conversion || 0))}%`; track.append(answered);
+    const details = document.createElement('div'); details.className = 'questionnaire-details';
+    const duration = item.avg_duration_ms ? `${Math.round(item.avg_duration_ms / 100) / 10} с` : '—';
+    details.textContent = `Увидели: ${item.viewed} · Ответили: ${item.answered} · Пропустили: ${item.skipped} · Назад: ${item.back_count} · Ошибки: ${item.validation_errors} · Среднее время: ${duration}`;
+    row.append(heading,track,details); questions.append(row);
+  }
+  const recent = $('#analyticsRecent'); recent.replaceChildren();
+  if (!(data.recent || []).length) emptyTable(recent,6);
+  for (const item of data.recent || []) {
+    const row = document.createElement('tr');
+    textCell(row,formatDate(item.received_at));
+    textCell(row,analyticsEventNames[item.event_name] || item.event_name);
+    textCell(row,item.chel_id || '—'); textCell(row,item.screen || item.step_key || '—');
+    textCell(row,deviceNames[item.device_type] || item.device_type); textCell(row,item.browser);
+    recent.append(row);
+  }
+  const errorCount = (data.errors || []).reduce((sum,item) => sum + Number(item.events || 0),0);
+  $('#analyticsErrors').textContent = `${errorCount.toLocaleString('ru-RU')} ошибок`;
+  const pagination = data.recent_pagination || {page:1,pages:1,total:data.recent?.length || 0};
+  analyticsRecentPage = pagination.page;
+  $('#analyticsRecentPage').textContent = `Страница ${pagination.page} из ${pagination.pages} · ${Number(pagination.total || 0).toLocaleString('ru-RU')} событий`;
+  $('#analyticsRecentPrev').disabled = pagination.page <= 1;
+  $('#analyticsRecentNext').disabled = pagination.page >= pagination.pages;
+  fillAnalyticsSelect('#analyticsDevice',data.filter_options?.devices || [],'Все устройства');
+  fillAnalyticsSelect('#analyticsMethod',data.filter_options?.methods || [],'Все способы');
+  fillAnalyticsSelect('#analyticsSource',data.filter_options?.sources || [],'Все источники');
+}
+
+async function loadAnalytics() {
+  const params = new URLSearchParams({period:$('#analyticsPeriod').value,recent_page:String(analyticsRecentPage),recent_limit:'25'});
+  for (const [key,selector] of [['device','#analyticsDevice'],['method','#analyticsMethod'],['source','#analyticsSource']]) {
+    if ($(selector).value) params.set(key,$(selector).value);
+  }
+  renderAnalytics(await adminFetch(`/api/admin/analytics?${params}`));
+}
+
 function showAdminView(view) {
-  activeAdminView = ['managers','examinations'].includes(view) ? view : 'dashboard';
+  activeAdminView = ['analytics','managers','examinations','costs'].includes(view) ? view : 'dashboard';
+  const analyticsVisible = activeAdminView === 'analytics';
   const managersVisible = activeAdminView === 'managers';
   const examinationsVisible = activeAdminView === 'examinations';
+  const costsVisible = activeAdminView === 'costs';
   $('#dashboard').classList.toggle('show-managers', managersVisible);
   $('#dashboard').classList.toggle('show-examinations', examinationsVisible);
+  $('#dashboard').classList.toggle('show-costs', costsVisible);
+  $('#dashboard').classList.toggle('show-analytics', analyticsVisible);
+  $('#analyticsAdminView').classList.toggle('hidden', !analyticsVisible);
   $('#managerAdminView').classList.toggle('hidden', !managersVisible);
   $('#examinationAdminView').classList.toggle('hidden', !examinationsVisible);
+  $('#costsAdminView').classList.toggle('hidden', !costsVisible);
   $('#dashboardTab').classList.toggle('active', activeAdminView === 'dashboard');
+  $('#analyticsTab').classList.toggle('active', analyticsVisible);
   $('#managersTab').classList.toggle('active', managersVisible);
   $('#examinationsTab').classList.toggle('active', examinationsVisible);
+  $('#costsTab').classList.toggle('active', costsVisible);
   if (managersVisible) loadStaff().catch(showDashboardError);
   if (examinationsVisible) loadExaminations().catch(showDashboardError);
+  if (costsVisible) loadCosts().catch(showDashboardError);
+  if (analyticsVisible) loadAnalytics().catch(showDashboardError);
 }
 
 async function createManager(event) {
@@ -366,6 +739,10 @@ async function createManager(event) {
         display_name:$('#staffDisplayName').value.trim(),
         login:$('#staffLogin').value.trim(),
         password:$('#staffPassword').value,
+        telegram_id:$('#staffTelegramId').value.trim(),
+        max_id:$('#staffMaxId').value.trim(),
+        notify_new_requests:$('#staffNotifyRequests').checked,
+        notify_new_messages:$('#staffNotifyMessages').checked,
       }),
     });
     form.reset();
@@ -386,7 +763,33 @@ async function updateManager(event) {
   if (!manager) return;
   const action = button.dataset.staffAction;
   const payload = {};
-  if (action === 'name') {
+  if (action === 'telegram-link' || action === 'max-link') {
+    button.disabled = true;
+    try {
+      const provider = action === 'telegram-link' ? 'telegram' : 'max';
+      const result = await adminFetch(`/api/admin/managers/${manager.id}/messenger-link`, undefined, {
+        method:'POST', body:JSON.stringify({provider}),
+      });
+      window.prompt(`Отправьте эту одноразовую ссылку менеджеру ${manager.display_name}. Она действует 7 дней:`, result.bot_url);
+      showManagerStatus(`Ссылка для привязки ${provider === 'telegram' ? 'Telegram' : 'MAX'} создана.`);
+    } catch (error) {
+      showManagerStatus(error.message, true);
+    } finally {
+      button.disabled = false;
+    }
+    return;
+  } else if (action === 'messenger-ids') {
+    const telegramId = window.prompt('Telegram ID (оставьте пустым, чтобы отвязать)', manager.telegram_id || '');
+    if (telegramId === null) return;
+    const maxId = window.prompt('MAX ID (оставьте пустым, чтобы отвязать)', manager.max_id || '');
+    if (maxId === null) return;
+    payload.telegram_id = telegramId.trim();
+    payload.max_id = maxId.trim();
+  } else if (action === 'requests') {
+    payload.notify_new_requests = !manager.notify_new_requests;
+  } else if (action === 'messages') {
+    payload.notify_new_messages = !manager.notify_new_messages;
+  } else if (action === 'name') {
     const displayName = window.prompt('Новое имя менеджера', manager.display_name);
     if (displayName === null) return;
     payload.display_name = displayName.trim();
@@ -620,6 +1023,8 @@ function showDashboard() {
 
 async function loadDashboard(token = sessionStorage.getItem(TOKEN_KEY)) {
   if (!token) return showLogin();
+  if (dashboardLoading) return;
+  dashboardLoading = true;
   const button = $('#refreshButton');
   button.disabled = true;
   $('#dashboardError').classList.add('hidden');
@@ -631,6 +1036,8 @@ async function loadDashboard(token = sessionStorage.getItem(TOKEN_KEY)) {
     await loadAllTables();
     if (activeAdminView === 'managers') await loadStaff();
     if (activeAdminView === 'examinations') await loadExaminations();
+    if (activeAdminView === 'costs') await loadCosts();
+    if (activeAdminView === 'analytics') await loadAnalytics();
     clearInterval(refreshTimer);
     refreshTimer = setInterval(() => loadDashboard(),60000);
   } catch (error) {
@@ -641,6 +1048,7 @@ async function loadDashboard(token = sessionStorage.getItem(TOKEN_KEY)) {
     if ($('#dashboard').classList.contains('hidden')) showLogin(error.message);
     else showDashboardError(error);
   } finally {
+    dashboardLoading = false;
     button.disabled = false;
   }
 }
@@ -657,8 +1065,10 @@ $('#logoutButton').addEventListener('click', () => {
   showLogin();
 });
 $('#dashboardTab').addEventListener('click', () => showAdminView('dashboard'));
+$('#analyticsTab').addEventListener('click', () => showAdminView('analytics'));
 $('#managersTab').addEventListener('click', () => showAdminView('managers'));
 $('#examinationsTab').addEventListener('click', () => showAdminView('examinations'));
+$('#costsTab').addEventListener('click', () => showAdminView('costs'));
 $('#managerCreateForm').addEventListener('submit', createManager);
 $('#staffList').addEventListener('click', updateManager);
 $('#examinationForm').addEventListener('submit', saveExamination);
@@ -666,6 +1076,28 @@ $('#examinationList').addEventListener('click', manageExamination);
 $('#cancelExaminationEdit').addEventListener('click', () => {
   resetExaminationForm();
   showExaminationStatus('');
+});
+$('#costsPeriod').addEventListener('change', () => loadCosts().catch(showDashboardError));
+$('#analyticsApply').addEventListener('click', () => {
+  analyticsRecentPage = 1;
+  loadAnalytics().catch(showDashboardError);
+});
+$('#funnelFromStart').addEventListener('click', () => {
+  analyticsFunnelMode = 'start';
+  renderAnalyticsFunnel(latestAnalyticsData?.funnel || []);
+});
+$('#funnelFromPrevious').addEventListener('click', () => {
+  analyticsFunnelMode = 'previous';
+  renderAnalyticsFunnel(latestAnalyticsData?.funnel || []);
+});
+$('#analyticsRecentPrev').addEventListener('click', () => {
+  if (analyticsRecentPage <= 1) return;
+  analyticsRecentPage -= 1;
+  loadAnalytics().catch(showDashboardError);
+});
+$('#analyticsRecentNext').addEventListener('click', () => {
+  analyticsRecentPage += 1;
+  loadAnalytics().catch(showDashboardError);
 });
 
 $('#usersPeriod').addEventListener('change', event => {

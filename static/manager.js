@@ -133,6 +133,15 @@ async function login(event) {
   }
 }
 
+async function openLinkedConversation() {
+  const conversationId = new URLSearchParams(window.location.search).get('conversation');
+  if (!conversationId) return;
+  await selectConversation(conversationId);
+  const cleanUrl = new URL(window.location.href);
+  cleanUrl.searchParams.delete('conversation');
+  history.replaceState({}, '', `${cleanUrl.pathname}${cleanUrl.search}${cleanUrl.hash}`);
+}
+
 function enterWorkspace(manager) {
   state.manager = manager;
   $('#managerPassword').value = '';
@@ -140,7 +149,7 @@ function enterWorkspace(manager) {
   $('#managerApp').classList.remove('hidden');
   $('#managerDisplayName').textContent = manager.display_name;
   $('#managerAvatar').textContent = initials(manager.display_name);
-  loadQueue();
+  loadQueue().then(openLinkedConversation).catch(error => toast(error.message, true));
   pollManagerNotifications();
   clearInterval(state.queueTimer);
   clearInterval(state.detailTimer);
@@ -357,6 +366,7 @@ function renderUserDetails() {
     <div>Мессенджеры: ${escapeHtml(identities.map(item => item.provider.toUpperCase()).join(', ') || 'не привязаны')}</div>
     <div>Телефон для созвона: ${escapeHtml(conversation.human_phone || 'не указан')}</div>`;
   const fields = [
+    ['company_inn','ИНН предприятия'],
     ['age','Возраст'], ['sex','Пол'], ['height_cm','Рост'], ['weight_kg','Вес'],
     ['smoking','Курение'], ['alcohol','Алкоголь'], ['activity','Активность'],
     ['blood_pressure','Давление'], ['blood_sugar','Сахар'], ['fatigue','Утомляемость'],

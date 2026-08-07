@@ -35,6 +35,11 @@ class Settings:
     orchestrator_model: str = os.getenv("ORCHESTRATOR_MODEL", "gpt-5.6-luna")
     specialist_model: str = os.getenv("SPECIALIST_MODEL", "gpt-5.6-sol")
     database_path: Path = Path(os.getenv("DATABASE_PATH", BASE_DIR / "data" / "consilium.db"))
+    analytics_database_path: Path = Path(os.getenv(
+        "ANALYTICS_DATABASE_PATH", BASE_DIR / "data" / "analytics.db",
+    ))
+    analytics_enabled: bool = env_bool("ANALYTICS_ENABLED", True)
+    analytics_retention_days: int = int(os.getenv("ANALYTICS_RETENTION_DAYS", "90"))
     log_path: Path = Path(os.getenv("LOG_PATH", BASE_DIR / "server-error.log"))
     max_history_messages: int = int(os.getenv("MAX_HISTORY_MESSAGES", "30"))
     host: str = os.getenv("HOST", "127.0.0.1")

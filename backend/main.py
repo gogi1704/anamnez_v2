@@ -4,6 +4,7 @@ import mimetypes
 import re
 import secrets
 import threading
+import time
 import traceback
 import webbrowser
 from http.cookies import CookieError, SimpleCookie
@@ -11,7 +12,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, quote, urlparse
 
-from . import database as db
+from . import analytics, database as db
 from .config import BASE_DIR, settings
 from .llm import LLMNotConfigured
 from .lab_results import LabResultsUnavailable, lookup_lab_results
@@ -37,6 +38,10 @@ def admin_token_valid(authorization: str, expected: str | None = None) -> bool:
         return False
     supplied = authorization.removeprefix("Bearer ").strip()
     return bool(expected and supplied and hmac.compare_digest(supplied, expected))
+
+
+def bot_token_valid(authorization: str) -> bool:
+    return admin_token_valid(authorization, settings.bot_integration_secret)
 
 
 def _record_startup_event(message: str) -> None:
@@ -76,6 +81,19 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
             return self._consume_messenger_login(parse_qs(parsed.query).get("t", [""])[0])
         if path == "/api/health":
             return self._json(200, {"status": "ok"})
+        if path == "/api/bot/manager-notifications":
+            if not bot_token_valid(self.headers.get("Authorization", "")):
+                return self._json(401, {"detail": "Неверные данные интеграции"})
+            query = parse_qs(parsed.query)
+            try:
+                return self._json(200, {
+                    "notifications": db.claim_manager_notifications(
+                        query.get("provider", [""])[0],
+                        int(query.get("limit", ["20"])[0]),
+                    )
+                })
+            except (ValueError, TypeError) as exc:
+                return self._json(422, {"detail": str(exc)})
         if path == "/favicon.ico":
             self.send_response(204)
             self._send_security_headers()
@@ -120,12 +138,32 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                 return self._json(404, {"detail": "Файл не найден"})
             mime = mimetypes.guess_type(name)[0] or "application/octet-stream"
             return self._send_file(STATIC_DIR / name, f"{mime}; charset=utf-8")
-        if path in {"/api/admin/dashboard", "/api/admin/table"}:
+        if path in {"/api/admin/dashboard", "/api/admin/table", "/api/admin/ai-costs", "/api/admin/analytics"}:
             if not self._admin_authorized():
                 return
             if path == "/api/admin/dashboard":
                 return self._json(200, db.admin_dashboard())
             query = parse_qs(parsed.query)
+            if path == "/api/admin/analytics":
+                try:
+                    return self._json(200, analytics.admin_report(
+                        query.get("period", ["30"])[0],
+                        query.get("device", [""])[0],
+                        query.get("method", [""])[0],
+                        query.get("source", [""])[0],
+                        int(query.get("recent_page", ["1"])[0]),
+                        int(query.get("recent_limit", ["25"])[0]),
+                    ))
+                except (ValueError, TypeError) as exc:
+                    return self._json(422, {"detail": str(exc)})
+            if path == "/api/admin/ai-costs":
+                try:
+                    return self._json(200, db.admin_ai_costs(
+                        query.get("period", ["30"])[0],
+                        int(query.get("limit", ["100"])[0]),
+                    ))
+                except (ValueError, TypeError) as exc:
+                    return self._json(422, {"detail": str(exc)})
             try:
                 return self._json(200, db.admin_table(
                     query.get("name", [""])[0],
@@ -245,6 +283,39 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         path = urlparse(self.path).path
+        if path == "/api/bot/manager-bind":
+            if not bot_token_valid(self.headers.get("Authorization", "")):
+                return self._json(401, {"detail": "Неверные данные интеграции"})
+            try:
+                payload = self._read_json()
+                binding = db.bind_staff_messenger(
+                    str(payload.get("token", "")), str(payload.get("provider", "")),
+                    payload.get("provider_user_id", ""), payload.get("chat_id", ""),
+                )
+                return self._json(200, {
+                    **binding, "manager_url": f"{settings.public_base_url}/manager",
+                })
+            except (ValueError, TypeError, json.JSONDecodeError, UnicodeDecodeError) as exc:
+                return self._json(422, {"detail": str(exc)})
+        if path.startswith("/api/bot/manager-notifications/") and path.endswith("/ack"):
+            if not bot_token_valid(self.headers.get("Authorization", "")):
+                return self._json(401, {"detail": "Неверные данные интеграции"})
+            try:
+                notification_id = int(
+                    path.removeprefix("/api/bot/manager-notifications/").removesuffix("/ack").strip("/")
+                )
+                payload = self._read_json()
+                if not isinstance(payload.get("success"), bool):
+                    raise ValueError("success должен быть true или false")
+                acknowledged = db.acknowledge_manager_notification(
+                    notification_id, str(payload.get("lease_token", "")),
+                    payload["success"], str(payload.get("error", "")),
+                )
+                if not acknowledged:
+                    return self._json(409, {"detail": "Уведомление уже обработано или аренда истекла"})
+                return self._json(200, {"status": "acknowledged"})
+            except (ValueError, TypeError, json.JSONDecodeError, UnicodeDecodeError) as exc:
+                return self._json(422, {"detail": str(exc)})
         if path == "/api/manager/login":
             try:
                 payload = self._read_json()
@@ -269,10 +340,17 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                 return
             try:
                 payload = self._read_json()
+                for key in ("notify_new_requests", "notify_new_messages"):
+                    if key in payload and not isinstance(payload[key], bool):
+                        raise ValueError(f"{key} должен быть true или false")
                 return self._json(201, db.admin_create_staff(
                     str(payload.get("display_name", "")),
                     str(payload.get("login", "")),
                     str(payload.get("password", "")),
+                    telegram_id=payload.get("telegram_id", ""),
+                    max_id=payload.get("max_id", ""),
+                    notify_new_requests=payload.get("notify_new_requests", True),
+                    notify_new_messages=payload.get("notify_new_messages", True),
                 ))
             except (ValueError, json.JSONDecodeError, UnicodeDecodeError) as exc:
                 return self._json(422, {"detail": str(exc)})
@@ -307,6 +385,27 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                 return self._json(200, item)
             except (ValueError, TypeError, json.JSONDecodeError, UnicodeDecodeError) as exc:
                 return self._json(422, {"detail": str(exc)})
+        if path.startswith("/api/admin/managers/") and path.endswith("/messenger-link"):
+            if not self._admin_authorized():
+                return
+            try:
+                staff_id = int(
+                    path.removeprefix("/api/admin/managers/").removesuffix("/messenger-link").strip("/")
+                )
+                payload = self._read_json()
+                binding = db.create_staff_messenger_token(staff_id, payload.get("provider", ""))
+                template = (
+                    settings.telegram_bot_auth_url
+                    if binding["provider"] == "telegram" else settings.max_bot_auth_url
+                )
+                if not template or "{token}" not in template:
+                    raise ValueError(f"Ссылка бота {binding['provider'].upper()} не настроена")
+                return self._json(201, {
+                    **binding,
+                    "bot_url": template.replace("{token}", quote(binding["token"])),
+                })
+            except (ValueError, TypeError, json.JSONDecodeError, UnicodeDecodeError) as exc:
+                return self._json(422, {"detail": str(exc)})
         if path.startswith("/api/admin/managers/"):
             if not self._admin_authorized():
                 return
@@ -315,11 +414,18 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                 payload = self._read_json()
                 if "is_active" in payload and not isinstance(payload["is_active"], bool):
                     raise ValueError("is_active должен быть true или false")
+                for key in ("notify_new_requests", "notify_new_messages"):
+                    if key in payload and not isinstance(payload[key], bool):
+                        raise ValueError(f"{key} должен быть true или false")
                 item = db.admin_update_staff(
                     staff_id,
                     display_name=payload.get("display_name"),
                     password=payload.get("password"),
                     is_active=payload.get("is_active"),
+                    telegram_id=payload.get("telegram_id"),
+                    max_id=payload.get("max_id"),
+                    notify_new_requests=payload.get("notify_new_requests"),
+                    notify_new_messages=payload.get("notify_new_messages"),
                 )
                 if not item:
                     return self._json(404, {"detail": "Менеджер не найден"})
@@ -376,10 +482,38 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                     return self._json(422, {"detail": str(exc)})
             return self._json(404, {"detail": "Маршрут панели менеджера не найден"})
         self._ensure_user_context()
+        if path == "/api/analytics/events":
+            try:
+                payload = self._read_json(max_bytes=64_000)
+                result = analytics.record_events(
+                    db.current_chel_id(), payload.get("events", []),
+                    user_agent=self.headers.get("User-Agent", ""),
+                )
+                return self._json(202, result)
+            except (ValueError, TypeError, json.JSONDecodeError, UnicodeDecodeError):
+                return self._json(202, {"accepted": 0, "duplicates": 0})
+        if path == "/api/register-choice":
+            try:
+                payload = self._read_json()
+                method = str(payload.get("method", "")).strip().lower()
+                if method != "anonymous":
+                    raise ValueError("На этом экране доступен только анонимный вход")
+                user = db.mark_current_user_registered(method)
+                self._track_analytics("registration_completed", {"method": method})
+                return self._json(200, {
+                    "status": "registered",
+                    "chel_id": user["chel_id"],
+                    "registration_method": user["registration_method"],
+                    "registered_at": user["registered_at"],
+                })
+            except (ValueError, json.JSONDecodeError, UnicodeDecodeError) as exc:
+                return self._json(422, {"detail": str(exc)})
         if path == "/api/auth/messenger/start":
             return self._start_messenger_auth()
         if path == "/api/conversations":
-            return self._json(201, db.create_conversation())
+            conversation = db.create_conversation()
+            self._track_analytics("conversation_created")
+            return self._json(201, conversation)
         if path == "/api/reset-user":
             if self.headers.get("X-Consilium-Action") != "reset-user":
                 return self._json(403, {"detail": "Подтвердите полный сброс данных"})
@@ -392,7 +526,7 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                     "identity_preserved": True,
                 })
             new_chel_id = f"chel_{secrets.token_hex(16)}"
-            db.ensure_user(new_chel_id)
+            db.ensure_user(new_chel_id, pending=True)
             db.set_current_chel_id(new_chel_id)
             self._identity_cookie_required = True
             return self._json(200, {
@@ -414,11 +548,18 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                 return self._json(403, {"detail": "Сначала завершите короткую анкету"})
             try:
                 payload = self._read_json()
+                self._track_analytics("lab_interpretation_started", {
+                    "document_count": 1 if str(payload.get("document_id", "all")) != "all" else 0,
+                })
                 result = orchestrator.interpret_lab_results(
                     payload.get("conversation_id"),
                     str(payload.get("document_id", "all")),
                 )
-                return self._json(200, result.to_dict())
+                result_payload = result.to_dict()
+                self._track_analytics("lab_interpretation_completed", {
+                    "cached": bool(result_payload.get("cached")),
+                })
+                return self._json(200, result_payload)
             except LLMNotConfigured as exc:
                 return self._json(503, {"detail": str(exc)})
             except ValueError as exc:
@@ -428,6 +569,7 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                     "detail": f"Не удалось расшифровать результаты: {exc}",
                 })
         if path == "/api/lab-results":
+            self._track_analytics("lab_results_requested")
             tube_number = str(db.get_profile().get("tube_number", "")).strip()
             if not tube_number:
                 return self._json(422, {
@@ -435,10 +577,16 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                     "detail": "Сначала введите номер пробирки",
                 })
             try:
-                return self._json(200, lookup_lab_results(tube_number).to_dict())
+                lab_result = lookup_lab_results(tube_number).to_dict()
+                self._track_analytics("lab_results_found", {
+                    "document_count": len(lab_result.get("documents", [])),
+                })
+                return self._json(200, lab_result)
             except ValueError as exc:
+                self._track_analytics("lab_results_not_found", {"error_code": "invalid_tube"})
                 return self._json(422, {"status": "invalid_tube", "detail": str(exc)})
             except LabResultsUnavailable:
+                self._track_analytics("lab_results_not_found", {"error_code": "unavailable"})
                 return self._json(503, {
                     "status": "unavailable",
                     "detail": "Сервис результатов временно недоступен. Попробуйте позже.",
@@ -458,10 +606,23 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                 return self._json(200, item)
             except (ValueError, TypeError) as exc:
                 return self._json(422, {"detail": str(exc)})
+        if path == "/api/onboarding/not-medical-exam":
+            state = db.save_onboarding(
+                status="complete",
+                selected_tests=[],
+                payment_status="not_medical_exam",
+                intro_seen=False,
+            )
+            self._track_analytics("not_medical_exam_selected")
+            self._track_analytics("onboarding_completed", {"result": "not_medical_exam"})
+            return self._json(200, public_onboarding(
+                state, db.get_profile(), db.list_examinations(),
+            ))
         if path == "/api/onboarding/profile":
             try:
                 profile = db.save_profile(self._validate_profile(self._read_json(), required=True))
                 state = db.save_onboarding(status="exams", selected_tests=[], payment_status="none")
+                self._track_analytics("questionnaire_completed")
                 return self._json(200, public_onboarding(
                     state, profile, db.list_examinations(),
                 ))
@@ -470,12 +631,13 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
         if path == "/api/onboarding/appearance":
             try:
                 payload = self._read_json()
-                font_size = str(payload.get("font_size", "standard"))
+                font_size = str(payload.get("font_size", "extra"))
                 if font_size not in {"standard", "large", "extra"}:
                     raise ValueError("Выберите доступный размер текста")
                 current = db.get_onboarding()
                 next_status = "questionnaire" if current["status"] == "appearance" else current["status"]
                 state = db.save_onboarding(status=next_status, font_size=font_size)
+                self._track_analytics("appearance_completed", {"font_size": font_size})
                 return self._json(200, public_onboarding(
                     state, db.get_profile(), db.list_examinations(),
                 ))
@@ -493,19 +655,38 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                     selected_tests=selected,
                     payment_status="pending" if selected else "skipped",
                 )
+                examination_items = db.list_examinations()
+                total_price = sum(int(item.get("price", 0)) for item in examination_items if item["id"] in selected)
+                self._track_analytics("examinations_selection_completed", {
+                    "selected_count": len(selected), "total_price": total_price,
+                })
+                if not selected:
+                    self._track_analytics("examinations_skipped")
+                    self._track_analytics("onboarding_completed", {"result": "examinations_skipped"})
                 return self._json(200, public_onboarding(
                     state, db.get_profile(), db.list_examinations(),
                 ))
             except (ValueError, TypeError) as exc:
                 return self._json(422, {"detail": str(exc)})
         if path == "/api/onboarding/payment":
-            state = db.get_onboarding()
-            if state["status"] != "payment" or not state["selected_tests"]:
-                return self._json(422, {"detail": "Сначала выберите обследования"})
-            state = db.save_onboarding(status="complete", payment_status="demo_paid")
-            return self._json(200, public_onboarding(
-                state, db.get_profile(), db.list_examinations(),
-            ))
+            try:
+                payload = self._read_json()
+                payment_method = str(payload.get("method", "")).strip().lower()
+                if payment_method != "at_exam":
+                    raise ValueError("Онлайн-оплата временно недоступна")
+                state = db.get_onboarding()
+                if state["status"] != "payment" or not state["selected_tests"]:
+                    raise ValueError("Сначала выберите обследования")
+                state = db.save_onboarding(status="complete", payment_status="pay_at_exam")
+                self._track_analytics("payment_method_selected", {
+                    "method": "at_exam", "selected_count": len(state.get("selected_tests", [])),
+                })
+                self._track_analytics("onboarding_completed", {"result": "examinations_selected"})
+                return self._json(200, public_onboarding(
+                    state, db.get_profile(), db.list_examinations(),
+                ))
+            except (ValueError, TypeError) as exc:
+                return self._json(422, {"detail": str(exc)})
         if path == "/api/onboarding/intro-seen":
             state = db.get_onboarding()
             if state["status"] != "complete":
@@ -526,16 +707,6 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                 return self._json(200, {"conversation_id": conversation_id, "context": context})
             except (json.JSONDecodeError, UnicodeDecodeError):
                 return self._json(400, {"detail": "Некорректный JSON"})
-        if path in {"/api/second-opinion", "/api/council"}:
-            try:
-                payload = self._read_json()
-                conversation_id = str(payload.get("conversation_id", ""))
-                result = orchestrator.second_opinion(conversation_id) if path.endswith("second-opinion") else orchestrator.council(conversation_id)
-                return self._json(200, result)
-            except (ValueError, LLMNotConfigured) as exc:
-                return self._json(422 if isinstance(exc, ValueError) else 503, {"detail": str(exc)})
-            except Exception as exc:
-                return self._json(502, {"detail": f"Ошибка AI-провайдера: {exc}"})
         if path == "/api/human-preference":
             try:
                 return self._set_human_preference(self._read_json())
@@ -546,6 +717,7 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
         if db.get_onboarding()["status"] != "complete":
             return self._json(403, {"detail": "Сначала завершите короткую анкету"})
         try:
+            chat_started = time.perf_counter()
             payload = self._read_json(max_bytes=17_000_000)
             message = str(payload.get("message", "")).strip()
             attachments = self._validate_attachments(payload.get("attachments", []))
@@ -555,9 +727,17 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                 message = "Проанализируй прикреплённый файл и объясни, что в нём важно."
             conversation_id = str(payload.get("conversation_id") or "")
             conversation = db.get_conversation(conversation_id) if conversation_id else None
+            is_first_message = not conversation or not db.list_messages(conversation_id, 1)
+            self._track_analytics("message_sent")
+            if is_first_message:
+                self._track_analytics("first_message_sent")
             if conversation and not bool(conversation.get("ai_enabled", 1)):
                 user_message, updated = db.add_user_message_waiting_for_manager(
                     conversation_id, message, attachments,
+                )
+                db.enqueue_manager_notifications(
+                    "new_message", conversation_id,
+                    message_id=user_message["id"], message_text=message,
                 )
                 return self._json(202, {
                     "conversation_id": conversation_id,
@@ -580,6 +760,13 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
             saved = db.get_conversation(result.conversation_id) or {}
             response["ai_enabled"] = bool(saved.get("ai_enabled", 1))
             response["human_status"] = saved.get("human_status", "none")
+            self._track_analytics("ai_response_completed", {
+                "agent": response.get("agent", ""),
+                "route_action": response.get("action", ""),
+                "response_ms": int((time.perf_counter() - chat_started) * 1000),
+            })
+            if response.get("action") == "human":
+                self._track_analytics("human_requested")
             return self._json(200, response)
         except LLMNotConfigured as exc:
             return self._json(503, {"detail": str(exc)})
@@ -661,6 +848,7 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                     "provider": provider,
                     "configured": False,
                 })
+            db.mark_current_user_registered(provider)
             intent = db.create_auth_intent(provider)
             bot_url = template.replace("{token}", quote(intent["token"], safe=""))
             return self._json(201, {
@@ -704,6 +892,11 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                 "detail": "Ссылка недействительна. Вернитесь в мессенджер и получите новую.",
             })
         db.set_current_chel_id(login["chel_id"])
+        identity = db.current_external_identity()
+        db.mark_current_user_registered(identity["provider"] if identity else "max")
+        self._track_analytics("registration_completed", {
+            "method": identity["provider"] if identity else "max",
+        })
         self.send_response(303)
         self._send_security_headers()
         self.send_header("Location", "/")
@@ -739,6 +932,7 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
             except ValueError as exc:
                 return self._json(422, {"detail": str(exc)})
         db.set_human_channel(conversation_id, channel, phone)
+        self._track_analytics("human_channel_selected", {"channel": channel})
         if channel == "chat":
             text = (
                 "Хорошо, оставляю обращение в формате чата. Специалист получит историю диалога и сможет "
@@ -807,7 +1001,9 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                 raise ValueError(f"Поле {name} должно быть от {minimum:g} до {maximum:g}")
             return number
 
-        age_value = optional_number("age", 0, 120)
+        age_value = optional_number("age", 18, 99)
+        if age_value is not None and not age_value.is_integer():
+            raise ValueError("Возраст должен быть указан целым числом")
         age = int(age_value) if age_value is not None else None
         sex = str(payload.get("sex", ""))
         pregnancy = str(payload.get("pregnancy", "not_applicable"))
@@ -846,11 +1042,15 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                 raise ValueError(f"Поле {name} должно быть списком")
             return [" ".join(str(item).split())[:200] for item in value if str(item).strip()][:20]
 
+        company_inn = "".join(str(payload.get("company_inn", "")).split())
+        if company_inn and (not company_inn.isdigit() or len(company_inn) not in {10, 12}):
+            raise ValueError("ИНН должен состоять из 10 или 12 цифр")
+
         result = {
             "preferred_name": " ".join(str(payload.get("preferred_name", "")).split())[:100],
-            "age": age, "sex": sex,
-            "height_cm": optional_number("height_cm", 30, 250),
-            "weight_kg": optional_number("weight_kg", 1, 500),
+            "company_inn": company_inn, "age": age, "sex": sex,
+            "height_cm": optional_number("height_cm", 50, 250),
+            "weight_kg": optional_number("weight_kg", 40, 250),
             "pregnancy": pregnancy, "smoking": smoking,
             "alcohol": alcohol, "activity": activity, "blood_pressure": blood_pressure,
             "blood_sugar": blood_sugar, "dark_in_eyes": dark_in_eyes,
@@ -861,9 +1061,9 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
             "notes": str(payload.get("notes", "")).strip()[:1000],
         }
         if required:
-            missing = [name for name in ("age", "sex", "height_cm", "weight_kg") if result[name] in (None, "")]
+            missing = [name for name in ("company_inn", "age", "sex", "height_cm", "weight_kg") if result[name] in (None, "")]
             if missing:
-                raise ValueError("Заполните обязательные поля: возраст, пол, рост и вес")
+                raise ValueError("Заполните обязательные поля: ИНН предприятия, возраст, пол, рост и вес")
             if smoking == "unknown" or alcohol == "unknown" or activity == "unknown":
                 raise ValueError("Ответьте на вопросы о курении, алкоголе и активности")
         return result
@@ -873,6 +1073,13 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
         if length > max_bytes:
             raise ValueError("Слишком большой запрос")
         return json.loads(self.rfile.read(length).decode("utf-8"))
+
+    def _track_analytics(self, event_name: str, properties: dict | None = None) -> None:
+        analytics.record_server_event(
+            db.current_chel_id(), event_name, properties,
+            user_agent=self.headers.get("User-Agent", ""),
+            session_id=self.headers.get("X-Analytics-Session", ""),
+        )
 
     def _admin_authorized(self) -> bool:
         if not settings.admin_dashboard_token:
@@ -1029,7 +1236,7 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
             self._identity_cookie_required = True
         else:
             self._identity_cookie_required = False
-        db.ensure_user(candidate)
+        db.ensure_user(candidate, pending=True)
         db.set_current_chel_id(candidate)
 
     def _send_session_cookie(self, session_value: str) -> None:
@@ -1097,6 +1304,8 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
 def serve() -> None:
     _record_startup_event("Начало запуска")
     db.init_db()
+    analytics.init_db()
+    analytics.cleanup_old_events()
     _record_startup_event("База данных готова")
     server = ConsiliumHTTPServer((settings.host, settings.port), ConsiliumHandler)
     _record_startup_event(f"Порт {settings.port} открыт")

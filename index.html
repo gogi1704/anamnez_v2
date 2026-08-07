@@ -2,7 +2,7 @@
 <html lang="ru">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content">
   <meta name="color-scheme" content="light">
   <meta name="theme-color" content="#176f57">
   <meta name="mobile-web-app-capable" content="yes">
@@ -15,9 +15,37 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/static/styles.css?v=20260730-5">
+  <link rel="stylesheet" href="/static/styles.css?v=20260807-ai-paused-new-chat">
 </head>
 <body>
+  <main class="welcome-screen hidden" id="welcomeScreen" aria-live="polite">
+    <section class="welcome-card">
+      <div class="welcome-brand" aria-label="Консилиум">
+        <span aria-hidden="true">К</span>
+        <div><strong>Консилиум</strong><small>Забота о здоровье начинается здесь</small></div>
+      </div>
+
+      <div class="welcome-hero" aria-hidden="true">
+        <span class="welcome-hero-heart">♥</span>
+        <i></i><i></i><i></i>
+      </div>
+
+      <div class="welcome-copy">
+        <h1>Привет! <span aria-hidden="true">👋</span></h1>
+        <p>Совсем скоро вам предстоит плановый медицинский осмотр. Мы рады, что вы проходите его вместе с нами.</p>
+        <p>Для начала просим вас ответить на несколько простых вопросов — это займет всего пару минут и поможет сделать обследование более полезным для вас.</p>
+        <p>После анкеты вы сможете ознакомиться с дополнительными обследованиями. Иногда именно они помогают обнаружить проблемы, которые никак себя не проявляют. Как любит говорить наш главный врач:</p>
+        <blockquote>«Здоровых людей не бывает — бывают недообследованные».</blockquote>
+        <p>И это еще не всё! В конце вас ждет небольшой сюрприз — мы покажем новый сервис, который сейчас разрабатываем специально для того, чтобы заботиться о своем здоровье было проще, удобнее и выгоднее.</p>
+      </div>
+
+      <button class="welcome-next" id="welcomeNextButton" type="button">
+        <span>Далее</span><span aria-hidden="true">→</span>
+      </button>
+      <p class="welcome-time"><span aria-hidden="true">◷</span> Анкета займёт около 2 минут</p>
+    </section>
+  </main>
+
   <main class="auth-gate hidden" id="authGate" aria-live="polite">
     <section class="auth-card">
       <div class="auth-brand"><span>К</span><div><strong>Консилиум</strong><small>Ваше личное пространство здоровья</small></div></div>
@@ -68,29 +96,19 @@
   </main>
 
   <div class="app-shell hidden" id="appShell">
-    <aside class="sidebar" aria-label="Команда специалистов">
-      <button class="sidebar-close" id="mobileTeamClose" aria-label="Закрыть список команды">×</button>
+    <aside class="sidebar" aria-label="Мои диалоги">
+      <button class="sidebar-close" id="mobileTeamClose" aria-label="Закрыть список диалогов">×</button>
       <div class="brand">
         <div class="brand-mark" aria-hidden="true">К</div>
-        <div><strong>Консилиум</strong><span>Команда специалистов</span></div>
+        <div><strong>Консилиум</strong><span>Ваши диалоги</span></div>
       </div>
-
-      <div class="team-heading">
-        <span>Команда</span><span class="count" id="onlineCount">9 специалистов</span>
-      </div>
-      <nav class="agent-list" id="agentList"></nav>
 
       <div class="history-section">
-        <div class="team-heading"><span>Диалоги</span></div>
+        <div class="team-heading"><span>Диалоги</span><span class="count" id="mobileConversationCount">0</span></div>
         <div class="conversation-list" id="conversationList"></div>
       </div>
-
-      <div class="sidebar-note">
-        <span class="pulse-dot"></span>
-        <div><strong id="aiStatus">Проверка подключения</strong><small id="aiModels">Python API</small></div>
-      </div>
     </aside>
-    <button class="team-backdrop" id="teamBackdrop" aria-label="Закрыть список команды"></button>
+    <button class="team-backdrop" id="teamBackdrop" aria-label="Закрыть список диалогов"></button>
 
     <main class="chat-column">
       <header class="chat-header">
@@ -105,19 +123,15 @@
             <button class="header-action-button" id="functionMenuButton" aria-label="Открыть меню функций" aria-expanded="false" title="Функции"><span>☰</span></button>
             <div class="function-menu hidden" id="functionMenu" role="menu">
               <strong>Функции</strong>
-              <button id="mobileTeamButton" role="menuitem"><i>⌘</i><span>Команда специалистов<small>Посмотреть врачей и консультантов</small></span></button>
               <button id="newChatButton" role="menuitem"><i>＋</i><span>Новый диалог<small>Начать с чистого контекста</small></span></button>
-              <button id="humanButton" role="menuitem"><i>♙</i><span>Позвать человека<small>Чат или созвон</small></span></button>
-              <button class="hidden" id="secondOpinionButton" role="menuitem"><i>Ⅱ</i><span>Второе мнение<small>Независимая оценка</small></span></button>
-              <button class="hidden" id="councilButton" role="menuitem"><i>◎</i><span>Консилиум<small>Несколько врачебных мнений</small></span></button>
-              <button id="menuProfileButton" role="menuitem"><i>♙</i><span>Моя анкета<small>Изменить данные о себе</small></span></button>
+              <button id="menuProfileButton" role="menuitem"><i>♙</i><span>Мои данные<small>Анкета, номер пробирки и память</small></span></button>
               <button id="menuLabResultsButton" role="menuitem"><i>▤</i><span>Результаты анализов<small id="menuLabResultsStatus">Проверить по номеру пробирки</small></span></button>
+              <button id="mobileDialogsButton" role="menuitem"><i>≡</i><span>Мои диалоги<small>Открыть историю переписок</small></span></button>
+              <button id="humanButton" role="menuitem"><i>♙</i><span>Позвать человека<small>Чат или созвон</small></span></button>
               <button id="menuBodyMapButton" role="menuitem"><i>◉</i><span>Карта тела<small>Отметить область и симптом</small></span></button>
               <button id="menuHealthHistoryButton" role="menuitem"><i>⌁</i><span>История здоровья<small>События и динамика по датам</small></span></button>
-              <button id="menuMemoryButton" role="menuitem"><i>◇</i><span>Память обо мне<small>Управлять сохранёнными фактами</small></span></button>
-              <button id="menuDashboardButton" role="menuitem"><i>▦</i><span>Дашборд проекта<small>Статистика для администратора</small></span></button>
-              <button id="menuInstallAppButton" role="menuitem"><i>⇩</i><span>На рабочий стол<small id="menuInstallAppStatus">Открывать как приложение</small></span></button>
-              <button class="menu-danger" id="resetUserButton" role="menuitem"><i>↺</i><span>Начать заново<small>Удалить все данные и пройти первый вход</small></span></button>
+              <div class="function-menu-separator" role="separator"></div>
+              <button id="menuInstallAppButton" role="menuitem"><i>⇩</i><span>Установить приложение<small id="menuInstallAppStatus">Открывать как приложение</small></span></button>
               <button id="menuFontSizeButton" role="menuitem"><i>А</i><span>Размер текста<small id="menuFontSizeStatus">Обычный</small></span></button>
             </div>
           </div>
@@ -138,7 +152,8 @@
       </section>
       <section class="chat-mode-banner hidden" id="chatModeBanner" aria-live="polite">
         <span id="chatModeIcon">♙</span>
-        <div><strong id="chatModeTitle">Менеджер подключён</strong><p id="chatModeText"></p></div>
+        <div class="chat-mode-copy"><strong id="chatModeTitle">Менеджер подключён</strong><p id="chatModeText"></p></div>
+        <button class="chat-mode-new-dialog hidden" id="chatModeNewDialog" type="button">Новый диалог</button>
       </section>
 
       <section class="messages" id="messages" aria-live="polite" aria-label="Сообщения"></section>
@@ -167,10 +182,9 @@
         <div><strong>Ход обработки</strong><span id="taskStatus">Ожидает задачу</span></div>
         <span class="live-badge">LIVE</span>
       </div>
-      <button class="memory-button profile-button" id="profileButton"><span>♙</span><div><strong>Моя анкета</strong><small id="profileStatus">Не заполнена</small></div><b id="profileCompletion">0%</b></button>
+      <button class="memory-button profile-button" id="profileButton"><span>♙</span><div><strong>Мои данные</strong><small id="profileStatus">Не заполнены</small></div><b id="profileCompletion">0%</b></button>
       <button class="memory-button" id="bodyMapButton"><span>◉</span><div><strong>Карта тела</strong><small id="bodyMapStatus">Отметить симптом</small></div><b id="bodySymptomCount">0</b></button>
       <button class="memory-button" id="healthHistoryButton"><span>⌁</span><div><strong>История здоровья</strong><small>События и изменения</small></div><b id="healthHistoryCount">0</b></button>
-      <button class="memory-button" id="memoryButton"><span>◇</span><div><strong>Память обо мне</strong><small>Вы управляете сохранёнными фактами</small></div><b id="memoryCount">0</b></button>
       <div class="timeline" id="timeline">
         <div class="empty-state">
           <div class="empty-icon">⌁</div>
@@ -192,23 +206,6 @@
       <h2 id="fontSizeTitle">Размер текста</h2>
       <p>Выберите комфортный размер. Настройка применяется ко всему приложению и сохраняется.</p>
       <div class="font-size-options" id="fontSizeOptions"></div>
-    </div>
-  </div>
-
-  <div class="modal-backdrop hidden" id="councilModal" role="dialog" aria-modal="true" aria-labelledby="councilModalTitle">
-    <div class="modal council-modal">
-      <button class="modal-close" id="councilModalClose" aria-label="Закрыть">×</button>
-      <div class="modal-icon">◎</div>
-      <h2 id="councilModalTitle">Как работает Консилиум</h2>
-      <p>Несколько врачей изучат один контекст, но каждый получит свою отдельную задачу. Затем ведущий соберёт их выводы в один понятный план.</p>
-      <div class="council-steps">
-        <article><b>1</b><span><strong>Разные фокусы</strong><small>Каждый врач отвечает только за свою область и не повторяет уже высказанное.</small></span></article>
-        <article><b>2</b><span><strong>Сверка позиций</strong><small>Отдельно отмечаются согласие, расхождения и недостающие данные.</small></span></article>
-        <article><b>3</b><span><strong>Общий вывод</strong><small>Мария формирует безопасные следующие шаги без окончательного диагноза.</small></span></article>
-      </div>
-      <div class="council-members"><span>Будут участвовать</span><div id="councilMemberList"></div></div>
-      <button class="primary-button" id="startCouncilButton">Начать консилиум</button>
-      <button class="secondary-button" id="cancelCouncilButton">Не сейчас</button>
     </div>
   </div>
 
@@ -258,35 +255,23 @@
     </div>
   </div>
 
-  <div class="modal-backdrop hidden" id="memoryModal" role="dialog" aria-modal="true" aria-labelledby="memoryTitle">
-    <div class="modal memory-modal">
-      <button class="modal-close" id="memoryClose" aria-label="Закрыть">×</button>
-      <div class="modal-icon">◇</div><h2 id="memoryTitle">Память обо мне</h2>
-      <p>Специалисты учитывают эти сведения в новых диалогах. Добавляйте только то, что действительно хотите сохранять.</p>
-      <div class="memory-form"><select id="memoryCategory"><option value="preference">Предпочтение</option><option value="health">Здоровье</option><option value="constraint">Ограничение</option><option value="goal">Цель</option></select><input id="memoryText" maxlength="500" placeholder="Например: отвечать коротко и по пунктам"><button id="addMemoryButton">Добавить</button></div>
-      <div class="memory-list" id="memoryList"></div>
-    </div>
-  </div>
-
   <div class="modal-backdrop hidden" id="capabilitiesModal" role="dialog" aria-modal="true" aria-labelledby="capabilitiesTitle">
     <div class="modal capabilities-modal">
       <button class="modal-close" id="capabilitiesClose" aria-label="Закрыть">×</button>
       <div class="modal-icon">✦</div><h2 id="capabilitiesTitle">Что умеет Консилиум</h2>
       <p>Все возможности собраны здесь. Доступность отдельных действий зависит от контекста диалога.</p>
       <div class="capability-grid">
-        <button class="capability-card accent" id="capabilityProfile"><i>♙</i><span><strong>Моя анкета</strong><small>Данные о здоровье и номер пробирки для результатов</small></span><b id="capabilityProfileStatus">Заполнить</b></button>
+        <button class="capability-card accent" id="capabilityProfile"><i>♙</i><span><strong>Мои данные</strong><small>Анкета, номер пробирки и сохранённые факты</small></span><b id="capabilityProfileStatus">Заполнить</b></button>
         <button class="capability-card accent" id="capabilityLabResults"><i>▤</i><span><strong>Результаты анализов</strong><small>Проверка по сохранённому номеру пробирки</small></span><b id="capabilityLabResultsStatus">Открыть</b></button>
         <button class="capability-card accent" id="capabilityBodyMap"><i>◉</i><span><strong>Интерактивная карта тела</strong><small>Область, характер, интенсивность и начало симптома</small></span><b>Открыть</b></button>
         <button class="capability-card accent" id="capabilityHealthHistory"><i>⌁</i><span><strong>Моя история здоровья</strong><small>Симптомы, консультации, документы и обследования по датам</small></span><b>Открыть</b></button>
-        <article class="capability-card"><i>◫</i><span><strong>Дополнительные обследования</strong><small>22 набора анализов, персональные отметки и демо-оплата</small></span></article>
-        <article class="capability-card"><i>◎</i><span><strong>Живой консилиум</strong><small>Несколько профильных мнений и общий вывод</small></span></article>
-        <article class="capability-card"><i>Ⅱ</i><span><strong>Второе мнение</strong><small>Независимая оценка другого специалиста</small></span></article>
+        <button class="capability-card accent" id="capabilityExaminations"><i>◫</i><span><strong>Дополнительные обследования</strong><small>Выбор и оплата дополнительных обследований</small></span><b>Выбрать</b></button>
         <article class="capability-card"><i>✓</i><span><strong>Проверяемый контекст</strong><small>Исправляйте, что специалисты поняли из разговора</small></span></article>
         <article class="capability-card"><i>⌁</i><span><strong>Карта состояния</strong><small>Тема, открытые вопросы и уровень срочности</small></span></article>
         <article class="capability-card"><i>▱</i><span><strong>Фото и документы</strong><small>Изображения, PDF, TXT и CSV до 4 МБ</small></span></article>
         <article class="capability-card"><i>◇</i><span><strong>Управляемая память</strong><small>Сохраняйте и удаляйте важные предпочтения</small></span></article>
         <article class="capability-card"><i>↗</i><span><strong>Передача человеку</strong><small>Предпросмотр сводки, чат или созвон</small></span></article>
-        <article class="capability-card"><i>☰</i><span><strong>Меню функций</strong><small>Команда, новый диалог, анкета, память и связь с человеком</small></span></article>
+        <article class="capability-card"><i>☰</i><span><strong>Меню функций</strong><small>Диалоги, мои данные, результаты и связь с человеком</small></span></article>
       </div>
     </div>
   </div>
@@ -418,7 +403,6 @@
         <button data-history-filter="symptom">Симптомы</button>
         <button data-history-filter="consultation">Консультации</button>
         <button data-history-filter="document">Документы</button>
-        <button data-history-filter="council">Консилиумы</button>
         <button data-history-filter="tests">Обследования</button>
       </div>
       <div class="health-history-summary" id="healthHistorySummary"></div>
@@ -429,15 +413,16 @@
   <div class="modal-backdrop hidden" id="profileModal" role="dialog" aria-modal="true" aria-labelledby="profileTitle">
     <div class="modal profile-modal">
       <button class="modal-close" id="profileClose" aria-label="Закрыть">×</button>
-      <div class="modal-icon">♙</div><h2 id="profileTitle">Моя анкета</h2>
+      <div class="modal-icon">♙</div><h2 id="profileTitle">Мои данные</h2>
       <p>Эти данные будут учитываться специалистами, когда вопрос касается вас. Если вы спрашиваете о другом человеке, укажите это в сообщении.</p>
       <div class="profile-grid">
         <label class="field-label wide">Ваш ID в сервисе<input id="profileChelId" readonly aria-readonly="true"></label>
+        <label class="field-label wide">ИНН предприятия<input id="profileCompanyInn" inputmode="numeric" maxlength="12" placeholder="10 или 12 цифр"><small>ИНН работодателя, направившего вас на медицинский осмотр.</small></label>
         <label class="field-label wide">Как к вам обращаться<input id="profileName" maxlength="100" placeholder="Необязательно"></label>
-        <label class="field-label">Возраст<input id="profileAge" type="number" min="0" max="120" placeholder="лет"></label>
+        <label class="field-label">Возраст<input id="profileAge" type="number" min="18" max="99" step="1" placeholder="18–99 лет"></label>
         <label class="field-label">Пол для медицинского контекста<select id="profileSex"><option value="female">Женский</option><option value="male">Мужской</option></select></label>
-        <label class="field-label">Рост<input id="profileHeight" type="number" min="30" max="250" step="0.1" placeholder="см"></label>
-        <label class="field-label">Вес<input id="profileWeight" type="number" min="1" max="500" step="0.1" placeholder="кг"></label>
+        <label class="field-label">Рост<input id="profileHeight" type="number" min="50" max="250" step="0.1" placeholder="50–250 см"></label>
+        <label class="field-label">Вес<input id="profileWeight" type="number" min="40" max="250" step="0.1" placeholder="40–250 кг"></label>
         <label class="field-label">Курение<select id="profileSmoking"><option value="unknown">Не указано</option><option value="never">Не курю</option><option value="former">Курил(а) раньше</option><option value="current">Курю сейчас</option></select></label>
         <label class="field-label">Алкоголь<select id="profileAlcohol"><option value="unknown">Не указано</option><option value="never">Не употребляю</option><option value="rarely">Редко</option><option value="weekly">Раз в неделю</option><option value="often">Чаще раза в неделю</option></select></label>
         <label class="field-label">Активность<select id="profileActivity"><option value="unknown">Не указано</option><option value="low">Низкая</option><option value="moderate">Средняя</option><option value="high">Высокая</option></select></label>
@@ -451,7 +436,13 @@
         <label class="field-label wide">Номер пробирки<input id="profileTubeNumber" maxlength="80" autocomplete="off" placeholder="Введите номер с наклейки на пробирке"><small>Нужен, чтобы в дальнейшем получить результаты сданных дополнительных обследований.</small></label>
         <label class="field-label wide">Что ещё важно учитывать<textarea id="profileNotes" rows="3" maxlength="1000" placeholder="Например: недавние операции или важные ограничения"></textarea></label>
       </div>
-      <div class="profile-footer"><span id="profileBmi">ИМТ появится после заполнения роста и веса</span><button class="primary-button" id="saveProfileButton">Сохранить анкету</button></div>
+      <div class="profile-footer"><span id="profileBmi">ИМТ появится после заполнения роста и веса</span><button class="primary-button" id="saveProfileButton">Сохранить данные</button></div>
+      <section class="profile-memory-section" aria-labelledby="profileMemoryTitle">
+        <div class="profile-memory-heading"><div><strong id="profileMemoryTitle">Что важно помнить обо мне</strong><small>Эти сведения учитываются в новых диалогах</small></div><b id="memoryCount">0</b></div>
+        <p>Добавляйте только те предпочтения и факты, которые хотите сохранять.</p>
+        <div class="memory-form"><select id="memoryCategory"><option value="preference">Предпочтение</option><option value="health">Здоровье</option><option value="constraint">Ограничение</option><option value="goal">Цель</option></select><input id="memoryText" maxlength="500" placeholder="Например: отвечать коротко и по пунктам"><button id="addMemoryButton">Добавить</button></div>
+        <div class="memory-list" id="memoryList"></div>
+      </section>
     </div>
   </div>
 
@@ -480,7 +471,7 @@
     </div>
   </div>
 
-  <script src="/static/agents.js?v=20260730-5"></script>
-  <script src="/static/app.js?v=20260730-5"></script>
+  <script src="/static/agents.js?v=20260807-ai-paused-new-chat"></script>
+  <script src="/static/app.js?v=20260807-ai-paused-new-chat"></script>
 </body>
 </html>

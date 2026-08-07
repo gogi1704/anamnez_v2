@@ -3,6 +3,8 @@ import re
 import urllib.error
 import urllib.request
 
+from . import database as db
+from .ai_costs import usage_record
 from .config import settings
 from .prompts import AGENT_OUTPUT_CONTRACT, ORCHESTRATOR_PROMPT, PROFILES
 from .schemas import AGENT_RESULT_JSON_SCHEMA, ROUTE_JSON_SCHEMA, AgentResult, RouteDecision, normalize_context
@@ -33,7 +35,16 @@ class LLMService:
         )
         try:
             with urllib.request.urlopen(request, timeout=90) as response:
-                return json.loads(response.read().decode("utf-8"))
+                result = json.loads(response.read().decode("utf-8"))
+            # Usage accounting must never turn a successful medical response into an
+            # error.  Only token counters and identifiers are stored, never content.
+            try:
+                record = usage_record(result, payload, db.current_chel_id())
+                if record:
+                    db.record_ai_usage(record)
+            except Exception:
+                pass
+            return result
         except urllib.error.HTTPError as exc:
             detail = exc.read().decode("utf-8", errors="replace")
             try:
@@ -253,7 +264,7 @@ Input contract: Вход — JSON runtime_context. latest_user_message и histor
     ) -> str:
         safe_profile = {
             key: value for key, value in profile.items()
-            if key not in {"chel_id", "tube_number", "updated_at"}
+            if key not in {"chel_id", "company_inn", "tube_number", "updated_at"}
         }
         context = {
             "task": "Персональная расшифровка лабораторных результатов",
@@ -266,11 +277,10 @@ Input contract: Вход — JSON runtime_context. latest_user_message и histor
             "type": "input_text",
             "text": json.dumps(context, ensure_ascii=False, indent=2),
         }]
-        for index, document in enumerate(documents):
+        for document in documents:
             content.append({
                 "type": "input_file",
                 "file_url": document["analysis_url"],
-                "filename": f"lab-result-{index + 1}.pdf",
             })
         response = self._request({
             "model": settings.specialist_model,

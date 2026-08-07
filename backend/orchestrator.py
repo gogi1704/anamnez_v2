@@ -67,7 +67,7 @@ QUESTIONS_PER_MESSAGE_LIMIT = 2
 def _profile_for_ai() -> dict:
     return {
         key: value for key, value in db.get_profile().items()
-        if key not in {"chel_id", "tube_number"}
+        if key not in {"chel_id", "company_inn", "tube_number"}
     }
 
 
@@ -179,6 +179,7 @@ class ConversationOrchestrator:
         handoff_reason = decision.reason
         human_ticket_id = conversation.get("human_ticket_id")
         human_status = conversation.get("human_status", "none")
+        human_status_before = human_status
         human_channel = conversation.get("human_channel")
         emergency = action == "emergency"
         urgency = "emergency" if emergency else "routine"
@@ -343,6 +344,10 @@ class ConversationOrchestrator:
             human_ticket_id=human_ticket_id,
             human_channel=human_channel,
         )
+        if action == "human" and human_status_before not in {"pending", "connected"}:
+            db.enqueue_manager_notifications(
+                "new_request", conversation_id, message_id=assistant_message["id"],
+            )
 
         return ChatResponse(
             conversation_id=conversation_id,

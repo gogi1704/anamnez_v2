@@ -33,11 +33,110 @@ const messages = $('#messages');
 const timeline = $('#timeline');
 const input = $('#messageInput');
 const ANONYMOUS_ACCESS_KEY = 'consilium_anonymous_access';
+const WELCOME_SEEN_KEY = 'consilium_welcome_seen';
 const INSTALL_DISMISSED_KEY = 'consilium_install_dismissed_at';
 const INSTALL_REOFFER_AFTER_MS = 7 * 24 * 60 * 60 * 1000;
 let userAudioContext = null;
 let deferredInstallPrompt = null;
 let installOfferTimer = null;
+let viewportSyncFrame = null;
+let backNavigationArmed = false;
+let allowBackNavigation = false;
+let welcomeNextAction = null;
+let installAfterCapabilities = false;
+let analyticsFlushTimer = null;
+let analyticsSending = false;
+let questionShownAt = 0;
+
+const ANALYTICS_QUEUE_KEY = 'consilium_analytics_queue_v1';
+const ANALYTICS_SESSION_KEY = 'consilium_analytics_session_v1';
+const ANALYTICS_SESSION_TTL = 30 * 60 * 1000;
+
+function analyticsUuid() {
+  return crypto.randomUUID?.() || `evt-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+}
+
+function getAnalyticsSession() {
+  const now = Date.now();
+  try {
+    const saved = JSON.parse(sessionStorage.getItem(ANALYTICS_SESSION_KEY) || '{}');
+    if (saved.id && now - Number(saved.lastSeen || 0) < ANALYTICS_SESSION_TTL) {
+      saved.lastSeen = now;
+      sessionStorage.setItem(ANALYTICS_SESSION_KEY, JSON.stringify(saved));
+      return saved.id;
+    }
+  } catch {}
+  const id = `ses-${analyticsUuid()}`;
+  sessionStorage.setItem(ANALYTICS_SESSION_KEY, JSON.stringify({id,lastSeen:now}));
+  return id;
+}
+
+const analyticsSessionId = getAnalyticsSession();
+
+function analyticsAttribution() {
+  const params = new URLSearchParams(location.search);
+  return {
+    source: params.get('utm_source') || params.get('source') || '',
+    campaign: params.get('utm_campaign') || '',
+    medium: params.get('utm_medium') || '',
+    app_mode: isInstalledApp() ? 'standalone' : 'browser',
+    page_version: '20260805',
+  };
+}
+
+function readAnalyticsQueue() {
+  try {
+    const queue = JSON.parse(localStorage.getItem(ANALYTICS_QUEUE_KEY) || '[]');
+    return Array.isArray(queue) ? queue.slice(-200) : [];
+  } catch { return []; }
+}
+
+function writeAnalyticsQueue(queue) {
+  try { localStorage.setItem(ANALYTICS_QUEUE_KEY, JSON.stringify(queue.slice(-200))); } catch {}
+}
+
+function trackEvent(eventName, properties = {}) {
+  const queue = readAnalyticsQueue();
+  queue.push({
+    event_id:`web-${analyticsUuid()}`,
+    session_id:analyticsSessionId,
+    event_name:eventName,
+    client_at:new Date().toISOString(),
+    properties:{...analyticsAttribution(),...properties},
+  });
+  writeAnalyticsQueue(queue);
+  clearTimeout(analyticsFlushTimer);
+  analyticsFlushTimer = setTimeout(() => flushAnalytics(), queue.length >= 10 ? 800 : 6000);
+}
+
+async function flushAnalytics({ beacon = false } = {}) {
+  if (analyticsSending) return;
+  const queue = readAnalyticsQueue();
+  if (!queue.length) return;
+  const batch = queue.slice(0, 30);
+  const body = JSON.stringify({events:batch});
+  if (beacon && navigator.sendBeacon) {
+    if (navigator.sendBeacon('/api/analytics/events', new Blob([body], {type:'application/json'}))) {
+      writeAnalyticsQueue(queue.slice(batch.length));
+    }
+    return;
+  }
+  analyticsSending = true;
+  try {
+    const response = await fetch('/api/analytics/events', {
+      method:'POST', body, keepalive:true,
+      headers:{'Content-Type':'application/json','X-Analytics-Session':analyticsSessionId},
+    });
+    if (response.ok) {
+      const sentIds = new Set(batch.map(event => event.event_id));
+      writeAnalyticsQueue(readAnalyticsQueue().filter(item => !sentIds.has(item.event_id)));
+    }
+  } catch {}
+  finally { analyticsSending = false; }
+}
+
+window.addEventListener('pagehide', () => flushAnalytics({beacon:true}));
+window.addEventListener('online', () => flushAnalytics());
 
 function isIosDevice() {
   return /iphone|ipad|ipod/i.test(navigator.userAgent)
@@ -52,10 +151,14 @@ function isInstalledApp() {
 function updateInstallMenu() {
   const button = $('#menuInstallAppButton');
   if (!button) return;
-  button.classList.toggle('hidden', isInstalledApp());
+  const installed = isInstalledApp();
+  button.classList.remove('hidden');
+  button.disabled = installed;
   const status = $('#menuInstallAppStatus');
   if (status) {
-    status.textContent = isIosDevice()
+    status.textContent = installed
+      ? 'Уже установлено'
+      : isIosDevice()
       ? 'Добавить на экран «Домой»'
       : 'Открывать как приложение';
   }
@@ -63,7 +166,10 @@ function updateInstallMenu() {
 
 function closeInstallApp({ dismissed = false } = {}) {
   $('#installAppModal').classList.add('hidden');
-  if (dismissed) localStorage.setItem(INSTALL_DISMISSED_KEY, String(Date.now()));
+  if (dismissed) {
+    localStorage.setItem(INSTALL_DISMISSED_KEY, String(Date.now()));
+    trackEvent('install_dismissed');
+  }
 }
 
 function openInstallApp() {
@@ -80,6 +186,7 @@ function openInstallApp() {
       ? 'Сервис будет открываться отдельным окном, почти как обычное приложение. Скачивать его из магазина не нужно.'
       : 'Откройте меню браузера и выберите «Установить приложение» или «Добавить на главный экран».';
   $('#installAppModal').classList.remove('hidden');
+  trackEvent('install_offer_viewed', {install_method:ios ? 'ios_instructions' : hasNativePrompt ? 'native_prompt' : 'browser_instructions'});
 }
 
 function scheduleInstallOffer() {
@@ -101,6 +208,7 @@ function scheduleInstallOffer() {
 }
 
 async function confirmInstallApp() {
+  trackEvent('install_clicked', {install_method:isIosDevice() ? 'ios_instructions' : 'native_prompt'});
   if (isIosDevice()) {
     closeInstallApp({ dismissed: true });
     return;
@@ -125,6 +233,7 @@ window.addEventListener('beforeinstallprompt', event => {
 });
 
 window.addEventListener('appinstalled', () => {
+  trackEvent('app_installed', {install_method:'native_prompt'});
   deferredInstallPrompt = null;
   localStorage.removeItem(INSTALL_DISMISSED_KEY);
   closeInstallApp();
@@ -176,14 +285,15 @@ function playUserMessageSound() {
 }
 
 const onboardingQuestions = [
+  { key:'company_inn', title:'Сообщите ИНН вашего предприятия', lead:'Если вы не владеете этой информацией, пожалуйста, уточните её у вашего работодателя.', type:'text', inputmode:'numeric', maxlength:12, placeholder:'10 или 12 цифр' },
   { key:'preferred_name', title:'Как к вам обращаться?', lead:'Имя необязательно, но с ним общение будет естественнее.', type:'text', placeholder:'Например, Алексей', optional:true },
-  { key:'age', title:'Сколько вам полных лет?', lead:'Возраст помогает специалистам точнее учитывать риски и нормы.', type:'number', min:0, max:120, placeholder:'Возраст' },
+  { key:'age', title:'Сколько вам полных лет?', lead:'Возраст помогает специалистам точнее учитывать риски и нормы.', type:'number', min:18, max:99, step:'1', placeholder:'От 18 до 99' },
   { key:'sex', title:'Укажите пол для медицинского контекста', lead:'Это важно для интерпретации части симптомов и обследований.', choices:[['female','Женский'],['male','Мужской']] },
-  { key:'height_cm', title:'Какой у вас рост?', lead:'Введите значение в сантиметрах.', type:'number', min:30, max:250, step:'0.1', placeholder:'Например, 176' },
-  { key:'weight_kg', title:'Какой у вас вес?', lead:'Введите актуальный вес в килограммах.', type:'number', min:1, max:500, step:'0.1', placeholder:'Например, 72' },
+  { key:'height_cm', title:'Какой у вас рост?', lead:'Введите значение в сантиметрах.', type:'number', min:50, max:250, step:'0.1', placeholder:'От 50 до 250' },
+  { key:'weight_kg', title:'Какой у вас вес?', lead:'Введите актуальный вес в килограммах.', type:'number', min:40, max:250, step:'0.1', placeholder:'От 40 до 250' },
   { key:'smoking', title:'Вы курите?', lead:'Учитываются сигареты, электронные сигареты и другие способы употребления никотина.', choices:[['never','Не курю'],['former','Курил(а) раньше'],['current','Курю сейчас']] },
   { key:'alcohol', title:'Как часто вы употребляете алкоголь?', lead:'Выберите наиболее близкий вариант.', choices:[['never','Не употребляю'],['rarely','Редко / по праздникам'],['weekly','Примерно раз в неделю'],['often','Чаще раза в неделю']] },
-  { key:'activity', title:'Какой у вас уровень активности?', lead:'Низкий — до 5 000 шагов, средний — 5–10 тысяч, высокий — более 10 тысяч или регулярный спорт.', choices:[['low','Низкий'],['moderate','Средний'],['high','Высокий']] },
+  { key:'activity', title:'Какой у вас уровень активности?', lead:'Ориентируйтесь на обычный день: низкий — до 5 000 шагов в день, средний — 5–10 тысяч шагов в день, высокий — более 10 тысяч шагов в день или регулярный спорт.', choices:[['low','Низкий'],['moderate','Средний'],['high','Высокий']] },
   { key:'blood_pressure', title:'Как вы оцениваете своё давление?', lead:'Если не измеряли или не уверены, выберите «Не знаю».', choices:[['normal','Обычно в норме'],['high','Бывает повышенным'],['low','Бывает пониженным'],['unstable','Сильно меняется'],['unknown','Не знаю']] },
   { key:'dark_in_eyes', title:'Темнеет ли в глазах при резком подъёме?', lead:'Например, когда быстро встаёте с кровати или стула.', choices:[['no','Нет'],['yes','Да'],['unknown','Не уверен(а)']] },
   { key:'blood_sugar', title:'Знаете ли вы уровень сахара в крови?', lead:'Это не оценка диагноза — только уже известная вам информация.', choices:[['normal','Был в норме'],['high','Бывал повышен'],['unknown','Не измерял(а) / не знаю']] },
@@ -196,11 +306,18 @@ const onboardingQuestions = [
 
 async function api(path, options = {}) {
   const response = await fetch(path, {
-    headers: { 'Content-Type': 'application/json', ...(options.headers || {}) },
+    headers: {
+      'Content-Type': 'application/json',
+      'X-Analytics-Session': analyticsSessionId,
+      ...(options.headers || {}),
+    },
     ...options,
   });
   const data = await response.json().catch(() => ({}));
-  if (!response.ok) throw new Error(data.detail || `Ошибка сервера: ${response.status}`);
+  if (!response.ok) {
+    trackEvent('api_error', {status_code:response.status,error_code:`http_${response.status}`,reason:path.split('?')[0]});
+    throw new Error(data.detail || `Ошибка сервера: ${response.status}`);
+  }
   return data;
 }
 
@@ -211,10 +328,59 @@ function setAuthStatus(message = '', error = false) {
   status.classList.toggle('error', Boolean(error));
 }
 
+function hideEntryScreens() {
+  $('#welcomeScreen').classList.add('hidden');
+  $('#authGate').classList.add('hidden');
+  $('#onboarding').classList.add('hidden');
+  $('#appShell').classList.add('hidden');
+}
+
+function showWelcome(nextAction) {
+  welcomeNextAction = nextAction;
+  hideEntryScreens();
+  $('#welcomeScreen').classList.remove('hidden');
+  $('#welcomeScreen').scrollTop = 0;
+  trackEvent('welcome_viewed', {screen:'welcome'});
+}
+
+async function continueFromWelcome() {
+  const button = $('#welcomeNextButton');
+  const nextAction = welcomeNextAction;
+  button.disabled = true;
+  localStorage.setItem(WELCOME_SEEN_KEY, '1');
+  trackEvent('welcome_continued', {screen:'welcome'});
+  $('#welcomeScreen').classList.add('hidden');
+  try {
+    if (nextAction) await nextAction();
+  } catch (error) {
+    showAuthGate();
+    setAuthStatus(`Не удалось продолжить: ${error.message}`, true);
+  } finally {
+    welcomeNextAction = null;
+    button.disabled = false;
+  }
+}
+
+async function enterKnownUser() {
+  if (localStorage.getItem(WELCOME_SEEN_KEY)) {
+    await startApplication();
+    return;
+  }
+  const onboarding = await api('/api/onboarding');
+  if (onboarding.status === 'complete') {
+    localStorage.setItem(WELCOME_SEEN_KEY, '1');
+    await startApplication();
+    return;
+  }
+  showWelcome(startApplication);
+}
+
 function showAuthGate() {
+  $('#welcomeScreen').classList.add('hidden');
   $('#authGate').classList.remove('hidden');
   $('#onboarding').classList.add('hidden');
   $('#appShell').classList.add('hidden');
+  trackEvent('auth_gate_viewed', {screen:'registration'});
 }
 
 function closeAnonymousWarning() {
@@ -222,12 +388,17 @@ function closeAnonymousWarning() {
 }
 
 async function startApplication() {
+  $('#welcomeScreen').classList.add('hidden');
   $('#authGate').classList.add('hidden');
   closeAnonymousWarning();
   await loadOnboarding();
 }
 
+$('#welcomeNextButton').addEventListener('click', continueFromWelcome);
+
 async function startMessengerAuth(provider) {
+  trackEvent('registration_method_selected', {provider,method:provider,screen:'registration'});
+  trackEvent('messenger_auth_started', {provider,method:provider});
   const button = provider === 'telegram' ? $('#telegramAuthButton') : $('#maxAuthButton');
   button.disabled = true;
   setAuthStatus('');
@@ -245,42 +416,30 @@ async function startMessengerAuth(provider) {
 
 $('#telegramAuthButton').addEventListener('click', () => startMessengerAuth('telegram'));
 $('#maxAuthButton').addEventListener('click', () => startMessengerAuth('max'));
-$('#anonymousAuthButton').addEventListener('click', () => $('#anonymousWarning').classList.remove('hidden'));
-$('#anonymousWarningClose').addEventListener('click', closeAnonymousWarning);
-$('#anonymousWarningCancel').addEventListener('click', closeAnonymousWarning);
+$('#anonymousAuthButton').addEventListener('click', () => {
+  trackEvent('registration_method_selected', {provider:'anonymous',method:'anonymous',screen:'registration'});
+  trackEvent('anonymous_warning_viewed', {screen:'registration'});
+  $('#anonymousWarning').classList.remove('hidden');
+});
+$('#anonymousWarningClose').addEventListener('click', () => { trackEvent('anonymous_warning_cancelled'); closeAnonymousWarning(); });
+$('#anonymousWarningCancel').addEventListener('click', () => { trackEvent('anonymous_warning_cancelled'); closeAnonymousWarning(); });
 $('#anonymousWarning').addEventListener('click', event => {
   if (event.target === $('#anonymousWarning')) closeAnonymousWarning();
 });
 $('#anonymousWarningConfirm').addEventListener('click', async () => {
-  localStorage.setItem(ANONYMOUS_ACCESS_KEY, state.identity?.chel_id || '');
   try {
+    trackEvent('registration_method_selected', {provider:'anonymous',method:'anonymous',result:'confirmed'});
+    const registration = await api('/api/register-choice', {
+      method:'POST',
+      body:JSON.stringify({ method:'anonymous' }),
+    });
+    localStorage.setItem(ANONYMOUS_ACCESS_KEY, registration.chel_id || state.identity?.chel_id || '');
     await startApplication();
   } catch (error) {
     showAuthGate();
     setAuthStatus(`Не удалось открыть Консилиум: ${error.message}`, true);
   }
 });
-
-async function resetUser() {
-  const confirmed = window.confirm(
-    'Начать заново?\n\nБудут безвозвратно удалены анкета, все диалоги, память, история здоровья, симптомы, обращения человеку и сохранённый номер созвона.\n\nЕсли вы вошли через MAX, привязка к аккаунту и ваш chel_id сохранятся.'
-  );
-  if (!confirmed) return;
-  const button = $('#resetUserButton');
-  button.disabled = true;
-  try {
-    await api('/api/reset-user', {
-      method:'POST',
-      headers:{ 'X-Consilium-Action':'reset-user' },
-      body:'{}',
-    });
-    localStorage.removeItem('consilium_conversation_id');
-    window.location.reload();
-  } catch (error) {
-    button.disabled = false;
-    alert(`Не удалось начать заново: ${error.message}`);
-  }
-}
 
 function activeOnboardingQuestions() {
   return onboardingQuestions;
@@ -324,6 +483,7 @@ function fontSizeChoices(className) {
 function renderAppearance() {
   setOnboardingMeta('Настройка', 2);
   $('#onboardingContent').innerHTML = `<span class="onboarding-kicker">Перед началом</span><h1>Какой размер текста вам удобен?</h1><p class="onboarding-lead">Вы увидите изменение сразу. Позже размер можно поменять через меню функций.</p><div class="appearance-options">${fontSizeChoices('appearance-choice')}</div><div class="onboarding-actions"><button type="button" class="onboarding-next" data-onboarding-action="save-appearance">Продолжить</button></div>`;
+  trackEvent('appearance_viewed', {screen:'appearance'});
 }
 
 async function saveAppearance(size = state.fontSize) {
@@ -350,15 +510,22 @@ function renderQuestion() {
   state.onboardingStep = Math.max(0, Math.min(state.onboardingStep, questions.length - 1));
   const question = questions[state.onboardingStep];
   const value = state.onboardingAnswers[question.key] ?? '';
+  questionShownAt = performance.now();
+  if (state.onboardingStep === 0) trackEvent('questionnaire_started', {screen:'questionnaire'});
+  trackEvent('question_viewed', {
+    question_key:question.key, step_number:state.onboardingStep + 1,
+    optional:Boolean(question.optional), screen:'questionnaire',
+  });
   setOnboardingMeta('Анкета', 5 + Math.round((state.onboardingStep / questions.length) * 60));
   const control = question.choices
     ? `<div class="choice-grid">${question.choices.map(([id,label]) => `<button type="button" class="choice-button ${value === id ? 'selected' : ''}" data-choice="${id}">${label}</button>`).join('')}</div>`
     : question.type === 'textarea'
       ? `<textarea class="onboarding-input onboarding-input-area" id="onboardingInput" placeholder="${escapeAttr(question.placeholder || '')}">${escapeHtml(Array.isArray(value) ? value.join('\n') : value)}</textarea>`
-      : `<input class="onboarding-input" id="onboardingInput" type="${question.type || 'text'}" value="${escapeAttr(value)}" placeholder="${escapeAttr(question.placeholder || '')}" ${question.min !== undefined ? `min="${question.min}"` : ''} ${question.max !== undefined ? `max="${question.max}"` : ''} ${question.step ? `step="${question.step}"` : ''}>`;
-  const bmi = question.key === 'weight_kg' && state.onboardingAnswers.height_cm && value
-    ? `<div class="bmi-preview">Расчётный ИМТ: ${(Number(value) / ((Number(state.onboardingAnswers.height_cm) / 100) ** 2)).toFixed(1)}. Это ориентир, не диагноз.</div>` : '';
-  $('#onboardingContent').innerHTML = `<span class="onboarding-kicker">Шаг ${state.onboardingStep + 1} из ${questions.length}</span><h1>${question.title}</h1><p class="onboarding-lead">${question.lead}</p>${control}${bmi}<div class="onboarding-actions">${state.onboardingStep ? '<button type="button" class="onboarding-back" data-onboarding-action="back">Назад</button>' : ''}<button type="button" class="onboarding-next" data-onboarding-action="next">${onboardingNextLabel(question, value, state.onboardingStep === questions.length - 1)}</button></div>`;
+      : `<input class="onboarding-input" id="onboardingInput" type="${question.type || 'text'}" value="${escapeAttr(value)}" placeholder="${escapeAttr(question.placeholder || '')}" ${question.inputmode ? `inputmode="${question.inputmode}"` : ''} ${question.maxlength ? `maxlength="${question.maxlength}"` : ''} ${question.min !== undefined ? `min="${question.min}"` : ''} ${question.max !== undefined ? `max="${question.max}"` : ''} ${question.step ? `step="${question.step}"` : ''}>`;
+  const notMedicalExam = question.key === 'company_inn'
+    ? '<button type="button" class="not-medical-exam-button" data-onboarding-action="skip-medical-exam">Я не на мед-осмотр</button>'
+    : '';
+  $('#onboardingContent').innerHTML = `<span class="onboarding-kicker">Шаг ${state.onboardingStep + 1} из ${questions.length}</span><h1>${question.title}</h1><p class="onboarding-lead">${question.lead}</p>${control}<div class="onboarding-actions">${state.onboardingStep ? '<button type="button" class="onboarding-back" data-onboarding-action="back">Назад</button>' : ''}<button type="button" class="onboarding-next" data-onboarding-action="next">${onboardingNextLabel(question, value, state.onboardingStep === questions.length - 1)}</button></div>${notMedicalExam}`;
   $('#onboardingInput')?.focus();
 }
 
@@ -366,17 +533,27 @@ function captureQuestionAnswer() {
   const question = activeOnboardingQuestions()[state.onboardingStep];
   if (!question.choices) {
     let value = $('#onboardingInput').value.trim();
+    if (question.key === 'company_inn' && !/^\d{10}(?:\d{2})?$/.test(value)) {
+      throw new Error('Введите ИНН предприятия: 10 или 12 цифр');
+    }
     if (question.list) value = value.split('\n').map(item => item.trim()).filter(Boolean);
     if (!question.optional && (value === '' || (Array.isArray(value) && !value.length))) throw new Error('Ответьте на вопрос, чтобы продолжить');
     if (question.type === 'number' && value !== '') {
       const number = Number(value);
       if (!Number.isFinite(number) || number < question.min || number > question.max) throw new Error(`Введите значение от ${question.min} до ${question.max}`);
+      if (question.key === 'age' && !Number.isInteger(number)) throw new Error('Введите возраст целым числом');
       value = number;
     }
     state.onboardingAnswers[question.key] = value;
   } else if (!state.onboardingAnswers[question.key]) {
     throw new Error('Выберите один из вариантов');
   }
+  const stored = state.onboardingAnswers[question.key];
+  const empty = Array.isArray(stored) ? !stored.length : !String(stored ?? '').trim();
+  trackEvent(empty ? 'question_skipped' : 'question_answered', {
+    question_key:question.key, step_number:state.onboardingStep + 1,
+    optional:Boolean(question.optional), duration_ms:Math.round(performance.now() - questionShownAt),
+  });
 }
 
 async function nextQuestion() {
@@ -389,7 +566,7 @@ async function nextQuestion() {
       return;
     }
     const payload = {
-      preferred_name:'', age:'', sex:'', height_cm:'', weight_kg:'', pregnancy:'not_applicable',
+      company_inn:'', preferred_name:'', age:'', sex:'', height_cm:'', weight_kg:'', pregnancy:'not_applicable',
       conditions:[], medications:[], allergies:[], smoking:'unknown', alcohol:'unknown', activity:'unknown',
       blood_pressure:'unknown', blood_sugar:'unknown', dark_in_eyes:'unknown', joint_pain:'unknown', fatigue:'unknown', notes:'',
       ...state.onboardingAnswers,
@@ -397,12 +574,33 @@ async function nextQuestion() {
     state.onboarding = await api('/api/onboarding/profile', { method:'POST', body:JSON.stringify(payload) });
     state.profile = state.onboarding.profile;
     renderExamOffer();
-  } catch (error) { showOnboardingError(error.message); }
+  } catch (error) {
+    const question = activeOnboardingQuestions()[state.onboardingStep];
+    trackEvent('question_validation_error', {
+      question_key:question?.key || '', step_number:state.onboardingStep + 1,
+      error_code:'invalid_or_missing',
+    });
+    showOnboardingError(error.message);
+  }
+}
+
+async function skipMedicalExam() {
+  const button = $('#onboardingContent [data-onboarding-action="skip-medical-exam"]');
+  if (button) button.disabled = true;
+  try {
+    state.onboarding = await api('/api/onboarding/not-medical-exam', { method:'POST', body:'{}' });
+    state.profile = state.onboarding.profile;
+    await openMainApp();
+  } catch (error) {
+    if (button) button.disabled = false;
+    showOnboardingError(error.message);
+  }
 }
 
 function renderExamOffer() {
+  trackEvent('examinations_offer_viewed', { screen:'examinations_offer' });
   setOnboardingMeta('Обследования', 72);
-  $('#onboardingContent').innerHTML = `<span class="onboarding-kicker">Необязательный шаг</span><h1>Хотите дополнить картину обследованиями?</h1><div class="exam-offer-guide"><p><strong>Нажимая «Посмотреть варианты»</strong>, вы увидите наборы обследований, подобранные с учётом ответов анкеты.</p><p>Перед выбором можно вернуться и изменить ответы. Позже анкету также можно отредактировать в разделе «Моя анкета».</p><p>Вы можете пропустить дополнительные обследования — Консилиум всё равно откроется.</p></div><div class="onboarding-actions"><button type="button" class="onboarding-back" data-onboarding-action="question-back">Изменить анкету</button><button type="button" class="onboarding-next" data-onboarding-action="start-exams">Посмотреть варианты</button></div><button type="button" class="exam-skip" data-onboarding-action="review-exam-skip">Пропустить и открыть Консилиум</button>`;
+  $('#onboardingContent').innerHTML = `<span class="onboarding-kicker">Необязательный шаг</span><h1>Хотите дополнить картину обследованиями?</h1><div class="exam-offer-guide"><p><strong>Нажимая «Посмотреть варианты»</strong>, вы увидите наборы обследований, подобранные с учётом ответов анкеты.</p><p>Перед выбором можно вернуться и изменить ответы. Позже данные также можно отредактировать в разделе «Мои данные».</p><p>Вы можете пропустить дополнительные обследования — Консилиум всё равно откроется.</p></div><div class="onboarding-actions"><button type="button" class="onboarding-back" data-onboarding-action="question-back">Изменить анкету</button><button type="button" class="onboarding-next" data-onboarding-action="start-exams">Посмотреть варианты</button></div><button type="button" class="exam-skip" data-onboarding-action="review-exam-skip">Пропустить и открыть Консилиум</button>`;
 }
 
 function renderExamSelection() {
@@ -410,10 +608,11 @@ function renderExamSelection() {
   const recommended = new Set(state.onboarding.recommended_test_ids || []);
   const cards = state.onboarding.tests.map(test => `<label class="exam-card ${state.selectedTests.has(test.id) ? 'selected' : ''}" data-test-card="${test.id}"><input type="checkbox" ${state.selectedTests.has(test.id) ? 'checked' : ''}><span class="exam-check">✓</span>${recommended.has(test.id) ? '<small class="recommended-badge">Подходит по анкете</small>' : ''}<strong>${test.name}</strong><b>${test.price.toLocaleString('ru')} ₽</b><small>${test.description}</small><em>${test.includes}</em></label>`).join('');
   const total = state.onboarding.tests.filter(test => state.selectedTests.has(test.id)).reduce((sum,test) => sum + test.price, 0);
-  $('#onboardingContent').innerHTML = `<span class="onboarding-kicker">Выбор анализов</span><h1>Выберите интересующие наборы</h1><p class="onboarding-lead">Рекомендации отмечены по ответам анкеты и не являются назначением.</p><div class="exam-list">${cards}</div><div class="exam-total"><span>Выбрано: ${state.selectedTests.size}</span><strong>${total.toLocaleString('ru')} ₽</strong></div><div class="onboarding-actions"><button type="button" class="onboarding-back" data-onboarding-action="exam-offer">Назад</button><button type="button" class="onboarding-next" data-onboarding-action="continue-payment" ${state.selectedTests.size ? '' : 'disabled'}>К демо-оплате</button></div><button type="button" class="exam-skip" data-onboarding-action="review-exam-skip">Ничего не выбирать</button>`;
+  $('#onboardingContent').innerHTML = `<span class="onboarding-kicker">Выбор анализов</span><h1>Выберите интересующие наборы</h1><p class="onboarding-lead">Рекомендации отмечены по ответам анкеты и не являются назначением.</p><div class="exam-list">${cards}</div><div class="exam-total"><span>Выбрано: ${state.selectedTests.size}</span><strong>${total.toLocaleString('ru')} ₽</strong></div><div class="onboarding-actions"><button type="button" class="onboarding-back" data-onboarding-action="exam-offer">Назад</button><button type="button" class="onboarding-next" data-onboarding-action="continue-payment" ${state.selectedTests.size ? '' : 'disabled'}>Далее</button></div><button type="button" class="exam-skip" data-onboarding-action="review-exam-skip">Ничего не выбирать</button>`;
 }
 
 function renderExamSkipConfirmation() {
+  trackEvent('examinations_objection_viewed', { screen:'examinations_skip' });
   setOnboardingMeta('Обследования', 76);
   $('#onboardingContent').innerHTML = `<span class="onboarding-kicker">Перед тем как продолжить</span><h1>Что дают дополнительные обследования?</h1><p class="onboarding-lead">Сдавая дополнительные обследования, вы получаете:</p><ul class="exam-benefits"><li><span>✓</span><div><strong>Больше информации за один визит</strong><small>Во время медосмотра дополнительные показатели можно проверить без отдельной поездки в лабораторию.</small></div></li><li><span>✓</span><div><strong>Возможность заметить скрытые изменения раньше</strong><small>Некоторые отклонения долго не проявляются заметными симптомами.</small></div></li><li><span>✓</span><div><strong>Результаты онлайн</strong><small>Готовые документы можно получить в Консилиуме по номеру пробирки.</small></div></li><li><span>✓</span><div><strong>Понятную расшифровку</strong><small>Результаты можно сопоставить с анкетой и обсудить со специалистом.</small></div></li></ul><p class="exam-benefits-note">Обследования остаются добровольными. Эта подборка не заменяет назначение врача.</p><div class="onboarding-actions skip-decision-actions"><button type="button" class="exam-refuse" data-onboarding-action="confirm-skip-exams">Всё равно отказаться</button><button type="button" class="onboarding-next" data-onboarding-action="start-exams">Выбрать обследования</button></div>`;
 }
@@ -431,27 +630,101 @@ function selectedTestDetails() {
 }
 
 function renderPayment() {
-  setOnboardingMeta('Демо-оплата', 92);
+  trackEvent('payment_viewed', { screen:'payment', selected_count:selectedTestDetails().length });
+  setOnboardingMeta('Оплата', 92);
   const selected = selectedTestDetails();
   const total = selected.reduce((sum,test) => sum + test.price, 0);
-  $('#onboardingContent').innerHTML = `<span class="onboarding-kicker">Последний шаг</span><h1>Проверим заказ</h1><p class="onboarding-lead">Это демонстрационный экран. Он не запрашивает платёжные данные и ничего не списывает.</p><div class="payment-stub"><span class="demo-badge">ДЕМО · БЕЗ СПИСАНИЯ</span><ul class="payment-lines">${selected.map(test => `<li><span>${test.name}</span><strong>${test.price.toLocaleString('ru')} ₽</strong></li>`).join('')}</ul><div class="payment-total"><span>Итого</span><strong>${total.toLocaleString('ru')} ₽</strong></div></div><div class="onboarding-actions"><button type="button" class="onboarding-back" data-onboarding-action="back-to-exams">Назад</button><button type="button" class="onboarding-next" data-onboarding-action="pay-demo">Имитировать оплату</button></div>`;
+  $('#onboardingContent').innerHTML = `<span class="onboarding-kicker">Последний шаг</span><h1>Проверим заказ</h1><p class="onboarding-lead">Выберите, как вам будет удобнее оплатить дополнительные обследования.</p><div class="payment-stub"><span class="demo-badge">ВЫБРАННЫЕ ОБСЛЕДОВАНИЯ</span><ul class="payment-lines">${selected.map(test => `<li><span>${test.name}</span><strong>${test.price.toLocaleString('ru')} ₽</strong></li>`).join('')}</ul><div class="payment-total"><span>Итого</span><strong>${total.toLocaleString('ru')} ₽</strong></div></div><div class="payment-actions"><button type="button" class="payment-online-button" data-onboarding-action="pay-online">Оплатить онлайн</button><button type="button" class="payment-at-exam-button" data-onboarding-action="pay-at-exam">Оплатить на медосмотре</button></div><button type="button" class="payment-back-button" data-onboarding-action="back-to-exams">← Вернуться к обследованиям</button><div class="payment-unavailable-backdrop hidden" id="paymentUnavailable" role="dialog" aria-modal="true" aria-labelledby="paymentUnavailableTitle"><div class="payment-unavailable-card"><span class="payment-unavailable-icon" aria-hidden="true">⌛</span><h2 id="paymentUnavailableTitle">Онлайн-оплата временно недоступна</h2><p>Мы уже работаем над её подключением. Совсем скоро обследования можно будет оплатить прямо в сервисе.</p><button type="button" data-onboarding-action="close-online-payment">Понятно</button></div></div>`;
 }
 
-async function demoPayment() {
+function showOnlinePaymentUnavailable() {
+  trackEvent('payment_online_unavailable', {method:'online',screen:'payment'});
+  $('#paymentUnavailable')?.classList.remove('hidden');
+}
+
+async function confirmPaymentAtExam() {
   try {
-    state.onboarding = await api('/api/onboarding/payment', { method:'POST', body:'{}' });
-    setOnboardingMeta('Готово', 100);
-    $('#onboardingContent').innerHTML = `<div class="success-mark">✓</div><h1>Всё готово</h1><p class="onboarding-lead">Анкета сохранена, выбранные обследования добавлены в демо-заказ. Теперь специалисты будут учитывать ваши данные в подходящих вопросах.</p><div class="onboarding-actions"><button type="button" class="onboarding-next" data-onboarding-action="open-app">Открыть Консилиум</button></div>`;
+    state.onboarding = await api('/api/onboarding/payment', { method:'POST', body:JSON.stringify({method:'at_exam'}) });
+    renderExamCompletion();
   } catch (error) { showOnboardingError(error.message); }
+}
+
+function renderExamCompletion() {
+  trackEvent('completion_viewed', { screen:'exam_completion' });
+  setOnboardingMeta('Готово', 100);
+  $('#onboardingContent').innerHTML = `
+    <div class="exam-completion">
+      <div class="exam-completion-mark" aria-hidden="true">🎉</div>
+      <span class="onboarding-kicker">Обследования выбраны</span>
+      <h1>Отлично! Вы выбрали дополнительные обследования.</h1>
+
+      <div class="exam-completion-copy">
+        <p>В день медицинского осмотра наша бригада сообщит вам <strong>индивидуальный номер пробирки</strong>.</p>
+        <p>Чтобы получить результаты анализов, достаточно будет ввести этот номер в соответствующее поле нашего сервиса.</p>
+
+        <div class="exam-tube-note">
+          <span aria-hidden="true">№</span>
+          <p>Сейчас у вас этого номера еще нет — это нормально. Когда он появится, просто напишите в чат нашему менеджеру. Он подскажет, куда ввести этот номер и как получить результаты.</p>
+        </div>
+
+        <p>После этого сообщения для вас откроется чат, в котором вы сможете:</p>
+        <ul class="exam-chat-benefits">
+          <li>узнать, как получить результаты анализов;</li>
+          <li>задать любые вопросы о медицинском осмотре;</li>
+          <li>получить консультацию по анализам, питанию и вопросам здоровья.</li>
+        </ul>
+
+        <p>Как только результаты будут готовы, вы сможете <strong>бесплатно получить их расшифровку</strong> у нашего специалиста.</p>
+
+        <div class="exam-install-note">
+          <span aria-hidden="true">📱</span>
+          <p><strong>Также рекомендуем установить наше приложение на смартфон.</strong> Так вы не потеряете доступ к своим результатам, сможете в любой момент обратиться к онлайн-врачу и всегда будете иметь все необходимые медицинские сервисы под рукой.</p>
+        </div>
+
+        <p class="exam-help-note"><span aria-hidden="true">💬</span> Не стесняйтесь писать в чат — мы всегда рады помочь!</p>
+      </div>
+
+      <div class="exam-completion-actions">
+        <button type="button" class="onboarding-next exam-install-button" data-onboarding-action="install-after-exams"><span aria-hidden="true">＋</span> Установить приложение</button>
+        <button type="button" class="exam-later-button" data-onboarding-action="later-after-exams">Установлю позже</button>
+      </div>
+    </div>`;
+}
+
+async function finishExamOnboarding(installApp = false) {
+  const buttons = $('#onboardingContent').querySelectorAll('[data-onboarding-action]');
+  buttons.forEach(button => { button.disabled = true; });
+  try {
+    if (!state.onboarding?.intro_seen) {
+      state.onboarding = await api('/api/onboarding/intro-seen', { method:'POST', body:'{}' });
+    }
+    if (!installApp) localStorage.setItem(INSTALL_DISMISSED_KEY, String(Date.now()));
+    await openMainApp({ skipIntro:true });
+    if (installApp) openInstallApp();
+  } catch (error) {
+    buttons.forEach(button => { button.disabled = false; });
+    showOnboardingError(error.message);
+  }
 }
 
 async function loadOnboarding() {
   state.onboarding = await api('/api/onboarding');
-  applyFontSize(state.onboarding.font_size || 'standard');
+  applyFontSize(state.onboarding.font_size || 'extra');
   state.profile = state.onboarding.profile;
   seedOnboardingAnswers(state.profile);
   state.selectedTests = new Set(state.onboarding.selected_tests || []);
-  if (state.onboarding.status === 'complete') return openMainApp();
+  if (state.onboarding.status === 'complete') {
+    if (
+      state.onboarding.selected_tests?.length
+      && ['demo_paid','pay_at_exam'].includes(state.onboarding.payment_status)
+      && !state.onboarding.intro_seen
+    ) {
+      $('#onboarding').classList.remove('hidden');
+      $('#appShell').classList.add('hidden');
+      return renderExamCompletion();
+    }
+    return openMainApp();
+  }
   $('#onboarding').classList.remove('hidden');
   $('#appShell').classList.add('hidden');
   if (state.onboarding.status === 'appearance') renderAppearance();
@@ -460,11 +733,15 @@ async function loadOnboarding() {
   else renderQuestion();
 }
 
-async function openMainApp() {
+async function openMainApp({ skipIntro = false } = {}) {
   $('#onboarding').classList.add('hidden');
   $('#appShell').classList.remove('hidden');
   if (!state.mainInitialized) await initMainApp();
-  if (!state.onboarding?.intro_seen) requestAnimationFrame(openCapabilities);
+  trackEvent('chat_opened', { screen:'chat' });
+  if (!skipIntro && !state.onboarding?.intro_seen) {
+    installAfterCapabilities = state.onboarding?.payment_status === 'not_medical_exam';
+    requestAnimationFrame(openCapabilities);
+  }
   else scheduleInstallOffer();
 }
 
@@ -485,23 +762,34 @@ $('#onboardingContent').addEventListener('click', event => {
   const card = event.target.closest('[data-test-card]');
   if (card) {
     const id = card.dataset.testCard;
-    state.selectedTests.has(id) ? state.selectedTests.delete(id) : state.selectedTests.add(id);
+    const removing = state.selectedTests.has(id);
+    removing ? state.selectedTests.delete(id) : state.selectedTests.add(id);
+    trackEvent(removing ? 'examination_deselected' : 'examination_selected', {
+      exam_id:id,
+      recommended:(state.onboarding.recommended_test_ids || []).includes(id),
+      selected_count:state.selectedTests.size,
+    });
     renderExamSelection();
     return;
   }
   const action = event.target.closest('[data-onboarding-action]')?.dataset.onboardingAction;
   if (!action) return;
   if (action === 'next') nextQuestion();
-  else if (action === 'back') { try { captureQuestionAnswer(); } catch {} state.onboardingStep -= 1; renderQuestion(); }
-  else if (action === 'question-back') { state.onboardingStep = activeOnboardingQuestions().length - 1; renderQuestion(); }
-  else if (action === 'start-exams') renderExamSelection();
-  else if (action === 'exam-offer') renderExamOffer();
-  else if (action === 'review-exam-skip') renderExamSkipConfirmation();
-  else if (action === 'confirm-skip-exams') submitExamSelection(true);
+  else if (action === 'back') { try { captureQuestionAnswer(); } catch {} trackEvent('question_back', { step_number:state.onboardingStep + 1 }); state.onboardingStep -= 1; renderQuestion(); }
+  else if (action === 'question-back') { trackEvent('question_back', { screen:'examinations_offer' }); trackEvent('funnel_action', {stage:'examinations_offer',action:'edit_questionnaire'}); state.onboardingStep = activeOnboardingQuestions().length - 1; renderQuestion(); }
+  else if (action === 'start-exams') { const afterObjection = Boolean($('#onboardingContent .exam-benefits')); trackEvent('funnel_action', {stage:'examinations_offer',action:afterObjection ? 'choose_after_objection' : 'view_options'}); trackEvent('examinations_opened', { screen:'examinations' }); renderExamSelection(); }
+  else if (action === 'exam-offer') { trackEvent('funnel_action', {stage:'examinations_options',action:'options_back'}); renderExamOffer(); }
+  else if (action === 'review-exam-skip') { const fromOptions = Boolean($('#onboardingContent .exam-list')); trackEvent('funnel_action', {stage:fromOptions ? 'examinations_options' : 'examinations_offer',action:fromOptions ? 'nothing_selected' : 'skip'}); trackEvent('examinations_skip_clicked', { selected_count:state.selectedTests.size }); renderExamSkipConfirmation(); }
+  else if (action === 'confirm-skip-exams') { trackEvent('funnel_action', {stage:'examinations_offer',action:'refuse'}); trackEvent('examinations_skipped', { screen:'examinations_skip' }); submitExamSelection(true); }
   else if (action === 'continue-payment') submitExamSelection(false);
   else if (action === 'back-to-exams') renderExamSelection();
-  else if (action === 'pay-demo') demoPayment();
+  else if (action === 'pay-online') { trackEvent('funnel_action', {stage:'examinations_options',action:'pay_online'}); showOnlinePaymentUnavailable(); }
+  else if (action === 'pay-at-exam') { trackEvent('funnel_action', {stage:'examinations_options',action:'pay_at_exam'}); confirmPaymentAtExam(); }
+  else if (action === 'close-online-payment') $('#paymentUnavailable')?.classList.add('hidden');
   else if (action === 'open-app') openMainApp();
+  else if (action === 'install-after-exams') { trackEvent('install_clicked', { screen:'exam_completion' }); finishExamOnboarding(true); }
+  else if (action === 'later-after-exams') { trackEvent('install_dismissed', { screen:'exam_completion' }); finishExamOnboarding(false); }
+  else if (action === 'skip-medical-exam') skipMedicalExam();
   else if (action === 'save-appearance') saveAppearance();
 });
 
@@ -521,19 +809,6 @@ $('#onboardingContent').addEventListener('focusin', event => {
   }, 180);
 });
 
-function renderAgentList() {
-  const groups = [['coordination', 'Помощь'], ['medical', 'Медицина'], ['general', 'Здоровье и образ жизни']];
-  $('#agentList').innerHTML = groups.map(([group, title]) => `
-    <div class="agent-group-label">${title}</div>
-    ${Object.values(AGENTS).filter(a => a.group === group).map(agent => `
-      <div class="agent-row ${agent.id === state.active ? 'active' : ''}">
-        <span class="agent-icon">${agent.icon}</span>
-        <span><strong>${agent.name}</strong><small>${agent.role}</small></span>
-        <i class="status-dot"></i>
-      </div>`).join('')}
-  `).join('');
-}
-
 function setActiveAgent(id) {
   if (!AGENTS[id]) id = 'manager';
   state.active = id;
@@ -541,37 +816,44 @@ function setActiveAgent(id) {
   $('#headerAvatar').textContent = agent.initials;
   $('#headerName').textContent = agent.name;
   $('#headerRole').textContent = agent.role;
-  renderAgentList();
 }
 
 function addMessage(sender, text, agentId = state.active, urgent = false, createdAt = null, metadata = {}) {
+  const messageId = Number(metadata._message_id || 0);
+  if (messageId) {
+    state.lastMessageId = Math.max(state.lastMessageId, messageId);
+    const existing = messages.querySelector(`[data-message-id="${messageId}"]`);
+    if (existing) return existing;
+  }
   const agent = AGENTS[agentId] || AGENTS.manager;
   const humanManager = sender === 'agent' && metadata.sender_type === 'human_manager';
   const wrapper = document.createElement('div');
   wrapper.className = `message-row ${sender}${urgent ? ' urgent' : ''}${humanManager ? ' human-manager' : ''}`;
-  if (metadata._message_id) wrapper.dataset.messageId = String(metadata._message_id);
+  if (messageId) wrapper.dataset.messageId = String(messageId);
   const date = createdAt ? new Date(createdAt) : new Date();
   const time = new Intl.DateTimeFormat('ru', { hour: '2-digit', minute: '2-digit' }).format(date);
   const attachmentBadges = (metadata.attachments || []).map(item => `<em class="message-file">▱ ${escapeHtml(item.name)}</em>`).join('');
-  const special = metadata.action === 'second_opinion' ? '<b class="special-label">Второе мнение</b>' : '';
   const cached = metadata.action === 'lab_interpretation' && metadata.interpretation_cached
     ? '<b class="special-label">Сохранённая расшифровка</b>' : '';
   const labDocuments = sender === 'agent'
     ? labDocumentsMarkup(metadata.lab_result_documents || [], 'message') : '';
   wrapper.innerHTML = sender === 'user'
     ? `<div class="bubble user-bubble">${attachmentBadges}<p>${escapeHtml(text)}</p><span>${time}</span></div>`
-    : `<div class="message-avatar">${humanManager ? 'Ч' : agent.initials}</div><div><div class="message-author"><strong>${humanManager ? escapeHtml(metadata.manager_name || 'Менеджер') : agent.name}</strong><span>${humanManager ? 'Человек' : agent.role}</span>${special}${cached}</div><div class="bubble agent-bubble"><p>${formatAssistantText(text)}</p>${labDocuments}<span>${time}</span></div></div>`;
+    : `<div class="message-avatar">${humanManager ? 'Ч' : agent.initials}</div><div><div class="message-author"><strong>${humanManager ? escapeHtml(metadata.manager_name || 'Менеджер') : agent.name}</strong><span>${humanManager ? 'Человек' : agent.role}</span>${cached}</div><div class="bubble agent-bubble"><p>${formatAssistantText(text)}</p>${labDocuments}<span>${time}</span></div></div>`;
   messages.appendChild(wrapper);
   scrollChatToBottom();
+  return wrapper;
 }
 
 function updateChatMode(aiEnabled = true, humanStatus = 'none', humanTicketId = null) {
   state.aiEnabled = Boolean(aiEnabled);
   state.humanStatus = humanStatus || 'none';
   const banner = $('#chatModeBanner');
+  const newDialogButton = $('#chatModeNewDialog');
   const relevant = !state.aiEnabled || ['pending', 'connected'].includes(state.humanStatus);
   banner.classList.toggle('hidden', !relevant);
   banner.classList.toggle('ai-paused', !state.aiEnabled);
+  newDialogButton.classList.toggle('hidden', state.aiEnabled || !relevant);
   input.placeholder = state.aiEnabled
     ? 'Задайте вопрос о здоровье...'
     : 'Напишите менеджеру...';
@@ -580,15 +862,23 @@ function updateChatMode(aiEnabled = true, humanStatus = 'none', humanTicketId = 
   $('#chatModeTitle').textContent = state.aiEnabled ? 'Обращение менеджеру открыто' : 'С вами общается менеджер';
   $('#chatModeText').textContent = state.aiEnabled
     ? `ИИ продолжает отвечать${humanTicketId ? ` · обращение ${humanTicketId}` : ''}.`
-    : 'ИИ приостановлен. Ваше сообщение сохранится и будет ждать ответа человека.';
+    : 'ИИ в этом диалоге отключён. Ваши сообщения будут ждать ответа менеджера. Пока ожидаете ответ, вы можете общаться с ИИ в новом диалоге.';
 }
 
 function addCouncilResult(result, createdAt = null) {
+  const messageId = Number(result.message?.id || 0);
+  if (messageId) {
+    state.lastMessageId = Math.max(state.lastMessageId, messageId);
+    const existing = messages.querySelector(`[data-message-id="${messageId}"]`);
+    if (existing) return existing;
+  }
   const wrapper = document.createElement('div');
   wrapper.className = 'council-result';
+  if (messageId) wrapper.dataset.messageId = String(messageId);
   wrapper.innerHTML = `<div class="council-title"><span>◎</span><div><strong>Консилиум завершён</strong><small>${result.agents.length} специалиста дали разные профильные оценки</small></div></div><div class="opinion-grid">${result.opinions.map(opinion => { const agent = AGENTS[opinion.agent] || AGENTS.manager; return `<article><div><i>${agent.initials}</i><span><strong>${agent.name}</strong><small>${agent.role}</small></span></div>${opinion.focus ? `<em class="council-focus">${escapeHtml(opinion.focus)}</em>` : ''}<p>${escapeHtml(opinion.message)}</p></article>`; }).join('')}</div><div class="council-synthesis"><strong>Общий вывод Марии</strong><p>${formatAssistantText(result.message.content)}</p></div>`;
   messages.appendChild(wrapper);
   scrollChatToBottom();
+  return wrapper;
 }
 
 function showTyping(agentId = 'manager') {
@@ -664,7 +954,6 @@ async function processMessage(text) {
     state.context = result.context || state.context;
     state.urgency = result.urgency || 'routine';
     renderInsights();
-    if (result.action !== 'human') toggleAdvancedActions(Boolean(result.council_available));
 
     if (result.action === 'waiting_human') {
       $('#taskStatus').textContent = 'Сообщение ожидает ответа менеджера';
@@ -701,12 +990,6 @@ function addSystemError(text) {
   scrollChatToBottom();
 }
 
-function toggleAdvancedActions(show) {
-  $('#secondOpinionButton').classList.toggle('hidden', !show);
-  $('#councilButton').classList.toggle('hidden', !show);
-  document.body.classList.toggle('advanced-actions-visible', show);
-}
-
 function renderInsights() {
   const context = state.context;
   const visible = context && (context.current_topic || context.user_goal || context.known_facts?.length);
@@ -728,11 +1011,28 @@ function renderInsights() {
 async function loadConversationList() {
   try {
     const items = await api('/api/conversations');
-    $('#conversationList').innerHTML = items.length ? items.slice(0, 8).map(item => `
+    $('#mobileConversationCount').textContent = String(items.length);
+    $('#conversationList').innerHTML = items.length ? items.map(item => `
       <button class="conversation-row ${item.id === state.conversationId ? 'active' : ''}" data-id="${item.id}">
-        <strong>${escapeHtml(item.title)}</strong><small>${formatRelative(item.updated_at)}</small>
+        <strong>${escapeHtml(item.title)}</strong><span>${escapeHtml(conversationSummary(item))}</span><small>${formatRelative(item.updated_at)}</small>
       </button>`).join('') : '<p class="no-conversations">Пока нет сохранённых диалогов</p>';
-  } catch { $('#conversationList').innerHTML = ''; }
+  } catch {
+    $('#mobileConversationCount').textContent = '0';
+    $('#conversationList').innerHTML = '<p class="no-conversations">Не удалось загрузить диалоги</p>';
+  }
+}
+
+function conversationSummary(item) {
+  try {
+    const context = JSON.parse(item.context_summary || '{}');
+    const topic = String(context.current_topic || context.user_goal || '').trim();
+    if (topic && topic.toLocaleLowerCase('ru') !== String(item.title || '').toLocaleLowerCase('ru')) {
+      return `Тема: ${topic}`;
+    }
+  } catch {}
+  if (item.human_status === 'pending') return 'Ожидает ответа менеджера';
+  if (item.human_status === 'connected') return 'Менеджер подключён';
+  return 'История разговора сохранена';
 }
 
 async function syncConversationUpdates() {
@@ -751,14 +1051,22 @@ async function syncConversationUpdates() {
       state.lastMessageId = Math.max(state.lastMessageId, Number(message.id || 0));
       const exists = messages.querySelector(`[data-message-id="${message.id}"]`);
       if (exists) continue;
-      addMessage(
-        message.role === 'user' ? 'user' : 'agent',
-        message.content,
-        message.agent_id || 'manager',
-        Boolean(message.metadata?.emergency),
-        message.created_at,
-        { ...(message.metadata || {}), _message_id:message.id },
-      );
+      if (message.metadata?.action === 'council' && message.metadata?.opinions) {
+        addCouncilResult({
+          agents: message.metadata.agents || [],
+          opinions: message.metadata.opinions,
+          message,
+        }, message.created_at);
+      } else {
+        addMessage(
+          message.role === 'user' ? 'user' : 'agent',
+          message.content,
+          message.agent_id || 'manager',
+          Boolean(message.metadata?.emergency),
+          message.created_at,
+          { ...(message.metadata || {}), _message_id:message.id },
+        );
+      }
       if (message.role !== 'user') incomingMessageReceived = true;
       if (message.metadata?.sender_type === 'human_manager') {
         $('#taskStatus').textContent = 'Менеджер ответил';
@@ -805,7 +1113,6 @@ async function openConversation(id) {
       data.human_status, data.human_ticket_id,
     );
     renderInsights();
-    toggleAdvancedActions(medicalAgents.includes(data.active_agent) || data.messages.some(item => medicalAgents.includes(item.agent_id)));
     $('#suggestions').classList.add('hidden');
     $('#taskStatus').textContent = 'Диалог загружен';
     await loadConversationList();
@@ -832,24 +1139,11 @@ function newConversation() {
   updateChatMode(true, 'none', null);
   clearAttachments();
   renderInsights();
-  toggleAdvancedActions(false);
   setActiveAgent('manager');
   $('#suggestions').classList.remove('hidden');
   $('#taskStatus').textContent = 'Ожидает задачу';
   addMessage('agent', 'Здравствуйте! Я Мария, ваш ИИ-менеджер. Задавайте вопросы о здоровье, питании, спорте или возможностях сервиса — я помогу разобраться и при необходимости подключу подходящего специалиста.', 'manager');
   loadConversationList();
-}
-
-async function checkHealth() {
-  try {
-    const health = await api('/api/health');
-    $('#aiStatus').textContent = health.ai_configured ? 'AI подключён' : 'Нужен API-ключ';
-    $('#aiModels').textContent = health.ai_configured ? `${health.orchestrator_model} → ${health.specialist_model}` : 'Укажите OPENAI_API_KEY';
-    document.querySelector('.pulse-dot').classList.toggle('configured', health.ai_configured);
-  } catch {
-    $('#aiStatus').textContent = 'Python-сервер не запущен';
-    $('#aiModels').textContent = 'Запустите python run.py';
-  }
 }
 
 async function openHumanModal(ticketId = null) {
@@ -922,7 +1216,11 @@ async function chooseHumanChannel(channel, phone = null) {
     });
     closeHumanModal();
     setActiveAgent('manager');
-    addMessage('agent', result.assistant_message.content, 'manager', false, result.assistant_message.created_at);
+    addMessage(
+      'agent', result.assistant_message.content, 'manager', false,
+      result.assistant_message.created_at,
+      { ...(result.assistant_message.metadata || {}), _message_id:result.assistant_message.id },
+    );
     $('#taskStatus').textContent = channel === 'chat'
       ? 'Чат со специалистом запрошен · ИИ на связи'
       : 'Созвон выбран · ИИ на связи';
@@ -942,38 +1240,6 @@ async function chooseHumanChannel(channel, phone = null) {
   }
 }
 
-async function requestSecondOpinion() {
-  if (!state.conversationId || state.processing) return;
-  state.processing = true;
-  $('#taskStatus').textContent = 'Независимый специалист изучает контекст';
-  addTimeline('manager', 'Запрошено второе мнение', 'Другой специалист оценивает ситуацию независимо', 'active');
-  showTyping('manager');
-  try {
-    const result = await api('/api/second-opinion', { method: 'POST', body: JSON.stringify({ conversation_id: state.conversationId }) });
-    $('#typing')?.remove();
-    setActiveAgent(result.agent);
-    addMessage('agent', result.message.content, result.agent, result.urgency === 'emergency', result.message.created_at, { action: 'second_opinion' });
-    addTimeline(result.agent, 'Второе мнение готово', 'Независимая оценка добавлена в диалог');
-    $('#taskStatus').textContent = 'Второе мнение получено';
-  } catch (error) { $('#typing')?.remove(); addSystemError(error.message); }
-  finally { state.processing = false; }
-}
-
-function councilAgentIds() {
-  const mapping = { therapist:['neurologist','cardiologist'], neurologist:['therapist','cardiologist'], cardiologist:['therapist','neurologist'], dermatologist:['therapist','pediatrician'], pediatrician:['therapist','neurologist'], psychologist:['therapist','neurologist'] };
-  return [state.active, ...(mapping[state.active] || ['therapist','neurologist'])]
-    .filter((agent,index,list) => AGENTS[agent] && !['manager','safety','general'].includes(agent) && list.indexOf(agent) === index)
-    .slice(0,3);
-}
-
-function openCouncilModal() {
-  const agents = councilAgentIds();
-  $('#councilMemberList').innerHTML = agents.map(id => { const agent=AGENTS[id]; return `<span class="council-member"><i>${agent.initials}</i>${agent.name} · ${agent.role}</span>`; }).join('');
-  $('#councilModal').classList.remove('hidden');
-}
-
-function closeCouncilModal() { $('#councilModal').classList.add('hidden'); }
-
 function closeFunctionMenu() {
   $('#functionMenu').classList.add('hidden');
   $('#functionMenuButton').setAttribute('aria-expanded', 'false');
@@ -988,6 +1254,7 @@ function toggleFunctionMenu() {
 function openCapabilities() {
   closeFunctionMenu();
   $('#capabilitiesModal').classList.remove('hidden');
+  trackEvent('capabilities_viewed', {screen:'capabilities'});
 }
 
 function renderFontSizeModal() {
@@ -1010,34 +1277,30 @@ async function updateFontSize(size) {
   } catch (error) { addSystemError(error.message); }
 }
 
-async function closeCapabilities() {
+async function closeCapabilities({ suppressFollowup = false } = {}) {
   $('#capabilitiesModal').classList.add('hidden');
+  trackEvent('capabilities_closed', {screen:'capabilities'});
   if (state.onboarding?.status === 'complete' && !state.onboarding.intro_seen) {
     try {
       state.onboarding = await api('/api/onboarding/intro-seen', { method:'POST', body:'{}' });
     } catch (error) { console.warn('Не удалось сохранить просмотр возможностей', error); }
   }
-  scheduleInstallOffer();
+  if (suppressFollowup) {
+    installAfterCapabilities = false;
+  } else if (installAfterCapabilities) {
+    installAfterCapabilities = false;
+    openInstallApp();
+  } else {
+    scheduleInstallOffer();
+  }
 }
 
-async function requestCouncil() {
-  if (!state.conversationId || state.processing) return;
-  closeCouncilModal();
-  state.processing = true;
-  $('#taskStatus').textContent = 'Специалисты собирают консилиум';
-  const likelyAgents = councilAgentIds();
-  likelyAgents.forEach((agent, index) => addTimeline(agent, index ? 'Сверяет позицию' : 'Ведущий специалист', 'Изучает общий контекст', 'active'));
-  showTyping('manager');
-  try {
-    const result = await api('/api/council', { method: 'POST', body: JSON.stringify({ conversation_id: state.conversationId }) });
-    $('#typing')?.remove();
-    addCouncilResult(result);
-    playUserMessageSound();
-    setActiveAgent('manager');
-    result.agents.forEach(agent => addTimeline(agent, 'Мнение учтено', 'Консилиум завершён'));
-    $('#taskStatus').textContent = 'Общий вывод консилиума готов';
-  } catch (error) { $('#typing')?.remove(); addSystemError(error.message); }
-  finally { state.processing = false; }
+async function openExaminationsFromCapabilities() {
+  await closeCapabilities({ suppressFollowup:true });
+  state.selectedTests = new Set(state.onboarding?.selected_tests || []);
+  $('#appShell').classList.add('hidden');
+  $('#onboarding').classList.remove('hidden');
+  renderExamSelection();
 }
 
 function openContextEditor() {
@@ -1094,7 +1357,7 @@ async function loadProfile() {
 
 function profileCompletion(profile = state.profile) {
   if (!profile) return 0;
-  const checks = [profile.age, profile.sex, profile.height_cm, profile.weight_kg,
+  const checks = [profile.company_inn, profile.age, profile.sex, profile.height_cm, profile.weight_kg,
     profile.smoking && profile.smoking !== 'unknown', profile.alcohol && profile.alcohol !== 'unknown',
     profile.activity && profile.activity !== 'unknown', profile.blood_pressure && profile.blood_pressure !== 'unknown'];
   return Math.round(checks.filter(Boolean).length / checks.length * 100);
@@ -1103,16 +1366,18 @@ function profileCompletion(profile = state.profile) {
 function renderProfileStatus() {
   const completion = profileCompletion();
   $('#profileCompletion').textContent = `${completion}%`;
-  $('#profileStatus').textContent = completion ? `Заполнено на ${completion}%` : 'Не заполнена';
+  $('#profileStatus').textContent = completion ? `Заполнено на ${completion}%` : 'Не заполнены';
   $('#capabilityProfileStatus').textContent = completion ? `${completion}%` : 'Заполнить';
   const hasTubeNumber = Boolean(state.profile?.tube_number?.trim());
   $('#menuLabResultsStatus').textContent = hasTubeNumber ? 'Номер пробирки сохранён' : 'Нужно ввести номер пробирки';
   $('#capabilityLabResultsStatus').textContent = hasTubeNumber ? 'Проверить' : 'Ввести номер';
 }
 
-function openProfile() {
+async function openProfile() {
+  await loadMemories();
   const profile = state.profile || {};
   $('#profileChelId').value = profile.chel_id || '';
+  $('#profileCompanyInn').value = profile.company_inn || '';
   $('#profileName').value = profile.preferred_name || '';
   $('#profileAge').value = profile.age ?? '';
   $('#profileSex').value = profile.sex || '';
@@ -1147,7 +1412,15 @@ function profileLines(selector) {
 }
 
 async function saveProfile() {
+  for (const selector of ['#profileAge', '#profileHeight', '#profileWeight']) {
+    const field = $(selector);
+    if (field.value && !field.checkValidity()) {
+      field.reportValidity();
+      return;
+    }
+  }
   const payload = {
+    company_inn: $('#profileCompanyInn').value.trim(),
     preferred_name: $('#profileName').value.trim(), age: $('#profileAge').value,
     sex: $('#profileSex').value, height_cm: $('#profileHeight').value,
     weight_kg: $('#profileWeight').value,
@@ -1165,13 +1438,14 @@ async function saveProfile() {
     state.profile = await api('/api/profile', { method:'POST', body:JSON.stringify(payload) });
     renderProfileStatus();
     $('#profileModal').classList.add('hidden');
-    $('#taskStatus').textContent = 'Анкета сохранена · специалисты учтут её в ответах';
+    $('#taskStatus').textContent = 'Данные сохранены · специалисты учтут их в ответах';
   } catch (error) { addSystemError(error.message); }
 }
 
 function profilePayloadWithTube(tubeNumber) {
   const profile = state.profile || {};
   return {
+    company_inn: profile.company_inn || '',
     preferred_name: profile.preferred_name || '',
     age: profile.age ?? '',
     sex: profile.sex || '',
@@ -1341,7 +1615,7 @@ async function interpretLabResults(documentId, sourceButton) {
       state.active,
       false,
       result.user_message.created_at,
-      result.user_message.metadata || {},
+      { ...(result.user_message.metadata || {}), _message_id:result.user_message.id },
     );
     showHandoff(result.handoff_from, result.agent);
     setActiveAgent(result.agent);
@@ -1351,12 +1625,11 @@ async function interpretLabResults(documentId, sourceButton) {
       result.agent,
       Boolean(result.emergency),
       result.assistant_message.created_at,
-      result.assistant_message.metadata || {},
+      { ...(result.assistant_message.metadata || {}), _message_id:result.assistant_message.id },
     );
     state.context = result.context;
     state.urgency = result.urgency || 'routine';
     renderInsights();
-    toggleAdvancedActions(Boolean(result.council_available));
     if (result.action === 'lab_results_prompt') await openLabResults();
     $('#taskStatus').textContent = result.assistant_message.metadata?.interpretation_cached
       ? 'Показана сохранённая расшифровка'
@@ -1601,8 +1874,22 @@ function focusChatInput() {
   if (window.matchMedia('(min-width: 721px)').matches) window.scrollTo(0, 0);
 }
 function syncVisualViewport() {
-  const height = window.visualViewport?.height || window.innerHeight;
-  document.documentElement.style.setProperty('--app-height', `${Math.round(height)}px`);
+  if (viewportSyncFrame) cancelAnimationFrame(viewportSyncFrame);
+  viewportSyncFrame = requestAnimationFrame(() => {
+    const viewport = window.visualViewport;
+    const height = Math.max(1, viewport?.height || window.innerHeight);
+    const top = Math.max(0, viewport?.offsetTop || 0);
+    const editableFocused = Boolean(document.activeElement?.matches(
+      'input:not([type="button"]):not([type="checkbox"]):not([type="radio"]), textarea, [contenteditable="true"]',
+    ));
+    document.documentElement.style.setProperty('--app-height', `${Math.round(height)}px`);
+    document.documentElement.style.setProperty('--app-top', `${Math.round(top)}px`);
+    document.body.classList.toggle(
+      'keyboard-open',
+      editableFocused && window.matchMedia('(max-width: 720px)').matches,
+    );
+    viewportSyncFrame = null;
+  });
 }
 function formatRelative(value) { return new Intl.DateTimeFormat('ru', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' }).format(new Date(value)); }
 
@@ -1619,28 +1906,110 @@ input.addEventListener('keydown', event => {
 });
 input.addEventListener('input', () => { input.style.height = 'auto'; input.style.height = `${Math.min(input.scrollHeight, 140)}px`; });
 input.addEventListener('focus', () => {
+  syncVisualViewport();
   setTimeout(scrollChatToBottom, 120);
   setTimeout(scrollChatToBottom, 320);
 });
+document.addEventListener('focusin', syncVisualViewport);
+document.addEventListener('focusout', () => setTimeout(syncVisualViewport, 30));
 syncVisualViewport();
 window.addEventListener('resize', syncVisualViewport, { passive: true });
-window.visualViewport?.addEventListener('resize', () => {
+window.addEventListener('orientationchange', syncVisualViewport, { passive: true });
+const handleVisualViewportChange = () => {
   syncVisualViewport();
   if (document.activeElement === input) scrollChatToBottom();
-}, { passive: true });
+};
+window.visualViewport?.addEventListener('resize', handleVisualViewportChange, { passive: true });
+window.visualViewport?.addEventListener('scroll', handleVisualViewportChange, { passive: true });
+
+function openMobileSidebar() {
+  closeFunctionMenu();
+  document.body.classList.add('show-team');
+  requestAnimationFrame(() => $('#conversationList').querySelector('.active')?.scrollIntoView({ block:'nearest' }));
+}
+
+function closeProfileModal() { $('#profileModal').classList.add('hidden'); }
+
+function closeVisibleModal() {
+  const layers = [...document.querySelectorAll(
+    '.auth-warning-backdrop:not(.hidden), .modal-backdrop:not(.hidden)',
+  )];
+  const layer = layers[layers.length - 1];
+  if (!layer) return false;
+  switch (layer.id) {
+    case 'anonymousWarning': closeAnonymousWarning(); break;
+    case 'fontSizeModal': closeFontSizeModal(); break;
+    case 'humanModal': resumeAfterHuman(); break;
+    case 'contextModal': closeContextEditor(); break;
+    case 'capabilitiesModal': void closeCapabilities(); break;
+    case 'installAppModal': closeInstallApp(); break;
+    case 'bodyMapModal': closeBodyMap(); break;
+    case 'healthHistoryModal': closeHealthHistory(); break;
+    case 'profileModal': closeProfileModal(); break;
+    case 'labResultsModal': closeLabResults(); break;
+    default: layer.classList.add('hidden');
+  }
+  return true;
+}
+
+function closeTopUiLayer() {
+  const editable = document.activeElement?.matches(
+    'input:not([type="button"]):not([type="checkbox"]):not([type="radio"]), textarea, [contenteditable="true"]',
+  );
+  if (document.body.classList.contains('keyboard-open') && editable) {
+    document.activeElement.blur();
+    syncVisualViewport();
+    return true;
+  }
+  if (
+    !$('#humanModal').classList.contains('hidden')
+    && !$('#callPhoneStep').classList.contains('hidden')
+  ) {
+    resetCallPhoneStep();
+    return true;
+  }
+  if (closeVisibleModal()) return true;
+  if (!$('#functionMenu').classList.contains('hidden')) {
+    closeFunctionMenu();
+    return true;
+  }
+  if (document.body.classList.contains('show-team')) {
+    closeMobileTeam();
+    return true;
+  }
+  return false;
+}
+
+function armBackNavigationGuard() {
+  if (history.state?.consiliumBackGuard) {
+    backNavigationArmed = true;
+    return;
+  }
+  history.pushState({ ...(history.state || {}), consiliumBackGuard:true }, '', window.location.href);
+  backNavigationArmed = true;
+}
+
+window.addEventListener('popstate', () => {
+  if (!backNavigationArmed || allowBackNavigation) return;
+  if (closeTopUiLayer()) {
+    history.pushState({ consiliumBackGuard:true }, '', window.location.href);
+    return;
+  }
+  const shouldExit = window.confirm('Закрыть Консилиум? Несохранённый текст сообщения будет потерян.');
+  if (!shouldExit) {
+    history.pushState({ consiliumBackGuard:true }, '', window.location.href);
+    return;
+  }
+  allowBackNavigation = true;
+  if (isInstalledApp()) window.close();
+  setTimeout(() => history.back(), 0);
+});
+
 $('#suggestions').addEventListener('click', event => { const button = event.target.closest('[data-prompt]'); if (button) processMessage(button.dataset.prompt); });
 $('#humanButton').addEventListener('click', () => processMessage('Я хочу поговорить с человеком'));
-$('#secondOpinionButton').addEventListener('click', requestSecondOpinion);
-$('#councilButton').addEventListener('click', openCouncilModal);
-$('#councilModalClose').addEventListener('click', closeCouncilModal);
-$('#cancelCouncilButton').addEventListener('click', closeCouncilModal);
-$('#startCouncilButton').addEventListener('click', requestCouncil);
-$('#councilModal').addEventListener('click', event => { if (event.target.id === 'councilModal') closeCouncilModal(); });
 $('#contextClose').addEventListener('click', closeContextEditor);
+$('#contextModal').addEventListener('click', event => { if (event.target.id === 'contextModal') closeContextEditor(); });
 $('#saveContextButton').addEventListener('click', saveContext);
-async function openMemory() { await loadMemories(); $('#memoryModal').classList.remove('hidden'); }
-$('#memoryButton').addEventListener('click', openMemory);
-$('#memoryClose').addEventListener('click', () => $('#memoryModal').classList.add('hidden'));
 $('#addMemoryButton').addEventListener('click', addMemory);
 $('#capabilitiesButton').addEventListener('click', openCapabilities);
 $('#capabilitiesClose').addEventListener('click', closeCapabilities);
@@ -1649,6 +2018,7 @@ $('#capabilityProfile').addEventListener('click', () => { closeCapabilities(); o
 $('#capabilityLabResults').addEventListener('click', () => { closeCapabilities(); openLabResults(); });
 $('#capabilityBodyMap').addEventListener('click', () => { closeCapabilities(); openBodyMap(); });
 $('#capabilityHealthHistory').addEventListener('click', () => { closeCapabilities(); openHealthHistory(); });
+$('#capabilityExaminations').addEventListener('click', openExaminationsFromCapabilities);
 $('#functionMenuButton').addEventListener('click', toggleFunctionMenu);
 $('#functionMenu').addEventListener('click', event => { if (event.target.closest('button')) closeFunctionMenu(); });
 $('#menuFontSizeButton').addEventListener('click', openFontSizeModal);
@@ -1659,7 +2029,6 @@ $('#menuProfileButton').addEventListener('click', openProfile);
 $('#menuLabResultsButton').addEventListener('click', openLabResults);
 $('#menuBodyMapButton').addEventListener('click', openBodyMap);
 $('#menuHealthHistoryButton').addEventListener('click', () => openHealthHistory());
-$('#menuMemoryButton').addEventListener('click', openMemory);
 $('#menuInstallAppButton').addEventListener('click', openInstallApp);
 $('#installAppClose').addEventListener('click', () => closeInstallApp({ dismissed:true }));
 $('#installAppLaterButton').addEventListener('click', () => closeInstallApp({ dismissed:true }));
@@ -1667,11 +2036,11 @@ $('#installAppConfirmButton').addEventListener('click', confirmInstallApp);
 $('#installAppModal').addEventListener('click', event => {
   if (event.target.id === 'installAppModal') closeInstallApp({ dismissed:true });
 });
-$('#resetUserButton').addEventListener('click', resetUser);
 $('#profileButton').addEventListener('click', openProfile);
 $('#bodyMapButton').addEventListener('click', openBodyMap);
 $('#healthHistoryButton').addEventListener('click', () => openHealthHistory());
-$('#profileClose').addEventListener('click', () => $('#profileModal').classList.add('hidden'));
+$('#profileClose').addEventListener('click', closeProfileModal);
+$('#profileModal').addEventListener('click', event => { if (event.target.id === 'profileModal') closeProfileModal(); });
 $('#saveProfileButton').addEventListener('click', saveProfile);
 $('#labResultsClose').addEventListener('click', closeLabResults);
 $('#labResultsModal').addEventListener('click', event => { if (event.target.id === 'labResultsModal') closeLabResults(); });
@@ -1722,10 +2091,7 @@ $('#attachButton').addEventListener('click', () => $('#attachmentInput').click()
 $('#attachmentInput').addEventListener('change', async event => { await addAttachments(event.target.files); event.target.value = ''; });
 $('#attachmentList').addEventListener('click', event => { const button = event.target.closest('[data-attachment-remove]'); if (button) { state.attachments.splice(Number(button.dataset.attachmentRemove), 1); renderAttachments(); } });
 $('#newChatButton').addEventListener('click', newConversation);
-$('#menuDashboardButton').addEventListener('click', () => {
-  closeFunctionMenu();
-  window.open('/dashboard', '_blank', 'noopener');
-});
+$('#chatModeNewDialog').addEventListener('click', newConversation);
 $('#conversationList').addEventListener('click', event => { const row = event.target.closest('[data-id]'); if (row) openConversation(row.dataset.id); });
 $('#modalClose').addEventListener('click', resumeAfterHuman);
 $('#modalOkay').addEventListener('click', resumeAfterHuman);
@@ -1746,7 +2112,7 @@ $('#handoffPreview').addEventListener('click', event => {
   openContextEditor();
 });
 function closeMobileTeam() { document.body.classList.remove('show-team'); }
-$('#mobileTeamButton').addEventListener('click', () => document.body.classList.toggle('show-team'));
+$('#mobileDialogsButton').addEventListener('click', openMobileSidebar);
 $('#mobileTeamClose').addEventListener('click', closeMobileTeam);
 $('#teamBackdrop').addEventListener('click', closeMobileTeam);
 document.addEventListener('click', event => {
@@ -1754,23 +2120,12 @@ document.addEventListener('click', event => {
 });
 document.addEventListener('keydown', event => {
   if (event.key !== 'Escape') return;
-  closeAnonymousWarning();
-  closeMobileTeam();
-  closeCouncilModal();
-  closeFunctionMenu();
-  closeInstallApp();
-  closeFontSizeModal();
-  closeLabResults();
-  closeBodyMap();
-  closeHealthHistory();
-  if (!$('#capabilitiesModal').classList.contains('hidden')) closeCapabilities();
+  closeTopUiLayer();
 });
 
 async function initMainApp() {
   state.mainInitialized = true;
   updateInstallMenu();
-  renderAgentList();
-  await checkHealth();
   await loadMemories();
   await loadProfile();
   await Promise.all([loadBodySymptoms(), loadHealthHistory()]);
@@ -1780,21 +2135,28 @@ async function initMainApp() {
 }
 
 async function init() {
+  trackEvent('landing_viewed', {screen:'entry'});
+  trackEvent('app_opened', {app_mode:isInstalledApp() ? 'standalone' : 'browser'});
   try {
     const identity = await api('/api/me');
     state.identity = identity;
-    const messengerLoginRequired = new URLSearchParams(window.location.search)
-      .get('auth') === 'messenger_required';
+    const entryParams = new URLSearchParams(window.location.search);
+    const messengerLoginRequired = entryParams.get('auth') === 'messenger_required';
+    const forceWelcomePreview = entryParams.get('welcome') === '1';
     if (identity.authenticated) {
       localStorage.removeItem(ANONYMOUS_ACCESS_KEY);
-      await startApplication();
+      if (forceWelcomePreview) showWelcome(startApplication);
+      else await enterKnownUser();
     } else if (messengerLoginRequired) {
       showAuthGate();
       setAuthStatus('Эта ссылка принадлежит другому пользователю. Войдите через свой мессенджер.', true);
     } else if (localStorage.getItem(ANONYMOUS_ACCESS_KEY) === identity.chel_id) {
-      await startApplication();
+      if (forceWelcomePreview) showWelcome(startApplication);
+      else await enterKnownUser();
     } else {
-      showAuthGate();
+      if (forceWelcomePreview) showWelcome(() => showAuthGate());
+      else if (localStorage.getItem(WELCOME_SEEN_KEY)) showAuthGate();
+      else showWelcome(() => showAuthGate());
     }
   }
   catch (error) {
@@ -1802,7 +2164,14 @@ async function init() {
     setAuthStatus(`Не удалось загрузить сервис: ${error.message}`, true);
   }
 }
+window.addEventListener('error', () => trackEvent('javascript_error', {error_code:'window_error',screen:'browser'}));
+window.addEventListener('unhandledrejection', () => trackEvent('javascript_error', {error_code:'unhandled_rejection',screen:'browser'}));
+window.addEventListener('load', () => {
+  const navigation = performance.getEntriesByType?.('navigation')?.[0];
+  if (navigation) trackEvent('performance_measured', {duration_ms:Math.round(navigation.duration),screen:'page_load'});
+});
 setInterval(syncConversationUpdates, 3000);
 document.addEventListener('pointerdown', unlockUserSound, {once:true});
 document.addEventListener('keydown', unlockUserSound, {once:true});
+armBackNavigationGuard();
 init();

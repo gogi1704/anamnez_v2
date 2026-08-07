@@ -28,16 +28,52 @@ def current_chel_id() -> str:
     return _current_chel_id.get()
 
 
-def ensure_user(chel_id: str) -> dict:
+def ensure_user(chel_id: str, *, pending: bool = False) -> dict:
     now = utc_now()
     with _write_lock, connection() as conn:
+        if pending:
+            conn.execute(
+                """INSERT INTO users (chel_id, created_at, last_seen_at)
+                VALUES (?, ?, ?)
+                ON CONFLICT(chel_id) DO UPDATE SET last_seen_at=excluded.last_seen_at""",
+                (chel_id, now, now),
+            )
+        else:
+            conn.execute(
+                """INSERT INTO users
+                (chel_id, created_at, last_seen_at, registered_at, registration_method)
+                VALUES (?, ?, ?, ?, 'internal')
+                ON CONFLICT(chel_id) DO UPDATE SET
+                    last_seen_at=excluded.last_seen_at,
+                    registered_at=COALESCE(users.registered_at, excluded.registered_at),
+                    registration_method=COALESCE(users.registration_method, excluded.registration_method)""",
+                (chel_id, now, now, now),
+            )
+        conn.commit()
+        row = conn.execute("SELECT * FROM users WHERE chel_id = ?", (chel_id,)).fetchone()
+    return dict(row)
+
+
+def mark_current_user_registered(method: str) -> dict:
+    """Count a user only after an explicit access choice or consumed messenger login."""
+    method = str(method or "").strip().lower()
+    if method not in {"anonymous", "telegram", "max"}:
+        raise ValueError("Неизвестный способ регистрации")
+    now = utc_now()
+    chel_id = current_chel_id()
+    with _write_lock, connection() as conn:
         conn.execute(
-            """INSERT INTO users (chel_id, created_at, last_seen_at)
-            VALUES (?, ?, ?) ON CONFLICT(chel_id) DO UPDATE SET last_seen_at=excluded.last_seen_at""",
-            (chel_id, now, now),
+            """UPDATE users SET
+                registered_at=COALESCE(registered_at, ?),
+                registration_method=COALESCE(registration_method, ?),
+                last_seen_at=?
+            WHERE chel_id=?""",
+            (now, method, now, chel_id),
         )
         conn.commit()
         row = conn.execute("SELECT * FROM users WHERE chel_id = ?", (chel_id,)).fetchone()
+    if not row:
+        raise ValueError("Пользователь не найден")
     return dict(row)
 
 
@@ -453,13 +489,174 @@ def current_external_identities() -> list[dict]:
     return [dict(row) for row in rows]
 
 
+def record_ai_usage(item: dict) -> int:
+    """Persist privacy-safe token counters and the cost-rate snapshot for one call."""
+    integer_fields = (
+        "input_tokens", "cached_input_tokens", "output_tokens",
+        "reasoning_tokens", "total_tokens",
+    )
+    float_fields = (
+        "input_rate", "cached_input_rate", "output_rate", "input_cost_usd",
+        "cached_input_cost_usd", "output_cost_usd", "total_cost_usd",
+    )
+    values = {
+        "chel_id": str(item.get("chel_id") or "")[:80],
+        "operation": str(item.get("operation") or "other")[:60],
+        "model": str(item.get("model") or "unknown")[:120],
+        "pricing_key": str(item.get("pricing_key") or "")[:120],
+        "pricing_known": 1 if item.get("pricing_known") else 0,
+        "long_context": 1 if item.get("long_context") else 0,
+    }
+    for field in integer_fields:
+        values[field] = max(0, int(item.get(field) or 0))
+    for field in float_fields:
+        values[field] = max(0.0, float(item.get(field) or 0))
+    now = utc_now()
+    with _write_lock, connection() as conn:
+        cursor = conn.execute(
+            """INSERT INTO ai_usage (
+                chel_id, operation, model, pricing_key, pricing_known, long_context,
+                input_tokens, cached_input_tokens, output_tokens, reasoning_tokens,
+                total_tokens, input_rate, cached_input_rate, output_rate,
+                input_cost_usd, cached_input_cost_usd, output_cost_usd,
+                total_cost_usd, created_at
+            ) VALUES (
+                :chel_id, :operation, :model, :pricing_key, :pricing_known, :long_context,
+                :input_tokens, :cached_input_tokens, :output_tokens, :reasoning_tokens,
+                :total_tokens, :input_rate, :cached_input_rate, :output_rate,
+                :input_cost_usd, :cached_input_cost_usd, :output_cost_usd,
+                :total_cost_usd, :created_at
+            )""",
+            {**values, "created_at": now},
+        )
+        conn.commit()
+        return int(cursor.lastrowid)
+
+
+def admin_ai_costs(period: str = "30", recent_limit: int = 100) -> dict:
+    """Aggregate AI token usage without exposing prompts, replies, or medical data."""
+    period = str(period or "30").strip().lower()
+    if period not in {"today", "7", "30", "90", "all"}:
+        raise ValueError("Неизвестный период расходов")
+    recent_limit = max(10, min(250, int(recent_limit)))
+    now = datetime.now(timezone.utc)
+    if period == "today":
+        started_at = now.date().isoformat()
+        chart_days = 1
+    elif period == "all":
+        started_at = ""
+        chart_days = 90
+    else:
+        days = int(period)
+        started_at = (now - timedelta(days=days - 1)).date().isoformat()
+        chart_days = days
+    where = "created_at >= ?" if started_at else "1=1"
+    params = (started_at,) if started_at else ()
+
+    summary_sql = """SELECT COUNT(*) AS requests,
+        COALESCE(SUM(input_tokens), 0) AS input_tokens,
+        COALESCE(SUM(cached_input_tokens), 0) AS cached_input_tokens,
+        COALESCE(SUM(output_tokens), 0) AS output_tokens,
+        COALESCE(SUM(reasoning_tokens), 0) AS reasoning_tokens,
+        COALESCE(SUM(total_tokens), 0) AS total_tokens,
+        COALESCE(SUM(input_cost_usd), 0) AS input_cost_usd,
+        COALESCE(SUM(cached_input_cost_usd), 0) AS cached_input_cost_usd,
+        COALESCE(SUM(output_cost_usd), 0) AS output_cost_usd,
+        COALESCE(SUM(total_cost_usd), 0) AS total_cost_usd,
+        COALESCE(SUM(CASE WHEN pricing_known = 0 THEN 1 ELSE 0 END), 0) AS unpriced_requests
+        FROM ai_usage"""
+
+    def normalized_summary(row: sqlite3.Row) -> dict:
+        result = dict(row)
+        for key in (
+            "requests", "input_tokens", "cached_input_tokens", "output_tokens",
+            "reasoning_tokens", "total_tokens", "unpriced_requests",
+        ):
+            result[key] = int(result[key] or 0)
+        for key in (
+            "input_cost_usd", "cached_input_cost_usd", "output_cost_usd", "total_cost_usd",
+        ):
+            result[key] = round(float(result[key] or 0), 9)
+        return result
+
+    with connection() as conn:
+        summary = normalized_summary(conn.execute(
+            f"{summary_sql} WHERE {where}", params,
+        ).fetchone())
+        all_time = normalized_summary(conn.execute(summary_sql).fetchone())
+        by_model = [dict(row) for row in conn.execute(
+            f"""SELECT model, pricing_key, pricing_known, COUNT(*) AS requests,
+                SUM(input_tokens) AS input_tokens,
+                SUM(cached_input_tokens) AS cached_input_tokens,
+                SUM(output_tokens) AS output_tokens,
+                SUM(total_tokens) AS total_tokens,
+                SUM(total_cost_usd) AS total_cost_usd
+            FROM ai_usage WHERE {where}
+            GROUP BY model, pricing_key, pricing_known
+            ORDER BY total_cost_usd DESC, total_tokens DESC""",
+            params,
+        ).fetchall()]
+        by_operation = [dict(row) for row in conn.execute(
+            f"""SELECT operation, COUNT(*) AS requests,
+                SUM(total_tokens) AS total_tokens, SUM(total_cost_usd) AS total_cost_usd
+            FROM ai_usage WHERE {where}
+            GROUP BY operation ORDER BY total_cost_usd DESC, total_tokens DESC""",
+            params,
+        ).fetchall()]
+        chart_start = (now - timedelta(days=chart_days - 1)).date().isoformat()
+        daily_rows = conn.execute(
+            """SELECT SUBSTR(created_at, 1, 10) AS day, COUNT(*) AS requests,
+                SUM(total_tokens) AS total_tokens, SUM(total_cost_usd) AS total_cost_usd
+            FROM ai_usage WHERE created_at >= ? GROUP BY day ORDER BY day""",
+            (chart_start,),
+        ).fetchall()
+        daily_map = {row["day"]: dict(row) for row in daily_rows}
+        daily = []
+        first_day = date.fromisoformat(chart_start)
+        for offset in range(chart_days):
+            day = (first_day + timedelta(days=offset)).isoformat()
+            item = daily_map.get(day, {})
+            daily.append({
+                "date": day,
+                "requests": int(item.get("requests") or 0),
+                "total_tokens": int(item.get("total_tokens") or 0),
+                "total_cost_usd": round(float(item.get("total_cost_usd") or 0), 9),
+            })
+        recent = [dict(row) for row in conn.execute(
+            f"""SELECT id, chel_id, operation, model, pricing_known, long_context,
+                input_tokens, cached_input_tokens, output_tokens, reasoning_tokens,
+                total_tokens, total_cost_usd, created_at
+            FROM ai_usage WHERE {where} ORDER BY id DESC LIMIT ?""",
+            (*params, recent_limit),
+        ).fetchall()]
+
+    from .ai_costs import public_pricing_catalog
+    return {
+        "generated_at": now.isoformat(),
+        "period": period,
+        "period_started_at": started_at or None,
+        "chart_days": chart_days,
+        "summary": summary,
+        "all_time": all_time,
+        "by_model": by_model,
+        "by_operation": by_operation,
+        "daily": daily,
+        "recent": recent,
+        "pricing": public_pricing_catalog(),
+        "notice": (
+            "Расчёт по токенам из ответов OpenAI API и сохранённым тарифам. "
+            "Окончательная сумма определяется биллингом OpenAI."
+        ),
+    }
+
+
 def admin_dashboard(days: int = 14, limit: int = 100) -> dict:
     """Return privacy-conscious aggregate analytics without message or profile text."""
     days = max(7, min(90, int(days)))
     limit = max(10, min(250, int(limit)))
     now = datetime.now(timezone.utc)
     first_day = (now - timedelta(days=days - 1)).date()
-    real_users = "chel_id NOT IN ('chel_legacy', 'chel_test_default')"
+    real_users = "chel_id NOT IN ('chel_legacy', 'chel_test_default') AND registered_at IS NOT NULL"
 
     with connection() as conn:
         def scalar(query: str, params: tuple = ()) -> int:
@@ -473,7 +670,9 @@ def admin_dashboard(days: int = 14, limit: int = 100) -> dict:
             ),
             "messenger_users": scalar(
                 """SELECT COUNT(DISTINCT e.chel_id) FROM external_identities e
+                JOIN users u ON u.chel_id=e.chel_id
                 WHERE e.access_status = 'active'
+                  AND u.registered_at IS NOT NULL
                   AND e.chel_id NOT IN ('chel_legacy', 'chel_test_default')"""
             ),
             "onboarding_complete": scalar(
@@ -508,8 +707,8 @@ def admin_dashboard(days: int = 14, limit: int = 100) -> dict:
         }
 
         created_rows = conn.execute(
-            f"""SELECT SUBSTR(created_at, 1, 10) AS day, COUNT(*) AS value
-            FROM users WHERE {real_users} AND created_at >= ?
+            f"""SELECT SUBSTR(registered_at, 1, 10) AS day, COUNT(*) AS value
+            FROM users WHERE {real_users} AND registered_at >= ?
             GROUP BY day""",
             (first_day.isoformat(),),
         ).fetchall()
@@ -566,11 +765,12 @@ def admin_dashboard(days: int = 14, limit: int = 100) -> dict:
                 "visits": int(row["visits"]),
             }
             for row in conn.execute(
-                """SELECT device_type, COUNT(DISTINCT chel_id) AS users,
-                    SUM(visit_count) AS visits
-                FROM user_device_stats
-                WHERE chel_id NOT IN ('chel_legacy', 'chel_test_default')
-                GROUP BY device_type ORDER BY users DESC, visits DESC"""
+                """SELECT d.device_type, COUNT(DISTINCT d.chel_id) AS users,
+                    SUM(d.visit_count) AS visits
+                FROM user_device_stats d JOIN users u ON u.chel_id=d.chel_id
+                WHERE d.chel_id NOT IN ('chel_legacy', 'chel_test_default')
+                  AND u.registered_at IS NOT NULL
+                GROUP BY d.device_type ORDER BY users DESC, visits DESC"""
             ).fetchall()
         ]
         operating_systems = [
@@ -580,11 +780,12 @@ def admin_dashboard(days: int = 14, limit: int = 100) -> dict:
                 "visits": int(row["visits"]),
             }
             for row in conn.execute(
-                """SELECT operating_system, COUNT(DISTINCT chel_id) AS users,
-                    SUM(visit_count) AS visits
-                FROM user_device_stats
-                WHERE chel_id NOT IN ('chel_legacy', 'chel_test_default')
-                GROUP BY operating_system ORDER BY users DESC, visits DESC"""
+                """SELECT d.operating_system, COUNT(DISTINCT d.chel_id) AS users,
+                    SUM(d.visit_count) AS visits
+                FROM user_device_stats d JOIN users u ON u.chel_id=d.chel_id
+                WHERE d.chel_id NOT IN ('chel_legacy', 'chel_test_default')
+                  AND u.registered_at IS NOT NULL
+                GROUP BY d.operating_system ORDER BY users DESC, visits DESC"""
             ).fetchall()
         ]
         browsers = [
@@ -594,21 +795,24 @@ def admin_dashboard(days: int = 14, limit: int = 100) -> dict:
                 "visits": int(row["visits"]),
             }
             for row in conn.execute(
-                """SELECT browser, COUNT(DISTINCT chel_id) AS users,
-                    SUM(visit_count) AS visits
-                FROM user_device_stats
-                WHERE chel_id NOT IN ('chel_legacy', 'chel_test_default')
-                GROUP BY browser ORDER BY users DESC, visits DESC"""
+                """SELECT d.browser, COUNT(DISTINCT d.chel_id) AS users,
+                    SUM(d.visit_count) AS visits
+                FROM user_device_stats d JOIN users u ON u.chel_id=d.chel_id
+                WHERE d.chel_id NOT IN ('chel_legacy', 'chel_test_default')
+                  AND u.registered_at IS NOT NULL
+                GROUP BY d.browser ORDER BY users DESC, visits DESC"""
             ).fetchall()
         ]
         summary["tracked_devices"] = scalar(
-            """SELECT COUNT(DISTINCT chel_id) FROM user_device_stats
-            WHERE chel_id NOT IN ('chel_legacy', 'chel_test_default')"""
+            """SELECT COUNT(DISTINCT d.chel_id) FROM user_device_stats d
+            JOIN users u ON u.chel_id=d.chel_id
+            WHERE d.chel_id NOT IN ('chel_legacy', 'chel_test_default')
+              AND u.registered_at IS NOT NULL"""
         )
 
         users = [
             dict(row) for row in conn.execute(
-                f"""SELECT u.chel_id, u.created_at, u.last_seen_at,
+                f"""SELECT u.chel_id, u.registered_at AS created_at, u.last_seen_at,
                     COALESCE(o.status, 'not_started') AS onboarding_status,
                     COALESCE(GROUP_CONCAT(DISTINCT e.provider), '') AS messengers,
                     COUNT(DISTINCT c.id) AS conversations,
@@ -709,15 +913,16 @@ def admin_table(
 
     with connection() as conn:
         if name == "users":
-            where = """u.chel_id NOT IN ('chel_legacy', 'chel_test_default')"""
+            where = """u.chel_id NOT IN ('chel_legacy', 'chel_test_default')
+                AND u.registered_at IS NOT NULL"""
             params: list = []
             period_where = where
             period_params: list = []
             if created_from:
-                period_where += " AND SUBSTR(u.created_at, 1, 10) >= ?"
+                period_where += " AND SUBSTR(u.registered_at, 1, 10) >= ?"
                 period_params.append(created_from)
             if created_to:
-                period_where += " AND SUBSTR(u.created_at, 1, 10) <= ?"
+                period_where += " AND SUBSTR(u.registered_at, 1, 10) <= ?"
                 period_params.append(created_to)
             where = period_where
             params.extend(period_params)
@@ -730,7 +935,8 @@ def admin_table(
                 params.extend([pattern, pattern, pattern])
             overall_total = conn.execute(
                 """SELECT COUNT(*) FROM users
-                WHERE chel_id NOT IN ('chel_legacy', 'chel_test_default')"""
+                WHERE chel_id NOT IN ('chel_legacy', 'chel_test_default')
+                  AND registered_at IS NOT NULL"""
             ).fetchone()[0]
             period_total = conn.execute(
                 f"SELECT COUNT(*) FROM users u WHERE {period_where}",
@@ -747,7 +953,7 @@ def admin_table(
             ).fetchone()[0]
             rows = [
                 dict(row) for row in conn.execute(
-                    f"""SELECT u.chel_id, u.created_at, u.last_seen_at,
+                    f"""SELECT u.chel_id, u.registered_at AS created_at, u.last_seen_at,
                         COALESCE(o.status, 'not_started') AS onboarding_status,
                         COALESCE(GROUP_CONCAT(DISTINCT e.provider), '') AS messengers,
                         COUNT(DISTINCT c.id) AS conversations,
@@ -821,7 +1027,11 @@ def admin_table(
                 item["phone"] = f"•••• {phone[-4:]}" if len(phone) >= 4 else ""
                 rows.append(item)
         else:
-            where = """d.chel_id NOT IN ('chel_legacy', 'chel_test_default')"""
+            where = """d.chel_id NOT IN ('chel_legacy', 'chel_test_default')
+                AND EXISTS (
+                    SELECT 1 FROM users u
+                    WHERE u.chel_id=d.chel_id AND u.registered_at IS NOT NULL
+                )"""
             params = []
             if query:
                 where += """ AND (
@@ -874,7 +1084,7 @@ def _manager_profile(conn: sqlite3.Connection, chel_id: str) -> dict:
     ).fetchone()
     if not row:
         return {
-            "chel_id": chel_id, "preferred_name": "", "age": None, "sex": "",
+            "chel_id": chel_id, "preferred_name": "", "company_inn": "", "age": None, "sex": "",
             "height_cm": None, "weight_kg": None, "pregnancy": "not_applicable",
             "conditions": [], "medications": [], "allergies": [],
             "smoking": "unknown", "alcohol": "unknown", "activity": "unknown",
@@ -891,38 +1101,64 @@ def _manager_profile(conn: sqlite3.Connection, chel_id: str) -> dict:
     return result
 
 
+def _staff_messenger_id(value, label: str) -> str:
+    value = str(value or "").strip()
+    if value and (not value.isdigit() or len(value) > 30):
+        raise ValueError(f"{label} должен состоять только из цифр")
+    return value
+
+
 def admin_list_staff() -> list[dict]:
     with connection() as conn:
         rows = conn.execute(
-            """SELECT id, display_name, login, is_active, created_at, updated_at,
+            """SELECT id, display_name, login, is_active, telegram_id, max_id,
+            notify_new_requests, notify_new_messages, created_at, updated_at,
             last_login_at FROM staff_users ORDER BY is_active DESC, display_name"""
         ).fetchall()
     result = []
     for row in rows:
         item = dict(row)
         item["is_active"] = bool(item["is_active"])
+        item["notify_new_requests"] = bool(item["notify_new_requests"])
+        item["notify_new_messages"] = bool(item["notify_new_messages"])
         result.append(item)
     return result
 
 
-def admin_create_staff(display_name: str, login: str, password: str) -> dict:
+def admin_create_staff(
+    display_name: str, login: str, password: str, *, telegram_id="", max_id="",
+    notify_new_requests: bool = True, notify_new_messages: bool = True,
+) -> dict:
     display_name = " ".join(str(display_name or "").split())[:80]
     if len(display_name) < 2:
         raise ValueError("Укажите имя менеджера")
     login = _staff_login(login)
     encoded = _password_hash(password)
+    telegram_id = _staff_messenger_id(telegram_id, "Telegram ID")
+    max_id = _staff_messenger_id(max_id, "MAX ID")
     now = utc_now()
     try:
         with _write_lock, connection() as conn:
             cursor = conn.execute(
                 """INSERT INTO staff_users
-                (display_name, login, password_hash, is_active, created_at, updated_at)
-                VALUES (?, ?, ?, 1, ?, ?)""",
-                (display_name, login, encoded, now, now),
+                (display_name, login, password_hash, is_active, telegram_id,
+                 telegram_chat_id, max_id, max_chat_id, notify_new_requests,
+                 notify_new_messages, created_at, updated_at)
+                VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                (
+                    display_name, login, encoded, telegram_id, telegram_id,
+                    max_id, max_id, int(bool(notify_new_requests)),
+                    int(bool(notify_new_messages)), now, now,
+                ),
             )
             conn.commit()
             staff_id = cursor.lastrowid
     except sqlite3.IntegrityError as exc:
+        details = str(exc).lower()
+        if "telegram_id" in details:
+            raise ValueError("Этот Telegram ID уже привязан к другому менеджеру") from exc
+        if "max_id" in details:
+            raise ValueError("Этот MAX ID уже привязан к другому менеджеру") from exc
         raise ValueError("Менеджер с таким логином уже существует") from exc
     return next(item for item in admin_list_staff() if item["id"] == staff_id)
 
@@ -930,6 +1166,9 @@ def admin_create_staff(display_name: str, login: str, password: str) -> dict:
 def admin_update_staff(
     staff_id: int, *, display_name: str | None = None,
     password: str | None = None, is_active: bool | None = None,
+    telegram_id: str | None = None, max_id: str | None = None,
+    notify_new_requests: bool | None = None,
+    notify_new_messages: bool | None = None,
 ) -> dict | None:
     updates: list[str] = []
     params: list = []
@@ -945,12 +1184,46 @@ def admin_update_staff(
     if is_active is not None:
         updates.append("is_active = ?")
         params.append(int(bool(is_active)))
+    for column, value, label in (
+        ("telegram_id", telegram_id, "Telegram ID"),
+        ("max_id", max_id, "MAX ID"),
+    ):
+        if value is not None:
+            messenger_id = _staff_messenger_id(value, label)
+            updates.extend([f"{column} = ?", f"{column.removesuffix('_id')}_chat_id = ?"])
+            params.extend([messenger_id, messenger_id])
+    if notify_new_requests is not None:
+        updates.append("notify_new_requests = ?")
+        params.append(int(bool(notify_new_requests)))
+    if notify_new_messages is not None:
+        updates.append("notify_new_messages = ?")
+        params.append(int(bool(notify_new_messages)))
     if not updates:
         raise ValueError("Нет изменений")
     updates.append("updated_at = ?")
     params.append(utc_now())
     params.append(int(staff_id))
     with _write_lock, connection() as conn:
+        for column, value, label in (
+            ("telegram_id", telegram_id, "Telegram ID"),
+            ("max_id", max_id, "MAX ID"),
+        ):
+            normalized = _staff_messenger_id(value, label) if value is not None else ""
+            if normalized and conn.execute(
+                f"SELECT 1 FROM staff_users WHERE {column} = ? AND id <> ?",
+                (normalized, int(staff_id)),
+            ).fetchone():
+                raise ValueError(f"Этот {label} уже привязан к другому менеджеру")
+        if telegram_id is not None:
+            conn.execute(
+                "DELETE FROM manager_notification_outbox WHERE staff_user_id = ? AND provider = 'telegram' AND status <> 'sent'",
+                (int(staff_id),),
+            )
+        if max_id is not None:
+            conn.execute(
+                "DELETE FROM manager_notification_outbox WHERE staff_user_id = ? AND provider = 'max' AND status <> 'sent'",
+                (int(staff_id),),
+            )
         cursor = conn.execute(
             f"UPDATE staff_users SET {', '.join(updates)} WHERE id = ?", tuple(params),
         )
@@ -970,6 +1243,215 @@ def admin_delete_staff(staff_id: int) -> bool:
     with _write_lock, connection() as conn:
         cursor = conn.execute(
             "DELETE FROM staff_users WHERE id = ?", (int(staff_id),),
+        )
+        conn.commit()
+    return bool(cursor.rowcount)
+
+
+def create_staff_messenger_token(staff_id: int, provider: str) -> dict:
+    provider = str(provider or "").strip().lower()
+    if provider not in {"telegram", "max"}:
+        raise ValueError("Выберите Telegram или MAX")
+    token = f"mgr_{secrets.token_urlsafe(24)}"
+    now = datetime.now(timezone.utc)
+    expires_at = now + timedelta(days=7)
+    with _write_lock, connection() as conn:
+        staff = conn.execute(
+            "SELECT id, display_name FROM staff_users WHERE id = ? AND is_active = 1",
+            (int(staff_id),),
+        ).fetchone()
+        if not staff:
+            raise ValueError("Активный менеджер не найден")
+        conn.execute(
+            "DELETE FROM staff_messenger_tokens WHERE staff_user_id = ? AND provider = ? AND used_at IS NULL",
+            (int(staff_id), provider),
+        )
+        conn.execute(
+            """INSERT INTO staff_messenger_tokens
+            (token_hash, staff_user_id, provider, expires_at, created_at)
+            VALUES (?, ?, ?, ?, ?)""",
+            (_token_hash(token), int(staff_id), provider, expires_at.isoformat(), now.isoformat()),
+        )
+        conn.commit()
+    return {
+        "token": token, "provider": provider, "staff_id": int(staff_id),
+        "display_name": staff["display_name"], "expires_at": expires_at.isoformat(),
+    }
+
+
+def bind_staff_messenger(
+    token: str, provider: str, provider_user_id, chat_id=None,
+) -> dict:
+    provider = str(provider or "").strip().lower()
+    if provider not in {"telegram", "max"}:
+        raise ValueError("Неизвестный мессенджер")
+    provider_user_id = _staff_messenger_id(provider_user_id, f"{provider.upper()} ID")
+    chat_id = _staff_messenger_id(chat_id or provider_user_id, "ID чата")
+    now = datetime.now(timezone.utc)
+    with _write_lock, connection() as conn:
+        row = conn.execute(
+            """SELECT t.token_hash, t.staff_user_id, t.provider, t.expires_at,
+                t.used_at, s.display_name, s.is_active
+            FROM staff_messenger_tokens t
+            JOIN staff_users s ON s.id = t.staff_user_id
+            WHERE t.token_hash = ?""",
+            (_token_hash(str(token or "")),),
+        ).fetchone()
+        if not row or row["provider"] != provider:
+            raise ValueError("Ссылка привязки недействительна")
+        if row["used_at"]:
+            raise ValueError("Ссылка привязки уже использована")
+        if datetime.fromisoformat(row["expires_at"]) < now:
+            raise ValueError("Срок действия ссылки привязки истёк")
+        if not row["is_active"]:
+            raise ValueError("Учётная запись менеджера отключена")
+        id_column = "telegram_id" if provider == "telegram" else "max_id"
+        chat_column = "telegram_chat_id" if provider == "telegram" else "max_chat_id"
+        duplicate = conn.execute(
+            f"SELECT id FROM staff_users WHERE {id_column} = ? AND id <> ?",
+            (provider_user_id, row["staff_user_id"]),
+        ).fetchone()
+        if duplicate:
+            raise ValueError("Этот аккаунт мессенджера уже привязан к другому менеджеру")
+        conn.execute(
+            f"UPDATE staff_users SET {id_column} = ?, {chat_column} = ?, updated_at = ? WHERE id = ?",
+            (provider_user_id, chat_id, now.isoformat(), row["staff_user_id"]),
+        )
+        conn.execute(
+            "DELETE FROM manager_notification_outbox WHERE staff_user_id = ? AND provider = ? AND status <> 'sent'",
+            (row["staff_user_id"], provider),
+        )
+        conn.execute(
+            "UPDATE staff_messenger_tokens SET used_at = ? WHERE token_hash = ?",
+            (now.isoformat(), row["token_hash"]),
+        )
+        conn.commit()
+    return {
+        "staff_id": row["staff_user_id"], "display_name": row["display_name"],
+        "provider": provider, "provider_user_id": provider_user_id,
+    }
+
+
+def enqueue_manager_notifications(
+    event_type: str, conversation_id: str, *, message_id: int = 0,
+    message_text: str = "",
+) -> int:
+    if event_type not in {"new_request", "new_message"}:
+        raise ValueError("Неизвестный тип уведомления")
+    now = utc_now()
+    with _write_lock, connection() as conn:
+        conversation = conn.execute(
+            """SELECT c.id, c.chel_id, c.human_ticket_id, c.human_channel,
+                COALESCE(p.preferred_name, '') AS preferred_name
+            FROM conversations c LEFT JOIN user_profile p ON p.chel_id = c.chel_id
+            WHERE c.id = ?""",
+            (conversation_id,),
+        ).fetchone()
+        if not conversation:
+            return 0
+        manager_url = f"{settings.public_base_url}/manager?conversation={conversation_id}"
+        name = conversation["preferred_name"] or f"Пользователь {conversation['chel_id'][-6:]}"
+        if event_type == "new_request":
+            title = "Новое обращение в Консилиуме"
+            body = (
+                f"{name} просит подключить человека. "
+                f"Обращение {conversation['human_ticket_id'] or conversation_id[:8]}."
+            )
+            preference = "notify_new_requests"
+        else:
+            title = "Новое сообщение пользователя"
+            body = f"{name} отправил новое сообщение. Откройте защищённую панель менеджера."
+            preference = "notify_new_messages"
+        recipients = conn.execute(
+            f"""SELECT id, telegram_chat_id, max_chat_id FROM staff_users
+            WHERE is_active = 1 AND {preference} = 1"""
+        ).fetchall()
+        inserted = 0
+        payload = json.dumps({
+            "title": title, "body": body, "manager_url": manager_url,
+            "conversation_id": conversation_id,
+            "ticket_id": conversation["human_ticket_id"] or "",
+        }, ensure_ascii=False)
+        for staff in recipients:
+            for provider, recipient in (
+                ("telegram", staff["telegram_chat_id"]), ("max", staff["max_chat_id"]),
+            ):
+                if not recipient:
+                    continue
+                cursor = conn.execute(
+                    """INSERT OR IGNORE INTO manager_notification_outbox
+                    (staff_user_id, provider, recipient_id, event_type,
+                     conversation_id, source_message_id, payload, status, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?)""",
+                    (
+                        staff["id"], provider, recipient, event_type, conversation_id,
+                        int(message_id or 0), payload, now,
+                    ),
+                )
+                inserted += int(bool(cursor.rowcount))
+        conn.commit()
+    return inserted
+
+
+def claim_manager_notifications(provider: str, limit: int = 20) -> list[dict]:
+    provider = str(provider or "").strip().lower()
+    if provider not in {"telegram", "max"}:
+        raise ValueError("Неизвестный мессенджер")
+    limit = max(1, min(50, int(limit)))
+    now = datetime.now(timezone.utc)
+    stale_before = (now - timedelta(minutes=2)).isoformat()
+    result = []
+    with _write_lock, connection() as conn:
+        rows = conn.execute(
+            """SELECT id, recipient_id, event_type, conversation_id, payload, attempts
+            FROM manager_notification_outbox
+            WHERE provider = ? AND attempts < 100
+              AND (next_attempt_at IS NULL OR next_attempt_at <= ?)
+              AND (
+                status = 'pending' OR (status = 'delivering' AND leased_at < ?)
+            ) ORDER BY id LIMIT ?""",
+            (provider, now.isoformat(), stale_before, limit),
+        ).fetchall()
+        for row in rows:
+            lease_token = secrets.token_urlsafe(18)
+            conn.execute(
+                """UPDATE manager_notification_outbox
+                SET status = 'delivering', lease_token = ?, leased_at = ?, attempts = attempts + 1
+                WHERE id = ?""",
+                (lease_token, now.isoformat(), row["id"]),
+            )
+            item = dict(row)
+            item["lease_token"] = lease_token
+            item["payload"] = json.loads(item["payload"] or "{}")
+            result.append(item)
+        conn.commit()
+    return result
+
+
+def acknowledge_manager_notification(
+    notification_id: int, lease_token: str, success: bool, error: str = "",
+) -> bool:
+    now_dt = datetime.now(timezone.utc)
+    now = now_dt.isoformat()
+    with _write_lock, connection() as conn:
+        row = conn.execute(
+            """SELECT attempts FROM manager_notification_outbox
+            WHERE id = ? AND lease_token = ? AND status = 'delivering'""",
+            (int(notification_id), str(lease_token or "")),
+        ).fetchone()
+        if not row:
+            return False
+        retry_delay = min(3600, 5 * (2 ** min(int(row["attempts"]), 10)))
+        next_attempt_at = None if success else (now_dt + timedelta(seconds=retry_delay)).isoformat()
+        cursor = conn.execute(
+            """UPDATE manager_notification_outbox SET status = ?, sent_at = ?,
+                last_error = ?, next_attempt_at = ?, lease_token = NULL, leased_at = NULL
+            WHERE id = ? AND lease_token = ? AND status = 'delivering'""",
+            (
+                "sent" if success else "pending", now if success else None,
+                str(error or "")[:500], next_attempt_at,
+                int(notification_id), str(lease_token or ""),
+            ),
         )
         conn.commit()
     return bool(cursor.rowcount)
@@ -1150,9 +1632,10 @@ def manager_list_conversations(
             c.id LIKE ? ESCAPE '\\' OR c.chel_id LIKE ? ESCAPE '\\'
             OR COALESCE(c.human_ticket_id, '') LIKE ? ESCAPE '\\'
             OR COALESCE(p.preferred_name, '') LIKE ? ESCAPE '\\'
+            OR COALESCE(p.company_inn, '') LIKE ? ESCAPE '\\'
             OR COALESCE(c.human_phone, '') LIKE ? ESCAPE '\\'
         )""")
-        params.extend([pattern] * 5)
+        params.extend([pattern] * 6)
     where_sql = " AND ".join(where)
     with connection() as conn:
         rows = conn.execute(
@@ -1448,7 +1931,9 @@ def init_db() -> None:
             CREATE TABLE IF NOT EXISTS users (
                 chel_id TEXT PRIMARY KEY,
                 created_at TEXT NOT NULL,
-                last_seen_at TEXT NOT NULL
+                last_seen_at TEXT NOT NULL,
+                registered_at TEXT,
+                registration_method TEXT
             );
 
             CREATE TABLE IF NOT EXISTS user_device_stats (
@@ -1518,6 +2003,12 @@ def init_db() -> None:
                 login TEXT NOT NULL UNIQUE,
                 password_hash TEXT NOT NULL,
                 is_active INTEGER NOT NULL DEFAULT 1,
+                telegram_id TEXT NOT NULL DEFAULT '',
+                telegram_chat_id TEXT NOT NULL DEFAULT '',
+                max_id TEXT NOT NULL DEFAULT '',
+                max_chat_id TEXT NOT NULL DEFAULT '',
+                notify_new_requests INTEGER NOT NULL DEFAULT 1,
+                notify_new_messages INTEGER NOT NULL DEFAULT 1,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
                 last_login_at TEXT
@@ -1533,6 +2024,38 @@ def init_db() -> None:
                 FOREIGN KEY(staff_user_id) REFERENCES staff_users(id) ON DELETE CASCADE
             );
 
+            CREATE TABLE IF NOT EXISTS staff_messenger_tokens (
+                token_hash TEXT PRIMARY KEY,
+                staff_user_id INTEGER NOT NULL,
+                provider TEXT NOT NULL,
+                expires_at TEXT NOT NULL,
+                used_at TEXT,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY(staff_user_id) REFERENCES staff_users(id) ON DELETE CASCADE
+            );
+
+            CREATE TABLE IF NOT EXISTS manager_notification_outbox (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                staff_user_id INTEGER NOT NULL,
+                provider TEXT NOT NULL,
+                recipient_id TEXT NOT NULL,
+                event_type TEXT NOT NULL,
+                conversation_id TEXT NOT NULL,
+                source_message_id INTEGER NOT NULL DEFAULT 0,
+                payload TEXT NOT NULL DEFAULT '{}',
+                status TEXT NOT NULL DEFAULT 'pending',
+                attempts INTEGER NOT NULL DEFAULT 0,
+                next_attempt_at TEXT,
+                lease_token TEXT,
+                leased_at TEXT,
+                sent_at TEXT,
+                last_error TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL,
+                UNIQUE(staff_user_id, provider, event_type, conversation_id, source_message_id),
+                FOREIGN KEY(staff_user_id) REFERENCES staff_users(id) ON DELETE CASCADE,
+                FOREIGN KEY(conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
+            );
+
             CREATE TABLE IF NOT EXISTS memories (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 chel_id TEXT NOT NULL DEFAULT 'chel_legacy',
@@ -1545,6 +2068,7 @@ def init_db() -> None:
             CREATE TABLE IF NOT EXISTS user_profile (
                 chel_id TEXT PRIMARY KEY,
                 preferred_name TEXT NOT NULL DEFAULT '',
+                company_inn TEXT NOT NULL DEFAULT '',
                 age INTEGER,
                 sex TEXT NOT NULL DEFAULT '',
                 height_cm REAL,
@@ -1573,7 +2097,7 @@ def init_db() -> None:
                 selected_tests TEXT NOT NULL DEFAULT '[]',
                 payment_status TEXT NOT NULL DEFAULT 'none',
                 intro_seen INTEGER NOT NULL DEFAULT 0,
-                font_size TEXT NOT NULL DEFAULT 'standard',
+                font_size TEXT NOT NULL DEFAULT 'extra',
                 updated_at TEXT NOT NULL,
                 FOREIGN KEY(chel_id) REFERENCES users(chel_id) ON DELETE CASCADE
             );
@@ -1660,9 +2184,53 @@ def init_db() -> None:
                 UNIQUE(chel_id, med_id, scope_key, profile_fingerprint),
                 FOREIGN KEY(chel_id) REFERENCES users(chel_id) ON DELETE CASCADE
             );
+
+            CREATE TABLE IF NOT EXISTS ai_usage (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                chel_id TEXT NOT NULL DEFAULT '',
+                operation TEXT NOT NULL DEFAULT 'other',
+                model TEXT NOT NULL,
+                pricing_key TEXT NOT NULL DEFAULT '',
+                pricing_known INTEGER NOT NULL DEFAULT 0,
+                long_context INTEGER NOT NULL DEFAULT 0,
+                input_tokens INTEGER NOT NULL DEFAULT 0,
+                cached_input_tokens INTEGER NOT NULL DEFAULT 0,
+                output_tokens INTEGER NOT NULL DEFAULT 0,
+                reasoning_tokens INTEGER NOT NULL DEFAULT 0,
+                total_tokens INTEGER NOT NULL DEFAULT 0,
+                input_rate REAL NOT NULL DEFAULT 0,
+                cached_input_rate REAL NOT NULL DEFAULT 0,
+                output_rate REAL NOT NULL DEFAULT 0,
+                input_cost_usd REAL NOT NULL DEFAULT 0,
+                cached_input_cost_usd REAL NOT NULL DEFAULT 0,
+                output_cost_usd REAL NOT NULL DEFAULT 0,
+                total_cost_usd REAL NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL
+            );
             """
         )
         now = utc_now()
+        users_columns = {row[1] for row in conn.execute("PRAGMA table_info(users)").fetchall()}
+        registration_columns_added = False
+        if "registered_at" not in users_columns:
+            conn.execute("ALTER TABLE users ADD COLUMN registered_at TEXT")
+            registration_columns_added = True
+        if "registration_method" not in users_columns:
+            conn.execute("ALTER TABLE users ADD COLUMN registration_method TEXT")
+            registration_columns_added = True
+        if registration_columns_added:
+            # Historical installations did not record the first access choice. Preserve their
+            # existing analytics; the stricter rule applies to records created after migration.
+            conn.execute(
+                """UPDATE users SET registered_at=created_at,
+                    registration_method=CASE
+                        WHEN EXISTS (
+                            SELECT 1 FROM external_identities e WHERE e.chel_id=users.chel_id
+                        ) THEN 'messenger'
+                        ELSE 'legacy'
+                    END
+                WHERE registered_at IS NULL"""
+            )
         conn.execute(
             "INSERT OR IGNORE INTO users (chel_id, created_at, last_seen_at) VALUES ('chel_legacy', ?, ?)",
             (now, now),
@@ -1696,6 +2264,17 @@ def init_db() -> None:
         if "ai_enabled" not in columns:
             conn.execute("ALTER TABLE conversations ADD COLUMN ai_enabled INTEGER NOT NULL DEFAULT 1")
 
+        staff_columns = {row[1] for row in conn.execute("PRAGMA table_info(staff_users)").fetchall()}
+        for name in ("telegram_id", "telegram_chat_id", "max_id", "max_chat_id"):
+            if name not in staff_columns:
+                conn.execute(f"ALTER TABLE staff_users ADD COLUMN {name} TEXT NOT NULL DEFAULT ''")
+        for name in ("notify_new_requests", "notify_new_messages"):
+            if name not in staff_columns:
+                conn.execute(f"ALTER TABLE staff_users ADD COLUMN {name} INTEGER NOT NULL DEFAULT 1")
+        outbox_columns = {row[1] for row in conn.execute("PRAGMA table_info(manager_notification_outbox)").fetchall()}
+        if "next_attempt_at" not in outbox_columns:
+            conn.execute("ALTER TABLE manager_notification_outbox ADD COLUMN next_attempt_at TEXT")
+
         memory_columns = {row[1] for row in conn.execute("PRAGMA table_info(memories)").fetchall()}
         if "chel_id" not in memory_columns:
             conn.execute("ALTER TABLE memories ADD COLUMN chel_id TEXT NOT NULL DEFAULT 'chel_legacy'")
@@ -1710,7 +2289,7 @@ def init_db() -> None:
             conn.execute(
                 """CREATE TABLE user_profile (
                     chel_id TEXT PRIMARY KEY,
-                    preferred_name TEXT NOT NULL DEFAULT '', age INTEGER, sex TEXT NOT NULL DEFAULT '',
+                    preferred_name TEXT NOT NULL DEFAULT '', company_inn TEXT NOT NULL DEFAULT '', age INTEGER, sex TEXT NOT NULL DEFAULT '',
                     height_cm REAL, weight_kg REAL, pregnancy TEXT NOT NULL DEFAULT 'not_applicable',
                     conditions TEXT NOT NULL DEFAULT '[]', medications TEXT NOT NULL DEFAULT '[]',
                     allergies TEXT NOT NULL DEFAULT '[]', smoking TEXT NOT NULL DEFAULT 'unknown',
@@ -1724,10 +2303,10 @@ def init_db() -> None:
             )
             conn.execute(
                 """INSERT INTO user_profile
-                (chel_id, preferred_name, age, sex, height_cm, weight_kg, pregnancy, conditions,
+                (chel_id, preferred_name, company_inn, age, sex, height_cm, weight_kg, pregnancy, conditions,
                  medications, allergies, smoking, alcohol, activity, blood_pressure, blood_sugar,
                  dark_in_eyes, joint_pain, fatigue, notes, updated_at)
-                SELECT 'chel_legacy', preferred_name, age, sex, height_cm, weight_kg, pregnancy,
+                SELECT 'chel_legacy', preferred_name, '', age, sex, height_cm, weight_kg, pregnancy,
                  conditions, medications, allergies, smoking, alcohol, activity, blood_pressure,
                  blood_sugar, dark_in_eyes, joint_pain, fatigue, notes, updated_at
                 FROM user_profile_legacy WHERE id = 1"""
@@ -1739,6 +2318,8 @@ def init_db() -> None:
                 conn.execute(f"ALTER TABLE user_profile ADD COLUMN {name} TEXT NOT NULL DEFAULT 'unknown'")
         if "tube_number" not in profile_columns:
             conn.execute("ALTER TABLE user_profile ADD COLUMN tube_number TEXT NOT NULL DEFAULT ''")
+        if "company_inn" not in profile_columns:
+            conn.execute("ALTER TABLE user_profile ADD COLUMN company_inn TEXT NOT NULL DEFAULT ''")
 
         onboarding_columns = {row[1] for row in conn.execute("PRAGMA table_info(onboarding_state)").fetchall()}
         if "chel_id" not in onboarding_columns:
@@ -1777,6 +2358,10 @@ def init_db() -> None:
         conn.execute("CREATE INDEX IF NOT EXISTS idx_messages_conversation_id ON messages(conversation_id, id)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_manager_actions_conversation_id ON manager_actions(conversation_id, created_at)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_staff_sessions_user ON staff_sessions(staff_user_id, expires_at)")
+        conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_staff_telegram_id ON staff_users(telegram_id) WHERE telegram_id <> ''")
+        conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_staff_max_id ON staff_users(max_id) WHERE max_id <> ''")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_staff_messenger_tokens ON staff_messenger_tokens(staff_user_id, provider, expires_at)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_manager_notification_delivery ON manager_notification_outbox(provider, status, id)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_memories_chel_id ON memories(chel_id, updated_at)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_body_symptoms_chel_id ON body_symptoms(chel_id, created_at)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_external_identities_chel_id ON external_identities(chel_id)")
@@ -1787,6 +2372,8 @@ def init_db() -> None:
             "CREATE INDEX IF NOT EXISTS idx_lab_interpretations_lookup "
             "ON lab_interpretations(chel_id, med_id, scope_key, profile_fingerprint)"
         )
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_ai_usage_created_at ON ai_usage(created_at)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_ai_usage_model ON ai_usage(model, created_at)")
 
         # Preserve tickets created by earlier versions without rewriting messages.
         conversations = conn.execute("SELECT id, status, human_status, human_ticket_id FROM conversations").fetchall()
@@ -2142,7 +2729,7 @@ def get_profile() -> dict:
     if not row:
         return {
             "chel_id": current_chel_id(),
-            "preferred_name": "", "age": None, "sex": "", "height_cm": None,
+            "preferred_name": "", "company_inn": "", "age": None, "sex": "", "height_cm": None,
             "weight_kg": None, "pregnancy": "not_applicable", "conditions": [],
             "medications": [], "allergies": [], "smoking": "unknown", "notes": "",
             "alcohol": "unknown", "activity": "unknown", "blood_pressure": "unknown",
@@ -2162,7 +2749,7 @@ def get_profile() -> dict:
 def save_profile(profile: dict) -> dict:
     now = utc_now()
     values = (
-        str(profile.get("preferred_name", ""))[:100], profile.get("age"),
+        str(profile.get("preferred_name", ""))[:100], str(profile.get("company_inn", ""))[:12], profile.get("age"),
         str(profile.get("sex", ""))[:30], profile.get("height_cm"), profile.get("weight_kg"),
         str(profile.get("pregnancy", "not_applicable"))[:30],
         json.dumps(profile.get("conditions", []), ensure_ascii=False),
@@ -2179,9 +2766,9 @@ def save_profile(profile: dict) -> dict:
     with _write_lock, connection() as conn:
         conn.execute(
             """INSERT INTO user_profile
-            (chel_id, preferred_name, age, sex, height_cm, weight_kg, pregnancy, conditions, medications, allergies, smoking, alcohol, activity, blood_pressure, blood_sugar, dark_in_eyes, joint_pain, fatigue, tube_number, notes, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-            ON CONFLICT(chel_id) DO UPDATE SET preferred_name=excluded.preferred_name, age=excluded.age,
+            (chel_id, preferred_name, company_inn, age, sex, height_cm, weight_kg, pregnancy, conditions, medications, allergies, smoking, alcohol, activity, blood_pressure, blood_sugar, dark_in_eyes, joint_pain, fatigue, tube_number, notes, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(chel_id) DO UPDATE SET preferred_name=excluded.preferred_name, company_inn=excluded.company_inn, age=excluded.age,
             sex=excluded.sex, height_cm=excluded.height_cm, weight_kg=excluded.weight_kg,
             pregnancy=excluded.pregnancy, conditions=excluded.conditions, medications=excluded.medications,
             allergies=excluded.allergies, smoking=excluded.smoking, alcohol=excluded.alcohol,
@@ -2197,7 +2784,7 @@ def save_profile(profile: dict) -> dict:
 def profile_fingerprint(profile: dict | None = None) -> str:
     """Stable cache key for profile fields that can change lab interpretation."""
     source = dict(profile or get_profile())
-    for key in ("chel_id", "tube_number", "updated_at"):
+    for key in ("chel_id", "company_inn", "tube_number", "updated_at"):
         source.pop(key, None)
     payload = json.dumps(source, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
@@ -2260,7 +2847,7 @@ def get_onboarding() -> dict:
             (current_chel_id(),),
         ).fetchone()
     if not row:
-        return {"status": "appearance", "selected_tests": [], "payment_status": "none", "intro_seen": False, "font_size": "standard", "updated_at": None}
+        return {"status": "appearance", "selected_tests": [], "payment_status": "none", "intro_seen": False, "font_size": "extra", "updated_at": None}
     result = dict(row)
     try:
         result["selected_tests"] = json.loads(result["selected_tests"] or "[]")
@@ -2281,7 +2868,7 @@ def save_onboarding(
     selected = current["selected_tests"] if selected_tests is None else selected_tests
     payment = current["payment_status"] if payment_status is None else payment_status
     seen = current.get("intro_seen", False) if intro_seen is None else intro_seen
-    size = current.get("font_size", "standard") if font_size is None else font_size
+    size = current.get("font_size", "extra") if font_size is None else font_size
     if size not in {"standard", "large", "extra"}:
         raise ValueError("Некорректный размер текста")
     with _write_lock, connection() as conn:

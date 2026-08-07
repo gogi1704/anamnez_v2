@@ -9,7 +9,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/static/dashboard.css?v=20260731-6">
+  <link rel="stylesheet" href="/static/dashboard.css?v=20260806-admin-rate-limit">
 </head>
 <body>
   <main class="dashboard-shell">
@@ -45,9 +45,90 @@
 
       <nav class="admin-tabs" aria-label="Разделы админ-панели">
         <button class="active" id="dashboardTab" type="button">Дашборд</button>
+        <button id="analyticsTab" type="button">Воронка и поведение</button>
         <button id="managersTab" type="button">Управление менеджерами</button>
         <button id="examinationsTab" type="button">Дополнительные обследования</button>
+        <button id="costsTab" type="button">Расходы</button>
       </nav>
+
+      <section class="analytics-admin hidden" id="analyticsAdminView">
+        <article class="panel analytics-heading-panel">
+          <div class="panel-heading"><div><p class="eyebrow">Аналитика прохождения сервиса</p><h2>Воронка и поведение пользователей</h2><p>Считаются только технические события — без ответов анкеты, сообщений, телефонов и номеров пробирок.</p></div></div>
+          <div class="analytics-filters">
+            <label>Период<select id="analyticsPeriod"><option value="today">Сегодня</option><option value="7">7 дней</option><option value="30" selected>30 дней</option><option value="90">90 дней</option><option value="all">Всё время</option></select></label>
+            <label>Устройство<select id="analyticsDevice"><option value="">Все устройства</option></select></label>
+            <label>Регистрация<select id="analyticsMethod"><option value="">Все способы</option></select></label>
+            <label>Источник<select id="analyticsSource"><option value="">Все источники</option></select></label>
+            <button type="button" id="analyticsApply">Применить</button>
+          </div>
+        </article>
+        <section class="analytics-summary" id="analyticsSummary"></section>
+        <article class="panel"><div class="panel-heading"><div><p class="eyebrow">От первого входа до обращения</p><h2>Полная воронка</h2></div><div class="funnel-mode-tabs" role="tablist" aria-label="Расчёт конверсии"><button class="active" id="funnelFromStart" type="button" role="tab" aria-selected="true">От начала</button><button id="funnelFromPrevious" type="button" role="tab" aria-selected="false">От предыдущего шага</button></div></div><div class="funnel-list" id="analyticsFunnel"></div></article>
+        <section class="analytics-detail-grid">
+          <article class="panel"><div class="panel-heading"><div><p class="eyebrow">Динамика</p><h2>Пользователи по дням</h2></div></div><div class="analytics-bars" id="analyticsDaily"></div></article>
+          <article class="panel"><div class="panel-heading"><div><p class="eyebrow">Аудитория</p><h2>Устройства</h2></div></div><div class="distribution-list" id="analyticsDevices"></div></article>
+          <article class="panel"><div class="panel-heading"><div><p class="eyebrow">Вход</p><h2>Способы регистрации</h2></div></div><div class="distribution-list" id="analyticsRegistrations"></div></article>
+          <article class="panel"><div class="panel-heading"><div><p class="eyebrow">Привлечение</p><h2>Источники</h2></div></div><div class="distribution-list" id="analyticsSources"></div></article>
+        </section>
+        <article class="panel questionnaire-analytics-panel"><div class="panel-heading"><div><p class="eyebrow">Отдельно от общей воронки</p><h2>Статистика по анкете</h2><p>В общей воронке анкета считается одним этапом. Здесь можно увидеть, на каких вопросах пользователи чаще пропускают ответ или прекращают заполнение.</p></div></div><div class="questionnaire-chart" id="analyticsQuestionsChart"></div></article>
+        <article class="panel table-panel"><div class="panel-heading"><div><p class="eyebrow">Контроль качества</p><h2>Ошибки и последние события</h2></div><span class="table-count" id="analyticsErrors"></span></div><div class="table-scroll"><table><thead><tr><th>Время</th><th>Событие</th><th>chel_id</th><th>Экран</th><th>Устройство</th><th>Браузер</th></tr></thead><tbody id="analyticsRecent"></tbody></table></div><div class="table-pagination"><button id="analyticsRecentPrev" type="button">← Назад</button><span id="analyticsRecentPage">Страница 1 из 1</span><button id="analyticsRecentNext" type="button">Далее →</button></div></article>
+      </section>
+
+      <section class="costs-admin hidden" id="costsAdminView">
+        <article class="panel costs-heading-panel">
+          <div class="costs-heading">
+            <div>
+              <p class="eyebrow">Использование OpenAI API</p>
+              <h2>Расходы на ИИ</h2>
+              <p id="costsNotice">Сохраняются только счётчики токенов — без текстов сообщений и медицинских данных.</p>
+            </div>
+            <label class="cost-period">Период
+              <select id="costsPeriod">
+                <option value="today">Сегодня</option>
+                <option value="7">Последние 7 дней</option>
+                <option value="30" selected>Последние 30 дней</option>
+                <option value="90">Последние 90 дней</option>
+                <option value="all">Всё время</option>
+              </select>
+            </label>
+          </div>
+        </article>
+
+        <section class="cost-summary-grid" id="costSummaryGrid" aria-label="Сводка расходов"></section>
+
+        <section class="cost-analytics-grid">
+          <article class="panel cost-chart-panel">
+            <div class="panel-heading"><div><p class="eyebrow">Динамика</p><h2>Расход по дням</h2></div></div>
+            <div class="cost-chart" id="costDailyChart"></div>
+          </article>
+          <article class="panel">
+            <div class="panel-heading"><div><p class="eyebrow">Назначение запросов</p><h2>По операциям</h2></div></div>
+            <div class="distribution-list" id="costOperationDistribution"></div>
+          </article>
+        </section>
+
+        <article class="panel table-panel">
+          <div class="panel-heading"><div><p class="eyebrow">Модели</p><h2>Токены и стоимость</h2></div></div>
+          <div class="table-scroll"><table>
+            <thead><tr><th>Модель</th><th>Запросы</th><th>Входные</th><th>Из них кеш</th><th>Выходные</th><th>Всего токенов</th><th>Стоимость</th></tr></thead>
+            <tbody id="costModelsTable"></tbody>
+          </table></div>
+        </article>
+
+        <article class="panel table-panel">
+          <div class="panel-heading"><div><p class="eyebrow">Последние вызовы</p><h2>Детализация</h2></div><span class="table-count" id="costRequestsCount"></span></div>
+          <div class="table-scroll"><table>
+            <thead><tr><th>Время</th><th>Операция</th><th>Модель</th><th>chel_id</th><th>Входные</th><th>Кеш</th><th>Выходные</th><th>Reasoning</th><th>Всего</th><th>Стоимость</th></tr></thead>
+            <tbody id="costRecentTable"></tbody>
+          </table></div>
+        </article>
+
+        <article class="panel pricing-panel">
+          <div class="panel-heading"><div><p class="eyebrow">Тарифный снимок</p><h2>Цена за 1 млн токенов</h2></div></div>
+          <div class="pricing-list" id="costPricingList"></div>
+          <p>Это расчётная аналитика приложения. Для сверки оплаты используйте раздел Billing в кабинете OpenAI. Статистика начинается после установки этого обновления.</p>
+        </article>
+      </section>
 
       <section class="manager-admin hidden" id="managerAdminView">
         <article class="panel manager-create-panel">
@@ -56,6 +137,13 @@
             <label>Имя менеджера<input id="staffDisplayName" maxlength="80" autocomplete="off" placeholder="Ольга Иванова" required></label>
             <label>Логин<input id="staffLogin" maxlength="64" autocomplete="off" placeholder="olga.ivanova" required></label>
             <label>Пароль<input id="staffPassword" type="text" minlength="6" maxlength="256" autocomplete="off" spellcheck="false" placeholder="Не короче 6 символов" required></label>
+            <label>Telegram ID <small>(необязательно)</small><input id="staffTelegramId" inputmode="numeric" maxlength="30" autocomplete="off" placeholder="Например, 123456789"></label>
+            <label>MAX ID <small>(необязательно)</small><input id="staffMaxId" inputmode="numeric" maxlength="30" autocomplete="off" placeholder="Например, 987654321"></label>
+            <div class="manager-notification-options">
+              <strong>Уведомлять менеджера</strong>
+              <label><input id="staffNotifyRequests" type="checkbox" checked> О новых обращениях</label>
+              <label><input id="staffNotifyMessages" type="checkbox" checked> О сообщениях, когда ИИ выключен</label>
+            </div>
             <button type="submit">Создать менеджера</button>
           </form>
           <p class="manager-form-status hidden" id="managerFormStatus" role="status"></p>
@@ -223,6 +311,6 @@
       <p class="dashboard-error hidden" id="dashboardError" role="alert"></p>
     </div>
   </main>
-  <script src="/static/dashboard.js?v=20260731-6" defer></script>
+  <script src="/static/dashboard.js?v=20260806-admin-rate-limit" defer></script>
 </body>
 </html>
