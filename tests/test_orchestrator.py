@@ -879,7 +879,13 @@ class OrchestratorTests(unittest.TestCase):
         self.assertIn('id="capabilityExaminations"', index)
         self.assertIn("Выбор и оплата дополнительных обследований", index)
         self.assertIn("openExaminationsFromCapabilities", script)
-        self.assertIn("renderExamSelection();", script)
+        self.assertIn("state.returnToChatAfterExaminations = true", script)
+        self.assertIn("function renderCurrentExamSelectionSummary()", script)
+        self.assertIn("У вас выбраны обследования", script)
+        self.assertIn('data-onboarding-action="edit-current-exams"', script)
+        self.assertIn('data-onboarding-action="close-current-exams"', script)
+        self.assertIn("if (returnDirectlyToChat) return openMainApp({ skipIntro:true })", script)
+        self.assertIn("editProfileFromChatExamFlow", script)
 
     def test_admin_dashboard_token_is_required_and_compared_exactly(self):
         expected = "dashboard-secret-" + ("x" * 32)
@@ -1116,6 +1122,14 @@ class OrchestratorTests(unittest.TestCase):
         self.assertIn('id="staffTelegramId"', dashboard)
         self.assertIn('id="staffMaxId"', dashboard)
         self.assertIn('id="staffNotifyRequests"', dashboard)
+        self.assertIn('id="userDataCleanupForm"', dashboard)
+        self.assertIn('id="userDataCleanupId"', dashboard)
+        self.assertNotIn('id="deleteMyDataButton"', dashboard)
+        self.assertIn("/api/admin/users/delete-data", script)
+        self.assertNotIn("/api/admin/my-user-id", script)
+        self.assertIn("X-Consilium-Action':'delete-user-data'", script)
+        self.assertNotIn('data-staff-action="cleanup-user"', script)
+        self.assertIn("ID менеджера:", script)
         self.assertIn('data-staff-action="telegram-link"', script)
         self.assertIn('data-staff-action="max-link"', script)
         self.assertIn('class="staff-card-content"', script)
@@ -1123,6 +1137,10 @@ class OrchestratorTests(unittest.TestCase):
         self.assertIn('class="staff-card-actions"', script)
         self.assertIn(".staff-card-content { display:grid", styles)
         self.assertIn("@media (max-width:520px)", styles)
+        self.assertIn('class="panel funnel-panel"', dashboard)
+        self.assertIn(".funnel-panel .panel-heading { align-items:stretch; flex-direction:column; }", styles)
+        self.assertIn(".funnel-row .funnel-label { grid-column:1/-1; width:100%; }", styles)
+        self.assertIn(".funnel-mode-tabs { display:grid;", styles)
         self.assertIn("sessionStorage", script)
         self.assertIn("Authorization:`Bearer ${token || ''}`", script)
         self.assertIn("/api/admin/table", script)
@@ -1357,6 +1375,7 @@ class OrchestratorTests(unittest.TestCase):
         manager = (project_root / "manager.html").read_text(encoding="utf-8")
         manager_script = (project_root / "static" / "manager.js").read_text(encoding="utf-8")
         app = (project_root / "static" / "app.js").read_text(encoding="utf-8")
+        styles = (project_root / "static" / "styles.css").read_text(encoding="utf-8")
         index = (project_root / "index.html").read_text(encoding="utf-8")
         dockerfile = (project_root / "Dockerfile").read_text(encoding="utf-8")
         self.assertIn('id="requestList"', manager)
@@ -1377,7 +1396,11 @@ class OrchestratorTests(unittest.TestCase):
         self.assertIn("sender_type === 'human_manager'", manager_script)
         self.assertIn('id="chatModeBanner"', index)
         self.assertIn('id="chatModeNewDialog"', index)
-        self.assertIn("вы можете общаться с ИИ в новом диалоге", app)
+        self.assertIn('id="chatModeToggle"', index)
+        self.assertIn('aria-controls="chatModeDetails"', index)
+        self.assertIn('.chat-mode-banner.expanded .chat-mode-details', styles)
+        self.assertIn("$('#chatModeToggle').addEventListener('click'", app)
+        self.assertIn("вы можете продолжить общение с ИИ в новом диалоге", app)
         self.assertIn("$('#chatModeNewDialog').addEventListener('click', newConversation)", app)
         self.assertNotIn("Я правильно понял?", index)
         self.assertNotIn('id="insightDock"', index)
@@ -1472,6 +1495,103 @@ class OrchestratorTests(unittest.TestCase):
             db.ensure_user("chel_test_default")
             db.set_current_chel_id("chel_test_default")
 
+    def test_admin_delete_user_data_removes_all_records_and_keeps_staff_account(self):
+        chel_id = "chel_admin_delete_target"
+        other_id = "chel_admin_delete_other"
+        manager = db.admin_create_staff(
+            "Менеджер Тест", "manager.cleanup", "123456", telegram_id="7788990011",
+        )
+        db.ensure_user(chel_id)
+        db.ensure_user(other_id)
+        try:
+            db.set_current_chel_id(chel_id)
+            conversation = db.create_conversation("Удаляемый диалог")
+            db.add_message(conversation["id"], "user", "Удаляемое сообщение")
+            db.add_handoff(conversation["id"], "manager", "therapist", "Удаляемая передача")
+            db.manager_set_ai_enabled(conversation["id"], False, "Менеджер Тест")
+            db.update_conversation(
+                conversation["id"], active_agent="manager", context_summary="{}",
+                status="waiting_human", human_status="pending",
+                human_ticket_id="H-DELETE", human_channel="chat",
+            )
+            db.enqueue_manager_notifications("new_request", conversation["id"])
+            db.add_memory("Удаляемая память")
+            db.save_profile({"preferred_name": "Удалить", "tube_number": "DELETE-1"})
+            db.save_onboarding(status="complete", selected_tests=["lipids"])
+            db.add_body_symptom({
+                "region": "Голова", "symptom_type": "Боль", "intensity": 4,
+            })
+            db.record_device_access("Mozilla/5.0 (iPhone) Safari")
+            with db.connection() as conn:
+                now = db.utc_now()
+                conn.execute(
+                    """INSERT INTO external_identities
+                    (provider, provider_user_id, chel_id, access_status, created_at, last_login_at)
+                    VALUES ('telegram', '7788990011', ?, 'active', ?, ?)""",
+                    (chel_id, now, now),
+                )
+                conn.execute(
+                    "INSERT INTO login_tokens (token_hash, chel_id, expires_at, created_at) VALUES ('delete-login', ?, ?, ?)",
+                    (chel_id, now, now),
+                )
+                conn.execute(
+                    "INSERT INTO auth_intents (token_hash, chel_id, provider, expires_at, created_at) VALUES ('delete-intent', ?, 'telegram', ?, ?)",
+                    (chel_id, now, now),
+                )
+                conn.execute(
+                    "INSERT INTO user_sessions (session_hash, chel_id, created_at, last_seen_at, expires_at) VALUES ('delete-session', ?, ?, ?, ?)",
+                    (chel_id, now, now, now),
+                )
+                conn.execute(
+                    "INSERT INTO ai_usage (chel_id, model, created_at) VALUES (?, 'test-model', ?)",
+                    (chel_id, now),
+                )
+                conn.commit()
+
+            listed = next(item for item in db.admin_list_staff() if item["id"] == manager["id"])
+            self.assertEqual(listed["user_chel_ids"], [chel_id])
+
+            result = db.admin_delete_user_data(chel_id)
+            self.assertTrue(result["user_found"])
+            self.assertGreater(result["deleted"], 0)
+            self.assertFalse(db.user_exists(chel_id))
+            self.assertTrue(db.user_exists(other_id))
+            self.assertTrue(any(item["id"] == manager["id"] for item in db.admin_list_staff()))
+            listed = next(item for item in db.admin_list_staff() if item["id"] == manager["id"])
+            self.assertEqual(listed["user_chel_ids"], [])
+
+            with db.connection() as conn:
+                for table in (
+                    "conversations", "memories", "body_symptoms", "lab_interpretations",
+                    "user_profile", "onboarding_state", "user_device_stats", "ai_usage",
+                    "login_tokens", "auth_intents", "user_sessions", "external_identities",
+                    "users",
+                ):
+                    self.assertEqual(conn.execute(
+                        f"SELECT COUNT(*) FROM {table} WHERE chel_id = ?", (chel_id,),
+                    ).fetchone()[0], 0, table)
+                self.assertEqual(conn.execute(
+                    "SELECT COUNT(*) FROM messages WHERE conversation_id = ?", (conversation["id"],),
+                ).fetchone()[0], 0)
+                self.assertEqual(conn.execute(
+                    "SELECT COUNT(*) FROM handoffs WHERE conversation_id = ?", (conversation["id"],),
+                ).fetchone()[0], 0)
+                self.assertEqual(conn.execute(
+                    "SELECT COUNT(*) FROM manager_actions WHERE conversation_id = ?", (conversation["id"],),
+                ).fetchone()[0], 0)
+                self.assertEqual(conn.execute(
+                    "SELECT COUNT(*) FROM manager_notification_outbox WHERE conversation_id = ?", (conversation["id"],),
+                ).fetchone()[0], 0)
+
+            with self.assertRaises(ValueError):
+                db.admin_delete_user_data("chel_test_default")
+        finally:
+            db.set_current_chel_id("chel_test_default")
+            db.admin_delete_staff(manager["id"])
+            with db.connection() as conn:
+                conn.execute("DELETE FROM users WHERE chel_id = ?", (other_id,))
+                conn.commit()
+
     def test_function_menu_has_requested_order_and_only_two_items_after_separator(self):
         project_root = Path(__file__).resolve().parents[1]
         index = (project_root / "index.html").read_text(encoding="utf-8")
@@ -1548,9 +1668,10 @@ class OrchestratorTests(unittest.TestCase):
         self.assertIn("controllerchange", script)
         self.assertIn("url.pathname.startsWith('/api/')", worker)
         self.assertIn("url.pathname.startsWith('/auth/')", worker)
-        self.assertIn("consilium-shell-v27", worker)
+        self.assertIn("consilium-shell-v34", worker)
         self.assertIn("fetch(request)", worker)
-        self.assertIn("/static/app.js?v=20260807-ai-paused-new-chat", index)
+        self.assertIn("/static/app.js?v=20260812-metrika-goals-only", index)
+        self.assertIn("/static/metrika.js?v=20260812-metrika-goals-only", index)
         self.assertIn('id="welcomeScreen"', index)
         self.assertIn('id="welcomeNextButton"', index)
         self.assertIn("WELCOME_SEEN_KEY", script)
@@ -1568,6 +1689,31 @@ class OrchestratorTests(unittest.TestCase):
             index.index('id="menuInstallAppButton"'),
             index.index('id="menuFontSizeButton"'),
         )
+
+    def test_yandex_metrika_is_configurable_goals_only_and_private(self):
+        project_root = Path(__file__).resolve().parents[1]
+        index = (project_root / "index.html").read_text(encoding="utf-8")
+        metrika = (project_root / "static" / "metrika.js").read_text(encoding="utf-8")
+        app = (project_root / "static" / "app.js").read_text(encoding="utf-8")
+        main = (project_root / "backend" / "main.py").read_text(encoding="utf-8")
+        config = (project_root / "backend" / "config.py").read_text(encoding="utf-8")
+
+        self.assertIn('src="/static/metrika.js?v=20260812-metrika-goals-only"', index)
+        self.assertIn('YANDEX_METRIKA_COUNTER_ID', config)
+        self.assertIn('path == "/api/public-config"', main)
+        self.assertIn('"metrika.js"', main)
+        self.assertIn("https://mc.yandex.ru", main)
+        self.assertNotIn("consilium_yandex_metrika_consent_v1", metrika)
+        self.assertNotIn("metrika-consent", metrika)
+        self.assertIn("webvisor: false", metrika)
+        self.assertIn("trackLinks: false", metrika)
+        self.assertIn("clickmap: false", metrika)
+        self.assertIn("defer: true", metrika)
+        self.assertNotIn("'hit'", metrika)
+        self.assertNotIn("UserID", metrika)
+        self.assertNotIn("userParams", metrika)
+        self.assertNotIn("chel_id", metrika)
+        self.assertIn("window.consiliumMetrikaGoal?.(goal)", app)
 
     def test_persisted_replies_are_deduplicated_by_server_message_id(self):
         project_root = Path(__file__).resolve().parents[1]

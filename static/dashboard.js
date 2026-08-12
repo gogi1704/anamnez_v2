@@ -16,6 +16,9 @@ const statusNames = {
 const deviceNames = {
   desktop:'ПК', android:'Android', ios:'iOS', other:'Другое',
 };
+const registrationNames = {
+  anonymous:'Анонимно', max:'MAX', telegram:'Telegram',
+};
 const operationNames = {
   routing:'Выбор специалиста', agent_response:'Ответ ИИ-агента',
   lab_interpretation:'Расшифровка анализов', council_opinion:'Мнение консилиума',
@@ -449,6 +452,13 @@ function renderStaff(items) {
     const initial = escapeHtml(String(item.display_name || 'М').trim().charAt(0).toUpperCase() || 'М');
     const telegramLinked = Boolean(item.telegram_id);
     const maxLinked = Boolean(item.max_id);
+    const userIds = Array.isArray(item.user_chel_ids) ? item.user_chel_ids : [];
+    const userIdBlock = userIds.length
+      ? userIds.map(chelId => `
+          <div class="staff-user-id-row">
+            <code title="${escapeHtml(chelId)}">${escapeHtml(chelId)}</code>
+          </div>`).join('')
+      : '<small>Не найден. Он появится здесь, если менеджер зарегистрируется в приложении через привязанный Telegram или MAX.</small>';
     return `
     <article class="staff-card ${item.is_active ? '' : 'inactive'}" data-staff-id="${item.id}">
       <header class="staff-card-header">
@@ -456,7 +466,7 @@ function renderStaff(items) {
           <span class="staff-avatar" aria-hidden="true">${initial}</span>
           <div>
             <strong>${escapeHtml(item.display_name)}</strong>
-            <small>Логин: ${escapeHtml(item.login)}</small>
+            <small>Логин: ${escapeHtml(item.login)} · ID менеджера: ${item.id}</small>
           </div>
         </div>
         <span class="staff-access-status ${item.is_active ? 'active' : 'disabled'}">${item.is_active ? 'Доступ активен' : 'Доступ отключён'}</span>
@@ -476,6 +486,10 @@ function renderStaff(items) {
             <button class="staff-inline-action" data-staff-action="max-link" type="button">${maxLinked ? 'Перепривязать' : 'Привязать'}</button>
           </div>
           <button class="staff-text-action" data-staff-action="messenger-ids" type="button">Изменить ID вручную</button>
+          <div class="staff-user-id">
+            <h4>chel_id для тестирования анкеты</h4>
+            ${userIdBlock}
+          </div>
         </section>
 
         <section class="staff-info-section" aria-label="Уведомления">
@@ -514,6 +528,48 @@ function escapeHtml(value) {
 
 async function loadStaff() {
   renderStaff(await adminFetch('/api/admin/managers'));
+}
+
+async function deleteUserData(event) {
+  event.preventDefault();
+  const chelId = $('#userDataCleanupId').value.trim();
+  const status = $('#userDataCleanupStatus');
+  if (!/^chel_[A-Za-z0-9_-]{8,64}$/.test(chelId)) {
+    status.textContent = 'Укажите корректный chel_id пользователя.';
+    status.classList.add('error');
+    status.classList.remove('hidden');
+    return;
+  }
+  const confirmation = window.prompt(
+    `Это действие нельзя отменить. Для полного удаления данных повторите ID пользователя:\n\n${chelId}`,
+  );
+  if (confirmation === null) return;
+  if (confirmation.trim() !== chelId) {
+    status.textContent = 'Удаление отменено: введённый ID не совпадает.';
+    status.classList.add('error');
+    status.classList.remove('hidden');
+    return;
+  }
+  const button = $('#deleteUserDataButton');
+  button.disabled = true;
+  status.classList.add('hidden');
+  try {
+    const result = await adminFetch('/api/admin/users/delete-data', undefined, {
+      method:'POST',
+      headers:{'X-Consilium-Action':'delete-user-data'},
+      body:JSON.stringify({chel_id:chelId,confirmation:chelId}),
+    });
+    $('#userDataCleanupForm').reset();
+    status.textContent = `Все данные ${result.chel_id} удалены. Пользователь сможет пройти регистрацию и анкету заново.`;
+    status.classList.remove('error','hidden');
+    await loadDashboard();
+  } catch (error) {
+    status.textContent = error.message;
+    status.classList.add('error');
+    status.classList.remove('hidden');
+  } finally {
+    button.disabled = false;
+  }
 }
 
 function showExaminationStatus(message, error = false) {
@@ -566,7 +622,10 @@ function fillAnalyticsSelect(selector, values, emptyLabel) {
   const select = $(selector);
   const current = select.value;
   select.replaceChildren(new Option(emptyLabel,''), ...values.map(value => new Option(
-    selector === '#analyticsDevice' ? (deviceNames[value] || value) : value, value,
+    selector === '#analyticsDevice' ? (deviceNames[value] || value)
+      : selector === '#analyticsMethod' ? (registrationNames[value] || value)
+      : value,
+    value,
   )));
   if ([...select.options].some(option => option.value === current)) select.value = current;
 }
@@ -651,7 +710,7 @@ function renderAnalytics(data) {
   }
   if (!(data.daily || []).length) daily.textContent = 'Пока нет данных';
   renderDistribution('#analyticsDevices',data.devices || [],'label','users',deviceNames);
-  renderDistribution('#analyticsRegistrations',data.registrations || [],'label','users');
+  renderDistribution('#analyticsRegistrations',data.registrations || [],'label','users',registrationNames);
   renderDistribution('#analyticsSources',data.sources || [],'label','users');
 
   const questions = $('#analyticsQuestionsChart'); questions.replaceChildren();
@@ -1070,6 +1129,7 @@ $('#managersTab').addEventListener('click', () => showAdminView('managers'));
 $('#examinationsTab').addEventListener('click', () => showAdminView('examinations'));
 $('#costsTab').addEventListener('click', () => showAdminView('costs'));
 $('#managerCreateForm').addEventListener('submit', createManager);
+$('#userDataCleanupForm').addEventListener('submit', deleteUserData);
 $('#staffList').addEventListener('click', updateManager);
 $('#examinationForm').addEventListener('submit', saveExamination);
 $('#examinationList').addEventListener('click', manageExamination);

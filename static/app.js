@@ -26,6 +26,7 @@ const state = {
   lastMessageId: 0,
   returnToHumanAfterContextEdit: false,
   contextEditTicketId: null,
+  returnToChatAfterExaminations: false,
 };
 
 const $ = selector => document.querySelector(selector);
@@ -107,6 +108,30 @@ function trackEvent(eventName, properties = {}) {
   writeAnalyticsQueue(queue);
   clearTimeout(analyticsFlushTimer);
   analyticsFlushTimer = setTimeout(() => flushAnalytics(), queue.length >= 10 ? 800 : 6000);
+  trackMetrikaGoal(eventName, properties);
+}
+
+function trackMetrikaGoal(eventName, properties = {}) {
+  const fixedGoals = {
+    welcome_continued:'welcome_continue', appearance_completed:'font_size_selected',
+    questionnaire_started:'questionnaire_started', questionnaire_completed:'questionnaire_completed',
+    examinations_offer_viewed:'exam_offer_viewed', examinations_opened:'exam_options_opened',
+    examinations_selection_completed:'exam_selection_completed', onboarding_completed:'onboarding_completed',
+    capabilities_viewed:'capabilities_viewed', chat_opened:'chat_opened',
+    first_message_sent:'first_message_sent', human_requested:'human_requested',
+    install_clicked:'install_clicked',
+  };
+  let goal = fixedGoals[eventName] || '';
+  if (eventName === 'registration_method_selected') {
+    const method = String(properties.method || properties.provider || '');
+    if (['max','telegram','anonymous'].includes(method)) goal = `registration_${method}`;
+  }
+  if (eventName === 'payment_method_selected') {
+    const method = String(properties.method || '');
+    if (method === 'online') goal = 'payment_online';
+    if (method === 'at_exam') goal = 'payment_at_exam';
+  }
+  if (goal) window.consiliumMetrikaGoal?.(goal);
 }
 
 async function flushAnalytics({ beacon = false } = {}) {
@@ -620,13 +645,49 @@ function renderExamSkipConfirmation() {
 async function submitExamSelection(skip = false) {
   try {
     state.onboarding = await api('/api/onboarding/exams', { method:'POST', body:JSON.stringify({ selected_tests:skip ? [] : [...state.selectedTests] }) });
-    if (skip) return openMainApp();
+    window.consiliumMetrikaGoal?.('exam_selection_completed');
+    if (skip) {
+      window.consiliumMetrikaGoal?.('onboarding_completed');
+      return openMainApp({ skipIntro:state.returnToChatAfterExaminations });
+    }
     renderPayment();
   } catch (error) { showOnboardingError(error.message); }
 }
 
 function selectedTestDetails() {
   return state.onboarding.tests.filter(test => state.onboarding.selected_tests.includes(test.id));
+}
+
+function renderCurrentExamSelectionSummary() {
+  setOnboardingMeta('Обследования', 100);
+  const selected = selectedTestDetails();
+  const total = selected.reduce((sum,test) => sum + test.price, 0);
+  const paymentLabels = {
+    pay_at_exam:'Оплата на медосмотре',
+    demo_paid:'Оплачено',
+    pending:'Способ оплаты ещё не выбран',
+    skipped:'Обследования не выбраны',
+  };
+  const paymentLabel = paymentLabels[state.onboarding?.payment_status] || 'Статус оплаты не указан';
+  const selection = selected.length
+    ? `<div class="current-exams-list">${selected.map(test => `
+        <article class="current-exam-item">
+          <div><strong>${escapeHtml(test.name)}</strong><small>${escapeHtml(test.description || '')}</small></div>
+          <b>${Number(test.price || 0).toLocaleString('ru')} ₽</b>
+        </article>`).join('')}</div>
+       <div class="current-exams-total"><span>${escapeHtml(paymentLabel)}</span><strong>Итого: ${total.toLocaleString('ru')} ₽</strong></div>`
+    : '<div class="current-exams-empty"><span aria-hidden="true">◫</span><strong>Дополнительные обследования пока не выбраны</strong><p>Вы можете выбрать подходящие наборы сейчас или вернуться к этому позже.</p></div>';
+  $('#onboardingContent').innerHTML = `
+    <div class="current-exams-summary">
+      <span class="onboarding-kicker">Ваш выбор</span>
+      <h1>${selected.length ? 'У вас выбраны обследования' : 'Ваши обследования'}</h1>
+      <p class="onboarding-lead">Проверьте сохранённый выбор. Его можно изменить, не проходя анкету заново.</p>
+      ${selection}
+      <div class="current-exams-actions">
+        <button type="button" class="onboarding-next" data-onboarding-action="edit-current-exams">${selected.length ? 'Изменить выбор' : 'Выбрать обследования'}</button>
+        <button type="button" class="current-exams-close" data-onboarding-action="close-current-exams">Закрыть</button>
+      </div>
+    </div>`;
 }
 
 function renderPayment() {
@@ -639,12 +700,17 @@ function renderPayment() {
 
 function showOnlinePaymentUnavailable() {
   trackEvent('payment_online_unavailable', {method:'online',screen:'payment'});
+  window.consiliumMetrikaGoal?.('payment_online');
   $('#paymentUnavailable')?.classList.remove('hidden');
 }
 
 async function confirmPaymentAtExam() {
   try {
+    const returnDirectlyToChat = state.returnToChatAfterExaminations;
     state.onboarding = await api('/api/onboarding/payment', { method:'POST', body:JSON.stringify({method:'at_exam'}) });
+    window.consiliumMetrikaGoal?.('payment_at_exam');
+    window.consiliumMetrikaGoal?.('onboarding_completed');
+    if (returnDirectlyToChat) return openMainApp({ skipIntro:true });
     renderExamCompletion();
   } catch (error) { showOnboardingError(error.message); }
 }
@@ -708,6 +774,7 @@ async function finishExamOnboarding(installApp = false) {
 }
 
 async function loadOnboarding() {
+  state.returnToChatAfterExaminations = false;
   state.onboarding = await api('/api/onboarding');
   applyFontSize(state.onboarding.font_size || 'extra');
   state.profile = state.onboarding.profile;
@@ -734,6 +801,7 @@ async function loadOnboarding() {
 }
 
 async function openMainApp({ skipIntro = false } = {}) {
+  state.returnToChatAfterExaminations = false;
   $('#onboarding').classList.add('hidden');
   $('#appShell').classList.remove('hidden');
   if (!state.mainInitialized) await initMainApp();
@@ -776,9 +844,9 @@ $('#onboardingContent').addEventListener('click', event => {
   if (!action) return;
   if (action === 'next') nextQuestion();
   else if (action === 'back') { try { captureQuestionAnswer(); } catch {} trackEvent('question_back', { step_number:state.onboardingStep + 1 }); state.onboardingStep -= 1; renderQuestion(); }
-  else if (action === 'question-back') { trackEvent('question_back', { screen:'examinations_offer' }); trackEvent('funnel_action', {stage:'examinations_offer',action:'edit_questionnaire'}); state.onboardingStep = activeOnboardingQuestions().length - 1; renderQuestion(); }
+  else if (action === 'question-back') { trackEvent('question_back', { screen:'examinations_offer' }); trackEvent('funnel_action', {stage:'examinations_offer',action:'edit_questionnaire'}); if (state.returnToChatAfterExaminations) editProfileFromChatExamFlow(); else { state.onboardingStep = activeOnboardingQuestions().length - 1; renderQuestion(); } }
   else if (action === 'start-exams') { const afterObjection = Boolean($('#onboardingContent .exam-benefits')); trackEvent('funnel_action', {stage:'examinations_offer',action:afterObjection ? 'choose_after_objection' : 'view_options'}); trackEvent('examinations_opened', { screen:'examinations' }); renderExamSelection(); }
-  else if (action === 'exam-offer') { trackEvent('funnel_action', {stage:'examinations_options',action:'options_back'}); renderExamOffer(); }
+  else if (action === 'exam-offer') { trackEvent('funnel_action', {stage:'examinations_options',action:'options_back'}); if (state.returnToChatAfterExaminations) { state.selectedTests = new Set(state.onboarding?.selected_tests || []); renderCurrentExamSelectionSummary(); } else renderExamOffer(); }
   else if (action === 'review-exam-skip') { const fromOptions = Boolean($('#onboardingContent .exam-list')); trackEvent('funnel_action', {stage:fromOptions ? 'examinations_options' : 'examinations_offer',action:fromOptions ? 'nothing_selected' : 'skip'}); trackEvent('examinations_skip_clicked', { selected_count:state.selectedTests.size }); renderExamSkipConfirmation(); }
   else if (action === 'confirm-skip-exams') { trackEvent('funnel_action', {stage:'examinations_offer',action:'refuse'}); trackEvent('examinations_skipped', { screen:'examinations_skip' }); submitExamSelection(true); }
   else if (action === 'continue-payment') submitExamSelection(false);
@@ -786,6 +854,8 @@ $('#onboardingContent').addEventListener('click', event => {
   else if (action === 'pay-online') { trackEvent('funnel_action', {stage:'examinations_options',action:'pay_online'}); showOnlinePaymentUnavailable(); }
   else if (action === 'pay-at-exam') { trackEvent('funnel_action', {stage:'examinations_options',action:'pay_at_exam'}); confirmPaymentAtExam(); }
   else if (action === 'close-online-payment') $('#paymentUnavailable')?.classList.add('hidden');
+  else if (action === 'edit-current-exams') { trackEvent('funnel_action', {stage:'chat_examinations',action:'edit_selection'}); renderExamSelection(); }
+  else if (action === 'close-current-exams') openMainApp({ skipIntro:true });
   else if (action === 'open-app') openMainApp();
   else if (action === 'install-after-exams') { trackEvent('install_clicked', { screen:'exam_completion' }); finishExamOnboarding(true); }
   else if (action === 'later-after-exams') { trackEvent('install_dismissed', { screen:'exam_completion' }); finishExamOnboarding(false); }
@@ -850,10 +920,12 @@ function updateChatMode(aiEnabled = true, humanStatus = 'none', humanTicketId = 
   state.humanStatus = humanStatus || 'none';
   const banner = $('#chatModeBanner');
   const newDialogButton = $('#chatModeNewDialog');
+  const toggleButton = $('#chatModeToggle');
   const relevant = !state.aiEnabled || ['pending', 'connected'].includes(state.humanStatus);
   banner.classList.toggle('hidden', !relevant);
   banner.classList.toggle('ai-paused', !state.aiEnabled);
   newDialogButton.classList.toggle('hidden', state.aiEnabled || !relevant);
+  toggleButton.classList.toggle('hidden', state.aiEnabled || !relevant);
   input.placeholder = state.aiEnabled
     ? 'Задайте вопрос о здоровье...'
     : 'Напишите менеджеру...';
@@ -862,7 +934,10 @@ function updateChatMode(aiEnabled = true, humanStatus = 'none', humanTicketId = 
   $('#chatModeTitle').textContent = state.aiEnabled ? 'Обращение менеджеру открыто' : 'С вами общается менеджер';
   $('#chatModeText').textContent = state.aiEnabled
     ? `ИИ продолжает отвечать${humanTicketId ? ` · обращение ${humanTicketId}` : ''}.`
-    : 'ИИ в этом диалоге отключён. Ваши сообщения будут ждать ответа менеджера. Пока ожидаете ответ, вы можете общаться с ИИ в новом диалоге.';
+    : 'ИИ отключён — сообщения будут ждать ответа менеджера.';
+  $('#chatModeDetailsText').textContent = state.aiEnabled
+    ? ''
+    : 'Пока ожидаете ответ, вы можете продолжить общение с ИИ в новом диалоге.';
 }
 
 function addCouncilResult(result, createdAt = null) {
@@ -1297,10 +1372,16 @@ async function closeCapabilities({ suppressFollowup = false } = {}) {
 
 async function openExaminationsFromCapabilities() {
   await closeCapabilities({ suppressFollowup:true });
+  state.returnToChatAfterExaminations = true;
   state.selectedTests = new Set(state.onboarding?.selected_tests || []);
   $('#appShell').classList.add('hidden');
   $('#onboarding').classList.remove('hidden');
-  renderExamSelection();
+  renderCurrentExamSelectionSummary();
+}
+
+async function editProfileFromChatExamFlow() {
+  await openMainApp({ skipIntro:true });
+  await openProfile();
 }
 
 function openContextEditor() {
@@ -2092,6 +2173,13 @@ $('#attachmentInput').addEventListener('change', async event => { await addAttac
 $('#attachmentList').addEventListener('click', event => { const button = event.target.closest('[data-attachment-remove]'); if (button) { state.attachments.splice(Number(button.dataset.attachmentRemove), 1); renderAttachments(); } });
 $('#newChatButton').addEventListener('click', newConversation);
 $('#chatModeNewDialog').addEventListener('click', newConversation);
+$('#chatModeToggle').addEventListener('click', () => {
+  const banner = $('#chatModeBanner');
+  const toggle = $('#chatModeToggle');
+  const expanded = banner.classList.toggle('expanded');
+  toggle.setAttribute('aria-expanded', String(expanded));
+  toggle.setAttribute('aria-label', expanded ? 'Скрыть подробности' : 'Показать подробности');
+});
 $('#conversationList').addEventListener('click', event => { const row = event.target.closest('[data-id]'); if (row) openConversation(row.dataset.id); });
 $('#modalClose').addEventListener('click', resumeAfterHuman);
 $('#modalOkay').addEventListener('click', resumeAfterHuman);

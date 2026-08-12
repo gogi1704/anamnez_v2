@@ -1,6 +1,7 @@
 import json
 import hashlib
 import hmac
+import re
 import secrets
 import sqlite3
 import threading
@@ -209,6 +210,37 @@ def reset_current_user(preserve_identity: bool = False) -> None:
         if not preserve_identity:
             conn.execute("DELETE FROM users WHERE chel_id = ?", (chel_id,))
         conn.commit()
+
+
+def admin_delete_user_data(chel_id: str) -> dict:
+    """Permanently remove every main-database record owned by one user."""
+    chel_id = str(chel_id or "").strip()
+    if not re.fullmatch(r"chel_[A-Za-z0-9_-]{8,64}", chel_id):
+        raise ValueError("Укажите корректный chel_id пользователя")
+    if chel_id in {"chel_legacy", "chel_test_default"}:
+        raise ValueError("Системного пользователя удалять нельзя")
+
+    # Keep this list explicit and ordered: conversations must be removed before
+    # the user because their dependent messages, handoffs and notifications use
+    # cascading foreign keys.
+    owned_tables = (
+        "conversations", "memories", "body_symptoms", "lab_interpretations",
+        "user_profile", "onboarding_state", "user_device_stats", "ai_usage",
+        "login_tokens", "auth_intents", "user_sessions", "external_identities",
+        "users",
+    )
+    deleted_by_table: dict[str, int] = {}
+    with _write_lock, connection() as conn:
+        for table in owned_tables:
+            cursor = conn.execute(f"DELETE FROM {table} WHERE chel_id = ?", (chel_id,))
+            deleted_by_table[table] = max(0, int(cursor.rowcount or 0))
+        conn.commit()
+    return {
+        "chel_id": chel_id,
+        "deleted": sum(deleted_by_table.values()),
+        "deleted_by_table": deleted_by_table,
+        "user_found": bool(deleted_by_table["users"]),
+    }
 
 
 def _token_hash(value: str) -> str:
@@ -1115,13 +1147,27 @@ def admin_list_staff() -> list[dict]:
             notify_new_requests, notify_new_messages, created_at, updated_at,
             last_login_at FROM staff_users ORDER BY is_active DESC, display_name"""
         ).fetchall()
-    result = []
-    for row in rows:
-        item = dict(row)
-        item["is_active"] = bool(item["is_active"])
-        item["notify_new_requests"] = bool(item["notify_new_requests"])
-        item["notify_new_messages"] = bool(item["notify_new_messages"])
-        result.append(item)
+        result = []
+        for row in rows:
+            item = dict(row)
+            linked_ids = conn.execute(
+                """SELECT provider, chel_id FROM external_identities
+                WHERE (? <> '' AND provider = 'telegram' AND provider_user_id = ?)
+                   OR (? <> '' AND provider = 'max' AND provider_user_id = ?)
+                ORDER BY provider""",
+                (
+                    item["telegram_id"], item["telegram_id"],
+                    item["max_id"], item["max_id"],
+                ),
+            ).fetchall()
+            item["user_identities"] = [dict(identity) for identity in linked_ids]
+            item["user_chel_ids"] = list(dict.fromkeys(
+                identity["chel_id"] for identity in linked_ids
+            ))
+            item["is_active"] = bool(item["is_active"])
+            item["notify_new_requests"] = bool(item["notify_new_requests"])
+            item["notify_new_messages"] = bool(item["notify_new_messages"])
+            result.append(item)
     return result
 
 

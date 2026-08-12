@@ -52,6 +52,7 @@ def main() -> int:
         PROJECT_DIR / "manifest.webmanifest",
         PROJECT_DIR / "service-worker.js",
         PROJECT_DIR / "static" / "app.js",
+        PROJECT_DIR / "static" / "metrika.js",
         PROJECT_DIR / "static" / "styles.css",
         PROJECT_DIR / "static" / "dashboard.js",
         PROJECT_DIR / "static" / "dashboard.css",
@@ -116,6 +117,14 @@ def main() -> int:
         errors.append("PUBLIC_BASE_URL в production должен начинаться с https://")
     else:
         passed.append(f"Публичный адрес задан: {settings.public_base_url}")
+
+    metrika_id = settings.yandex_metrika_counter_id
+    if metrika_id and not (metrika_id.isdigit() and 5 <= len(metrika_id) <= 12):
+        errors.append("YANDEX_METRIKA_COUNTER_ID должен содержать от 5 до 12 цифр")
+    elif metrika_id:
+        passed.append("Яндекс Метрика настроена (номер счётчика скрыт)")
+    else:
+        warnings.append("Яндекс Метрика отключена: YANDEX_METRIKA_COUNTER_ID не задан")
 
     integration_secret = settings.bot_integration_secret.strip()
     if production and (

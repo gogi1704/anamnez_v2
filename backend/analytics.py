@@ -37,6 +37,7 @@ ALLOWED_EVENTS = {
     "lab_results_not_found", "lab_interpretation_started", "lab_interpretation_completed",
     "lab_interpretation_error", "api_error", "javascript_error", "performance_measured",
 }
+REGISTRATION_METHODS = {"anonymous", "max", "telegram"}
 
 ALLOWED_PROPERTIES = {
     "question_key", "step_number", "optional", "provider", "method", "result",
@@ -247,6 +248,7 @@ def record_events(chel_id: str, events: list[dict], *, user_agent: str = "", is_
         source = str(properties.get("source", raw.get("source", "")))[:80]
         campaign = str(properties.get("campaign", raw.get("campaign", "")))[:100]
         method = str(properties.get("method", properties.get("provider", "")))[:30]
+        registration_method = method if event_name == "registration_completed" and method in REGISTRATION_METHODS else ""
         app_mode = str(properties.get("app_mode", raw.get("app_mode", "browser")))[:20]
         duration = properties.get("duration_ms")
         duration_ms = max(0, min(int(duration), 86_400_000)) if isinstance(duration, (int, float)) else None
@@ -254,7 +256,7 @@ def record_events(chel_id: str, events: list[dict], *, user_agent: str = "", is_
             "event_id": event_id, "chel_id": str(chel_id)[:80], "session_id": session_id,
             "event_name": event_name, "screen": str(properties.get("screen", raw.get("screen", "")))[:80],
             "step_key": str(properties.get("question_key", raw.get("step_key", "")))[:80],
-            "source": source, "campaign": campaign, "registration_method": method,
+            "source": source, "campaign": campaign, "registration_method": registration_method,
             "device_type": device["device_type"], "operating_system": device["operating_system"],
             "browser": device["browser"], "app_mode": app_mode, "duration_ms": duration_ms,
             "properties": json.dumps(properties, ensure_ascii=False),
@@ -330,8 +332,14 @@ def _filters(period: str, device: str, method: str, source: str) -> tuple[str, l
         clauses.append("e.device_type = ?")
         params.append(device)
     if method:
-        clauses.append("(e.registration_method = ? OR s.registration_method = ?)")
-        params.extend([method, method])
+        clauses.append(
+            "EXISTS (SELECT 1 FROM analytics_events registration_event "
+            "WHERE registration_event.chel_id=e.chel_id "
+            "AND registration_event.event_name='registration_completed' "
+            "AND COALESCE(NULLIF(json_extract(registration_event.properties,'$.method'),''),"
+            "registration_event.registration_method)=?)"
+        )
+        params.append(method)
     if source:
         clauses.append("(e.source = ? OR s.entry_source = ?)")
         params.extend([source, source])
@@ -365,7 +373,7 @@ def admin_report(
                 detail_params = [*params, detail_event]
                 if property_name:
                     if property_name == "method":
-                        detail_where += " AND COALESCE(NULLIF(e.registration_method,''),json_extract(e.properties,'$.method')) = ?"
+                        detail_where += " AND COALESCE(NULLIF(json_extract(e.properties,'$.method'),''),e.registration_method) = ?"
                     else:
                         detail_where += f" AND json_extract(e.properties,'$.{property_name}') = ?"
                     detail_params.append(property_value)
@@ -452,10 +460,15 @@ def admin_report(
             recent.append(item)
         filter_options = {
             "devices": [row[0] for row in conn.execute("SELECT DISTINCT device_type FROM analytics_events ORDER BY device_type") if row[0]],
-            "methods": [row[0] for row in conn.execute("SELECT DISTINCT registration_method FROM analytics_sessions WHERE registration_method<>'' ORDER BY registration_method")],
+            "methods": [row[0] for row in conn.execute(
+                "SELECT DISTINCT COALESCE(NULLIF(json_extract(properties,'$.method'),''),registration_method) method "
+                "FROM analytics_events WHERE event_name='registration_completed' "
+                "AND COALESCE(NULLIF(json_extract(properties,'$.method'),''),registration_method) "
+                "IN ('anonymous','max','telegram') ORDER BY method"
+            )],
             "sources": [row[0] for row in conn.execute("SELECT DISTINCT entry_source FROM analytics_sessions WHERE entry_source<>'' ORDER BY entry_source LIMIT 100")],
         }
-        registrations = grouped("COALESCE(NULLIF(e.registration_method,''),s.registration_method)", "registration_completed")
+        registrations = grouped("COALESCE(NULLIF(json_extract(e.properties,'$.method'),''),e.registration_method)", "registration_completed")
         devices = grouped("e.device_type")
         operating_systems = grouped("e.operating_system")
         browsers = grouped("e.browser")
@@ -490,3 +503,28 @@ def cleanup_old_events() -> int:
         )
         conn.commit()
         return cursor.rowcount
+
+
+def delete_user_data(chel_id: str) -> dict:
+    """Remove all product-analytics events and sessions for a user."""
+    chel_id = str(chel_id or "").strip()
+    if not settings.analytics_database_path.exists():
+        return {"events": 0, "sessions": 0}
+    with _write_lock, connection() as conn:
+        existing_tables = {
+            row[0] for row in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table'"
+            ).fetchall()
+        }
+        events = 0
+        sessions = 0
+        if "analytics_events" in existing_tables:
+            events = max(0, int(conn.execute(
+                "DELETE FROM analytics_events WHERE chel_id = ?", (chel_id,),
+            ).rowcount or 0))
+        if "analytics_sessions" in existing_tables:
+            sessions = max(0, int(conn.execute(
+                "DELETE FROM analytics_sessions WHERE chel_id = ?", (chel_id,),
+            ).rowcount or 0))
+        conn.commit()
+    return {"events": events, "sessions": sessions}

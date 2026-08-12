@@ -1,9 +1,10 @@
-const CACHE_NAME = 'consilium-shell-v27';
-const ASSET_VERSION = '20260807-ai-paused-new-chat';
+const CACHE_NAME = 'consilium-shell-v34';
+const ASSET_VERSION = '20260812-metrika-goals-only';
 const APP_SHELL = [
   '/',
   '/manifest.webmanifest',
   `/static/styles.css?v=${ASSET_VERSION}`,
+  `/static/metrika.js?v=${ASSET_VERSION}`,
   `/static/agents.js?v=${ASSET_VERSION}`,
   `/static/app.js?v=${ASSET_VERSION}`,
   '/static/icon-192.png',

@@ -35,6 +35,28 @@ class AnalyticsTests(unittest.TestCase):
             properties = json.loads(conn.execute("SELECT properties FROM analytics_events").fetchone()[0])
         self.assertEqual(properties, {"method": "anonymous"})
 
+    def test_delete_user_data_removes_only_target_events_and_sessions(self):
+        analytics.record_events("CHEL-DELETE", [{
+            "event_id": "delete-event-0001", "session_id": "delete-session-0001",
+            "event_name": "registration_completed", "properties": {"method": "anonymous"},
+        }])
+        analytics.record_events("CHEL-KEEP", [{
+            "event_id": "keep-event-000001", "session_id": "keep-session-000001",
+            "event_name": "registration_completed", "properties": {"method": "max"},
+        }])
+        result = analytics.delete_user_data("CHEL-DELETE")
+        self.assertEqual(result, {"events": 1, "sessions": 1})
+        with analytics.connection() as conn:
+            self.assertEqual(conn.execute(
+                "SELECT COUNT(*) FROM analytics_events WHERE chel_id = 'CHEL-DELETE'"
+            ).fetchone()[0], 0)
+            self.assertEqual(conn.execute(
+                "SELECT COUNT(*) FROM analytics_sessions WHERE chel_id = 'CHEL-DELETE'"
+            ).fetchone()[0], 0)
+            self.assertEqual(conn.execute(
+                "SELECT COUNT(*) FROM analytics_events WHERE chel_id = 'CHEL-KEEP'"
+            ).fetchone()[0], 1)
+
     def test_report_calculates_funnel_and_question_conversion(self):
         events = [
             {"event_id": "event-00000001", "session_id": "session-00000001", "event_name": "registration_completed", "properties": {"method": "max"}},
@@ -54,6 +76,27 @@ class AnalyticsTests(unittest.TestCase):
         self.assertEqual(report["questions"][0]["avg_duration_ms"], 2200)
         self.assertEqual(report["devices"][0]["label"], "android")
         self.assertEqual(report["recent_pagination"], {"page": 1, "limit": 25, "total": 4, "pages": 1})
+
+    def test_payment_method_does_not_replace_registration_method(self):
+        analytics.record_events("CHEL-METHOD", [
+            {
+                "event_id": "method-register-01", "session_id": "method-session-01",
+                "event_name": "registration_completed", "properties": {"method": "max"},
+            },
+            {
+                "event_id": "method-payment-01", "session_id": "method-session-01",
+                "event_name": "payment_method_selected", "properties": {"method": "at_exam"},
+            },
+        ])
+        report = analytics.admin_report("30")
+        self.assertEqual(report["filter_options"]["methods"], ["max"])
+        self.assertEqual(report["registrations"], [{"label": "max", "users": 1, "events": 1}])
+        self.assertEqual(analytics.admin_report("30", method="max")["summary"]["events"], 2)
+        self.assertEqual(analytics.admin_report("30", method="at_exam")["summary"]["events"], 0)
+        with analytics.connection() as conn:
+            self.assertEqual(conn.execute(
+                "SELECT registration_method FROM analytics_sessions WHERE session_id='method-session-01'"
+            ).fetchone()[0], "max")
 
     def test_recent_events_are_paginated_and_page_is_clamped(self):
         events = [

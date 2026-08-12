@@ -15,7 +15,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/static/styles.css?v=20260807-ai-paused-new-chat">
+  <link rel="stylesheet" href="/static/styles.css?v=20260812-metrika-goals-only">
 </head>
 <body>
   <main class="welcome-screen hidden" id="welcomeScreen" aria-live="polite">
@@ -152,8 +152,17 @@
       </section>
       <section class="chat-mode-banner hidden" id="chatModeBanner" aria-live="polite">
         <span id="chatModeIcon">♙</span>
-        <div class="chat-mode-copy"><strong id="chatModeTitle">Менеджер подключён</strong><p id="chatModeText"></p></div>
-        <button class="chat-mode-new-dialog hidden" id="chatModeNewDialog" type="button">Новый диалог</button>
+        <div class="chat-mode-copy">
+          <strong id="chatModeTitle">Менеджер подключён</strong>
+          <p id="chatModeText"></p>
+          <div class="chat-mode-details" id="chatModeDetails">
+            <p id="chatModeDetailsText"></p>
+            <button class="chat-mode-new-dialog hidden" id="chatModeNewDialog" type="button">Новый диалог</button>
+          </div>
+        </div>
+        <button class="chat-mode-toggle hidden" id="chatModeToggle" type="button" aria-expanded="false" aria-controls="chatModeDetails" aria-label="Показать подробности">
+          <span aria-hidden="true">⌄</span>
+        </button>
       </section>
 
       <section class="messages" id="messages" aria-live="polite" aria-label="Сообщения"></section>
@@ -214,7 +223,7 @@
       <button class="modal-close" id="modalClose" aria-label="Закрыть">×</button>
       <div class="modal-icon">♙</div>
       <h2 id="humanTitle">Как продолжить со специалистом?</h2>
-      <p>Контекст разговора подготовлен, поэтому не придётся всё рассказывать заново. Выберите удобный формат — реальное подключение оператора в этой демоверсии пока работает как заглушка.</p>
+      <p>Контекст разговора подготовлен, поэтому не придётся всё рассказывать заново.</p>
       <div class="handoff-review">
         <strong>Проверьте обращение перед отправкой</strong>
         <p>Если что-то указано неточно, исправьте сведения — специалист получит обновлённую версию.</p>
@@ -471,7 +480,8 @@
     </div>
   </div>
 
-  <script src="/static/agents.js?v=20260807-ai-paused-new-chat"></script>
-  <script src="/static/app.js?v=20260807-ai-paused-new-chat"></script>
+  <script src="/static/metrika.js?v=20260812-metrika-goals-only"></script>
+  <script src="/static/agents.js?v=20260812-metrika-goals-only"></script>
+  <script src="/static/app.js?v=20260812-metrika-goals-only"></script>
 </body>
 </html>

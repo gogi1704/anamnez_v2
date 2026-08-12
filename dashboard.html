@@ -9,7 +9,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/static/dashboard.css?v=20260806-admin-rate-limit">
+  <link rel="stylesheet" href="/static/dashboard.css?v=20260810-mobile-analytics-layout">
 </head>
 <body>
   <main class="dashboard-shell">
@@ -63,7 +63,7 @@
           </div>
         </article>
         <section class="analytics-summary" id="analyticsSummary"></section>
-        <article class="panel"><div class="panel-heading"><div><p class="eyebrow">От первого входа до обращения</p><h2>Полная воронка</h2></div><div class="funnel-mode-tabs" role="tablist" aria-label="Расчёт конверсии"><button class="active" id="funnelFromStart" type="button" role="tab" aria-selected="true">От начала</button><button id="funnelFromPrevious" type="button" role="tab" aria-selected="false">От предыдущего шага</button></div></div><div class="funnel-list" id="analyticsFunnel"></div></article>
+        <article class="panel funnel-panel"><div class="panel-heading"><div><p class="eyebrow">От первого входа до обращения</p><h2>Полная воронка</h2></div><div class="funnel-mode-tabs" role="tablist" aria-label="Расчёт конверсии"><button class="active" id="funnelFromStart" type="button" role="tab" aria-selected="true">От начала</button><button id="funnelFromPrevious" type="button" role="tab" aria-selected="false">От предыдущего шага</button></div></div><div class="funnel-list" id="analyticsFunnel"></div></article>
         <section class="analytics-detail-grid">
           <article class="panel"><div class="panel-heading"><div><p class="eyebrow">Динамика</p><h2>Пользователи по дням</h2></div></div><div class="analytics-bars" id="analyticsDaily"></div></article>
           <article class="panel"><div class="panel-heading"><div><p class="eyebrow">Аудитория</p><h2>Устройства</h2></div></div><div class="distribution-list" id="analyticsDevices"></div></article>
@@ -186,6 +186,21 @@
         <span>✓</span>
         <div><strong>Без текстов медицинских сообщений</strong><small>Дашборд показывает служебные статусы и агрегаты, но не содержимое переписки и медицинской анкеты.</small></div>
       </aside>
+
+      <section class="panel user-data-cleanup" id="userDataCleanup">
+        <div class="user-data-cleanup-copy">
+          <p class="eyebrow">Необратимое действие</p>
+          <h2>Очистить все данные пользователя по ID</h2>
+          <p>Будут безвозвратно удалены анкета, обследования, диалоги и сообщения, обращения, результаты и расшифровки, память, симптомы, устройства, авторизация и статистика пользователя. Учётная запись менеджера не удаляется.</p>
+        </div>
+        <form class="user-data-cleanup-form" id="userDataCleanupForm">
+          <label>chel_id пользователя
+            <input id="userDataCleanupId" type="text" minlength="13" maxlength="69" autocomplete="off" spellcheck="false" placeholder="chel_..." required>
+          </label>
+          <button class="delete-user-data-button" id="deleteUserDataButton" type="submit">Удалить все данные</button>
+          <p class="user-data-cleanup-status hidden" id="userDataCleanupStatus" role="status"></p>
+        </form>
+      </section>
 
       <section class="summary-grid" id="summaryGrid" aria-label="Основные показатели"></section>
 
@@ -311,6 +326,6 @@
       <p class="dashboard-error hidden" id="dashboardError" role="alert"></p>
     </div>
   </main>
-  <script src="/static/dashboard.js?v=20260806-admin-rate-limit" defer></script>
+  <script src="/static/dashboard.js?v=20260810-registration-methods" defer></script>
 </body>
 </html>

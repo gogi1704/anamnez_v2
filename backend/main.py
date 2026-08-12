@@ -23,7 +23,7 @@ from .prompts import public_agents
 
 STATIC_DIR = BASE_DIR / "static"
 ALLOWED_STATIC = {
-    "app.js", "agents.js", "styles.css", "dashboard.js", "dashboard.css",
+    "app.js", "agents.js", "styles.css", "metrika.js", "dashboard.js", "dashboard.css",
     "manager.js", "manager.css", "icon-192.png", "icon-512.png",
     "icon-maskable-512.png", "apple-touch-icon.png",
 }
@@ -81,6 +81,11 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
             return self._consume_messenger_login(parse_qs(parsed.query).get("t", [""])[0])
         if path == "/api/health":
             return self._json(200, {"status": "ok"})
+        if path == "/api/public-config":
+            counter_id = settings.yandex_metrika_counter_id
+            return self._json(200, {
+                "yandex_metrika_counter_id": counter_id if counter_id.isdigit() else "",
+            })
         if path == "/api/bot/manager-notifications":
             if not bot_token_valid(self.headers.get("Authorization", "")):
                 return self._json(401, {"detail": "Неверные данные интеграции"})
@@ -352,6 +357,29 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                     notify_new_requests=payload.get("notify_new_requests", True),
                     notify_new_messages=payload.get("notify_new_messages", True),
                 ))
+            except (ValueError, json.JSONDecodeError, UnicodeDecodeError) as exc:
+                return self._json(422, {"detail": str(exc)})
+        if path == "/api/admin/users/delete-data":
+            if not self._admin_authorized():
+                return
+            if self.headers.get("X-Consilium-Action") != "delete-user-data":
+                return self._json(403, {"detail": "Подтвердите полное удаление данных пользователя"})
+            try:
+                payload = self._read_json()
+                chel_id = str(payload.get("chel_id", "")).strip()
+                if str(payload.get("confirmation", "")).strip() != chel_id:
+                    raise ValueError("Для подтверждения повторите chel_id без изменений")
+                main_result = db.admin_delete_user_data(chel_id)
+                analytics_result = analytics.delete_user_data(chel_id)
+                deleted = main_result["deleted"] + sum(analytics_result.values())
+                if not deleted:
+                    return self._json(404, {"detail": "Пользователь с таким chel_id не найден"})
+                return self._json(200, {
+                    **main_result,
+                    "analytics": analytics_result,
+                    "deleted": deleted,
+                    "status": "deleted",
+                })
             except (ValueError, json.JSONDecodeError, UnicodeDecodeError) as exc:
                 return self._json(422, {"detail": str(exc)})
         if path == "/api/admin/examinations":
@@ -1286,12 +1314,16 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
         self.send_header("X-Frame-Options", "DENY")
         self.send_header("Referrer-Policy", "same-origin")
         self.send_header("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+        metrika_sources = (
+            " https://mc.yandex.ru https://mc.yandex.com https://yastatic.net"
+            if settings.yandex_metrika_counter_id.isdigit() else ""
+        )
         self.send_header(
             "Content-Security-Policy",
-            "default-src 'self'; script-src 'self'; "
+            f"default-src 'self'; script-src 'self'{metrika_sources}; "
             "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
             "font-src 'self' https://fonts.gstatic.com data:; "
-            "img-src 'self' data: blob:; connect-src 'self'; "
+            f"img-src 'self' data: blob:{metrika_sources}; connect-src 'self'{metrika_sources}; "
             "object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'",
         )
 

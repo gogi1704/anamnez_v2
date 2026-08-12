@@ -40,6 +40,7 @@ class Settings:
     ))
     analytics_enabled: bool = env_bool("ANALYTICS_ENABLED", True)
     analytics_retention_days: int = int(os.getenv("ANALYTICS_RETENTION_DAYS", "90"))
+    yandex_metrika_counter_id: str = os.getenv("YANDEX_METRIKA_COUNTER_ID", "").strip()
     log_path: Path = Path(os.getenv("LOG_PATH", BASE_DIR / "server-error.log"))
     max_history_messages: int = int(os.getenv("MAX_HISTORY_MESSAGES", "30"))
     host: str = os.getenv("HOST", "127.0.0.1")
