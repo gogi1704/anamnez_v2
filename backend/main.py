@@ -214,7 +214,11 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
         self._ensure_user_context()
         if path == "/":
             db.record_device_access(self.headers.get("User-Agent", ""))
-            return self._send_file(BASE_DIR / "index.html", "text/html; charset=utf-8")
+            return self._send_file(
+                BASE_DIR / "index.html",
+                "text/html; charset=utf-8",
+                allow_metrika_frame=True,
+            )
         if path == "/api/agents":
             return self._json(200, public_agents())
         if path == "/api/me":
@@ -1231,12 +1235,14 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
-    def _send_file(self, path: Path, content_type: str) -> None:
+    def _send_file(
+        self, path: Path, content_type: str, *, allow_metrika_frame: bool = False,
+    ) -> None:
         if not path.exists():
             return self._json(404, {"detail": "Файл не найден"})
         body = path.read_bytes()
         self.send_response(200)
-        self._send_security_headers()
+        self._send_security_headers(allow_metrika_frame=allow_metrika_frame)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
@@ -1309,13 +1315,31 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
             parts.append("Secure")
         self.send_header("Set-Cookie", "; ".join(parts))
 
-    def _send_security_headers(self) -> None:
+    def _send_security_headers(self, *, allow_metrika_frame: bool = False) -> None:
         self.send_header("X-Content-Type-Options", "nosniff")
-        self.send_header("X-Frame-Options", "DENY")
+        if not allow_metrika_frame:
+            self.send_header("X-Frame-Options", "DENY")
         self.send_header("Referrer-Policy", "same-origin")
         self.send_header("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
         metrika_sources = (
-            " https://mc.yandex.ru https://mc.yandex.com https://yastatic.net"
+            " https://mc.yandex.ru https://mc.yandex.com https://mc.webvisor.com "
+            "https://mc.webvisor.org https://yastatic.net wss://mc.yandex.ru "
+            "wss://mc.yandex.com wss://mc.webvisor.com wss://mc.webvisor.org"
+            if settings.yandex_metrika_counter_id.isdigit() else ""
+        )
+        metrika_frame_ancestors = (
+            "'self' https://metrika.yandex.ru https://metrica.yandex.ru "
+            "https://analytics.yandex.ru https://metr.yandex.ru "
+            "https://metrika.ya.ru https://metrica.ya.ru "
+            "https://webvisor.com https://*.webvisor.com"
+            if allow_metrika_frame and settings.yandex_metrika_counter_id.isdigit()
+            else "'none'"
+        )
+        metrika_frames = (
+            " child-src blob: https://mc.yandex.ru https://mc.yandex.com "
+            "https://mc.webvisor.com https://mc.webvisor.org; "
+            "frame-src blob: https://mc.yandex.ru https://mc.yandex.com "
+            "https://mc.webvisor.com https://mc.webvisor.org;"
             if settings.yandex_metrika_counter_id.isdigit() else ""
         )
         self.send_header(
@@ -1323,8 +1347,9 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
             f"default-src 'self'; script-src 'self'{metrika_sources}; "
             "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
             "font-src 'self' https://fonts.gstatic.com data:; "
-            f"img-src 'self' data: blob:{metrika_sources}; connect-src 'self'{metrika_sources}; "
-            "object-src 'none'; base-uri 'self'; form-action 'self'; frame-ancestors 'none'",
+            f"img-src 'self' data: blob:{metrika_sources}; connect-src 'self'{metrika_sources};"
+            f"{metrika_frames} object-src 'none'; base-uri 'self'; form-action 'self'; "
+            f"frame-ancestors {metrika_frame_ancestors}",
         )
 
     def log_message(self, format: str, *args) -> None:

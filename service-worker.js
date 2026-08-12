@@ -1,5 +1,5 @@
-const CACHE_NAME = 'consilium-shell-v35';
-const ASSET_VERSION = '20260812-metrika-visits-clickmap';
+const CACHE_NAME = 'consilium-shell-v36';
+const ASSET_VERSION = '20260812-metrika-maps-frame';
 const APP_SHELL = [
   '/',
   '/manifest.webmanifest',

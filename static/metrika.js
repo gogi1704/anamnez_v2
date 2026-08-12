@@ -13,6 +13,17 @@
   let counterReady = false;
   const pendingGoals = [];
 
+  function protectSensitiveContent(root = document) {
+    root.querySelectorAll?.('input, textarea, select, [contenteditable="true"]')
+      .forEach(element => element.classList.add('ym-disable-keys'));
+    root.querySelectorAll?.('form')
+      .forEach(element => element.classList.add('ym-disable-submit'));
+    [
+      '#onboarding', '#appShell', '#humanModal', '#contextModal',
+      '#bodyMapModal', '#healthHistoryModal', '#profileModal', '#labResultsModal',
+    ].forEach(selector => document.querySelector(selector)?.classList.add('ym-hide-content'));
+  }
+
   function sendGoal(goal) {
     if (!safeGoals.has(goal)) return;
     if (!counterReady || !counterId || typeof window.ym !== 'function') {
@@ -26,6 +37,14 @@
 
   function loadCounter() {
     if (!counterId || document.querySelector('script[data-consilium-metrika]')) return;
+    protectSensitiveContent();
+    new MutationObserver(mutations => {
+      for (const mutation of mutations) {
+        for (const node of mutation.addedNodes) {
+          if (node.nodeType === Node.ELEMENT_NODE) protectSensitiveContent(node);
+        }
+      }
+    }).observe(document.body, { childList:true, subtree:true });
     window.ym = window.ym || function metrikaQueue() {
       (window.ym.a = window.ym.a || []).push(arguments);
     };
@@ -41,7 +60,7 @@
           defer: true,
           sendTitle: false,
           trackLinks: true,
-          webvisor: false,
+          webvisor: true,
         });
         window.ym(counterId, 'hit', `${location.origin}${location.pathname}`);
         counterReady = true;
