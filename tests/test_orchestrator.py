@@ -1668,10 +1668,10 @@ class OrchestratorTests(unittest.TestCase):
         self.assertIn("controllerchange", script)
         self.assertIn("url.pathname.startsWith('/api/')", worker)
         self.assertIn("url.pathname.startsWith('/auth/')", worker)
-        self.assertIn("consilium-shell-v34", worker)
+        self.assertIn("consilium-shell-v35", worker)
         self.assertIn("fetch(request)", worker)
-        self.assertIn("/static/app.js?v=20260812-metrika-goals-only", index)
-        self.assertIn("/static/metrika.js?v=20260812-metrika-goals-only", index)
+        self.assertIn("/static/app.js?v=20260812-metrika-visits-clickmap", index)
+        self.assertIn("/static/metrika.js?v=20260812-metrika-visits-clickmap", index)
         self.assertIn('id="welcomeScreen"', index)
         self.assertIn('id="welcomeNextButton"', index)
         self.assertIn("WELCOME_SEEN_KEY", script)
@@ -1690,7 +1690,7 @@ class OrchestratorTests(unittest.TestCase):
             index.index('id="menuFontSizeButton"'),
         )
 
-    def test_yandex_metrika_is_configurable_goals_only_and_private(self):
+    def test_yandex_metrika_tracks_safe_visits_clickmap_and_goals(self):
         project_root = Path(__file__).resolve().parents[1]
         index = (project_root / "index.html").read_text(encoding="utf-8")
         metrika = (project_root / "static" / "metrika.js").read_text(encoding="utf-8")
@@ -1698,7 +1698,7 @@ class OrchestratorTests(unittest.TestCase):
         main = (project_root / "backend" / "main.py").read_text(encoding="utf-8")
         config = (project_root / "backend" / "config.py").read_text(encoding="utf-8")
 
-        self.assertIn('src="/static/metrika.js?v=20260812-metrika-goals-only"', index)
+        self.assertIn('src="/static/metrika.js?v=20260812-metrika-visits-clickmap"', index)
         self.assertIn('YANDEX_METRIKA_COUNTER_ID', config)
         self.assertIn('path == "/api/public-config"', main)
         self.assertIn('"metrika.js"', main)
@@ -1706,10 +1706,12 @@ class OrchestratorTests(unittest.TestCase):
         self.assertNotIn("consilium_yandex_metrika_consent_v1", metrika)
         self.assertNotIn("metrika-consent", metrika)
         self.assertIn("webvisor: false", metrika)
-        self.assertIn("trackLinks: false", metrika)
-        self.assertIn("clickmap: false", metrika)
+        self.assertIn("trackLinks: true", metrika)
+        self.assertIn("clickmap: true", metrika)
         self.assertIn("defer: true", metrika)
-        self.assertNotIn("'hit'", metrika)
+        self.assertIn("sendTitle: false", metrika)
+        self.assertIn("'hit', `${location.origin}${location.pathname}`", metrika)
+        self.assertIn("counterReady", metrika)
         self.assertNotIn("UserID", metrika)
         self.assertNotIn("userParams", metrika)
         self.assertNotIn("chel_id", metrika)

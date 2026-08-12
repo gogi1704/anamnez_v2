@@ -10,11 +10,12 @@
     'first_message_sent', 'human_requested', 'install_clicked',
   ]);
   let counterId = null;
+  let counterReady = false;
   const pendingGoals = [];
 
   function sendGoal(goal) {
     if (!safeGoals.has(goal)) return;
-    if (!counterId || typeof window.ym !== 'function') {
+    if (!counterReady || !counterId || typeof window.ym !== 'function') {
       if (!pendingGoals.includes(goal)) pendingGoals.push(goal);
       return;
     }
@@ -35,13 +36,17 @@
       script.src = 'https://mc.yandex.ru/metrika/tag.js';
       script.onload = () => {
         window.ym(counterId, 'init', {
-          clickmap: false,
+          accurateTrackBounce: true,
+          clickmap: true,
           defer: true,
-        trackLinks: false,
-        webvisor: false,
-      });
-      while (pendingGoals.length) sendGoal(pendingGoals.shift());
-    };
+          sendTitle: false,
+          trackLinks: true,
+          webvisor: false,
+        });
+        window.ym(counterId, 'hit', `${location.origin}${location.pathname}`);
+        counterReady = true;
+        while (pendingGoals.length) sendGoal(pendingGoals.shift());
+      };
     document.head.append(script);
   }
 
