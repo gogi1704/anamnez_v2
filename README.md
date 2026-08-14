@@ -730,8 +730,9 @@ server {
         proxy_buffering off;
     }
 
-    location ~ ^/api/admin/(dashboard|table|managers(?:/[0-9]+)?)$ {
-        limit_req zone=consilium_ai burst=4 nodelay;
+    # Админка защищена отдельным токеном. Не применяйте к ней лимит AI-запросов:
+    # один экран загружает несколько независимых таблиц.
+    location ^~ /api/admin/ {
         proxy_pass http://127.0.0.1:8002;
         proxy_http_version 1.1;
         proxy_set_header Host $host;

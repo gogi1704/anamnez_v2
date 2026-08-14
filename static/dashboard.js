@@ -419,7 +419,9 @@ async function loadCosts() {
   $('#costsNotice').textContent = `${data.notice} Обновлено ${formatDate(data.generated_at)}.`;
 }
 
-async function adminFetch(path, token = sessionStorage.getItem(TOKEN_KEY), options = {}) {
+const wait = milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds));
+
+async function adminFetch(path, token = sessionStorage.getItem(TOKEN_KEY), options = {}, retryAttempt = 0) {
   const response = await fetch(path, {
     ...options,
     headers:{
@@ -430,6 +432,15 @@ async function adminFetch(path, token = sessionStorage.getItem(TOKEN_KEY), optio
     cache:'no-store',
   });
   const data = await response.json().catch(() => ({}));
+  const method = String(options.method || 'GET').toUpperCase();
+  if (response.status === 429 && method === 'GET' && retryAttempt < 3) {
+    const retryAfterSeconds = Number(response.headers.get('Retry-After') || 0);
+    const delay = retryAfterSeconds > 0
+      ? Math.min(retryAfterSeconds * 1000, 10000)
+      : 1000 * (2 ** retryAttempt);
+    await wait(delay);
+    return adminFetch(path, token, options, retryAttempt + 1);
+  }
   if (!response.ok) {
     const error = new Error(data.detail || `Ошибка сервера: ${response.status}`);
     error.status = response.status;
@@ -1039,7 +1050,7 @@ async function loadTable(key, reset = false) {
 }
 
 async function loadAllTables() {
-  await Promise.all(Object.keys(tableStates).map(key => loadTable(key)));
+  for (const key of Object.keys(tableStates)) await loadTable(key);
 }
 
 function bindTableControls(key) {
@@ -1132,11 +1143,11 @@ async function loadDashboard(token = sessionStorage.getItem(TOKEN_KEY)) {
     sessionStorage.setItem(TOKEN_KEY,token);
     showDashboard();
     renderDashboard(data);
-    await loadAllTables();
-    if (activeAdminView === 'managers') await loadStaff();
-    if (activeAdminView === 'examinations') await loadExaminations();
-    if (activeAdminView === 'costs') await loadCosts();
-    if (activeAdminView === 'analytics') await loadAnalytics();
+    if (activeAdminView === 'dashboard') await loadAllTables();
+    else if (activeAdminView === 'managers') await loadStaff();
+    else if (activeAdminView === 'examinations') await loadExaminations();
+    else if (activeAdminView === 'costs') await loadCosts();
+    else if (activeAdminView === 'analytics') await loadAnalytics();
     clearInterval(refreshTimer);
     refreshTimer = setInterval(() => loadDashboard(),60000);
   } catch (error) {
