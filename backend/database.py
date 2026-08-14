@@ -207,6 +207,7 @@ def reset_current_user(preserve_identity: bool = False) -> None:
         conn.execute("DELETE FROM lab_interpretations WHERE chel_id = ?", (chel_id,))
         conn.execute("DELETE FROM user_profile WHERE chel_id = ?", (chel_id,))
         conn.execute("DELETE FROM onboarding_state WHERE chel_id = ?", (chel_id,))
+        conn.execute("DELETE FROM payment_orders WHERE chel_id = ?", (chel_id,))
         if not preserve_identity:
             conn.execute("DELETE FROM users WHERE chel_id = ?", (chel_id,))
         conn.commit()
@@ -225,7 +226,7 @@ def admin_delete_user_data(chel_id: str) -> dict:
     # cascading foreign keys.
     owned_tables = (
         "conversations", "memories", "body_symptoms", "lab_interpretations",
-        "user_profile", "onboarding_state", "user_device_stats", "ai_usage",
+        "user_profile", "onboarding_state", "payment_orders", "user_device_stats", "ai_usage",
         "login_tokens", "auth_intents", "user_sessions", "external_identities",
         "users",
     )
@@ -1512,6 +1513,210 @@ def list_examinations() -> list[dict]:
     return [dict(row) for row in rows]
 
 
+def _payment_items(value: str) -> list[dict]:
+    try:
+        items = json.loads(value or "[]")
+    except json.JSONDecodeError:
+        return []
+    return items if isinstance(items, list) else []
+
+
+def _public_payment_order(row) -> dict | None:
+    if not row:
+        return None
+    result = dict(row)
+    result["items"] = _payment_items(result.get("items", "[]"))
+    result["amount"] = f"{int(result.pop('amount_kopecks', 0)) / 100:.2f}"
+    result["paid"] = bool(result.get("paid"))
+    result["test"] = bool(result.get("test"))
+    result.pop("idempotence_key", None)
+    result.pop("selection_fingerprint", None)
+    result.pop("last_error", None)
+    return result
+
+
+def create_payment_order() -> dict:
+    """Freeze the selected catalog items and server-calculated amount before payment."""
+    from .onboarding import normalize_examination_selection
+
+    onboarding = get_onboarding()
+    selected_ids = normalize_examination_selection(onboarding.get("selected_tests") or [])
+    catalog = {item["id"]: item for item in list_examinations()}
+    if not selected_ids or any(item_id not in catalog for item_id in selected_ids):
+        raise ValueError("Сначала выберите доступные дополнительные обследования")
+    items = [
+        {
+            "id": item_id,
+            "name": str(catalog[item_id]["name"])[:128],
+            "price": int(catalog[item_id]["price"]),
+        }
+        for item_id in selected_ids
+    ]
+    if any(item["price"] <= 0 for item in items):
+        raise ValueError("Для выбранного обследования не указана корректная цена")
+    amount_kopecks = sum(item["price"] * 100 for item in items)
+    canonical = json.dumps(items, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    fingerprint = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
+    now = utc_now()
+    chel_id = current_chel_id()
+    with _write_lock, connection() as conn:
+        existing = conn.execute(
+            """SELECT * FROM payment_orders
+            WHERE chel_id = ? AND selection_fingerprint = ?
+              AND status IN ('creating', 'pending')
+            ORDER BY created_at DESC LIMIT 1""",
+            (chel_id, fingerprint),
+        ).fetchone()
+        if existing:
+            return _public_payment_order(existing)
+        order_id = f"ord_{uuid.uuid4().hex}"
+        conn.execute(
+            """INSERT INTO payment_orders
+            (id, chel_id, idempotence_key, selection_fingerprint, status,
+             amount_kopecks, items, created_at, updated_at)
+            VALUES (?, ?, ?, ?, 'creating', ?, ?, ?, ?)""",
+            (
+                order_id, chel_id, str(uuid.uuid4()), fingerprint,
+                amount_kopecks, canonical, now, now,
+            ),
+        )
+        conn.commit()
+        row = conn.execute("SELECT * FROM payment_orders WHERE id = ?", (order_id,)).fetchone()
+    return _public_payment_order(row)
+
+
+def payment_order_private(order_id: str, *, require_owner: bool = True) -> dict | None:
+    order_id = str(order_id or "").strip()
+    with connection() as conn:
+        if require_owner:
+            row = conn.execute(
+                "SELECT * FROM payment_orders WHERE id = ? AND chel_id = ?",
+                (order_id, current_chel_id()),
+            ).fetchone()
+        else:
+            row = conn.execute("SELECT * FROM payment_orders WHERE id = ?", (order_id,)).fetchone()
+    if not row:
+        return None
+    result = dict(row)
+    result["items"] = _payment_items(result.get("items", "[]"))
+    return result
+
+
+def payment_order_by_provider_id(provider_payment_id: str) -> dict | None:
+    with connection() as conn:
+        row = conn.execute(
+            "SELECT * FROM payment_orders WHERE provider_payment_id = ?",
+            (str(provider_payment_id or "").strip(),),
+        ).fetchone()
+    if not row:
+        return None
+    result = dict(row)
+    result["items"] = _payment_items(result.get("items", "[]"))
+    return result
+
+
+def mark_payment_creation_failed(order_id: str, error: str) -> None:
+    with _write_lock, connection() as conn:
+        conn.execute(
+            """UPDATE payment_orders SET status = 'failed', last_error = ?, updated_at = ?
+            WHERE id = ? AND status = 'creating'""",
+            (str(error or "")[:500], utc_now(), str(order_id or "")),
+        )
+        conn.commit()
+
+
+def attach_yookassa_payment(order_id: str, payment: dict) -> dict:
+    provider_id = str(payment.get("id", "")).strip()
+    status = str(payment.get("status", "pending")).strip()
+    confirmation = payment.get("confirmation") if isinstance(payment.get("confirmation"), dict) else {}
+    confirmation_url = str(confirmation.get("confirmation_url", "")).strip()
+    if not provider_id or status not in {"pending", "waiting_for_capture", "succeeded", "canceled"}:
+        raise ValueError("ЮKassa вернула некорректный платёж")
+    with _write_lock, connection() as conn:
+        cursor = conn.execute(
+            """UPDATE payment_orders SET provider_payment_id = ?, status = ?,
+                confirmation_url = ?, test = ?, updated_at = ?
+            WHERE id = ? AND status = 'creating'""",
+            (
+                provider_id, status, confirmation_url, int(bool(payment.get("test"))),
+                utc_now(), str(order_id or ""),
+            ),
+        )
+        if not cursor.rowcount:
+            row = conn.execute("SELECT * FROM payment_orders WHERE id = ?", (order_id,)).fetchone()
+            if not row or row["provider_payment_id"] != provider_id:
+                raise ValueError("Заказ уже связан с другим платежом")
+        conn.commit()
+        row = conn.execute("SELECT * FROM payment_orders WHERE id = ?", (order_id,)).fetchone()
+    return _public_payment_order(row)
+
+
+def apply_yookassa_status(order_id: str, payment: dict) -> dict:
+    """Apply a provider-verified status and complete onboarding exactly once."""
+    provider_id = str(payment.get("id", "")).strip()
+    status = str(payment.get("status", "")).strip()
+    if status not in {"pending", "waiting_for_capture", "succeeded", "canceled"}:
+        raise ValueError("Неизвестный статус платежа ЮKassa")
+    now = utc_now()
+    with _write_lock, connection() as conn:
+        row = conn.execute("SELECT * FROM payment_orders WHERE id = ?", (order_id,)).fetchone()
+        if not row or not provider_id or row["provider_payment_id"] != provider_id:
+            raise ValueError("Платёж не относится к этому заказу")
+        amount = payment.get("amount") if isinstance(payment.get("amount"), dict) else {}
+        try:
+            provider_kopecks = int(round(float(str(amount.get("value", "0"))) * 100))
+        except (TypeError, ValueError):
+            provider_kopecks = -1
+        metadata = payment.get("metadata") if isinstance(payment.get("metadata"), dict) else {}
+        if (
+            provider_kopecks != int(row["amount_kopecks"])
+            or str(amount.get("currency", "")) != row["currency"]
+            or str(metadata.get("order_id", "")) != row["id"]
+        ):
+            raise ValueError("Сумма или реквизиты платежа не совпадают с заказом")
+        paid = status == "succeeded" and bool(payment.get("paid"))
+        conn.execute(
+            """UPDATE payment_orders SET status = ?, paid = ?, test = ?, updated_at = ?,
+                paid_at = CASE WHEN ? THEN COALESCE(paid_at, ?) ELSE paid_at END,
+                canceled_at = CASE WHEN ? = 'canceled' THEN COALESCE(canceled_at, ?) ELSE canceled_at END
+            WHERE id = ?""",
+            (
+                status, int(paid), int(bool(payment.get("test"))), now,
+                int(paid), now, status, now, row["id"],
+            ),
+        )
+        if paid:
+            item_ids = [str(item.get("id", "")) for item in _payment_items(row["items"])]
+            onboarding = conn.execute(
+                "SELECT intro_seen, font_size FROM onboarding_state WHERE chel_id = ?",
+                (row["chel_id"],),
+            ).fetchone()
+            conn.execute(
+                """INSERT INTO onboarding_state
+                (chel_id, status, selected_tests, payment_status, intro_seen, font_size, updated_at)
+                VALUES (?, 'complete', ?, 'paid_online', ?, ?, ?)
+                ON CONFLICT(chel_id) DO UPDATE SET status='complete',
+                  selected_tests=excluded.selected_tests, payment_status='paid_online',
+                  updated_at=excluded.updated_at""",
+                (
+                    row["chel_id"], json.dumps(item_ids, ensure_ascii=False),
+                    int(onboarding["intro_seen"]) if onboarding else 0,
+                    onboarding["font_size"] if onboarding else "extra", now,
+                ),
+            )
+        conn.commit()
+        updated = conn.execute("SELECT * FROM payment_orders WHERE id = ?", (row["id"],)).fetchone()
+    return _public_payment_order(updated)
+
+
+def public_payment_order(order_id: str) -> dict | None:
+    private = payment_order_private(order_id)
+    if not private:
+        return None
+    private["items"] = json.dumps(private["items"], ensure_ascii=False)
+    return _public_payment_order(private)
+
+
 def _validate_examination(
     name: str, description: str, includes: str, price,
 ) -> tuple[str, str, str, int]:
@@ -1752,6 +1957,16 @@ def manager_conversation_detail(conversation_id: str) -> dict | None:
             onboarding["selected_tests"] = json.loads(onboarding.get("selected_tests") or "[]")
         except json.JSONDecodeError:
             onboarding["selected_tests"] = []
+        examination_names = {
+            str(row["id"]): str(row["name"])
+            for row in conn.execute(
+                "SELECT id, name FROM examination_catalog"
+            ).fetchall()
+        }
+        onboarding["selected_test_names"] = [
+            examination_names.get(str(examination_id), str(examination_id))
+            for examination_id in onboarding["selected_tests"]
+        ]
         interpretations = []
         for row in conn.execute(
             """SELECT med_id, scope_key, source_urls, interpretation, agent_id,
@@ -2023,6 +2238,13 @@ def init_db() -> None:
                 FOREIGN KEY(conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
             );
 
+            CREATE TABLE IF NOT EXISTS conversation_reads (
+                conversation_id TEXT PRIMARY KEY,
+                last_read_message_id INTEGER NOT NULL DEFAULT 0,
+                read_at TEXT NOT NULL,
+                FOREIGN KEY(conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
+            );
+
             CREATE TABLE IF NOT EXISTS handoffs (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 conversation_id TEXT NOT NULL,
@@ -2156,6 +2378,28 @@ def init_db() -> None:
                 price INTEGER NOT NULL,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS payment_orders (
+                id TEXT PRIMARY KEY,
+                chel_id TEXT NOT NULL,
+                provider TEXT NOT NULL DEFAULT 'yookassa',
+                provider_payment_id TEXT UNIQUE,
+                idempotence_key TEXT NOT NULL UNIQUE,
+                selection_fingerprint TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'creating',
+                amount_kopecks INTEGER NOT NULL,
+                currency TEXT NOT NULL DEFAULT 'RUB',
+                items TEXT NOT NULL,
+                confirmation_url TEXT NOT NULL DEFAULT '',
+                paid INTEGER NOT NULL DEFAULT 0,
+                test INTEGER NOT NULL DEFAULT 0,
+                last_error TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                paid_at TEXT,
+                canceled_at TEXT,
+                FOREIGN KEY(chel_id) REFERENCES users(chel_id) ON DELETE CASCADE
             );
 
             CREATE TABLE IF NOT EXISTS external_identities (
@@ -2402,6 +2646,15 @@ def init_db() -> None:
         )
         conn.execute("CREATE INDEX IF NOT EXISTS idx_conversations_human_queue ON conversations(human_status, updated_at)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_messages_conversation_id ON messages(conversation_id, id)")
+        conn.execute(
+            """INSERT OR IGNORE INTO conversation_reads
+            (conversation_id, last_read_message_id, read_at)
+            SELECT c.id, COALESCE(MAX(m.id), 0), ?
+            FROM conversations c
+            LEFT JOIN messages m ON m.conversation_id = c.id AND m.role = 'assistant'
+            GROUP BY c.id""",
+            (now,),
+        )
         conn.execute("CREATE INDEX IF NOT EXISTS idx_manager_actions_conversation_id ON manager_actions(conversation_id, created_at)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_staff_sessions_user ON staff_sessions(staff_user_id, expires_at)")
         conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_staff_telegram_id ON staff_users(telegram_id) WHERE telegram_id <> ''")
@@ -2420,6 +2673,14 @@ def init_db() -> None:
         )
         conn.execute("CREATE INDEX IF NOT EXISTS idx_ai_usage_created_at ON ai_usage(created_at)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_ai_usage_model ON ai_usage(model, created_at)")
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_payment_orders_user "
+            "ON payment_orders(chel_id, created_at DESC)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_payment_orders_provider "
+            "ON payment_orders(provider_payment_id, status)"
+        )
 
         # Preserve tickets created by earlier versions without rewriting messages.
         conversations = conn.execute("SELECT id, status, human_status, human_ticket_id FROM conversations").fetchall()
@@ -2454,6 +2715,10 @@ def create_conversation(title: str = "Новый диалог") -> dict:
             "INSERT INTO conversations (id, chel_id, title, created_at, updated_at) VALUES (?, ?, ?, ?, ?)",
             (conversation_id, current_chel_id(), title[:80], now, now),
         )
+        conn.execute(
+            "INSERT INTO conversation_reads (conversation_id, last_read_message_id, read_at) VALUES (?, 0, ?)",
+            (conversation_id, now),
+        )
         conn.commit()
     return get_conversation(conversation_id)
 
@@ -2470,10 +2735,54 @@ def get_conversation(conversation_id: str) -> dict | None:
 def list_conversations(limit: int = 50) -> list[dict]:
     with connection() as conn:
         rows = conn.execute(
-            "SELECT * FROM conversations WHERE chel_id = ? ORDER BY updated_at DESC LIMIT ?",
+            """SELECT c.*,
+                COALESCE((
+                    SELECT COUNT(*) FROM messages incoming
+                    WHERE incoming.conversation_id = c.id
+                      AND incoming.role = 'assistant'
+                      AND incoming.id > COALESCE(r.last_read_message_id, 0)
+                ), 0) AS unread_count
+            FROM conversations c
+            LEFT JOIN conversation_reads r ON r.conversation_id = c.id
+            WHERE c.chel_id = ? ORDER BY c.updated_at DESC LIMIT ?""",
             (current_chel_id(), limit),
         ).fetchall()
     return [dict(row) for row in rows]
+
+
+def conversation_unread_counts() -> dict[str, int]:
+    """Return unread incoming-message counts for all current user's dialogs."""
+    return {
+        item["id"]: int(item.get("unread_count") or 0)
+        for item in list_conversations()
+        if int(item.get("unread_count") or 0) > 0
+    }
+
+
+def mark_conversation_read(conversation_id: str) -> dict | None:
+    """Mark every currently persisted incoming message in one owned dialog as read."""
+    conversation = get_conversation(conversation_id)
+    if not conversation:
+        return None
+    now = utc_now()
+    with _write_lock, connection() as conn:
+        row = conn.execute(
+            """SELECT COALESCE(MAX(m.id), 0) AS last_incoming_id
+            FROM messages m JOIN conversations c ON c.id = m.conversation_id
+            WHERE m.conversation_id = ? AND c.chel_id = ? AND m.role = 'assistant'""",
+            (conversation_id, current_chel_id()),
+        ).fetchone()
+        last_incoming_id = int(row["last_incoming_id"] or 0)
+        conn.execute(
+            """INSERT INTO conversation_reads (conversation_id, last_read_message_id, read_at)
+            VALUES (?, ?, ?)
+            ON CONFLICT(conversation_id) DO UPDATE SET
+                last_read_message_id = MAX(last_read_message_id, excluded.last_read_message_id),
+                read_at = excluded.read_at""",
+            (conversation_id, last_incoming_id, now),
+        )
+        conn.commit()
+    return {"conversation_id": conversation_id, "last_read_message_id": last_incoming_id}
 
 
 def list_messages(conversation_id: str, limit: int | None = None) -> list[dict]:
@@ -2537,13 +2846,19 @@ def add_message(conversation_id: str, role: str, content: str, agent_id: str | N
 def update_conversation(
     conversation_id: str, *, active_agent: str, context_summary: str,
     status: str = "active", human_status: str = "none", human_ticket_id: str | None = None,
-    human_channel: str | None = None,
+    human_channel: str | None = None, ai_enabled: bool | None = None,
 ) -> None:
     with _write_lock, connection() as conn:
-        conn.execute(
-            "UPDATE conversations SET active_agent = ?, context_summary = ?, status = ?, human_status = ?, human_ticket_id = ?, human_channel = ?, updated_at = ? WHERE id = ? AND chel_id = ?",
-            (active_agent, context_summary, status, human_status, human_ticket_id, human_channel, utc_now(), conversation_id, current_chel_id()),
-        )
+        if ai_enabled is None:
+            conn.execute(
+                "UPDATE conversations SET active_agent = ?, context_summary = ?, status = ?, human_status = ?, human_ticket_id = ?, human_channel = ?, updated_at = ? WHERE id = ? AND chel_id = ?",
+                (active_agent, context_summary, status, human_status, human_ticket_id, human_channel, utc_now(), conversation_id, current_chel_id()),
+            )
+        else:
+            conn.execute(
+                "UPDATE conversations SET active_agent = ?, context_summary = ?, status = ?, human_status = ?, human_ticket_id = ?, human_channel = ?, ai_enabled = ?, updated_at = ? WHERE id = ? AND chel_id = ?",
+                (active_agent, context_summary, status, human_status, human_ticket_id, human_channel, int(ai_enabled), utc_now(), conversation_id, current_chel_id()),
+            )
         conn.commit()
 
 
@@ -2552,7 +2867,7 @@ def set_human_channel(conversation_id: str, channel: str, phone: str | None = No
         raise ValueError("Неизвестный способ связи")
     with _write_lock, connection() as conn:
         conn.execute(
-            "UPDATE conversations SET human_channel = ?, human_phone = ?, status = 'waiting_human', updated_at = ? WHERE id = ? AND chel_id = ?",
+            "UPDATE conversations SET human_channel = ?, human_phone = ?, ai_enabled = 0, status = 'waiting_human', updated_at = ? WHERE id = ? AND chel_id = ?",
             (channel, phone if channel == "call" else None, utc_now(), conversation_id, current_chel_id()),
         )
         conn.commit()

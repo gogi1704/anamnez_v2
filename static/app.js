@@ -23,10 +23,12 @@ const state = {
   identity: null,
   aiEnabled: true,
   humanStatus: 'none',
+  unreadCounts: {},
   lastMessageId: 0,
   returnToHumanAfterContextEdit: false,
   contextEditTicketId: null,
   returnToChatAfterExaminations: false,
+  publicConfig: {},
 };
 
 const $ = selector => document.querySelector(selector);
@@ -628,12 +630,62 @@ function renderExamOffer() {
   $('#onboardingContent').innerHTML = `<span class="onboarding-kicker">Необязательный шаг</span><h1>Хотите дополнить картину обследованиями?</h1><div class="exam-offer-guide"><p><strong>Нажимая «Посмотреть варианты»</strong>, вы увидите наборы обследований, подобранные с учётом ответов анкеты.</p><p>Перед выбором можно вернуться и изменить ответы. Позже данные также можно отредактировать в разделе «Мои данные».</p><p>Вы можете пропустить дополнительные обследования — Консилиум всё равно откроется.</p></div><div class="onboarding-actions"><button type="button" class="onboarding-back" data-onboarding-action="question-back">Изменить анкету</button><button type="button" class="onboarding-next" data-onboarding-action="start-exams">Посмотреть варианты</button></div><button type="button" class="exam-skip" data-onboarding-action="review-exam-skip">Пропустить и открыть Консилиум</button>`;
 }
 
-function renderExamSelection() {
+const EXAMINATION_UPGRADE_PAIRS = {
+  fatigue_basic:'fatigue_extended',
+  weight_basic:'weight_extended',
+  liver_basic:'liver_extended',
+};
+const EXAMINATION_BASIC_BY_EXTENDED = Object.fromEntries(
+  Object.entries(EXAMINATION_UPGRADE_PAIRS).map(([basicId, extendedId]) => [extendedId, basicId]),
+);
+
+function normalizeSelectedTestPairs() {
+  Object.entries(EXAMINATION_UPGRADE_PAIRS).forEach(([basicId, extendedId]) => {
+    if (state.selectedTests.has(extendedId)) state.selectedTests.delete(basicId);
+  });
+}
+
+function selectExamination(id) {
+  const extendedId = EXAMINATION_UPGRADE_PAIRS[id];
+  if (extendedId && state.selectedTests.has(extendedId)) return { changed:false, removing:false };
+  const removing = state.selectedTests.has(id);
+  if (removing) state.selectedTests.delete(id);
+  else {
+    const basicId = EXAMINATION_BASIC_BY_EXTENDED[id];
+    if (basicId) state.selectedTests.delete(basicId);
+    state.selectedTests.add(id);
+  }
+  return { changed:true, removing };
+}
+
+function renderExamSelection(scrollPosition = null) {
+  normalizeSelectedTestPairs();
   setOnboardingMeta('Обследования', 80);
   const recommended = new Set(state.onboarding.recommended_test_ids || []);
-  const cards = state.onboarding.tests.map(test => `<label class="exam-card ${state.selectedTests.has(test.id) ? 'selected' : ''}" data-test-card="${test.id}"><input type="checkbox" ${state.selectedTests.has(test.id) ? 'checked' : ''}><span class="exam-check">✓</span>${recommended.has(test.id) ? '<small class="recommended-badge">Подходит по анкете</small>' : ''}<strong>${test.name}</strong><b>${test.price.toLocaleString('ru')} ₽</b><small>${test.description}</small><em>${test.includes}</em></label>`).join('');
+  const cards = state.onboarding.tests.map(test => {
+    const selected = state.selectedTests.has(test.id);
+    const extendedId = EXAMINATION_UPGRADE_PAIRS[test.id];
+    const disabled = Boolean(extendedId && state.selectedTests.has(extendedId));
+    const extended = extendedId
+      ? state.onboarding.tests.find(item => item.id === extendedId)
+      : null;
+    const disabledNote = disabled
+      ? `<small class="exam-upgrade-note">Уже входит в «${escapeHtml(extended?.name || 'Расширенный комплекс')}»</small>`
+      : '';
+    return `<label class="exam-card ${selected ? 'selected' : ''} ${disabled ? 'disabled-by-upgrade' : ''}" data-test-card="${test.id}" ${disabled ? 'aria-disabled="true"' : ''}><input type="checkbox" ${selected ? 'checked' : ''} ${disabled ? 'disabled' : ''}><span class="exam-check">✓</span>${recommended.has(test.id) ? '<small class="recommended-badge">Подходит по анкете</small>' : ''}<strong>${escapeHtml(test.name)}</strong><b>${Number(test.price).toLocaleString('ru')} ₽</b><small>${escapeHtml(test.description)}</small><em>${escapeHtml(test.includes)}</em>${disabledNote}</label>`;
+  }).join('');
   const total = state.onboarding.tests.filter(test => state.selectedTests.has(test.id)).reduce((sum,test) => sum + test.price, 0);
   $('#onboardingContent').innerHTML = `<span class="onboarding-kicker">Выбор анализов</span><h1>Выберите интересующие наборы</h1><p class="onboarding-lead">Рекомендации отмечены по ответам анкеты и не являются назначением.</p><div class="exam-list">${cards}</div><div class="exam-total"><span>Выбрано: ${state.selectedTests.size}</span><strong>${total.toLocaleString('ru')} ₽</strong></div><div class="onboarding-actions"><button type="button" class="onboarding-back" data-onboarding-action="exam-offer">Назад</button><button type="button" class="onboarding-next" data-onboarding-action="continue-payment" ${state.selectedTests.size ? '' : 'disabled'}>Далее</button></div><button type="button" class="exam-skip" data-onboarding-action="review-exam-skip">Ничего не выбирать</button>`;
+  if (scrollPosition) {
+    const examList = $('#onboardingContent .exam-list');
+    const onboarding = $('#onboarding');
+    examList.scrollTop = scrollPosition.examList || 0;
+    onboarding.scrollTop = scrollPosition.onboarding || 0;
+    requestAnimationFrame(() => {
+      examList.scrollTop = scrollPosition.examList || 0;
+      onboarding.scrollTop = scrollPosition.onboarding || 0;
+    });
+  }
 }
 
 function renderExamSkipConfirmation() {
@@ -663,6 +715,7 @@ function renderCurrentExamSelectionSummary() {
   const selected = selectedTestDetails();
   const total = selected.reduce((sum,test) => sum + test.price, 0);
   const paymentLabels = {
+    paid_online:'Оплачено онлайн',
     pay_at_exam:'Оплата на медосмотре',
     demo_paid:'Оплачено',
     pending:'Способ оплаты ещё не выбран',
@@ -695,13 +748,93 @@ function renderPayment() {
   setOnboardingMeta('Оплата', 92);
   const selected = selectedTestDetails();
   const total = selected.reduce((sum,test) => sum + test.price, 0);
-  $('#onboardingContent').innerHTML = `<span class="onboarding-kicker">Последний шаг</span><h1>Проверим заказ</h1><p class="onboarding-lead">Выберите, как вам будет удобнее оплатить дополнительные обследования.</p><div class="payment-stub"><span class="demo-badge">ВЫБРАННЫЕ ОБСЛЕДОВАНИЯ</span><ul class="payment-lines">${selected.map(test => `<li><span>${test.name}</span><strong>${test.price.toLocaleString('ru')} ₽</strong></li>`).join('')}</ul><div class="payment-total"><span>Итого</span><strong>${total.toLocaleString('ru')} ₽</strong></div></div><div class="payment-actions"><button type="button" class="payment-online-button" data-onboarding-action="pay-online">Оплатить онлайн</button><button type="button" class="payment-at-exam-button" data-onboarding-action="pay-at-exam">Оплатить на медосмотре</button></div><button type="button" class="payment-back-button" data-onboarding-action="back-to-exams">← Вернуться к обследованиям</button><div class="payment-unavailable-backdrop hidden" id="paymentUnavailable" role="dialog" aria-modal="true" aria-labelledby="paymentUnavailableTitle"><div class="payment-unavailable-card"><span class="payment-unavailable-icon" aria-hidden="true">⌛</span><h2 id="paymentUnavailableTitle">Онлайн-оплата временно недоступна</h2><p>Мы уже работаем над её подключением. Совсем скоро обследования можно будет оплатить прямо в сервисе.</p><button type="button" data-onboarding-action="close-online-payment">Понятно</button></div></div>`;
+  const emailField = state.publicConfig.online_payments_enabled && state.publicConfig.payment_receipt_email_required
+    ? `<label class="payment-email-label">Электронная почта для чека<input id="paymentReceiptEmail" type="email" autocomplete="email" maxlength="254" placeholder="name@example.ru"></label>` : '';
+  $('#onboardingContent').innerHTML = `<span class="onboarding-kicker">Последний шаг</span><h1>Проверим заказ</h1><p class="onboarding-lead">Выберите, как вам будет удобнее оплатить дополнительные обследования.</p><div class="payment-stub"><span class="demo-badge">ВЫБРАННЫЕ ОБСЛЕДОВАНИЯ</span><ul class="payment-lines">${selected.map(test => `<li><span>${test.name}</span><strong>${test.price.toLocaleString('ru')} ₽</strong></li>`).join('')}</ul><div class="payment-total"><span>Итого</span><strong>${total.toLocaleString('ru')} ₽</strong></div></div>${emailField}<div class="payment-actions"><button type="button" class="payment-online-button" data-onboarding-action="pay-online">Оплатить онлайн</button><button type="button" class="payment-at-exam-button" data-onboarding-action="pay-at-exam">Оплатить на медосмотре</button></div><button type="button" class="payment-back-button" data-onboarding-action="back-to-exams">← Вернуться к обследованиям</button>`;
+}
+
+async function startOnlinePayment() {
+  if (!state.publicConfig.online_payments_enabled) {
+    showOnlinePaymentUnavailable();
+    return;
+  }
+  const button = $('#onboardingContent [data-onboarding-action="pay-online"]');
+  const receiptEmail = $('#paymentReceiptEmail')?.value?.trim() || '';
+  button.disabled = true;
+  button.textContent = 'Открываем оплату…';
+  try {
+    const result = await api('/api/payments/yookassa/create', {
+      method:'POST', body:JSON.stringify({
+        receipt_email:receiptEmail,
+        return_to_chat:Boolean(state.returnToChatAfterExaminations),
+      }),
+    });
+    const url = result.order?.confirmation_url;
+    if (!url) throw new Error('ЮKassa не вернула ссылку для оплаты');
+    trackEvent('payment_redirected', {provider:'yookassa'});
+    window.consiliumMetrikaGoal?.('payment_online');
+    window.location.assign(url);
+  } catch (error) {
+    button.disabled = false;
+    button.textContent = 'Оплатить онлайн';
+    showOnboardingError(error.message);
+  }
 }
 
 function showOnlinePaymentUnavailable() {
-  trackEvent('payment_online_unavailable', {method:'online',screen:'payment'});
-  window.consiliumMetrikaGoal?.('payment_online');
-  $('#paymentUnavailable')?.classList.remove('hidden');
+  document.querySelector('.payment-unavailable-backdrop')?.remove();
+  const backdrop = document.createElement('div');
+  backdrop.className = 'payment-unavailable-backdrop';
+  backdrop.setAttribute('role', 'dialog');
+  backdrop.setAttribute('aria-modal', 'true');
+  backdrop.setAttribute('aria-labelledby', 'paymentUnavailableTitle');
+  backdrop.innerHTML = `
+    <div class="payment-unavailable-card">
+      <span class="payment-unavailable-icon" aria-hidden="true">⌛</span>
+      <h2 id="paymentUnavailableTitle">Онлайн-оплата временно недоступна</h2>
+      <p>Мы уже работаем над её подключением. Пока вы можете выбрать оплату на медицинском осмотре.</p>
+      <button type="button" data-close-payment-unavailable>Понятно</button>
+    </div>`;
+  const close = () => backdrop.remove();
+  backdrop.addEventListener('click', event => {
+    if (event.target === backdrop || event.target.closest('[data-close-payment-unavailable]')) close();
+  });
+  document.body.appendChild(backdrop);
+  backdrop.querySelector('button').focus();
+  trackEvent('payment_unavailable_viewed', {provider:'yookassa'});
+}
+
+async function handlePaymentReturn() {
+  const params = new URLSearchParams(location.search);
+  const orderId = params.get('payment_return');
+  const returnDirectlyToChat = params.get('return_to_chat') === '1';
+  if (!orderId) return false;
+  history.replaceState({}, '', `${location.pathname}${location.hash || ''}`);
+  $('#onboarding').classList.remove('hidden');
+  $('#appShell').classList.add('hidden');
+  setOnboardingMeta('Проверка оплаты', 96);
+  $('#onboardingContent').innerHTML = `<div class="payment-result"><span class="payment-result-icon">⌛</span><h1>Проверяем оплату</h1><p class="onboarding-lead">Обычно это занимает несколько секунд. Не закрывайте страницу.</p></div>`;
+  try {
+    const result = await api(`/api/payments/${encodeURIComponent(orderId)}`);
+    const status = result.order?.status;
+    if (status === 'succeeded' && result.order?.paid) {
+      state.onboarding = await api('/api/onboarding');
+      state.profile = state.onboarding.profile;
+      state.selectedTests = new Set(state.onboarding.selected_tests || []);
+      trackEvent('payment_succeeded', {provider:'yookassa'});
+      window.consiliumMetrikaGoal?.('onboarding_completed');
+      if (returnDirectlyToChat) return openMainApp({skipIntro:true}), true;
+      renderExamCompletion();
+      return true;
+    }
+    const canceled = status === 'canceled';
+    trackEvent(canceled ? 'payment_canceled' : 'payment_pending', {provider:'yookassa'});
+    $('#onboardingContent').innerHTML = `<div class="payment-result"><span class="payment-result-icon ${canceled ? 'error' : ''}">${canceled ? '!' : '⌛'}</span><h1>${canceled ? 'Оплата не прошла' : 'Оплата ещё обрабатывается'}</h1><p class="onboarding-lead">${canceled ? 'Деньги не списаны. Можно попробовать оплатить ещё раз или выбрать оплату на медосмотре.' : 'ЮKassa ещё не подтвердила платёж. Подождите немного и проверьте снова.'}</p><div class="onboarding-actions"><button type="button" class="onboarding-back" data-onboarding-action="back-to-payment">Вернуться</button>${canceled ? '' : '<button type="button" class="onboarding-next" data-onboarding-action="check-payment" data-order-id="'+escapeHtml(orderId)+'">Проверить снова</button>'}</div></div>`;
+    return true;
+  } catch (error) {
+    $('#onboardingContent').innerHTML = `<div class="payment-result"><span class="payment-result-icon error">!</span><h1>Не удалось проверить оплату</h1><p class="onboarding-lead">${escapeHtml(error.message)}</p><button type="button" class="onboarding-next" data-onboarding-action="check-payment" data-order-id="${escapeHtml(orderId)}">Повторить проверку</button></div>`;
+    return true;
+  }
 }
 
 async function confirmPaymentAtExam() {
@@ -783,7 +916,7 @@ async function loadOnboarding() {
   if (state.onboarding.status === 'complete') {
     if (
       state.onboarding.selected_tests?.length
-      && ['demo_paid','pay_at_exam'].includes(state.onboarding.payment_status)
+      && ['demo_paid','paid_online','pay_at_exam'].includes(state.onboarding.payment_status)
       && !state.onboarding.intro_seen
     ) {
       $('#onboarding').classList.remove('hidden');
@@ -830,14 +963,18 @@ $('#onboardingContent').addEventListener('click', event => {
   const card = event.target.closest('[data-test-card]');
   if (card) {
     const id = card.dataset.testCard;
-    const removing = state.selectedTests.has(id);
-    removing ? state.selectedTests.delete(id) : state.selectedTests.add(id);
-    trackEvent(removing ? 'examination_deselected' : 'examination_selected', {
+    const scrollPosition = {
+      examList:card.closest('.exam-list')?.scrollTop || 0,
+      onboarding:$('#onboarding').scrollTop || 0,
+    };
+    const selection = selectExamination(id);
+    if (!selection.changed) return;
+    trackEvent(selection.removing ? 'examination_deselected' : 'examination_selected', {
       exam_id:id,
       recommended:(state.onboarding.recommended_test_ids || []).includes(id),
       selected_count:state.selectedTests.size,
     });
-    renderExamSelection();
+    renderExamSelection(scrollPosition);
     return;
   }
   const action = event.target.closest('[data-onboarding-action]')?.dataset.onboardingAction;
@@ -851,9 +988,10 @@ $('#onboardingContent').addEventListener('click', event => {
   else if (action === 'confirm-skip-exams') { trackEvent('funnel_action', {stage:'examinations_offer',action:'refuse'}); trackEvent('examinations_skipped', { screen:'examinations_skip' }); submitExamSelection(true); }
   else if (action === 'continue-payment') submitExamSelection(false);
   else if (action === 'back-to-exams') renderExamSelection();
-  else if (action === 'pay-online') { trackEvent('funnel_action', {stage:'examinations_options',action:'pay_online'}); showOnlinePaymentUnavailable(); }
+  else if (action === 'pay-online') { trackEvent('funnel_action', {stage:'examinations_options',action:'pay_online'}); startOnlinePayment(); }
   else if (action === 'pay-at-exam') { trackEvent('funnel_action', {stage:'examinations_options',action:'pay_at_exam'}); confirmPaymentAtExam(); }
-  else if (action === 'close-online-payment') $('#paymentUnavailable')?.classList.add('hidden');
+  else if (action === 'back-to-payment') renderPayment();
+  else if (action === 'check-payment') { const orderId = event.target.closest('[data-order-id]')?.dataset.orderId; if (orderId) { const url = new URL(location.href); url.searchParams.set('payment_return', orderId); history.replaceState({}, '', url); handlePaymentReturn(); } }
   else if (action === 'edit-current-exams') { trackEvent('funnel_action', {stage:'chat_examinations',action:'edit_selection'}); renderExamSelection(); }
   else if (action === 'close-current-exams') openMainApp({ skipIntro:true });
   else if (action === 'open-app') openMainApp();
@@ -888,6 +1026,95 @@ function setActiveAgent(id) {
   $('#headerRole').textContent = agent.role;
 }
 
+const labInterpretationSections = [
+  { id:'summary', title:'Общая картина', icon:'✓', tone:'summary', test:/общ(?:ий|ая)\s+(?:вывод|картин)|коротк(?:ий|ая)\s+.*вывод/i },
+  { id:'normal', title:'В пределах референсов', icon:'●', tone:'normal', test:/пределах\s+референс|в\s+норме|без\s+отклонен/i },
+  { id:'deviations', title:'На что обратить внимание', icon:'!', tone:'attention', test:/отклонен|обратить\s+внимание|вне\s+референс/i },
+  { id:'connections', title:'Связи и ограничения', icon:'↔', tone:'context', test:/связ(?:и|ь)\s+между|ограничен.*интерпретац|важн.*ограничен/i },
+  { id:'next', title:'Что делать дальше', icon:'→', tone:'next', test:/обсудить\s+со\s+специалист|что\s+делать|следующ(?:ий|ие)\s+шаг|когда\s+.*сделать/i },
+];
+
+function labRichTextMarkup(value) {
+  const lines = String(value || '').split(/\n+/).map(line => line.trim()).filter(Boolean);
+  const parts = [];
+  let list = [];
+  const flushList = () => {
+    if (!list.length) return;
+    parts.push(`<ul>${list.map(item => `<li>${item}</li>`).join('')}</ul>`);
+    list = [];
+  };
+  const inline = text => escapeHtml(text)
+    .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
+    .replace(/(https?:\/\/[^\s<]+)/g, '<a class="message-link" href="$1" target="_blank" rel="noopener noreferrer">Открыть документ</a>');
+  for (const line of lines) {
+    const bullet = line.match(/^(?:[-–—•]|\d+[.)])\s+(.+)$/);
+    if (bullet) list.push(inline(bullet[1]));
+    else {
+      flushList();
+      parts.push(`<p>${inline(line)}</p>`);
+    }
+  }
+  flushList();
+  return parts.join('');
+}
+
+function labInterpretationMarkup(text, metadata = {}) {
+  const raw = String(text || '').replace(/\r/g, '').trim();
+  const buckets = new Map();
+  const intro = [];
+  let active = null;
+  for (const originalLine of raw.split('\n')) {
+    const line = originalLine.trim();
+    if (!line) {
+      if (active) buckets.get(active).push('');
+      else intro.push('');
+      continue;
+    }
+    const cleaned = line
+      .replace(/^#{1,4}\s*/, '')
+      .replace(/^\*\*(.*?)\*\*:?\s*$/, '$1')
+      .replace(/^\d+[.)]\s*/, '')
+      .replace(/:$/, '')
+      .trim();
+    const section = labInterpretationSections.find(item => item.test.test(cleaned));
+    if (section && cleaned.length <= 150) {
+      active = section.id;
+      if (!buckets.has(active)) buckets.set(active, []);
+      const colon = line.indexOf(':');
+      if (colon >= 0 && line.slice(colon + 1).trim()) buckets.get(active).push(line.slice(colon + 1).trim());
+      continue;
+    }
+    (active ? buckets.get(active) : intro).push(line);
+  }
+  if (intro.join('').trim()) {
+    const target = buckets.has('summary') ? 'details' : 'summary';
+    if (!buckets.has(target)) buckets.set(target, []);
+    buckets.set(target, [...intro, ...buckets.get(target)]);
+  }
+  if (!buckets.size) buckets.set('details', [raw]);
+  const scope = metadata.document_id === 'all'
+    ? 'Все документы проанализированы вместе'
+    : 'Проанализирован выбранный документ';
+  const cards = [];
+  for (const [id, lines] of buckets) {
+    const section = labInterpretationSections.find(item => item.id === id) || {
+      id:'details', title:'Подробная расшифровка', icon:'≡', tone:'context',
+    };
+    const body = lines.join('\n').trim();
+    if (!body) continue;
+    const initiallyOpen = ['summary', 'deviations'].includes(id);
+    cards.push(`<details class="lab-report-section ${section.tone}" ${initiallyOpen ? 'open' : ''}>
+      <summary><i>${section.icon}</i><strong>${section.title}</strong><span></span></summary>
+      <div class="lab-report-body">${labRichTextMarkup(body)}</div>
+    </details>`);
+  }
+  return `<div class="lab-report">
+    <div class="lab-report-heading"><i>▤</i><div><strong>Расшифровка результатов</strong><small>${scope} · с учётом данных анкеты</small></div></div>
+    <div class="lab-report-sections">${cards.join('')}</div>
+    <p class="lab-report-disclaimer">Расшифровка помогает понять результаты, но не заменяет диагноз и очную консультацию врача.</p>
+  </div>`;
+}
+
 function addMessage(sender, text, agentId = state.active, urgent = false, createdAt = null, metadata = {}) {
   const messageId = Number(metadata._message_id || 0);
   if (messageId) {
@@ -898,7 +1125,8 @@ function addMessage(sender, text, agentId = state.active, urgent = false, create
   const agent = AGENTS[agentId] || AGENTS.manager;
   const humanManager = sender === 'agent' && metadata.sender_type === 'human_manager';
   const wrapper = document.createElement('div');
-  wrapper.className = `message-row ${sender}${urgent ? ' urgent' : ''}${humanManager ? ' human-manager' : ''}`;
+  const labInterpretation = sender === 'agent' && metadata.action === 'lab_interpretation';
+  wrapper.className = `message-row ${sender}${urgent ? ' urgent' : ''}${humanManager ? ' human-manager' : ''}${labInterpretation ? ' lab-interpretation' : ''}`;
   if (messageId) wrapper.dataset.messageId = String(messageId);
   const date = createdAt ? new Date(createdAt) : new Date();
   const time = new Intl.DateTimeFormat('ru', { hour: '2-digit', minute: '2-digit' }).format(date);
@@ -907,9 +1135,12 @@ function addMessage(sender, text, agentId = state.active, urgent = false, create
     ? '<b class="special-label">Сохранённая расшифровка</b>' : '';
   const labDocuments = sender === 'agent'
     ? labDocumentsMarkup(metadata.lab_result_documents || [], 'message') : '';
+  const assistantContent = labInterpretation
+    ? labInterpretationMarkup(text, metadata)
+    : `<p>${formatAssistantText(text)}</p>`;
   wrapper.innerHTML = sender === 'user'
     ? `<div class="bubble user-bubble">${attachmentBadges}<p>${escapeHtml(text)}</p><span>${time}</span></div>`
-    : `<div class="message-avatar">${humanManager ? 'Ч' : agent.initials}</div><div><div class="message-author"><strong>${humanManager ? escapeHtml(metadata.manager_name || 'Менеджер') : agent.name}</strong><span>${humanManager ? 'Человек' : agent.role}</span>${cached}</div><div class="bubble agent-bubble"><p>${formatAssistantText(text)}</p>${labDocuments}<span>${time}</span></div></div>`;
+    : `<div class="message-avatar">${humanManager ? 'Ч' : agent.initials}</div><div><div class="message-author"><strong>${humanManager ? escapeHtml(metadata.manager_name || 'Менеджер') : agent.name}</strong><span>${humanManager ? 'Человек' : agent.role}</span>${cached}</div><div class="bubble agent-bubble">${assistantContent}${labDocuments}<span>${time}</span></div></div>`;
   messages.appendChild(wrapper);
   scrollChatToBottom();
   return wrapper;
@@ -931,10 +1162,12 @@ function updateChatMode(aiEnabled = true, humanStatus = 'none', humanTicketId = 
     : 'Напишите менеджеру...';
   if (!relevant) return;
   $('#chatModeIcon').textContent = state.aiEnabled ? '✓' : '♙';
-  $('#chatModeTitle').textContent = state.aiEnabled ? 'Обращение менеджеру открыто' : 'С вами общается менеджер';
+  $('#chatModeTitle').textContent = state.aiEnabled
+    ? 'ИИ снова отвечает в этом диалоге'
+    : state.humanStatus === 'connected' ? 'С вами общается менеджер' : 'Ожидаем ответа менеджера';
   $('#chatModeText').textContent = state.aiEnabled
-    ? `ИИ продолжает отвечать${humanTicketId ? ` · обращение ${humanTicketId}` : ''}.`
-    : 'ИИ отключён — сообщения будут ждать ответа менеджера.';
+    ? `Менеджер включил ИИ${humanTicketId ? ` · обращение ${humanTicketId}` : ''}.`
+    : 'ИИ в этом диалоге приостановлен. Новые сообщения получит менеджер.';
   $('#chatModeDetailsText').textContent = state.aiEnabled
     ? ''
     : 'Пока ожидаете ответ, вы можете продолжить общение с ИИ в новом диалоге.';
@@ -1033,12 +1266,14 @@ async function processMessage(text) {
     if (result.action === 'waiting_human') {
       $('#taskStatus').textContent = 'Сообщение ожидает ответа менеджера';
       addTimeline('manager', 'Сообщение передано', 'Менеджер увидит его в своей очереди', 'active');
+    } else if (result.action === 'human_preference') {
+      $('#taskStatus').textContent = 'Сообщения ждут ответа менеджера';
     } else if (result.action === 'lab_results_prompt') {
       await openLabResults();
       $('#taskStatus').textContent = 'Укажите номер пробирки';
     } else if (result.human_escalation) {
       await openHumanModal(result.human_ticket_id);
-      $('#taskStatus').textContent = 'Выберите формат связи · ИИ на связи';
+      $('#taskStatus').textContent = 'ИИ приостановлен · выберите чат или созвон';
     } else if (result.human_channel_prompt === 'call') {
       await openHumanModal(result.human_ticket_id);
       showCallPhoneStep();
@@ -1046,6 +1281,7 @@ async function processMessage(text) {
     } else {
       $('#taskStatus').textContent = result.emergency ? 'Требуется срочное действие' : 'Контекст сохранён';
     }
+    if (result.assistant_message) await markConversationRead(result.conversation_id);
     await loadConversationList();
   } catch (error) {
     $('#typing')?.remove();
@@ -1086,15 +1322,61 @@ function renderInsights() {
 async function loadConversationList() {
   try {
     const items = await api('/api/conversations');
+    applyUnreadCounts(Object.fromEntries(items.map(item => [item.id, Number(item.unread_count || 0)])));
     $('#mobileConversationCount').textContent = String(items.length);
     $('#conversationList').innerHTML = items.length ? items.map(item => `
-      <button class="conversation-row ${item.id === state.conversationId ? 'active' : ''}" data-id="${item.id}">
-        <strong>${escapeHtml(item.title)}</strong><span>${escapeHtml(conversationSummary(item))}</span><small>${formatRelative(item.updated_at)}</small>
+      <button class="conversation-row ${item.id === state.conversationId ? 'active' : ''} ${Number(item.unread_count || 0) ? 'unread' : ''}" data-id="${item.id}">
+        <span class="conversation-row-title"><strong>${escapeHtml(item.title)}</strong>${Number(item.unread_count || 0) ? `<b>${formatUnreadCount(item.unread_count)}</b>` : ''}</span>
+        <span>${escapeHtml(conversationSummary(item))}</span><small>${formatRelative(item.updated_at)}</small>
       </button>`).join('') : '<p class="no-conversations">Пока нет сохранённых диалогов</p>';
   } catch {
     $('#mobileConversationCount').textContent = '0';
     $('#conversationList').innerHTML = '<p class="no-conversations">Не удалось загрузить диалоги</p>';
   }
+}
+
+function formatUnreadCount(count) {
+  const value = Math.max(0, Number(count || 0));
+  return value > 99 ? '99+' : String(value);
+}
+
+function applyUnreadCounts(counts = {}) {
+  state.unreadCounts = Object.fromEntries(
+    Object.entries(counts || {}).map(([id, count]) => [id, Math.max(0, Number(count || 0))]),
+  );
+  const total = Object.values(state.unreadCounts).reduce((sum, count) => sum + count, 0);
+  const badge = $('#mobileDialogsUnread');
+  badge.textContent = formatUnreadCount(total);
+  badge.classList.toggle('hidden', total === 0);
+  const button = $('#mobileHeaderDialogsButton');
+  button.classList.toggle('has-unread', total > 0);
+  button.setAttribute('aria-label', total
+    ? `Открыть диалоги, новых сообщений: ${total}`
+    : 'Открыть диалоги, новых сообщений нет');
+  document.querySelectorAll('.conversation-row[data-id]').forEach(row => {
+    const count = state.unreadCounts[row.dataset.id] || 0;
+    row.classList.toggle('unread', count > 0);
+    const title = row.querySelector('.conversation-row-title');
+    let rowBadge = title?.querySelector('b');
+    if (count && title && !rowBadge) {
+      rowBadge = document.createElement('b');
+      title.appendChild(rowBadge);
+    }
+    if (rowBadge) {
+      rowBadge.textContent = formatUnreadCount(count);
+      rowBadge.classList.toggle('hidden', count === 0);
+    }
+  });
+}
+
+async function markConversationRead(conversationId = state.conversationId) {
+  if (!conversationId) return;
+  try {
+    const result = await api(`/api/conversations/${encodeURIComponent(conversationId)}/read`, {
+      method:'POST', body:'{}',
+    });
+    applyUnreadCounts(result.unread_counts || {});
+  } catch {}
 }
 
 function conversationSummary(item) {
@@ -1111,9 +1393,14 @@ function conversationSummary(item) {
 }
 
 async function syncConversationUpdates() {
-  if (
-    !state.conversationId || state.processing || !state.mainInitialized
-  ) return;
+  if (state.processing || !state.mainInitialized) return;
+  if (!state.conversationId) {
+    try {
+      const summary = await api('/api/conversations/unread');
+      applyUnreadCounts(summary.unread_counts || {});
+    } catch {}
+    return;
+  }
   try {
     const data = await api(
       `/api/conversations/${state.conversationId}/updates?after_id=${state.lastMessageId}`,
@@ -1121,6 +1408,7 @@ async function syncConversationUpdates() {
     updateChatMode(
       data.ai_enabled, data.human_status, data.human_ticket_id,
     );
+    applyUnreadCounts(data.unread_counts || {});
     let incomingMessageReceived = false;
     for (const message of data.messages || []) {
       state.lastMessageId = Math.max(state.lastMessageId, Number(message.id || 0));
@@ -1147,7 +1435,10 @@ async function syncConversationUpdates() {
         $('#taskStatus').textContent = 'Менеджер ответил';
       }
     }
-    if (incomingMessageReceived) playUserMessageSound();
+    if (incomingMessageReceived) {
+      playUserMessageSound();
+      await markConversationRead(state.conversationId);
+    }
   } catch (error) {
     if (error.message === 'Диалог не найден') {
       state.conversationId = null;
@@ -1190,6 +1481,7 @@ async function openConversation(id) {
     renderInsights();
     $('#suggestions').classList.add('hidden');
     $('#taskStatus').textContent = 'Диалог загружен';
+    await markConversationRead(id);
     await loadConversationList();
     document.body.classList.remove('show-team');
   } catch (error) {
@@ -1241,9 +1533,13 @@ function closeHumanModal() {
 }
 function resumeAfterHuman() {
   closeHumanModal();
-  $('#taskStatus').textContent = 'Обращение подготовлено · ИИ на связи';
-  input.placeholder = 'Продолжите диалог — контекст сохранён...';
+  $('#taskStatus').textContent = 'ИИ приостановлен · ожидаем менеджера';
+  input.placeholder = 'Напишите менеджеру...';
   focusChatInput();
+}
+function startNewAiConversationAfterHuman() {
+  closeHumanModal();
+  newConversation();
 }
 function setHumanChoiceDisabled(disabled) {
   $('#humanChatButton').disabled = disabled;
@@ -1290,6 +1586,7 @@ async function chooseHumanChannel(channel, phone = null) {
       body: JSON.stringify({ conversation_id: state.conversationId, channel, phone }),
     });
     closeHumanModal();
+    updateChatMode(false, result.human_status, result.ticket_id);
     setActiveAgent('manager');
     addMessage(
       'agent', result.assistant_message.content, 'manager', false,
@@ -1297,9 +1594,10 @@ async function chooseHumanChannel(channel, phone = null) {
       { ...(result.assistant_message.metadata || {}), _message_id:result.assistant_message.id },
     );
     $('#taskStatus').textContent = channel === 'chat'
-      ? 'Чат со специалистом запрошен · ИИ на связи'
-      : 'Созвон выбран · ИИ на связи';
-    input.placeholder = 'Продолжите диалог — контекст сохранён...';
+      ? 'Сообщения ждут ответа менеджера'
+      : 'Созвон запрошен · ожидаем менеджера';
+    input.placeholder = 'Напишите менеджеру...';
+    await markConversationRead(state.conversationId);
     await loadConversationList();
   } catch (error) {
     addSystemError(error.message);
@@ -2034,6 +2332,11 @@ function closeVisibleModal() {
 }
 
 function closeTopUiLayer() {
+  const paymentUnavailable = document.querySelector('.payment-unavailable-backdrop');
+  if (paymentUnavailable) {
+    paymentUnavailable.remove();
+    return true;
+  }
   const editable = document.activeElement?.matches(
     'input:not([type="button"]):not([type="checkbox"]):not([type="radio"]), textarea, [contenteditable="true"]',
   );
@@ -2182,7 +2485,7 @@ $('#chatModeToggle').addEventListener('click', () => {
 });
 $('#conversationList').addEventListener('click', event => { const row = event.target.closest('[data-id]'); if (row) openConversation(row.dataset.id); });
 $('#modalClose').addEventListener('click', resumeAfterHuman);
-$('#modalOkay').addEventListener('click', resumeAfterHuman);
+$('#modalOkay').addEventListener('click', startNewAiConversationAfterHuman);
 $('#humanChatButton').addEventListener('click', () => chooseHumanChannel('chat'));
 $('#humanCallButton').addEventListener('click', showCallPhoneStep);
 $('#callPhoneBack').addEventListener('click', resetCallPhoneStep);
@@ -2201,6 +2504,7 @@ $('#handoffPreview').addEventListener('click', event => {
 });
 function closeMobileTeam() { document.body.classList.remove('show-team'); }
 $('#mobileDialogsButton').addEventListener('click', openMobileSidebar);
+$('#mobileHeaderDialogsButton').addEventListener('click', openMobileSidebar);
 $('#mobileTeamClose').addEventListener('click', closeMobileTeam);
 $('#teamBackdrop').addEventListener('click', closeMobileTeam);
 document.addEventListener('click', event => {
@@ -2226,6 +2530,7 @@ async function init() {
   trackEvent('landing_viewed', {screen:'entry'});
   trackEvent('app_opened', {app_mode:isInstalledApp() ? 'standalone' : 'browser'});
   try {
+    state.publicConfig = await api('/api/public-config');
     const identity = await api('/api/me');
     state.identity = identity;
     const entryParams = new URLSearchParams(window.location.search);
@@ -2234,13 +2539,13 @@ async function init() {
     if (identity.authenticated) {
       localStorage.removeItem(ANONYMOUS_ACCESS_KEY);
       if (forceWelcomePreview) showWelcome(startApplication);
-      else await enterKnownUser();
+      else if (!(await handlePaymentReturn())) await enterKnownUser();
     } else if (messengerLoginRequired) {
       showAuthGate();
       setAuthStatus('Эта ссылка принадлежит другому пользователю. Войдите через свой мессенджер.', true);
     } else if (localStorage.getItem(ANONYMOUS_ACCESS_KEY) === identity.chel_id) {
       if (forceWelcomePreview) showWelcome(startApplication);
-      else await enterKnownUser();
+      else if (!(await handlePaymentReturn())) await enterKnownUser();
     } else {
       if (forceWelcomePreview) showWelcome(() => showAuthGate());
       else if (localStorage.getItem(WELCOME_SEEN_KEY)) showAuthGate();

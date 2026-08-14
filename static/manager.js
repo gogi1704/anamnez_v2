@@ -291,15 +291,17 @@ function renderHeader() {
     ? `${conversation.human_ticket_id} · ${conversation.human_status === 'closed' ? 'закрыто' : conversation.human_channel === 'call' ? 'созвон' : conversation.human_channel === 'chat' ? 'чат' : 'формат не выбран'}`
     : `Диалог ${conversation.id.slice(0, 8)}`;
   $('#aiEnabled').checked = Boolean(conversation.ai_enabled);
-  $('#aiSwitchTitle').textContent = conversation.ai_enabled ? 'ИИ отвечает' : 'ИИ выключен';
+  $('#aiSwitchTitle').textContent = conversation.ai_enabled ? 'ИИ отвечает' : 'ИИ приостановлен';
   $('#aiSwitchHint').textContent = conversation.ai_enabled
-    ? 'Следующие вопросы получит ИИ'
-    : 'Пользователь ждёт человека';
+    ? 'Следующие сообщения сможет обрабатывать ИИ'
+    : 'Новые сообщения ожидают менеджера';
   const notice = $('#managerModeNotice');
   notice.classList.toggle('ai-off', !conversation.ai_enabled);
   $('#managerModeText').textContent = conversation.ai_enabled
-    ? 'ИИ продолжает отвечать пользователю с учётом всей истории. Вы также можете написать в чат.'
-    : 'ИИ приостановлен. Новые сообщения сохраняются, но ответит на них только менеджер.';
+    ? 'ИИ включён и отвечает с учётом истории этого диалога. Менеджер также может писать пользователю.'
+    : conversation.human_status === 'connected'
+      ? 'ИИ приостановлен. Пользователь общается с менеджером; на новые сообщения ИИ не отвечает.'
+      : 'ИИ автоматически приостановлен после обращения. Новые сообщения ждут ответа менеджера.';
   const closeButton = $('#closeRequestButton');
   const closable = conversation.human_status !== 'closed'
     && (Boolean(conversation.human_ticket_id) || !conversation.ai_enabled);
@@ -385,7 +387,10 @@ function renderUserDetails() {
       Интенсивность ${item.intensity}/10 · ${item.status === 'active' ? 'активен' : 'завершён'}
       ${item.notes ? `<br>${escapeHtml(item.notes)}` : ''}</div>`).join('')
     : '<span class="empty-detail">Симптомы не отмечены</span>';
-  const examNames = (onboarding.selected_tests || []).map(escapeHtml).join(', ');
+  const selectedTestNames = Array.isArray(onboarding.selected_test_names)
+    ? onboarding.selected_test_names
+    : (onboarding.selected_tests || []);
+  const examNames = selectedTestNames.map(escapeHtml).join(', ');
   const docs = (lab.documents || []).map(item => {
     const url = safeUrl(item.url);
     return url ? `<div class="stack-item"><strong>${escapeHtml(item.title || 'Результат анализа')}</strong><a href="${escapeHtml(url)}" target="_blank" rel="noopener">Открыть документ</a></div>` : '';

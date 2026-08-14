@@ -62,6 +62,16 @@ button:hover,.button:hover { background:var(--green-dark); }
 .funnel-breakdown-row b { text-align:right; font-size:11px; font-variant-numeric:tabular-nums; }
 .funnel-breakdown-row small { color:var(--muted); font-size:9px; text-align:right; white-space:nowrap; }
 .analytics-detail-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:14px; }
+.examination-analytics-panel .panel-heading { align-items:flex-start; }
+.examination-analytics-panel .panel-heading p:last-child { max-width:900px; margin:7px 0 0; color:var(--muted); font-size:12px; line-height:1.5; }
+.examination-popularity { display:grid; gap:11px; }
+.examination-popularity-row { display:grid; gap:7px; padding:12px 14px; border:1px solid var(--line); border-radius:14px; background:#fbfdfc; }
+.examination-popularity-heading { display:flex; align-items:flex-start; justify-content:space-between; gap:14px; }
+.examination-popularity-heading strong { min-width:0; overflow-wrap:anywhere; font-size:12px; line-height:1.4; }
+.examination-popularity-heading b { flex:none; color:var(--green-dark); font-size:13px; font-variant-numeric:tabular-nums; }
+.examination-popularity-track { height:10px; overflow:hidden; border-radius:99px; background:#e7eeea; }
+.examination-popularity-track i { display:block; height:100%; border-radius:inherit; background:linear-gradient(90deg,var(--green),#63ad90); }
+.examination-popularity-details { color:var(--muted); font-size:10px; line-height:1.5; overflow-wrap:anywhere; }
 .analytics-bars { display:flex; align-items:flex-end; gap:6px; min-height:210px; overflow-x:auto; padding-top:12px; }
 .analytics-day { display:grid; grid-template-rows:1fr auto; align-items:end; flex:1 0 24px; height:200px; text-align:center; }
 .analytics-day i { display:block; min-height:2px; border-radius:6px 6px 1px 1px; background:linear-gradient(180deg,#54a586,var(--green)); }
@@ -241,6 +251,9 @@ tbody tr:hover { background:#f8fbf9; }
   .user-data-cleanup { grid-template-columns:1fr; align-items:stretch; }
 }
 @media (max-width:700px) {
+  input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="file"]),
+  select,
+  textarea { font-size:16px !important; }
   .dashboard-shell { padding:14px; }
   .login-card { width:100%; margin:4vh auto 0; padding:24px; border-radius:20px; }
   .dashboard-header { align-items:stretch; flex-direction:column; }
@@ -286,6 +299,10 @@ tbody tr:hover { background:#f8fbf9; }
   .funnel-breakdown-row > span { grid-column:1/-1; }
   .questionnaire-row-heading { align-items:flex-start; }
   .questionnaire-row-heading strong { min-width:0; }
+  .examination-analytics-panel .panel-heading { flex-direction:column; }
+  .examination-analytics-panel .table-count { align-self:flex-start; max-width:100%; white-space:normal; }
+  .examination-popularity-row { padding:11px; }
+  .examination-popularity-details { font-size:9px; }
   .analytics-admin .table-panel .panel-heading { align-items:flex-start; flex-direction:column; }
   .analytics-admin .table-count { align-self:flex-start; }
 }

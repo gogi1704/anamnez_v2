@@ -68,6 +68,26 @@ TEST_CATALOG = [
 ]
 
 
+# Stable catalog IDs keep these relationships valid even when an administrator
+# changes the user-facing names, descriptions, or prices.
+EXAMINATION_UPGRADE_PAIRS = {
+    "fatigue_basic": "fatigue_extended",
+    "weight_basic": "weight_extended",
+    "liver_basic": "liver_extended",
+}
+
+
+def normalize_examination_selection(selected_ids) -> list[str]:
+    """Make extended complexes replace their corresponding basic complexes."""
+    selected = list(dict.fromkeys(str(item) for item in (selected_ids or [])))
+    selected_set = set(selected)
+    blocked_basics = {
+        basic_id for basic_id, extended_id in EXAMINATION_UPGRADE_PAIRS.items()
+        if extended_id in selected_set
+    }
+    return [item_id for item_id in selected if item_id not in blocked_basics]
+
+
 def recommend_test_ids(profile: dict) -> list[str]:
     result: list[str] = []
     height = profile.get("height_cm") or 0
@@ -91,6 +111,7 @@ def public_onboarding(
     available_ids = {item["id"] for item in catalog}
     return {
         **state,
+        "selected_tests": normalize_examination_selection(state.get("selected_tests", [])),
         "profile": profile,
         "tests": catalog,
         "recommended_test_ids": [

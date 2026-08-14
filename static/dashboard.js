@@ -613,7 +613,7 @@ const analyticsEventNames = {
   registration_completed:'Регистрация завершена', appearance_completed:'Размер текста выбран',
   questionnaire_started:'Вход в анкету', questionnaire_completed:'Выход из анкеты',
   examinations_offer_viewed:'Предложение обследований', examinations_opened:'Список обследований открыт',
-  examinations_selection_completed:'Выбор обследований завершён', onboarding_completed:'Старт завершён',
+  examinations_selection_completed:'Выбор обследований завершён', examination_selection_confirmed:'Обследование подтверждено', onboarding_completed:'Старт завершён',
   capabilities_viewed:'Возможности показаны', chat_opened:'Чат открыт', first_message_sent:'Первое сообщение',
   human_requested:'Запрошен человек', api_error:'Ошибка API', javascript_error:'Ошибка браузера',
 };
@@ -681,6 +681,45 @@ function renderAnalyticsFunnel(items = []) {
   }
 }
 
+function renderExaminationAnalytics(items = [], summary = {}) {
+  const root = $('#analyticsExaminations');
+  const summaryNode = $('#analyticsExaminationsSummary');
+  root.replaceChildren();
+  summaryNode.textContent = [
+    `${Number(summary.users_with_selection || 0).toLocaleString('ru-RU')} пользователей выбрали`,
+    `${Number(summary.selected_items || 0).toLocaleString('ru-RU')} позиций`,
+  ].join(' · ');
+  if (!items.length) {
+    const empty = document.createElement('p');
+    empty.className = 'form-error';
+    empty.textContent = 'Пока нет подтверждённых выборов обследований за этот период';
+    root.append(empty);
+    return;
+  }
+  const max = Math.max(1, ...items.map(item => Number(item.users || 0)));
+  for (const item of items) {
+    const row = document.createElement('div');
+    row.className = 'examination-popularity-row';
+    const heading = document.createElement('div');
+    heading.className = 'examination-popularity-heading';
+    const label = document.createElement('strong');
+    label.textContent = item.label || item.exam_id || 'Обследование';
+    const count = document.createElement('b');
+    count.textContent = `${Number(item.users || 0).toLocaleString('ru-RU')} чел.`;
+    heading.append(label, count);
+    const track = document.createElement('div');
+    track.className = 'examination-popularity-track';
+    const bar = document.createElement('i');
+    bar.style.width = `${Number(item.users || 0) / max * 100}%`;
+    track.append(bar);
+    const details = document.createElement('div');
+    details.className = 'examination-popularity-details';
+    details.textContent = `${Number(item.percent_of_selectors || 0).toLocaleString('ru-RU')}% среди выбравших обследования · ${Number(item.percent_of_completed || 0).toLocaleString('ru-RU')}% среди завершивших этап`;
+    row.append(heading, track, details);
+    root.append(row);
+  }
+}
+
 function renderAnalytics(data) {
   latestAnalyticsData = data;
   const summary = $('#analyticsSummary');
@@ -712,6 +751,7 @@ function renderAnalytics(data) {
   renderDistribution('#analyticsDevices',data.devices || [],'label','users',deviceNames);
   renderDistribution('#analyticsRegistrations',data.registrations || [],'label','users',registrationNames);
   renderDistribution('#analyticsSources',data.sources || [],'label','users');
+  renderExaminationAnalytics(data.examinations || [], data.examination_summary || {});
 
   const questions = $('#analyticsQuestionsChart'); questions.replaceChildren();
   if (!(data.questions || []).length) {

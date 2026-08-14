@@ -16,8 +16,9 @@ from . import analytics, database as db
 from .config import BASE_DIR, settings
 from .llm import LLMNotConfigured
 from .lab_results import LabResultsUnavailable, lookup_lab_results
+from . import yookassa
 from .orchestrator import orchestrator
-from .onboarding import public_onboarding
+from .onboarding import normalize_examination_selection, public_onboarding
 from .prompts import public_agents
 
 
@@ -85,6 +86,10 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
             counter_id = settings.yandex_metrika_counter_id
             return self._json(200, {
                 "yandex_metrika_counter_id": counter_id if counter_id.isdigit() else "",
+                "online_payments_enabled": bool(
+                    settings.online_payments_enabled and yookassa.configured()
+                ),
+                "payment_receipt_email_required": bool(settings.yookassa_receipts_enabled),
             })
         if path == "/api/bot/manager-notifications":
             if not bot_token_valid(self.headers.get("Authorization", "")):
@@ -245,6 +250,20 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
             return self._json(200, public_onboarding(
                 db.get_onboarding(), db.get_profile(), db.list_examinations(),
             ))
+        if path.startswith("/api/payments/"):
+            order_id = path.removeprefix("/api/payments/").strip("/")
+            order = db.payment_order_private(order_id)
+            if not order:
+                return self._json(404, {"detail": "Заказ не найден"})
+            try:
+                if order.get("provider_payment_id") and order.get("status") not in {"succeeded", "canceled"}:
+                    verified = yookassa.get_payment(order["provider_payment_id"])
+                    order = db.apply_yookassa_status(order_id, verified)
+                else:
+                    order = db.public_payment_order(order_id)
+                return self._json(200, {"order": order})
+            except (ValueError, yookassa.YooKassaUnavailable) as exc:
+                return self._json(502, {"detail": str(exc)})
         if path.startswith("/api/handoff-preview/"):
             conversation_id = path.removeprefix("/api/handoff-preview/")
             item = db.get_conversation(conversation_id)
@@ -264,6 +283,8 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
             })
         if path == "/api/conversations":
             return self._json(200, db.list_conversations())
+        if path == "/api/conversations/unread":
+            return self._json(200, {"unread_counts": db.conversation_unread_counts()})
         if path.startswith("/api/conversations/") and path.endswith("/updates"):
             conversation_id = path.removeprefix("/api/conversations/").removesuffix("/updates").strip("/")
             item = db.get_conversation(conversation_id)
@@ -281,6 +302,7 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                 "human_ticket_id": item.get("human_ticket_id"),
                 "human_channel": item.get("human_channel"),
                 "messages": db.list_messages_after(conversation_id, after_id),
+                "unread_counts": db.conversation_unread_counts(),
             })
         if path.startswith("/api/conversations/"):
             conversation_id = path.removeprefix("/api/conversations/")
@@ -292,6 +314,28 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         path = urlparse(self.path).path
+        if path == "/api/payments/yookassa/webhook":
+            try:
+                payload = self._read_json(max_bytes=128_000)
+                event = str(payload.get("event", ""))
+                notification = payload.get("object")
+                if event not in {"payment.succeeded", "payment.canceled", "payment.waiting_for_capture"}:
+                    return self._json(200, {"status": "ignored"})
+                if not isinstance(notification, dict):
+                    raise ValueError("Некорректное уведомление ЮKassa")
+                provider_id = str(notification.get("id", ""))
+                order = db.payment_order_by_provider_id(provider_id)
+                if not order:
+                    return self._json(200, {"status": "unknown_payment"})
+                # The webhook body is never trusted on its own: re-read the payment
+                # from YooKassa with server credentials before changing local state.
+                verified = yookassa.get_payment(provider_id)
+                updated = db.apply_yookassa_status(order["id"], verified)
+                return self._json(200, {"status": updated["status"]})
+            except (ValueError, TypeError, json.JSONDecodeError, UnicodeDecodeError) as exc:
+                return self._json(400, {"detail": str(exc)})
+            except yookassa.YooKassaUnavailable as exc:
+                return self._json(503, {"detail": str(exc)})
         if path == "/api/bot/manager-bind":
             if not bot_token_valid(self.headers.get("Authorization", "")):
                 return self._json(401, {"detail": "Неверные данные интеграции"})
@@ -514,6 +558,45 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                     return self._json(422, {"detail": str(exc)})
             return self._json(404, {"detail": "Маршрут панели менеджера не найден"})
         self._ensure_user_context()
+        if path == "/api/payments/yookassa/create":
+            order = None
+            try:
+                payload = self._read_json()
+                if not settings.online_payments_enabled:
+                    raise yookassa.YooKassaUnavailable(
+                        "Онлайн-оплата временно недоступна"
+                    )
+                if not yookassa.configured():
+                    raise yookassa.YooKassaUnavailable("Онлайн-оплата пока не настроена")
+                state = db.get_onboarding()
+                if state["status"] != "payment" or not state["selected_tests"]:
+                    raise ValueError("Сначала выберите дополнительные обследования")
+                order = db.create_payment_order()
+                private_order = db.payment_order_private(order["id"])
+                if private_order.get("provider_payment_id") and private_order.get("confirmation_url"):
+                    return self._json(200, {"order": db.public_payment_order(order["id"])})
+                return_to_chat = payload.get("return_to_chat") is True
+                return_url = (
+                    f"{settings.public_base_url}/?payment_return={quote(order['id'])}"
+                    f"{'&return_to_chat=1' if return_to_chat else ''}"
+                )
+                payment = yookassa.create_payment(
+                    private_order, return_url, str(payload.get("receipt_email", "")),
+                )
+                result = db.attach_yookassa_payment(order["id"], payment)
+                self._track_analytics("payment_created", {
+                    "provider": "yookassa", "amount_kopecks": private_order["amount_kopecks"],
+                    "selected_count": len(private_order["items"]),
+                })
+                return self._json(201, {"order": result})
+            except (ValueError, TypeError, json.JSONDecodeError, UnicodeDecodeError) as exc:
+                if order:
+                    db.mark_payment_creation_failed(order["id"], str(exc))
+                return self._json(422, {"detail": str(exc)})
+            except yookassa.YooKassaUnavailable as exc:
+                # Keep the same idempotence key after an uncertain network/API
+                # result. A retry cannot accidentally create a second charge.
+                return self._json(503, {"detail": str(exc)})
         if path == "/api/analytics/events":
             try:
                 payload = self._read_json(max_bytes=64_000)
@@ -679,7 +762,7 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
             try:
                 payload = self._read_json()
                 allowed = {item["id"] for item in db.list_examinations()}
-                selected = list(dict.fromkeys(str(item) for item in payload.get("selected_tests", [])))
+                selected = normalize_examination_selection(payload.get("selected_tests", []))
                 if any(item not in allowed for item in selected):
                     raise ValueError("Выбран неизвестный набор обследований")
                 state = db.save_onboarding(
@@ -689,9 +772,19 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                 )
                 examination_items = db.list_examinations()
                 total_price = sum(int(item.get("price", 0)) for item in examination_items if item["id"] in selected)
+                selection_id = f"selection-{secrets.token_hex(12)}"
                 self._track_analytics("examinations_selection_completed", {
                     "selected_count": len(selected), "total_price": total_price,
+                    "selection_id": selection_id,
                 })
+                selected_set = set(selected)
+                for item in examination_items:
+                    if item["id"] in selected_set:
+                        self._track_analytics("examination_selection_confirmed", {
+                            "selection_id": selection_id,
+                            "exam_id": item["id"],
+                            "exam_name": item.get("name") or item["id"],
+                        })
                 if not selected:
                     self._track_analytics("examinations_skipped")
                     self._track_analytics("onboarding_completed", {"result": "examinations_skipped"})
@@ -744,6 +837,12 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                 return self._set_human_preference(self._read_json())
             except (json.JSONDecodeError, UnicodeDecodeError):
                 return self._json(400, {"detail": "Некорректный JSON"})
+        if path.startswith("/api/conversations/") and path.endswith("/read"):
+            conversation_id = path.removeprefix("/api/conversations/").removesuffix("/read").strip("/")
+            result = db.mark_conversation_read(conversation_id)
+            if not result:
+                return self._json(404, {"detail": "Диалог не найден"})
+            return self._json(200, {**result, "unread_counts": db.conversation_unread_counts()})
         if path != "/api/chat":
             return self._json(404, {"detail": "Маршрут не найден"})
         if db.get_onboarding()["status"] != "complete":
@@ -763,7 +862,16 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
             self._track_analytics("message_sent")
             if is_first_message:
                 self._track_analytics("first_message_sent")
-            if conversation and not bool(conversation.get("ai_enabled", 1)):
+            handoff_choice = bool(
+                conversation
+                and conversation.get("human_status") == "pending"
+                and not conversation.get("human_channel")
+                and (
+                    orchestrator._wants_human_call(message)
+                    or orchestrator._wants_human_chat(message)
+                )
+            )
+            if conversation and not bool(conversation.get("ai_enabled", 1)) and not handoff_choice:
                 user_message, updated = db.add_user_message_waiting_for_manager(
                     conversation_id, message, attachments,
                 )
@@ -967,15 +1075,16 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
         self._track_analytics("human_channel_selected", {"channel": channel})
         if channel == "chat":
             text = (
-                "Хорошо, оставляю обращение в формате чата. Специалист получит историю диалога и сможет "
-                "продолжить с этого места после подключения. Пока можете писать сюда — ИИ останется на связи."
+                "Обращение передано менеджеру в формате чата. ИИ в этом диалоге приостановлен. "
+                "Пишите сюда — менеджер увидит сообщения и ответит в этой переписке. "
+                "Пока ожидаете ответа, для общения с ИИ можно открыть новый диалог."
             )
         else:
             masked_phone = f"+7 ••• •••-{phone[-4:-2]}-{phone[-2:]}"
             text = (
-                f"Хорошо, запрос на созвон принят. Контактный номер {masked_phone} сохранён и будет передан специалисту "
-                "вместе со сводкой. Сейчас это демонстрационный сценарий: звонок автоматически не создаётся. "
-                "Пока можете продолжить диалог с ИИ."
+                f"Запрос на созвон принят. Контактный номер {masked_phone} сохранён и передан менеджеру вместе со сводкой. "
+                "ИИ в этом диалоге приостановлен: новые сообщения здесь получает менеджер. "
+                "Включить ИИ в этом диалоге снова сможет менеджер. Пока ожидаете звонка, с ИИ можно общаться в новом диалоге."
             )
         message = db.add_message(
             conversation_id, "assistant", text, "manager",
@@ -986,6 +1095,7 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
             "ticket_id": conversation["human_ticket_id"],
             "channel": channel,
             "human_status": "pending",
+            "ai_enabled": False,
             "masked_phone": f"+7 ••• •••-{phone[-4:-2]}-{phone[-2:]}" if phone else None,
             "assistant_message": message,
         })
@@ -1336,7 +1446,7 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
             else "'none'"
         )
         metrika_frames = (
-            " child-src blob: https://mc.yandex.ru https://mc.yandex.com "
+            " child-src 'self' blob: https://mc.yandex.ru https://mc.yandex.com "
             "https://mc.webvisor.com https://mc.webvisor.org; "
             "frame-src blob: https://mc.yandex.ru https://mc.yandex.com "
             "https://mc.webvisor.com https://mc.webvisor.org;"
@@ -1348,7 +1458,8 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
             "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
             "font-src 'self' https://fonts.gstatic.com data:; "
             f"img-src 'self' data: blob:{metrika_sources}; connect-src 'self'{metrika_sources};"
-            f"{metrika_frames} object-src 'none'; base-uri 'self'; form-action 'self'; "
+            f"{metrika_frames} worker-src 'self' blob:; object-src 'none'; "
+            "base-uri 'self'; form-action 'self'; "
             f"frame-ancestors {metrika_frame_ancestors}",
         )
 

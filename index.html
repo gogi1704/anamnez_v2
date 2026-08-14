@@ -15,7 +15,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/static/styles.css?v=20260812-metrika-maps-frame">
+  <link rel="stylesheet" href="/static/styles.css?v=20260814-release-fixes">
 </head>
 <body>
   <main class="welcome-screen hidden" id="welcomeScreen" aria-live="polite">
@@ -112,6 +112,9 @@
 
     <main class="chat-column">
       <header class="chat-header">
+        <button class="mobile-header-dialogs" id="mobileHeaderDialogsButton" type="button" aria-label="Открыть диалоги, новых сообщений нет">
+          <span aria-hidden="true">≡</span><small>Диалоги</small><b class="hidden" id="mobileDialogsUnread">0</b>
+        </button>
         <div class="active-avatar" id="headerAvatar">МН</div>
         <div class="chat-title">
           <div><strong id="headerName">Мария</strong><span class="role" id="headerRole">ИИ-менеджер</span></div>
@@ -222,33 +225,33 @@
     <div class="modal">
       <button class="modal-close" id="modalClose" aria-label="Закрыть">×</button>
       <div class="modal-icon">♙</div>
-      <h2 id="humanTitle">Как продолжить со специалистом?</h2>
-      <p>Контекст разговора подготовлен, поэтому не придётся всё рассказывать заново.</p>
+      <h2 id="humanTitle">Как связаться с менеджером?</h2>
+      <p>Контекст разговора уже подготовлен. ИИ в этом диалоге приостановлен, чтобы новые сообщения ждали ответа менеджера.</p>
       <div class="handoff-review">
-        <strong>Проверьте обращение перед отправкой</strong>
-        <p>Если что-то указано неточно, исправьте сведения — специалист получит обновлённую версию.</p>
+        <strong>Проверьте сведения обращения</strong>
+        <p>Если что-то указано неточно, исправьте сведения — менеджер увидит обновлённую версию.</p>
         <div class="handoff-preview" id="handoffPreview"><span>Подготавливаю сводку…</span></div>
       </div>
       <div class="ticket"><span>Номер обращения</span><strong id="ticketNumber">H-000000</strong></div>
       <div class="human-options" aria-label="Способ связи">
         <button class="human-option" id="humanChatButton">
           <span class="human-option-icon" aria-hidden="true">⌨</span>
-          <span><strong>Чат со специалистом</strong><small>Продолжить эту переписку</small></span>
+          <span><strong>Чат с менеджером</strong><small>Менеджер ответит в этой переписке</small></span>
         </button>
         <button class="human-option" id="humanCallButton">
           <span class="human-option-icon" aria-hidden="true">☎</span>
-          <span><strong>Созвон</strong><small>Выбрать звонок как следующий шаг</small></span>
+          <span><strong>Созвон</strong><small>Оставить номер для звонка менеджера</small></span>
         </button>
       </div>
       <div class="call-phone-step hidden" id="callPhoneStep">
         <button class="call-phone-back" id="callPhoneBack" type="button">← Выбрать другой способ</button>
         <strong>На какой номер позвонить?</strong>
-        <p>Укажите российский номер. Мы сохраним его в едином формате и передадим только вместе с обращением.</p>
+        <p>Укажите российский номер. Он будет передан менеджеру только вместе с этим обращением.</p>
         <label class="field-label">Номер телефона<input id="callPhoneInput" type="tel" inputmode="tel" autocomplete="tel" maxlength="30" placeholder="+7 999 123-45-67"></label>
         <span class="call-phone-error hidden" id="callPhoneError" role="alert">Введите российский номер в формате +7 999 123-45-67</span>
         <button class="primary-button" id="confirmCallButton" type="button" disabled>Запросить созвон</button>
       </div>
-      <button class="secondary-button" id="modalOkay">Пока продолжить с ИИ</button>
+      <button class="secondary-button" id="modalOkay">Открыть новый диалог с ИИ</button>
     </div>
   </div>
 
@@ -480,8 +483,8 @@
     </div>
   </div>
 
-  <script src="/static/metrika.js?v=20260812-metrika-maps-frame"></script>
-  <script src="/static/agents.js?v=20260812-metrika-maps-frame"></script>
-  <script src="/static/app.js?v=20260812-metrika-maps-frame"></script>
+  <script src="/static/metrika.js?v=20260814-release-fixes"></script>
+  <script src="/static/agents.js?v=20260814-release-fixes"></script>
+  <script src="/static/app.js?v=20260814-release-fixes"></script>
 </body>
 </html>

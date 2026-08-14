@@ -112,6 +112,62 @@ class AnalyticsTests(unittest.TestCase):
         self.assertEqual(second["recent_pagination"], {"page": 2, "limit": 25, "total": 31, "pages": 2})
         self.assertEqual(beyond["recent_pagination"]["page"], 2)
 
+    def test_examination_popularity_uses_each_users_latest_confirmed_selection(self):
+        analytics.record_events("CHEL-EXAM-1", [
+            {
+                "event_id": "exam-one-complete-old", "session_id": "exam-session-01",
+                "event_name": "examinations_selection_completed",
+                "properties": {"selection_id": "selection-old", "selected_count": 2},
+            },
+            {
+                "event_id": "exam-one-a-old", "session_id": "exam-session-01",
+                "event_name": "examination_selection_confirmed",
+                "properties": {"selection_id": "selection-old", "exam_id": "exam-a", "exam_name": "Обследование А"},
+            },
+            {
+                "event_id": "exam-one-b-old", "session_id": "exam-session-01",
+                "event_name": "examination_selection_confirmed",
+                "properties": {"selection_id": "selection-old", "exam_id": "exam-b", "exam_name": "Обследование Б"},
+            },
+            {
+                "event_id": "exam-one-complete-new", "session_id": "exam-session-01",
+                "event_name": "examinations_selection_completed",
+                "properties": {"selection_id": "selection-new", "selected_count": 1},
+            },
+            {
+                "event_id": "exam-one-b-new", "session_id": "exam-session-01",
+                "event_name": "examination_selection_confirmed",
+                "properties": {"selection_id": "selection-new", "exam_id": "exam-b", "exam_name": "Обследование Б"},
+            },
+        ])
+        analytics.record_events("CHEL-EXAM-2", [
+            {
+                "event_id": "exam-two-complete", "session_id": "exam-session-02",
+                "event_name": "examinations_selection_completed",
+                "properties": {"selection_id": "selection-two", "selected_count": 1},
+            },
+            {
+                "event_id": "exam-two-a", "session_id": "exam-session-02",
+                "event_name": "examination_selection_confirmed",
+                "properties": {"selection_id": "selection-two", "exam_id": "exam-a", "exam_name": "Обследование А"},
+            },
+        ])
+        analytics.record_events("CHEL-EXAM-3", [{
+            "event_id": "exam-three-skipped", "session_id": "exam-session-03",
+            "event_name": "examinations_selection_completed",
+            "properties": {"selection_id": "selection-three", "selected_count": 0},
+        }])
+
+        report = analytics.admin_report("30")
+        self.assertEqual(report["examination_summary"], {
+            "completed_users": 3, "users_with_selection": 2, "selected_items": 2,
+        })
+        examinations = {item["exam_id"]: item for item in report["examinations"]}
+        self.assertEqual(examinations["exam-a"]["users"], 1)
+        self.assertEqual(examinations["exam-b"]["users"], 1)
+        self.assertEqual(examinations["exam-a"]["percent_of_selectors"], 50.0)
+        self.assertEqual(examinations["exam-a"]["percent_of_completed"], 33.3)
+
     def test_funnel_stages_include_expandable_action_breakdowns(self):
         first_events = [
             {"event_id": "detail-max-register", "session_id": "detail-session-01", "event_name": "registration_completed", "properties": {"method": "max"}},

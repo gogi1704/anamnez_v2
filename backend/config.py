@@ -41,6 +41,18 @@ class Settings:
     analytics_enabled: bool = env_bool("ANALYTICS_ENABLED", True)
     analytics_retention_days: int = int(os.getenv("ANALYTICS_RETENTION_DAYS", "90"))
     yandex_metrika_counter_id: str = os.getenv("YANDEX_METRIKA_COUNTER_ID", "").strip()
+    online_payments_enabled: bool = env_bool("ONLINE_PAYMENTS_ENABLED", False)
+    yookassa_shop_id: str = os.getenv("YOOKASSA_SHOP_ID", "").strip()
+    yookassa_secret_key: str = os.getenv("YOOKASSA_SECRET_KEY", "").strip()
+    yookassa_api_url: str = os.getenv(
+        "YOOKASSA_API_URL", "https://api.yookassa.ru/v3",
+    ).strip().rstrip("/")
+    yookassa_timeout_seconds: int = int(os.getenv("YOOKASSA_TIMEOUT_SECONDS", "20"))
+    yookassa_receipts_enabled: bool = env_bool("YOOKASSA_RECEIPTS_ENABLED", False)
+    yookassa_vat_code: int = int(os.getenv("YOOKASSA_VAT_CODE", "1"))
+    yookassa_payment_mode: str = os.getenv(
+        "YOOKASSA_PAYMENT_MODE", "full_prepayment",
+    ).strip()
     log_path: Path = Path(os.getenv("LOG_PATH", BASE_DIR / "server-error.log"))
     max_history_messages: int = int(os.getenv("MAX_HISTORY_MESSAGES", "30"))
     host: str = os.getenv("HOST", "127.0.0.1")

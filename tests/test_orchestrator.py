@@ -19,7 +19,10 @@ from backend.lab_results import (  # noqa: E402
 from backend.llm import LLMService  # noqa: E402
 from backend.main import ConsiliumHandler, admin_token_valid  # noqa: E402
 from backend.orchestrator import ConversationOrchestrator  # noqa: E402
-from backend.onboarding import TEST_CATALOG, public_onboarding, recommend_test_ids  # noqa: E402
+from backend.onboarding import (  # noqa: E402
+    EXAMINATION_UPGRADE_PAIRS, TEST_CATALOG, normalize_examination_selection,
+    public_onboarding, recommend_test_ids,
+)
 from backend.prompts import ORCHESTRATOR_PROMPT, PROFILES  # noqa: E402
 from backend.schemas import AgentResult, RouteDecision, normalize_context  # noqa: E402
 
@@ -172,27 +175,26 @@ class OrchestratorTests(unittest.TestCase):
         self.assertEqual(fake.route_calls[1]["conversation"]["active_agent"], "neurologist")
         self.assertGreaterEqual(len(fake.route_calls[1]["history"]), 3)
 
-    def test_human_ticket_stays_pending_while_ai_continues(self):
+    def test_human_ticket_immediately_pauses_ai_in_current_dialogue(self):
         service = ConversationOrchestrator(FakeLLM())
         result = service.process(None, "Позовите живого оператора")
         ticket = result.human_ticket_id
         self.assertTrue(result.human_escalation)
         self.assertRegex(ticket, r"^H-[A-F0-9]{6}$")
 
-        continued = service.process(result.conversation_id, "А пока помоги разобраться с головной болью")
         saved = db.get_conversation(result.conversation_id)
-        self.assertEqual(continued.agent, "neurologist")
-        self.assertFalse(continued.human_escalation)
-        self.assertEqual(saved["status"], "active")
+        self.assertEqual(saved["status"], "waiting_human")
         self.assertEqual(saved["human_status"], "pending")
         self.assertEqual(saved["human_ticket_id"], ticket)
+        self.assertFalse(saved["ai_enabled"])
 
     def test_repeated_human_request_reuses_ticket(self):
         service = ConversationOrchestrator(FakeLLM())
         first = service.process(None, "Позови человека")
         repeated = service.process(first.conversation_id, "Подключи оператора")
         self.assertEqual(first.human_ticket_id, repeated.human_ticket_id)
-        self.assertIn("уже подготовлено", repeated.assistant_message["content"])
+        self.assertIn("подготовлено", repeated.assistant_message["content"])
+        self.assertIn("ИИ в этом диалоге приостановлен", repeated.assistant_message["content"])
 
     def test_closed_human_request_gets_new_ticket_when_requested_again(self):
         service = ConversationOrchestrator(FakeLLM())
@@ -205,7 +207,7 @@ class OrchestratorTests(unittest.TestCase):
         self.assertNotEqual(first.human_ticket_id, repeated.human_ticket_id)
         self.assertIsNone(repeated.human_channel)
 
-    def test_human_channel_is_persisted_without_closing_ai_dialogue(self):
+    def test_human_channel_is_persisted_and_ai_stays_paused(self):
         service = ConversationOrchestrator(FakeLLM())
         result = service.process(None, "Позови человека")
         saved = db.set_human_channel(result.conversation_id, "chat")
@@ -213,11 +215,14 @@ class OrchestratorTests(unittest.TestCase):
         self.assertEqual(saved["human_channel"], "chat")
         self.assertEqual(saved["human_status"], "pending")
         self.assertEqual(saved["status"], "waiting_human")
+        self.assertFalse(saved["ai_enabled"])
 
-        continued = service.process(result.conversation_id, "А пока ответь на мой вопрос")
-        after_continue = db.get_conversation(result.conversation_id)
-        self.assertFalse(continued.human_escalation)
-        self.assertEqual(after_continue["human_channel"], "chat")
+        queued, after_message = db.add_user_message_waiting_for_manager(
+            result.conversation_id, "А пока ответьте на мой вопрос"
+        )
+        self.assertTrue(queued["metadata"]["awaiting_manager"])
+        self.assertEqual(after_message["human_channel"], "chat")
+        self.assertFalse(after_message["ai_enabled"])
 
     def test_russian_phone_is_normalized_and_saved_for_call(self):
         self.assertEqual(
@@ -235,6 +240,7 @@ class OrchestratorTests(unittest.TestCase):
         saved = db.set_human_channel(result.conversation_id, "call", "+79991234567")
         self.assertEqual(saved["human_channel"], "call")
         self.assertEqual(saved["human_phone"], "+79991234567")
+        self.assertFalse(saved["ai_enabled"])
 
     def test_text_call_choice_opens_phone_prompt_for_pending_handoff(self):
         fake = FakeLLM()
@@ -259,7 +265,9 @@ class OrchestratorTests(unittest.TestCase):
 
         response = service.process(handoff.conversation_id, "Не хочу созвон, продолжим здесь")
 
-        self.assertNotEqual(response.action, "human_channel_prompt")
+        self.assertEqual(response.action, "human_preference")
+        self.assertEqual(response.human_channel, "chat")
+        self.assertFalse(db.get_conversation(handoff.conversation_id)["ai_enabled"])
 
     def test_critical_phrase_bypasses_ai_router(self):
         fake = FakeLLM()
@@ -307,7 +315,7 @@ class OrchestratorTests(unittest.TestCase):
         self.assertEqual(third.assistant_message["metadata"]["assessment_questions_total"], 5)
         self.assertTrue(fourth.human_escalation)
         self.assertEqual(fourth.agent, "manager")
-        self.assertIn("в чате со специалистом или созвоном", fourth.assistant_message["content"])
+        self.assertIn("чат с менеджером или созвон", fourth.assistant_message["content"])
 
     def test_medical_agent_can_offer_human_before_question_limit_when_context_is_sufficient(self):
         service = ConversationOrchestrator(EarlyHumanMedicalLLM())
@@ -316,7 +324,7 @@ class OrchestratorTests(unittest.TestCase):
 
         self.assertEqual(first.assistant_message["metadata"]["assessment_questions_asked"], 2)
         self.assertTrue(second.human_escalation)
-        self.assertIn("в чате со специалистом или созвоном", second.assistant_message["content"])
+        self.assertIn("чат с менеджером или созвон", second.assistant_message["content"])
 
     def test_human_reminder_has_two_blank_lines(self):
         text = "Да, я здесь. Обращение H-939398 уже передано человеку; ожидайте ответа специалиста."
@@ -819,6 +827,9 @@ class OrchestratorTests(unittest.TestCase):
         self.assertIn("/api/lab-results/interpret", script)
         self.assertIn(".lab-document-card", styles)
         self.assertIn(".lab-interpret-all", styles)
+        self.assertIn("function labInterpretationMarkup", script)
+        self.assertIn("lab-report-section", script)
+        self.assertIn(".message-row.lab-interpretation", styles)
 
     def test_layout_prevents_desktop_shell_and_focus_from_scrolling_outside_frame(self):
         project_root = Path(__file__).resolve().parents[1]
@@ -840,6 +851,8 @@ class OrchestratorTests(unittest.TestCase):
 
         self.assertIn("viewport-fit=cover", index)
         self.assertIn("interactive-widget=resizes-content", index)
+        self.assertIn('input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="file"])', styles)
+        self.assertIn("font-size:16px !important", styles)
         self.assertIn('id="mobileDialogsButton"', index)
         self.assertNotIn('id="sidebarDialogsTab"', index)
         self.assertNotIn('id="sidebarTeamTab"', index)
@@ -1305,6 +1318,7 @@ class OrchestratorTests(unittest.TestCase):
                 "medications": ["Назначенный препарат"], "allergies": ["Пыльца"],
                 "tube_number": "MED-777",
             })
+            db.save_onboarding(status="complete", selected_tests=["lipids"])
             db.add_body_symptom({
                 "region": "Грудь", "symptom_type": "Боль", "intensity": 4,
                 "notes": "После нагрузки",
@@ -1338,6 +1352,12 @@ class OrchestratorTests(unittest.TestCase):
             self.assertEqual(detail["symptoms"][0]["region"], "Грудь")
             self.assertEqual(detail["conversation"]["human_status"], "connected")
             self.assertFalse(detail["conversation"]["ai_enabled"])
+            expected_exam_name = next(
+                item["name"] for item in db.list_examinations() if item["id"] == "lipids"
+            )
+            self.assertEqual(
+                detail["onboarding"]["selected_test_names"], [expected_exam_name],
+            )
             self.assertTrue(any(
                 item["action"] == "ai_mode" for item in detail["manager_actions"]
             ))
@@ -1404,13 +1424,51 @@ class OrchestratorTests(unittest.TestCase):
         self.assertIn("$('#chatModeNewDialog').addEventListener('click', newConversation)", app)
         self.assertNotIn("Я правильно понял?", index)
         self.assertNotIn('id="insightDock"', index)
-        self.assertIn("Проверьте обращение перед отправкой", index)
+        self.assertIn("Проверьте сведения обращения", index)
         self.assertIn('id="editHandoffContext"', app)
         self.assertIn("returnToHumanAfterContextEdit", app)
         self.assertIn("/updates?after_id=", app)
         self.assertIn("Сообщение ожидает ответа менеджера", app)
         self.assertIn("playUserMessageSound()", app)
+        self.assertIn('id="mobileHeaderDialogsButton"', index)
+        self.assertIn('id="mobileDialogsUnread"', index)
+        self.assertIn("applyUnreadCounts", app)
+        self.assertIn("markConversationRead", app)
+        self.assertIn("/api/conversations/unread", app)
+        self.assertIn(".mobile-header-dialogs", styles)
+        self.assertIn(".conversation-row.unread", styles)
         self.assertIn("index.html dashboard.html manager.html", dockerfile)
+
+    def test_conversation_unread_counts_are_persisted_and_scoped(self):
+        db.ensure_user("chel_unread_test")
+        db.set_current_chel_id("chel_unread_test")
+        try:
+            conversation = db.create_conversation("Проверка непрочитанных")
+            self.assertEqual(db.conversation_unread_counts(), {})
+
+            db.add_message(conversation["id"], "assistant", "Первый ответ", "manager")
+            db.add_message(conversation["id"], "user", "Моё сообщение")
+            self.assertEqual(db.conversation_unread_counts(), {conversation["id"]: 1})
+
+            marked = db.mark_conversation_read(conversation["id"])
+            self.assertGreater(marked["last_read_message_id"], 0)
+            self.assertEqual(db.conversation_unread_counts(), {})
+
+            db.add_message(conversation["id"], "assistant", "Новый ответ", "manager")
+            db.add_message(conversation["id"], "assistant", "Ещё один ответ", "manager")
+            self.assertEqual(db.conversation_unread_counts(), {conversation["id"]: 2})
+
+            db.ensure_user("chel_unread_other")
+            db.set_current_chel_id("chel_unread_other")
+            self.assertIsNone(db.mark_conversation_read(conversation["id"]))
+            self.assertEqual(db.conversation_unread_counts(), {})
+        finally:
+            db.set_current_chel_id("chel_unread_test")
+            db.reset_current_user()
+            db.set_current_chel_id("chel_unread_other")
+            db.reset_current_user()
+            db.ensure_user("chel_test_default")
+            db.set_current_chel_id("chel_test_default")
 
     def test_chel_id_separates_profiles_conversations_memories_and_symptoms(self):
         first_id = "chel_test_first"
@@ -1668,10 +1726,10 @@ class OrchestratorTests(unittest.TestCase):
         self.assertIn("controllerchange", script)
         self.assertIn("url.pathname.startsWith('/api/')", worker)
         self.assertIn("url.pathname.startsWith('/auth/')", worker)
-        self.assertIn("consilium-shell-v36", worker)
+        self.assertIn("consilium-shell-v45", worker)
         self.assertIn("fetch(request)", worker)
-        self.assertIn("/static/app.js?v=20260812-metrika-maps-frame", index)
-        self.assertIn("/static/metrika.js?v=20260812-metrika-maps-frame", index)
+        self.assertIn("/static/app.js?v=20260814-release-fixes", index)
+        self.assertIn("/static/metrika.js?v=20260814-release-fixes", index)
         self.assertIn('id="welcomeScreen"', index)
         self.assertIn('id="welcomeNextButton"', index)
         self.assertIn("WELCOME_SEEN_KEY", script)
@@ -1680,10 +1738,13 @@ class OrchestratorTests(unittest.TestCase):
         self.assertIn("function renderExamCompletion()", script)
         self.assertIn('data-onboarding-action="install-after-exams"', script)
         self.assertIn('data-onboarding-action="later-after-exams"', script)
-        self.assertIn("['demo_paid','pay_at_exam'].includes(state.onboarding.payment_status)", script)
+        self.assertIn("['demo_paid','paid_online','pay_at_exam'].includes(state.onboarding.payment_status)", script)
         self.assertIn("Оплатить онлайн", script)
         self.assertIn("Оплатить на медосмотре", script)
+        self.assertIn("/api/payments/yookassa/create", script)
+        self.assertIn("if (!state.publicConfig.online_payments_enabled)", script)
         self.assertIn("Онлайн-оплата временно недоступна", script)
+        self.assertIn("handlePaymentReturn", script)
         self.assertIn("Когда он появится", script)
         self.assertLess(
             index.index('id="menuInstallAppButton"'),
@@ -1698,7 +1759,7 @@ class OrchestratorTests(unittest.TestCase):
         main = (project_root / "backend" / "main.py").read_text(encoding="utf-8")
         config = (project_root / "backend" / "config.py").read_text(encoding="utf-8")
 
-        self.assertIn('src="/static/metrika.js?v=20260812-metrika-maps-frame"', index)
+        self.assertIn('src="/static/metrika.js?v=20260814-release-fixes"', index)
         self.assertIn('YANDEX_METRIKA_COUNTER_ID', config)
         self.assertIn('path == "/api/public-config"', main)
         self.assertIn('"metrika.js"', main)
@@ -1719,6 +1780,8 @@ class OrchestratorTests(unittest.TestCase):
         self.assertIn("https://metrika.yandex.ru", main)
         self.assertIn("https://webvisor.com", main)
         self.assertIn("https://mc.webvisor.com", main)
+        self.assertIn("worker-src 'self' blob:", main)
+        self.assertIn("child-src 'self' blob:", main)
         self.assertIn("wss://mc.webvisor.com", main)
         self.assertIn("if not allow_metrika_frame:", main)
         self.assertIn('self.send_header("X-Frame-Options", "DENY")', main)
@@ -2013,6 +2076,112 @@ class OrchestratorTests(unittest.TestCase):
         self.assertEqual(len(TEST_CATALOG), 22)
         self.assertIn("fatigue_basic", recommend_test_ids(profile))
         self.assertIn("weight_basic", recommend_test_ids(profile))
+
+    def test_extended_examinations_replace_matching_basic_complexes(self):
+        self.assertEqual(EXAMINATION_UPGRADE_PAIRS, {
+            "fatigue_basic": "fatigue_extended",
+            "weight_basic": "weight_extended",
+            "liver_basic": "liver_extended",
+        })
+        self.assertEqual(
+            normalize_examination_selection([
+                "fatigue_basic", "lipids", "fatigue_extended", "iron",
+            ]),
+            ["lipids", "fatigue_extended", "iron"],
+        )
+        self.assertEqual(
+            normalize_examination_selection(["weight_basic", "liver_basic"]),
+            ["weight_basic", "liver_basic"],
+        )
+
+        payload = public_onboarding(
+            {"selected_tests": ["liver_basic", "liver_extended"]}, {}, TEST_CATALOG,
+        )
+        self.assertEqual(payload["selected_tests"], ["liver_extended"])
+
+        project_root = Path(__file__).resolve().parents[1]
+        script = (project_root / "static" / "app.js").read_text(encoding="utf-8")
+        styles = (project_root / "static" / "styles.css").read_text(encoding="utf-8")
+        self.assertIn("function selectExamination(id)", script)
+        self.assertIn("state.selectedTests.delete(basicId)", script)
+        self.assertIn("disabled-by-upgrade", script)
+        self.assertIn("Уже входит в", script)
+        self.assertIn("function renderExamSelection(scrollPosition = null)", script)
+        self.assertIn("examList:card.closest('.exam-list')?.scrollTop || 0", script)
+        self.assertIn("onboarding:$('#onboarding').scrollTop || 0", script)
+        self.assertIn("examList.scrollTop = scrollPosition.examList || 0", script)
+        self.assertIn("onboarding.scrollTop = scrollPosition.onboarding || 0", script)
+        self.assertIn(".exam-card.disabled-by-upgrade", styles)
+
+    def test_yookassa_order_freezes_server_prices_and_completes_only_after_verified_success(self):
+        chel_id = "chel_yookassa_payment_test"
+        db.ensure_user(chel_id)
+        try:
+            db.set_current_chel_id(chel_id)
+            db.save_onboarding(
+                status="payment", selected_tests=["fatigue_basic", "lipids"],
+                payment_status="pending",
+            )
+            order = db.create_payment_order()
+            private = db.payment_order_private(order["id"])
+            expected = sum(
+                item["price"] for item in db.list_examinations()
+                if item["id"] in {"fatigue_basic", "lipids"}
+            )
+            self.assertEqual(private["amount_kopecks"], expected * 100)
+            self.assertEqual(private["status"], "creating")
+
+            provider = {
+                "id": "2f3e4567-89ab-4cde-8012-3456789abcde",
+                "status": "pending", "paid": False, "test": True,
+                "amount": {"value": f"{expected:.2f}", "currency": "RUB"},
+                "metadata": {"order_id": order["id"]},
+                "confirmation": {"confirmation_url": "https://yoomoney.ru/pay/test"},
+            }
+            attached = db.attach_yookassa_payment(order["id"], provider)
+            self.assertEqual(attached["status"], "pending")
+            self.assertEqual(db.get_onboarding()["status"], "payment")
+
+            succeeded = {**provider, "status": "succeeded", "paid": True}
+            paid = db.apply_yookassa_status(order["id"], succeeded)
+            self.assertTrue(paid["paid"])
+            self.assertEqual(db.get_onboarding()["status"], "complete")
+            self.assertEqual(db.get_onboarding()["payment_status"], "paid_online")
+            repeated = db.apply_yookassa_status(order["id"], succeeded)
+            self.assertTrue(repeated["paid"])
+        finally:
+            db.set_current_chel_id(chel_id)
+            db.reset_current_user()
+            db.ensure_user("chel_test_default")
+            db.set_current_chel_id("chel_test_default")
+
+    def test_yookassa_rejects_tampered_amount(self):
+        chel_id = "chel_yookassa_tamper_test"
+        db.ensure_user(chel_id)
+        try:
+            db.set_current_chel_id(chel_id)
+            db.save_onboarding(
+                status="payment", selected_tests=["lipids"], payment_status="pending",
+            )
+            order = db.create_payment_order()
+            provider = {
+                "id": "3f3e4567-89ab-4cde-8012-3456789abcde",
+                "status": "pending", "paid": False, "test": True,
+                "confirmation": {"confirmation_url": "https://yoomoney.ru/pay/test"},
+            }
+            db.attach_yookassa_payment(order["id"], provider)
+            with self.assertRaisesRegex(ValueError, "Сумма"):
+                db.apply_yookassa_status(order["id"], {
+                    **provider, "status": "succeeded", "paid": True,
+                    "amount": {"value": "1.00", "currency": "RUB"},
+                    "metadata": {"order_id": order["id"]},
+                })
+            self.assertEqual(db.get_onboarding()["status"], "payment")
+        finally:
+            db.set_current_chel_id(chel_id)
+            db.reset_current_user()
+            db.ensure_user("chel_test_default")
+            db.set_current_chel_id("chel_test_default")
 
     def test_new_users_start_with_extra_large_font_and_keep_the_choice(self):
         chel_id = "chel_new_font_default"

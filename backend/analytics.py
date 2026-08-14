@@ -26,7 +26,7 @@ ALLOWED_EVENTS = {
     "questionnaire_completed", "not_medical_exam_selected", "examinations_offer_viewed",
     "examinations_opened", "examination_selected", "examination_deselected",
     "examinations_skip_clicked", "examinations_objection_viewed", "examinations_skip_recovered",
-    "examinations_skipped", "examinations_selection_completed", "payment_viewed",
+    "examinations_skipped", "examinations_selection_completed", "examination_selection_confirmed", "payment_viewed",
     "payment_method_selected", "payment_online_unavailable", "payment_completed",
     "onboarding_completed", "completion_viewed", "capabilities_viewed",
     "capabilities_closed", "install_offer_viewed", "install_clicked", "install_dismissed",
@@ -46,6 +46,7 @@ ALLOWED_PROPERTIES = {
     "response_ms", "screen", "previous_screen", "source", "campaign", "medium",
     "app_mode", "page_version", "connection_type", "conversation_count",
     "document_count", "cached", "reason", "font_size", "stage", "action",
+    "selection_id", "exam_name",
 }
 
 FUNNEL_BREAKDOWNS = {
@@ -473,7 +474,72 @@ def admin_report(
         operating_systems = grouped("e.operating_system")
         browsers = grouped("e.browser")
         sources = grouped("COALESCE(NULLIF(e.source,''),s.entry_source)")
-        examinations = grouped("json_extract(e.properties,'$.exam_id')", "examination_selected")
+        selection_extra = (" AND " if where else " WHERE ") + (
+            "e.event_name IN ('examinations_selection_completed','examination_selection_confirmed')"
+        )
+        selection_rows = conn.execute(
+            "SELECT e.rowid event_order, e.event_id, e.chel_id, e.event_name, e.received_at, e.properties" +
+            join + where + selection_extra + " ORDER BY e.received_at, e.rowid",
+            params,
+        ).fetchall()
+        parsed_selection_rows = []
+        latest_selections = {}
+        for row in selection_rows:
+            item = dict(row)
+            try:
+                item["properties"] = json.loads(item["properties"] or "{}")
+            except json.JSONDecodeError:
+                item["properties"] = {}
+            parsed_selection_rows.append(item)
+            if item["event_name"] != "examinations_selection_completed":
+                continue
+            selection_id = str(item["properties"].get("selection_id", "")).strip()
+            if not selection_id:
+                continue
+            latest_selections[item["chel_id"]] = item
+
+        selected_by_user = {chel_id: {} for chel_id in latest_selections}
+        for item in parsed_selection_rows:
+            if item["event_name"] != "examination_selection_confirmed":
+                continue
+            latest = latest_selections.get(item["chel_id"])
+            if not latest:
+                continue
+            properties = item["properties"]
+            if properties.get("selection_id") != latest["properties"].get("selection_id"):
+                continue
+            exam_id = str(properties.get("exam_id", "")).strip()
+            if not exam_id:
+                continue
+            selected_by_user[item["chel_id"]][exam_id] = (
+                str(properties.get("exam_name", "")).strip() or exam_id
+            )
+
+        completed_selection_users = len(latest_selections)
+        users_with_selection = sum(bool(items) for items in selected_by_user.values())
+        examination_counts = {}
+        for items in selected_by_user.values():
+            for exam_id, exam_name in items.items():
+                aggregate = examination_counts.setdefault(
+                    exam_id, {"exam_id": exam_id, "label": exam_name, "users": 0},
+                )
+                aggregate["label"] = exam_name
+                aggregate["users"] += 1
+        examinations = []
+        for item in examination_counts.values():
+            item["percent_of_selectors"] = round(
+                item["users"] / users_with_selection * 100, 1,
+            ) if users_with_selection else 0.0
+            item["percent_of_completed"] = round(
+                item["users"] / completed_selection_users * 100, 1,
+            ) if completed_selection_users else 0.0
+            examinations.append(item)
+        examinations.sort(key=lambda item: (-item["users"], item["label"].lower()))
+        examination_summary = {
+            "completed_users": completed_selection_users,
+            "users_with_selection": users_with_selection,
+            "selected_items": sum(item["users"] for item in examinations),
+        }
     return {
         "generated_at": _now(), "period": period,
         "summary": {"users": registered_users, "visitors": total_users, "sessions": total_sessions, "events": total_events},
@@ -481,6 +547,7 @@ def admin_report(
         "registrations": registrations, "devices": devices,
         "operating_systems": operating_systems, "browsers": browsers,
         "sources": sources, "examinations": examinations,
+        "examination_summary": examination_summary,
         "errors": errors, "recent": recent,
         "recent_pagination": {
             "page": recent_page, "limit": recent_limit, "total": recent_total,
