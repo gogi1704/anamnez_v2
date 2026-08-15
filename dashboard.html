@@ -9,7 +9,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/static/dashboard.css?v=20260814-admin-429">
+  <link rel="stylesheet" href="/static/dashboard.css?v=20260815-manager-attribution">
 </head>
 <body>
   <main class="dashboard-shell">
@@ -70,6 +70,20 @@
           <article class="panel"><div class="panel-heading"><div><p class="eyebrow">Вход</p><h2>Способы регистрации</h2></div></div><div class="distribution-list" id="analyticsRegistrations"></div></article>
           <article class="panel"><div class="panel-heading"><div><p class="eyebrow">Привлечение</p><h2>Источники</h2></div></div><div class="distribution-list" id="analyticsSources"></div></article>
         </section>
+        <article class="panel table-panel manager-attribution-panel">
+          <div class="panel-heading">
+            <div>
+              <p class="eyebrow">Атрибуция пользователей</p>
+              <h2>Статистика по менеджерам</h2>
+              <p>Метка закрепляется за пользователем при первом входе по ссылке менеджера и в дальнейшем не меняется.</p>
+            </div>
+            <span class="table-count" id="managerAttributionSummary"></span>
+          </div>
+          <div class="table-scroll"><table>
+            <thead><tr><th>Менеджер</th><th>Пришло пользователей</th><th>Доля от всех</th><th>Выбрали обследования</th><th>Конверсия в выбор</th></tr></thead>
+            <tbody id="managerAttributionTable"></tbody>
+          </table></div>
+        </article>
         <article class="panel examination-analytics-panel">
           <div class="panel-heading">
             <div>
@@ -276,11 +290,11 @@
           </div>
         </div>
         <div class="table-tools users-table-tools">
-          <label class="table-search">Поиск пользователей<input id="usersSearch" type="search" placeholder="chel_id, статус, Telegram или MAX"></label>
+          <label class="table-search">Поиск пользователей<input id="usersSearch" type="search" placeholder="chel_id, менеджер, статус, Telegram или MAX"></label>
           <button class="table-clear" id="usersClear" type="button">Сбросить фильтры</button>
         </div>
         <div class="table-scroll"><table>
-          <thead><tr><th>chel_id</th><th>Первый вход</th><th>Последняя активность</th><th>Анкета</th><th>Мессенджеры</th><th>Диалоги</th><th>Сообщения</th></tr></thead>
+          <thead><tr><th>chel_id</th><th>От менеджера</th><th>Первый вход</th><th>Последняя активность</th><th>Анкета</th><th>Мессенджеры</th><th>Диалоги</th><th>Сообщения</th></tr></thead>
           <tbody id="usersTable"></tbody>
         </table></div>
         <div class="table-pagination"><button id="usersPrev" type="button">← Назад</button><span id="usersPage"></span><button id="usersNext" type="button">Дальше →</button></div>
@@ -337,6 +351,6 @@
       <p class="dashboard-error hidden" id="dashboardError" role="alert"></p>
     </div>
   </main>
-  <script src="/static/dashboard.js?v=20260814-admin-429" defer></script>
+  <script src="/static/dashboard.js?v=20260815-manager-attribution" defer></script>
 </body>
 </html>

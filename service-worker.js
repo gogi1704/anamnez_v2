@@ -1,5 +1,5 @@
-const CACHE_NAME = 'consilium-shell-v45';
-const ASSET_VERSION = '20260814-release-fixes';
+const CACHE_NAME = 'consilium-shell-v46';
+const ASSET_VERSION = '20260815-manager-attribution';
 const APP_SHELL = [
   '/',
   '/manifest.webmanifest',

@@ -156,14 +156,17 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
             query = parse_qs(parsed.query)
             if path == "/api/admin/analytics":
                 try:
-                    return self._json(200, analytics.admin_report(
-                        query.get("period", ["30"])[0],
+                    period = query.get("period", ["30"])[0]
+                    report = analytics.admin_report(
+                        period,
                         query.get("device", [""])[0],
                         query.get("method", [""])[0],
                         query.get("source", [""])[0],
                         int(query.get("recent_page", ["1"])[0]),
                         int(query.get("recent_limit", ["25"])[0]),
-                    ))
+                    )
+                    report["manager_attribution"] = db.admin_manager_attribution(period)
+                    return self._json(200, report)
                 except (ValueError, TypeError) as exc:
                     return self._json(422, {"detail": str(exc)})
             if path == "/api/admin/ai-costs":
@@ -954,6 +957,7 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                 provider_user_id=payload.get("provider_user_id", ""),
                 intent_token=str(payload.get("intent_token", "")),
                 legacy_chel_id=payload.get("legacy_chel_id"),
+                from_manager=str(payload.get("from_manager", "")),
             )
             return self._json(201, {
                 "auth_url": f"{settings.public_base_url}/auth/messenger?t={login['token']}",
@@ -1361,6 +1365,11 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
         self.wfile.write(body)
 
     def _ensure_user_context(self) -> None:
+        query = parse_qs(urlparse(self.path).query)
+        from_manager = (
+            query.get("from_manager", [""])[0]
+            or query.get("splitter_source", [""])[0]
+        )
         cookie = SimpleCookie()
         try:
             cookie.load(self.headers.get("Cookie", ""))
@@ -1380,7 +1389,7 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
             self._identity_cookie_required = True
         else:
             self._identity_cookie_required = False
-        db.ensure_user(candidate, pending=True)
+        db.ensure_user(candidate, pending=True, from_manager=from_manager)
         db.set_current_chel_id(candidate)
 
     def _send_session_cookie(self, session_value: str) -> None:

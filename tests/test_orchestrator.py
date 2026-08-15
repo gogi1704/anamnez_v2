@@ -970,7 +970,49 @@ class OrchestratorTests(unittest.TestCase):
         main_source = (project_root / "backend" / "main.py").read_text(encoding="utf-8")
         self.assertIn("/api/register-choice", script)
         self.assertIn('db.mark_current_user_registered(provider)', main_source)
-        self.assertIn('db.ensure_user(candidate, pending=True)', main_source)
+        self.assertIn('db.ensure_user(candidate, pending=True, from_manager=from_manager)', main_source)
+
+    def test_manager_attribution_is_immutable_and_counts_examination_selection(self):
+        users = (
+            ("chel_attr_manager1_a", "manager_1", True),
+            ("chel_attr_manager1_b", "manager_1", False),
+            ("chel_attr_manager2_a", "manager_2", True),
+        )
+        try:
+            for chel_id, manager, selected in users:
+                db.ensure_user(chel_id, pending=True, from_manager=manager)
+                db.set_current_chel_id(chel_id)
+                db.mark_current_user_registered("anonymous")
+                if selected:
+                    db.save_onboarding(status="payment", selected_tests=["lipids"])
+
+            db.ensure_user(
+                "chel_attr_manager1_a", pending=True, from_manager="another_manager",
+            )
+            with db.connection() as conn:
+                stored = conn.execute(
+                    "SELECT from_manager FROM users WHERE chel_id = ?",
+                    ("chel_attr_manager1_a",),
+                ).fetchone()[0]
+            self.assertEqual(stored, "manager_1")
+
+            report = db.admin_manager_attribution("all")
+            managers = {item["from_manager"]: item for item in report["managers"]}
+            self.assertEqual(managers["manager_1"]["users"], 2)
+            self.assertEqual(managers["manager_1"]["users_with_examinations"], 1)
+            self.assertEqual(managers["manager_1"]["examination_conversion"], 50.0)
+            self.assertEqual(managers["manager_2"]["users"], 1)
+            self.assertEqual(managers["manager_2"]["users_with_examinations"], 1)
+
+            table = db.admin_table("users", "manager_1", limit=10)
+            self.assertEqual(table["total"], 2)
+            self.assertTrue(all(row["from_manager"] == "manager_1" for row in table["rows"]))
+        finally:
+            for chel_id, _, _ in users:
+                db.set_current_chel_id(chel_id)
+                db.reset_current_user()
+            db.ensure_user("chel_test_default")
+            db.set_current_chel_id("chel_test_default")
 
     def test_admin_table_searches_full_allowlisted_views(self):
         chel_id = "chel_dashboard_search_1234"
@@ -1730,9 +1772,9 @@ class OrchestratorTests(unittest.TestCase):
         self.assertIn("controllerchange", script)
         self.assertIn("url.pathname.startsWith('/api/')", worker)
         self.assertIn("url.pathname.startsWith('/auth/')", worker)
-        self.assertIn("consilium-shell-v45", worker)
+        self.assertIn("consilium-shell-v46", worker)
         self.assertIn("fetch(request)", worker)
-        self.assertIn("/static/app.js?v=20260814-release-fixes", index)
+        self.assertIn("/static/app.js?v=20260815-manager-attribution", index)
         self.assertIn("/static/metrika.js?v=20260814-release-fixes", index)
         self.assertIn('id="welcomeScreen"', index)
         self.assertIn('id="welcomeNextButton"', index)

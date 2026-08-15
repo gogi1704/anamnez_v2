@@ -188,10 +188,11 @@ function renderUsers(items, total = items.length, counts = {}) {
   $('#usersPeriodCount').textContent = `Новых за период: ${period.toLocaleString('ru-RU')}`;
   $('#usersCount').textContent = `Найдено: ${Number(total).toLocaleString('ru-RU')}`;
   $('#usersCount').classList.toggle('hidden',!counts.filterActive);
-  if (!items.length) emptyTable(root,7);
+  if (!items.length) emptyTable(root,8);
   for (const item of items) {
     const row = document.createElement('tr');
     textCell(row,item.chel_id,item.chel_id);
+    textCell(row,item.from_manager || '—');
     textCell(row,formatDate(item.created_at));
     textCell(row,formatDate(item.last_seen_at));
     statusCell(row,item.onboarding_status,['complete']);
@@ -731,6 +732,30 @@ function renderExaminationAnalytics(items = [], summary = {}) {
   }
 }
 
+function renderManagerAttribution(data = {}) {
+  const root = $('#managerAttributionTable');
+  const summary = $('#managerAttributionSummary');
+  const items = data.managers || [];
+  root.replaceChildren();
+  summary.textContent = [
+    `${Number(data.attributed_users || 0).toLocaleString('ru-RU')} с меткой`,
+    `${Number(data.attributed_percent || 0).toLocaleString('ru-RU')}% от всех`,
+  ].join(' · ');
+  if (!items.length) {
+    emptyTable(root,5);
+    return;
+  }
+  for (const item of items) {
+    const row = document.createElement('tr');
+    textCell(row,item.from_manager || '—');
+    textCell(row,Number(item.users || 0).toLocaleString('ru-RU'));
+    textCell(row,`${Number(item.percent_of_all || 0).toLocaleString('ru-RU')}%`);
+    textCell(row,Number(item.users_with_examinations || 0).toLocaleString('ru-RU'));
+    textCell(row,`${Number(item.examination_conversion || 0).toLocaleString('ru-RU')}%`);
+    root.append(row);
+  }
+}
+
 function renderAnalytics(data) {
   latestAnalyticsData = data;
   const summary = $('#analyticsSummary');
@@ -762,6 +787,7 @@ function renderAnalytics(data) {
   renderDistribution('#analyticsDevices',data.devices || [],'label','users',deviceNames);
   renderDistribution('#analyticsRegistrations',data.registrations || [],'label','users',registrationNames);
   renderDistribution('#analyticsSources',data.sources || [],'label','users');
+  renderManagerAttribution(data.manager_attribution || {});
   renderExaminationAnalytics(data.examinations || [], data.examination_summary || {});
 
   const questions = $('#analyticsQuestionsChart'); questions.replaceChildren();

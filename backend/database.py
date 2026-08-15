@@ -29,26 +29,48 @@ def current_chel_id() -> str:
     return _current_chel_id.get()
 
 
-def ensure_user(chel_id: str, *, pending: bool = False) -> dict:
+def normalize_from_manager(value: str | None) -> str:
+    """Return a safe attribution label suitable for permanent user storage."""
+    normalized = str(value or "").strip()[:80]
+    if not normalized or normalized.lower() == "direct":
+        return ""
+    return normalized if re.fullmatch(r"[\w.-]+", normalized, re.UNICODE) else ""
+
+
+def ensure_user(
+    chel_id: str, *, pending: bool = False, from_manager: str = "",
+) -> dict:
     now = utc_now()
+    manager = normalize_from_manager(from_manager)
     with _write_lock, connection() as conn:
         if pending:
             conn.execute(
-                """INSERT INTO users (chel_id, created_at, last_seen_at)
-                VALUES (?, ?, ?)
-                ON CONFLICT(chel_id) DO UPDATE SET last_seen_at=excluded.last_seen_at""",
-                (chel_id, now, now),
+                """INSERT INTO users (chel_id, created_at, last_seen_at, from_manager)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(chel_id) DO UPDATE SET
+                    last_seen_at=excluded.last_seen_at,
+                    from_manager=CASE
+                        WHEN users.registered_at IS NULL AND users.from_manager = ''
+                        THEN excluded.from_manager
+                        ELSE users.from_manager
+                    END""",
+                (chel_id, now, now, manager),
             )
         else:
             conn.execute(
                 """INSERT INTO users
-                (chel_id, created_at, last_seen_at, registered_at, registration_method)
-                VALUES (?, ?, ?, ?, 'internal')
+                (chel_id, created_at, last_seen_at, registered_at, registration_method, from_manager)
+                VALUES (?, ?, ?, ?, 'internal', ?)
                 ON CONFLICT(chel_id) DO UPDATE SET
                     last_seen_at=excluded.last_seen_at,
                     registered_at=COALESCE(users.registered_at, excluded.registered_at),
-                    registration_method=COALESCE(users.registration_method, excluded.registration_method)""",
-                (chel_id, now, now, now),
+                    registration_method=COALESCE(users.registration_method, excluded.registration_method),
+                    from_manager=CASE
+                        WHEN users.registered_at IS NULL AND users.from_manager = ''
+                        THEN excluded.from_manager
+                        ELSE users.from_manager
+                    END""",
+                (chel_id, now, now, now, manager),
             )
         conn.commit()
         row = conn.execute("SELECT * FROM users WHERE chel_id = ?", (chel_id,)).fetchone()
@@ -327,6 +349,7 @@ def create_messenger_login(
     provider_user_id: str | int,
     intent_token: str = "",
     legacy_chel_id: int | None = None,
+    from_manager: str = "",
 ) -> dict:
     """Bind a verified messenger identity and issue a one-time Consilium login."""
     provider = _messenger_provider(provider)
@@ -337,6 +360,7 @@ def create_messenger_login(
         raise ValueError("chel_id должен быть положительным числом")
 
     now = datetime.now(timezone.utc)
+    manager = normalize_from_manager(from_manager)
     expires_at = now + timedelta(seconds=settings.auth_link_ttl_seconds)
     raw_token = secrets.token_urlsafe(32)
     with _write_lock, connection() as conn:
@@ -381,9 +405,15 @@ def create_messenger_login(
             else:
                 chel_id = f"chel_{secrets.token_hex(16)}"
             conn.execute(
-                """INSERT INTO users (chel_id, created_at, last_seen_at)
-                VALUES (?, ?, ?) ON CONFLICT(chel_id) DO UPDATE SET last_seen_at=excluded.last_seen_at""",
-                (chel_id, now.isoformat(), now.isoformat()),
+                """INSERT INTO users (chel_id, created_at, last_seen_at, from_manager)
+                VALUES (?, ?, ?, ?) ON CONFLICT(chel_id) DO UPDATE SET
+                    last_seen_at=excluded.last_seen_at,
+                    from_manager=CASE
+                        WHEN users.registered_at IS NULL AND users.from_manager = ''
+                        THEN excluded.from_manager
+                        ELSE users.from_manager
+                    END""",
+                (chel_id, now.isoformat(), now.isoformat(), manager),
             )
             conn.execute(
                 """INSERT INTO external_identities
@@ -910,6 +940,72 @@ def admin_dashboard(days: int = 14, limit: int = 100) -> dict:
     }
 
 
+def admin_manager_attribution(period: str = "30") -> dict:
+    """Aggregate immutable manager attribution for registered users."""
+    period = str(period or "30").strip().lower()
+    now = datetime.now(timezone.utc)
+    if period == "all":
+        started_at = ""
+    elif period == "today":
+        started_at = now.date().isoformat()
+    else:
+        try:
+            days = max(1, min(3650, int(period)))
+        except ValueError as exc:
+            raise ValueError("Неизвестный период статистики") from exc
+        started_at = (now - timedelta(days=days - 1)).date().isoformat()
+
+    where = """u.chel_id NOT IN ('chel_legacy', 'chel_test_default')
+        AND u.registered_at IS NOT NULL"""
+    params: list[str] = []
+    if started_at:
+        where += " AND SUBSTR(u.registered_at, 1, 10) >= ?"
+        params.append(started_at)
+
+    with connection() as conn:
+        total_users = int(conn.execute(
+            f"SELECT COUNT(*) FROM users u WHERE {where}", tuple(params),
+        ).fetchone()[0] or 0)
+        attributed_users = int(conn.execute(
+            f"SELECT COUNT(*) FROM users u WHERE {where} AND TRIM(u.from_manager) <> ''",
+            tuple(params),
+        ).fetchone()[0] or 0)
+        rows = conn.execute(
+            f"""SELECT u.from_manager, COUNT(*) AS users,
+                SUM(CASE WHEN EXISTS (
+                    SELECT 1 FROM onboarding_state o
+                    WHERE o.chel_id = u.chel_id
+                      AND JSON_VALID(o.selected_tests)
+                      AND JSON_ARRAY_LENGTH(o.selected_tests) > 0
+                ) THEN 1 ELSE 0 END) AS users_with_examinations
+            FROM users u
+            WHERE {where} AND TRIM(u.from_manager) <> ''
+            GROUP BY u.from_manager
+            ORDER BY users DESC, u.from_manager""",
+            tuple(params),
+        ).fetchall()
+
+    managers = []
+    for row in rows:
+        users = int(row["users"] or 0)
+        selected = int(row["users_with_examinations"] or 0)
+        managers.append({
+            "from_manager": row["from_manager"],
+            "users": users,
+            "percent_of_all": round(users * 100 / total_users, 1) if total_users else 0,
+            "users_with_examinations": selected,
+            "examination_conversion": round(selected * 100 / users, 1) if users else 0,
+        })
+    return {
+        "period": period,
+        "period_started_at": started_at or None,
+        "total_users": total_users,
+        "attributed_users": attributed_users,
+        "attributed_percent": round(attributed_users * 100 / total_users, 1) if total_users else 0,
+        "managers": managers,
+    }
+
+
 def _admin_date(value: str, field_name: str) -> str:
     normalized = str(value or "").strip()
     if not normalized:
@@ -964,8 +1060,9 @@ def admin_table(
                     u.chel_id LIKE ? ESCAPE '\\'
                     OR COALESCE(o.status, 'not_started') LIKE ? ESCAPE '\\'
                     OR COALESCE(e.provider, 'нет') LIKE ? ESCAPE '\\'
+                    OR COALESCE(u.from_manager, '') LIKE ? ESCAPE '\\'
                 )"""
-                params.extend([pattern, pattern, pattern])
+                params.extend([pattern, pattern, pattern, pattern])
             overall_total = conn.execute(
                 """SELECT COUNT(*) FROM users
                 WHERE chel_id NOT IN ('chel_legacy', 'chel_test_default')
@@ -987,6 +1084,7 @@ def admin_table(
             rows = [
                 dict(row) for row in conn.execute(
                     f"""SELECT u.chel_id, u.registered_at AS created_at, u.last_seen_at,
+                        COALESCE(u.from_manager, '') AS from_manager,
                         COALESCE(o.status, 'not_started') AS onboarding_status,
                         COALESCE(GROUP_CONCAT(DISTINCT e.provider), '') AS messengers,
                         COUNT(DISTINCT c.id) AS conversations,
@@ -2194,7 +2292,8 @@ def init_db() -> None:
                 created_at TEXT NOT NULL,
                 last_seen_at TEXT NOT NULL,
                 registered_at TEXT,
-                registration_method TEXT
+                registration_method TEXT,
+                from_manager TEXT NOT NULL DEFAULT ''
             );
 
             CREATE TABLE IF NOT EXISTS user_device_stats (
@@ -2508,6 +2607,8 @@ def init_db() -> None:
         if "registration_method" not in users_columns:
             conn.execute("ALTER TABLE users ADD COLUMN registration_method TEXT")
             registration_columns_added = True
+        if "from_manager" not in users_columns:
+            conn.execute("ALTER TABLE users ADD COLUMN from_manager TEXT NOT NULL DEFAULT ''")
         if registration_columns_added:
             # Historical installations did not record the first access choice. Preserve their
             # existing analytics; the stricter rule applies to records created after migration.
@@ -2640,6 +2741,10 @@ def init_db() -> None:
             conn.execute("ALTER TABLE onboarding_state ADD COLUMN font_size TEXT NOT NULL DEFAULT 'standard'")
 
         conn.execute("CREATE INDEX IF NOT EXISTS idx_conversations_chel_id ON conversations(chel_id, updated_at)")
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_users_from_manager "
+            "ON users(from_manager, registered_at)"
+        )
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_user_device_stats_audience "
             "ON user_device_stats(device_type, operating_system, browser, last_seen_at)"

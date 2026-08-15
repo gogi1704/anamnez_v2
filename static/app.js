@@ -79,7 +79,7 @@ const analyticsSessionId = getAnalyticsSession();
 function analyticsAttribution() {
   const params = new URLSearchParams(location.search);
   return {
-    source: params.get('utm_source') || params.get('source') || '',
+    source: params.get('splitter_source') || params.get('utm_source') || params.get('source') || '',
     campaign: params.get('utm_campaign') || '',
     medium: params.get('utm_medium') || '',
     app_mode: isInstalledApp() ? 'standalone' : 'browser',
