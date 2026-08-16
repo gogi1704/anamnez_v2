@@ -1,10 +1,12 @@
-const CACHE_NAME = 'consilium-shell-v46';
-const ASSET_VERSION = '20260815-manager-attribution';
+const CACHE_NAME = 'consilium-shell-v49';
+const ASSET_VERSION = '20260816-composer-clean';
 const APP_SHELL = [
   '/',
   '/manifest.webmanifest',
   `/static/styles.css?v=${ASSET_VERSION}`,
   `/static/metrika.js?v=${ASSET_VERSION}`,
+  `/static/rich-text.css?v=${ASSET_VERSION}`,
+  `/static/rich-text.js?v=${ASSET_VERSION}`,
   `/static/agents.js?v=${ASSET_VERSION}`,
   `/static/app.js?v=${ASSET_VERSION}`,
   '/static/icon-192.png',

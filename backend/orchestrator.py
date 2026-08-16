@@ -87,6 +87,20 @@ def _device_for_ai() -> dict:
     }
 
 
+def _messenger_access_for_ai() -> dict:
+    linked = [item["provider"] for item in db.current_external_identities()]
+    available = []
+    if settings.telegram_bot_auth_url:
+        available.append("telegram")
+    if settings.max_bot_auth_url:
+        available.append("max")
+    return {
+        "is_anonymous": not bool(linked),
+        "linked_providers": linked,
+        "available_providers": available,
+    }
+
+
 class ConversationOrchestrator:
     def __init__(self, llm: LLMService = llm_service) -> None:
         self.llm = llm
@@ -99,6 +113,7 @@ class ConversationOrchestrator:
         conversation["_memories"] = [{"category": item["category"], "content": item["content"]} for item in db.list_memories()[:20]]
         conversation["_profile"] = _profile_for_ai()
         conversation["_device"] = _device_for_ai()
+        conversation["_messenger_access"] = _messenger_access_for_ai()
         conversation["_body_symptoms"] = db.list_body_symptoms(status="active", limit=20)
         previous_agent = conversation["active_agent"]
         attachment_meta = [{"name": item.get("name"), "type": item.get("type")} for item in (attachments or [])]
@@ -697,6 +712,7 @@ class ConversationOrchestrator:
         conversation["_memories"] = [{"category": item["category"], "content": item["content"]} for item in db.list_memories()[:20]]
         conversation["_profile"] = _profile_for_ai()
         conversation["_device"] = _device_for_ai()
+        conversation["_messenger_access"] = _messenger_access_for_ai()
         conversation["_body_symptoms"] = db.list_body_symptoms(status="active", limit=20)
         context = self._load_context(conversation.get("context_summary", ""))
         history = db.list_messages(conversation_id, settings.max_history_messages)
@@ -717,6 +733,7 @@ class ConversationOrchestrator:
         conversation["_memories"] = [{"category": item["category"], "content": item["content"]} for item in db.list_memories()[:20]]
         conversation["_profile"] = _profile_for_ai()
         conversation["_device"] = _device_for_ai()
+        conversation["_messenger_access"] = _messenger_access_for_ai()
         conversation["_body_symptoms"] = db.list_body_symptoms(status="active", limit=20)
         context = self._load_context(conversation.get("context_summary", ""))
         history = db.list_messages(conversation_id, settings.max_history_messages)

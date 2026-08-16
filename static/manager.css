@@ -136,3 +136,8 @@ button { cursor:pointer; }
   .manager-composer span { display:none; }
   .user-panel { inset:8px; width:auto; }
 }
+
+/* Safe Markdown/rich-text layout */
+.message-bubble > .rich-text { font-size:inherit; line-height:1.55; }
+.interpretation-item > .rich-text { margin-top:6px; font-size:10px; }
+.request-card p { overflow-wrap:anywhere; }

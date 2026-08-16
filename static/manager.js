@@ -55,6 +55,19 @@ function escapeHtml(value) {
   }[char]));
 }
 
+function richText(value) {
+  return window.ConsiliumRichText.render(value);
+}
+
+function plainTextPreview(value) {
+  return String(value ?? '')
+    .replace(/\[([^\]]+)\]\([^)]*\)/g, '$1')
+    .replace(/^[#>\-*+\d.)\s]+/gm, '')
+    .replace(/[`*_~|]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 function safeUrl(value) {
   try {
     const url = new URL(String(value || ''));
@@ -241,7 +254,7 @@ async function loadQueue() {
       const unread = Number(item.unanswered_user_messages || 0);
       return `<button class="request-card ${item.id === state.selectedId ? 'active' : ''}" data-conversation-id="${escapeHtml(item.id)}">
         <span class="request-card-head"><strong>${escapeHtml(name)}</strong><time>${formatDate(item.updated_at)}</time></span>
-        <p>${escapeHtml(item.last_message || item.title || 'Нет сообщений')}</p>
+        <p>${escapeHtml(plainTextPreview(item.last_message || item.title || 'Нет сообщений'))}</p>
         <span class="request-meta">${queueLabel(item)}<span>${escapeHtml(item.human_ticket_id || item.id.slice(0, 8))}</span>${unread ? `<i class="unread">${unread}</i>` : ''}</span>
       </button>`;
     }).join('') : '<div class="queue-empty">В этой очереди пока нет обращений.</div>';
@@ -330,9 +343,12 @@ function renderMessages() {
       ? (metadata.manager_name || 'Менеджер')
       : `${agentName(message.agent_id)} · ИИ`;
     const docs = messageDocuments(metadata);
+    const content = isUser
+      ? `<div class="plain-message-text">${escapeHtml(message.content)}</div>`
+      : richText(message.content);
     return `<article class="manager-message ${isUser ? 'user' : isHuman ? 'human' : 'ai'}">
       <div class="message-card"><div class="message-author"><strong>${escapeHtml(author)}</strong></div>
-      <div class="message-bubble">${escapeHtml(message.content)}${docs ? `<div class="message-files">${docs}</div>` : ''}<time class="message-time">${formatDate(message.created_at, true)}</time></div></div>
+      <div class="message-bubble">${content}${docs ? `<div class="message-files">${docs}</div>` : ''}<time class="message-time">${formatDate(message.created_at, true)}</time></div></div>
     </article>`;
   }).join('') : '<div class="queue-empty">В диалоге пока нет сообщений.</div>';
   if (nearBottom || !container.dataset.rendered) container.scrollTop = container.scrollHeight;
@@ -396,7 +412,7 @@ function renderUserDetails() {
     return url ? `<div class="stack-item"><strong>${escapeHtml(item.title || 'Результат анализа')}</strong><a href="${escapeHtml(url)}" target="_blank" rel="noopener">Открыть документ</a></div>` : '';
   }).join('');
   const interpretations = (lab.interpretations || []).map(item =>
-    `<div class="stack-item"><strong>Расшифровка ${escapeHtml(item.scope_key)}</strong>${escapeHtml(item.interpretation)}</div>`).join('');
+    `<div class="stack-item interpretation-item"><strong>Расшифровка ${escapeHtml(item.scope_key)}</strong>${richText(item.interpretation)}</div>`).join('');
   $('#labDetails').innerHTML = `<div class="stack-item"><strong>Номер пробирки</strong>${escapeHtml(lab.tube_number || 'Не указан')}</div>
     <div class="stack-item"><strong>Выбранные обследования</strong>${examNames || 'Не выбраны'}</div>${docs}${interpretations}`;
   $('#memoryDetails').innerHTML = memories.length ? memories.map(item =>

@@ -29,6 +29,7 @@ const state = {
   contextEditTicketId: null,
   returnToChatAfterExaminations: false,
   publicConfig: {},
+  messengerLinkJustCompleted: '',
 };
 
 const $ = selector => document.querySelector(selector);
@@ -38,6 +39,7 @@ const input = $('#messageInput');
 const ANONYMOUS_ACCESS_KEY = 'consilium_anonymous_access';
 const WELCOME_SEEN_KEY = 'consilium_welcome_seen';
 const INSTALL_DISMISSED_KEY = 'consilium_install_dismissed_at';
+const MESSENGER_LINK_PENDING_KEY = 'consilium_messenger_link_pending';
 const INSTALL_REOFFER_AFTER_MS = 7 * 24 * 60 * 60 * 1000;
 let userAudioContext = null;
 let deferredInstallPrompt = null;
@@ -408,6 +410,91 @@ function showAuthGate() {
   $('#onboarding').classList.add('hidden');
   $('#appShell').classList.add('hidden');
   trackEvent('auth_gate_viewed', {screen:'registration'});
+}
+
+function messengerName(provider) {
+  return provider === 'max' ? 'MAX' : 'Telegram';
+}
+
+function linkedMessengerProviders() {
+  return new Set(state.identity?.providers || []);
+}
+
+function updateMessengerLinkMenu() {
+  const status = $('#menuMessengerLinkStatus');
+  if (!status) return;
+  const linked = [...linkedMessengerProviders()];
+  if (!linked.length) status.textContent = 'Telegram или MAX';
+  else if (linked.length === 1) status.textContent = `${messengerName(linked[0])} привязан · можно добавить ещё`;
+  else status.textContent = 'Telegram и MAX привязаны';
+}
+
+function closeMessengerLinkModal() {
+  $('#messengerLinkModal').classList.add('hidden');
+}
+
+function renderMessengerLinkOptions() {
+  const linked = linkedMessengerProviders();
+  const providers = [
+    {id:'telegram', icon:'➤', title:'Telegram'},
+    {id:'max', icon:'М', title:'MAX'},
+  ];
+  $('#messengerLinkOptions').innerHTML = providers.map(item => {
+    const configured = Boolean(state.identity?.messengers?.[item.id]?.configured);
+    const connected = linked.has(item.id);
+    const subtitle = connected
+      ? 'Уже привязан к этому профилю'
+      : configured ? 'Подтвердить через официального бота' : 'Временно недоступен';
+    return `<button type="button" class="messenger-link-option ${item.id} ${connected ? 'connected' : ''}" data-link-provider="${item.id}" ${connected || !configured ? 'disabled' : ''}>
+      <i aria-hidden="true">${item.icon}</i>
+      <span><strong>${item.title}</strong><small>${subtitle}</small></span>
+      <b>${connected ? '✓' : '→'}</b>
+    </button>`;
+  }).join('');
+}
+
+function openMessengerLinkModal({ source = 'menu', justLinked = '' } = {}) {
+  closeFunctionMenu();
+  renderMessengerLinkOptions();
+  const success = $('#messengerLinkSuccess');
+  success.classList.remove('error');
+  success.classList.toggle('hidden', !justLinked);
+  success.textContent = justLinked ? `Готово — ${messengerName(justLinked)} привязан к вашему профилю.` : '';
+  $('#messengerLinkDescription').textContent = linkedMessengerProviders().size
+    ? 'Добавьте ещё один способ входа или проверьте уже подключённые мессенджеры.'
+    : 'Сохраните доступ к анкете, выбранным обследованиям, результатам и расшифровкам на любом устройстве.';
+  $('#messengerLinkLater').textContent = justLinked ? 'Готово' : 'Не сейчас';
+  $('#messengerLinkModal').dataset.source = source;
+  $('#messengerLinkModal').classList.remove('hidden');
+  trackEvent('messenger_link_modal_viewed', {source, linked_count:linkedMessengerProviders().size});
+}
+
+async function startMessengerLink(provider, button) {
+  button.disabled = true;
+  const source = $('#messengerLinkModal').dataset.source || 'menu';
+  try {
+    trackEvent('messenger_auth_started', {provider, method:provider, context:'profile_link', source});
+    const result = await api('/api/auth/messenger/start', {
+      method:'POST', body:JSON.stringify({provider}),
+    });
+    sessionStorage.setItem(MESSENGER_LINK_PENDING_KEY, JSON.stringify({provider, source}));
+    window.location.assign(result.bot_url);
+  } catch (error) {
+    button.disabled = false;
+    const success = $('#messengerLinkSuccess');
+    success.textContent = error.message;
+    success.classList.remove('hidden');
+    success.classList.add('error');
+  }
+}
+
+function consumeCompletedMessengerLink(identity) {
+  let pending = null;
+  try { pending = JSON.parse(sessionStorage.getItem(MESSENGER_LINK_PENDING_KEY) || 'null'); } catch {}
+  if (!pending?.provider || !(identity.providers || []).includes(pending.provider)) return;
+  sessionStorage.removeItem(MESSENGER_LINK_PENDING_KEY);
+  state.messengerLinkJustCompleted = pending.provider;
+  trackEvent('messenger_auth_completed', {provider:pending.provider, context:'profile_link', source:pending.source || 'menu'});
 }
 
 function closeAnonymousWarning() {
@@ -851,6 +938,12 @@ async function confirmPaymentAtExam() {
 function renderExamCompletion() {
   trackEvent('completion_viewed', { screen:'exam_completion' });
   setOnboardingMeta('Готово', 100);
+  const messengerOffer = state.identity?.authenticated ? '' : `
+    <section class="exam-messenger-offer">
+      <span class="exam-messenger-offer-icon" aria-hidden="true">↗</span>
+      <div><strong>Сохраните результаты и расшифровки</strong><p>Привяжите Telegram или MAX, чтобы вернуться к анкете, выбранным обследованиям и готовым результатам с другого устройства.</p></div>
+      <button type="button" data-onboarding-action="link-messenger-after-exams">Привязать мессенджер</button>
+    </section>`;
   $('#onboardingContent').innerHTML = `
     <div class="exam-completion">
       <div class="exam-completion-mark" aria-hidden="true">🎉</div>
@@ -881,6 +974,7 @@ function renderExamCompletion() {
         </div>
 
         <p class="exam-help-note"><span aria-hidden="true">💬</span> Не стесняйтесь писать в чат — мы всегда рады помочь!</p>
+        ${messengerOffer}
       </div>
 
       <div class="exam-completion-actions">
@@ -888,6 +982,11 @@ function renderExamCompletion() {
         <button type="button" class="exam-later-button" data-onboarding-action="later-after-exams">Установлю позже</button>
       </div>
     </div>`;
+  if (state.messengerLinkJustCompleted) {
+    const provider = state.messengerLinkJustCompleted;
+    state.messengerLinkJustCompleted = '';
+    requestAnimationFrame(() => openMessengerLinkModal({source:'exam_completion', justLinked:provider}));
+  }
 }
 
 async function finishExamOnboarding(installApp = false) {
@@ -944,6 +1043,11 @@ async function openMainApp({ skipIntro = false } = {}) {
     requestAnimationFrame(openCapabilities);
   }
   else scheduleInstallOffer();
+  if (state.messengerLinkJustCompleted) {
+    const provider = state.messengerLinkJustCompleted;
+    state.messengerLinkJustCompleted = '';
+    requestAnimationFrame(() => openMessengerLinkModal({source:'return', justLinked:provider}));
+  }
 }
 
 $('#onboardingContent').addEventListener('click', event => {
@@ -997,6 +1101,7 @@ $('#onboardingContent').addEventListener('click', event => {
   else if (action === 'open-app') openMainApp();
   else if (action === 'install-after-exams') { trackEvent('install_clicked', { screen:'exam_completion' }); finishExamOnboarding(true); }
   else if (action === 'later-after-exams') { trackEvent('install_dismissed', { screen:'exam_completion' }); finishExamOnboarding(false); }
+  else if (action === 'link-messenger-after-exams') openMessengerLinkModal({source:'exam_completion'});
   else if (action === 'skip-medical-exam') skipMedicalExam();
   else if (action === 'save-appearance') saveAppearance();
 });
@@ -1035,29 +1140,8 @@ const labInterpretationSections = [
 ];
 
 function labRichTextMarkup(value) {
-  const lines = String(value || '').split(/\n+/).map(line => line.trim()).filter(Boolean);
-  const parts = [];
-  let list = [];
-  const flushList = () => {
-    if (!list.length) return;
-    parts.push(`<ul>${list.map(item => `<li>${item}</li>`).join('')}</ul>`);
-    list = [];
-  };
-  const inline = text => escapeHtml(text)
-    .replace(/\*\*([^*]+)\*\*/g, '<strong>$1</strong>')
-    .replace(/(https?:\/\/[^\s<]+)/g, '<a class="message-link" href="$1" target="_blank" rel="noopener noreferrer">Открыть документ</a>');
-  for (const line of lines) {
-    const bullet = line.match(/^(?:[-–—•]|\d+[.)])\s+(.+)$/);
-    if (bullet) list.push(inline(bullet[1]));
-    else {
-      flushList();
-      parts.push(`<p>${inline(line)}</p>`);
-    }
-  }
-  flushList();
-  return parts.join('');
+  return window.ConsiliumRichText.render(value);
 }
-
 function labInterpretationMarkup(text, metadata = {}) {
   const raw = String(text || '').replace(/\r/g, '').trim();
   const buckets = new Map();
@@ -1137,7 +1221,7 @@ function addMessage(sender, text, agentId = state.active, urgent = false, create
     ? labDocumentsMarkup(metadata.lab_result_documents || [], 'message') : '';
   const assistantContent = labInterpretation
     ? labInterpretationMarkup(text, metadata)
-    : `<p>${formatAssistantText(text)}</p>`;
+    : formatAssistantText(text);
   wrapper.innerHTML = sender === 'user'
     ? `<div class="bubble user-bubble">${attachmentBadges}<p>${escapeHtml(text)}</p><span>${time}</span></div>`
     : `<div class="message-avatar">${humanManager ? 'Ч' : agent.initials}</div><div><div class="message-author"><strong>${humanManager ? escapeHtml(metadata.manager_name || 'Менеджер') : agent.name}</strong><span>${humanManager ? 'Человек' : agent.role}</span>${cached}</div><div class="bubble agent-bubble">${assistantContent}${labDocuments}<span>${time}</span></div></div>`;
@@ -1183,7 +1267,7 @@ function addCouncilResult(result, createdAt = null) {
   const wrapper = document.createElement('div');
   wrapper.className = 'council-result';
   if (messageId) wrapper.dataset.messageId = String(messageId);
-  wrapper.innerHTML = `<div class="council-title"><span>◎</span><div><strong>Консилиум завершён</strong><small>${result.agents.length} специалиста дали разные профильные оценки</small></div></div><div class="opinion-grid">${result.opinions.map(opinion => { const agent = AGENTS[opinion.agent] || AGENTS.manager; return `<article><div><i>${agent.initials}</i><span><strong>${agent.name}</strong><small>${agent.role}</small></span></div>${opinion.focus ? `<em class="council-focus">${escapeHtml(opinion.focus)}</em>` : ''}<p>${escapeHtml(opinion.message)}</p></article>`; }).join('')}</div><div class="council-synthesis"><strong>Общий вывод Марии</strong><p>${formatAssistantText(result.message.content)}</p></div>`;
+  wrapper.innerHTML = `<div class="council-title"><span>◎</span><div><strong>Консилиум завершён</strong><small>${result.agents.length} специалиста дали разные профильные оценки</small></div></div><div class="opinion-grid">${result.opinions.map(opinion => { const agent = AGENTS[opinion.agent] || AGENTS.manager; return `<article><div><i>${agent.initials}</i><span><strong>${agent.name}</strong><small>${agent.role}</small></span></div>${opinion.focus ? `<em class="council-focus">${escapeHtml(opinion.focus)}</em>` : ''}<div class="council-opinion-text">${formatAssistantText(opinion.message)}</div></article>`; }).join('')}</div><div class="council-synthesis"><strong>Общий вывод Марии</strong>${formatAssistantText(result.message.content)}</div>`;
   messages.appendChild(wrapper);
   scrollChatToBottom();
   return wrapper;
@@ -2233,14 +2317,7 @@ function renderAttachments() {
 function clearAttachments() { state.attachments = []; renderAttachments(); }
 function escapeHtml(value) { const d = document.createElement('div'); d.textContent = value ?? ''; return d.innerHTML; }
 function formatAssistantText(value) {
-  const separated = String(value ?? '').replace(
-    /\s*(Обращение H-[A-ZА-Я0-9-]+ уже передано человеку; ожидайте ответа специалиста\.)/giu,
-    '\n\n\n$1',
-  ).trimStart();
-  return escapeHtml(separated).replace(
-    /(https?:\/\/[^\s<]+)/g,
-    '<a class="message-link" href="$1" target="_blank" rel="noopener noreferrer">Открыть документ</a>',
-  );
+  return window.ConsiliumRichText.render(value);
 }
 function scrollChatToBottom() {
   requestAnimationFrame(() => {
@@ -2322,6 +2399,7 @@ function closeVisibleModal() {
     case 'contextModal': closeContextEditor(); break;
     case 'capabilitiesModal': void closeCapabilities(); break;
     case 'installAppModal': closeInstallApp(); break;
+    case 'messengerLinkModal': closeMessengerLinkModal(); break;
     case 'bodyMapModal': closeBodyMap(); break;
     case 'healthHistoryModal': closeHealthHistory(); break;
     case 'profileModal': closeProfileModal(); break;
@@ -2410,6 +2488,7 @@ $('#fontSizeClose').addEventListener('click', closeFontSizeModal);
 $('#fontSizeModal').addEventListener('click', event => { if (event.target.id === 'fontSizeModal') closeFontSizeModal(); });
 $('#fontSizeOptions').addEventListener('click', event => { const option=event.target.closest('.font-size-choice[data-size]'); if (option) updateFontSize(option.dataset.size); });
 $('#menuProfileButton').addEventListener('click', openProfile);
+$('#menuMessengerLinkButton').addEventListener('click', () => openMessengerLinkModal({source:'menu'}));
 $('#menuLabResultsButton').addEventListener('click', openLabResults);
 $('#menuBodyMapButton').addEventListener('click', openBodyMap);
 $('#menuHealthHistoryButton').addEventListener('click', () => openHealthHistory());
@@ -2419,6 +2498,13 @@ $('#installAppLaterButton').addEventListener('click', () => closeInstallApp({ di
 $('#installAppConfirmButton').addEventListener('click', confirmInstallApp);
 $('#installAppModal').addEventListener('click', event => {
   if (event.target.id === 'installAppModal') closeInstallApp({ dismissed:true });
+});
+$('#messengerLinkClose').addEventListener('click', closeMessengerLinkModal);
+$('#messengerLinkLater').addEventListener('click', closeMessengerLinkModal);
+$('#messengerLinkModal').addEventListener('click', event => {
+  if (event.target.id === 'messengerLinkModal') closeMessengerLinkModal();
+  const button = event.target.closest('[data-link-provider]');
+  if (button) startMessengerLink(button.dataset.linkProvider, button);
 });
 $('#profileButton').addEventListener('click', openProfile);
 $('#bodyMapButton').addEventListener('click', openBodyMap);
@@ -2533,6 +2619,8 @@ async function init() {
     state.publicConfig = await api('/api/public-config');
     const identity = await api('/api/me');
     state.identity = identity;
+    consumeCompletedMessengerLink(identity);
+    updateMessengerLinkMenu();
     const entryParams = new URLSearchParams(window.location.search);
     const messengerLoginRequired = entryParams.get('auth') === 'messenger_required';
     const forceWelcomePreview = entryParams.get('welcome') === '1';

@@ -15,7 +15,8 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/static/styles.css?v=20260814-release-fixes">
+  <link rel="stylesheet" href="/static/styles.css?v=20260816-composer-clean">
+  <link rel="stylesheet" href="/static/rich-text.css?v=20260816-rich-text">
 </head>
 <body>
   <main class="welcome-screen hidden" id="welcomeScreen" aria-live="polite">
@@ -128,6 +129,7 @@
               <strong>Функции</strong>
               <button id="newChatButton" role="menuitem"><i>＋</i><span>Новый диалог<small>Начать с чистого контекста</small></span></button>
               <button id="menuProfileButton" role="menuitem"><i>♙</i><span>Мои данные<small>Анкета, номер пробирки и память</small></span></button>
+              <button id="menuMessengerLinkButton" role="menuitem"><i>↗</i><span>Привязать мессенджер<small id="menuMessengerLinkStatus">Telegram или MAX</small></span></button>
               <button id="menuLabResultsButton" role="menuitem"><i>▤</i><span>Результаты анализов<small id="menuLabResultsStatus">Проверить по номеру пробирки</small></span></button>
               <button id="mobileDialogsButton" role="menuitem"><i>≡</i><span>Мои диалоги<small>Открыть историю переписок</small></span></button>
               <button id="humanButton" role="menuitem"><i>♙</i><span>Позвать человека<small>Чат или созвон</small></span></button>
@@ -185,7 +187,7 @@
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12 14-7-4 14-3-5-7-2Z"/><path d="m12 14 7-9"/></svg>
         </button>
         <div class="attachment-list hidden" id="attachmentList"></div>
-        <div class="composer-meta"><span>Enter — отправить · Shift+Enter — новая строка</span><span>Ответы не заменяют врача</span></div>
+        <div class="composer-meta"><span>Enter — отправить · Shift+Enter — новая строка</span></div>
       </form>
     </main>
 
@@ -304,6 +306,19 @@
         <button class="primary-button" id="installAppConfirmButton" type="button">Добавить</button>
         <button class="secondary-button" id="installAppLaterButton" type="button">Не сейчас</button>
       </div>
+    </div>
+  </div>
+
+  <div class="modal-backdrop hidden" id="messengerLinkModal" role="dialog" aria-modal="true" aria-labelledby="messengerLinkTitle">
+    <div class="modal messenger-link-modal">
+      <button class="modal-close" id="messengerLinkClose" type="button" aria-label="Закрыть">×</button>
+      <div class="messenger-link-icon" aria-hidden="true">↗</div>
+      <h2 id="messengerLinkTitle">Привязать мессенджер</h2>
+      <p id="messengerLinkDescription">Сохраните доступ к анкете, обследованиям, результатам и расшифровкам на другом устройстве.</p>
+      <div class="messenger-link-success hidden" id="messengerLinkSuccess" role="status"></div>
+      <div class="messenger-link-options" id="messengerLinkOptions"></div>
+      <p class="messenger-link-note">Консилиум не получает пароль от мессенджера. Подтверждение выполняется через официального бота.</p>
+      <button class="secondary-button messenger-link-later" id="messengerLinkLater" type="button">Не сейчас</button>
     </div>
   </div>
 
@@ -485,6 +500,7 @@
 
   <script src="/static/metrika.js?v=20260814-release-fixes"></script>
   <script src="/static/agents.js?v=20260814-release-fixes"></script>
-  <script src="/static/app.js?v=20260815-manager-attribution"></script>
+  <script src="/static/rich-text.js?v=20260816-rich-text"></script>
+  <script src="/static/app.js?v=20260816-composer-clean"></script>
 </body>
 </html>

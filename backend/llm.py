@@ -170,6 +170,11 @@ class LLMService:
                 "operating_system": "Другое",
                 "browser": "Другое",
             }),
+            "messenger_access": conversation.get("_messenger_access", {
+                "is_anonymous": True,
+                "linked_providers": [],
+                "available_providers": [],
+            }),
             "active_body_symptoms": conversation.get("_body_symptoms", []),
             "consultation_progress": conversation.get("_consultation_progress", {
                 "questions_asked": 0,

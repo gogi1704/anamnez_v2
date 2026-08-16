@@ -543,6 +543,23 @@ class OrchestratorTests(unittest.TestCase):
         self.assertIn("Установить приложение", manager_prompt)
         self.assertIn("ярлыке, рабочем столе", ORCHESTRATOR_PROMPT)
 
+    def test_agents_can_explain_messenger_linking_with_current_status(self):
+        manager_prompt = PROFILES["manager"].prompt
+        self.assertIn("«Привязать мессенджер» находится в меню функций", manager_prompt)
+        self.assertIn("Telegram ID, MAX ID, код или пароль", manager_prompt)
+        self.assertIn("сохраняется тот же профиль", manager_prompt)
+        self.assertIn("messenger_access", manager_prompt)
+        self.assertIn("Вопросы о привязке, входе или восстановлении", ORCHESTRATOR_PROMPT)
+        runtime = json.loads(LLMService.runtime_context([], {}, {
+            "_messenger_access": {
+                "is_anonymous": False,
+                "linked_providers": ["telegram"],
+                "available_providers": ["telegram", "max"],
+            },
+        }))
+        self.assertEqual(runtime["messenger_access"]["linked_providers"], ["telegram"])
+        self.assertEqual(runtime["messenger_access"]["available_providers"], ["telegram", "max"])
+
     def test_user_language_and_supported_topics_are_clear(self):
         project_root = Path(__file__).resolve().parents[1]
         index = (project_root / "index.html").read_text(encoding="utf-8")
@@ -830,6 +847,25 @@ class OrchestratorTests(unittest.TestCase):
         self.assertIn("function labInterpretationMarkup", script)
         self.assertIn("lab-report-section", script)
         self.assertIn(".message-row.lab-interpretation", styles)
+
+    def test_ai_markdown_uses_shared_safe_rich_text_renderer(self):
+        project_root = Path(__file__).resolve().parents[1]
+        index = (project_root / "index.html").read_text(encoding="utf-8")
+        manager_html = (project_root / "manager.html").read_text(encoding="utf-8")
+        app_script = (project_root / "static" / "app.js").read_text(encoding="utf-8")
+        manager_script = (project_root / "static" / "manager.js").read_text(encoding="utf-8")
+        rich_script = (project_root / "static" / "rich-text.js").read_text(encoding="utf-8")
+        rich_styles = (project_root / "static" / "rich-text.css").read_text(encoding="utf-8")
+
+        self.assertIn('/static/rich-text.js?v=20260816-rich-text', index)
+        self.assertIn('/static/rich-text.js?v=20260816-rich-text', manager_html)
+        self.assertIn('window.ConsiliumRichText.render(value)', app_script)
+        self.assertIn('window.ConsiliumRichText.render(value)', manager_script)
+        self.assertIn('function renderMarkdown(value)', rich_script)
+        self.assertIn('escapeHtml(code.join', rich_script)
+        self.assertIn('rich-table-scroll', rich_script)
+        self.assertIn('.rich-table-scroll', rich_styles)
+        self.assertIn('overflow-x:auto', rich_styles)
 
     def test_layout_prevents_desktop_shell_and_focus_from_scrolling_outside_frame(self):
         project_root = Path(__file__).resolve().parents[1]
@@ -1772,9 +1808,9 @@ class OrchestratorTests(unittest.TestCase):
         self.assertIn("controllerchange", script)
         self.assertIn("url.pathname.startsWith('/api/')", worker)
         self.assertIn("url.pathname.startsWith('/auth/')", worker)
-        self.assertIn("consilium-shell-v46", worker)
+        self.assertIn("consilium-shell-v49", worker)
         self.assertIn("fetch(request)", worker)
-        self.assertIn("/static/app.js?v=20260815-manager-attribution", index)
+        self.assertIn("/static/app.js?v=20260816-composer-clean", index)
         self.assertIn("/static/metrika.js?v=20260814-release-fixes", index)
         self.assertIn('id="welcomeScreen"', index)
         self.assertIn('id="welcomeNextButton"', index)
@@ -2085,6 +2121,20 @@ class OrchestratorTests(unittest.TestCase):
         self.assertIn("=== identity.chel_id", script)
         self.assertIn("/api/auth/messenger/start", script)
         self.assertIn("identity.authenticated", script)
+
+    def test_messenger_can_be_linked_from_menu_and_after_examinations(self):
+        project_root = Path(__file__).resolve().parents[1]
+        index = (project_root / "index.html").read_text(encoding="utf-8")
+        script = (project_root / "static" / "app.js").read_text(encoding="utf-8")
+        styles = (project_root / "static" / "styles.css").read_text(encoding="utf-8")
+        self.assertIn('id="menuMessengerLinkButton"', index)
+        self.assertIn('id="messengerLinkModal"', index)
+        self.assertIn('data-onboarding-action="link-messenger-after-exams"', script)
+        self.assertIn("state.identity?.authenticated ? ''", script)
+        self.assertIn("consilium_messenger_link_pending", script)
+        self.assertIn("/api/auth/messenger/start", script)
+        self.assertIn("messenger-link-option", styles)
+        self.assertIn("exam-messenger-offer", styles)
 
     def test_auth_token_is_redacted_from_application_log(self):
         fake_handler = type("FakeHandler", (), {"address_string": lambda self: "127.0.0.1"})()

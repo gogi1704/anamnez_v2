@@ -20,6 +20,7 @@ ALLOWED_EVENTS = {
     "landing_viewed", "welcome_viewed", "welcome_continued", "auth_gate_viewed",
     "registration_method_selected", "anonymous_warning_viewed", "anonymous_warning_cancelled",
     "registration_completed", "registration_failed", "messenger_auth_started", "funnel_action",
+    "messenger_link_modal_viewed",
     "messenger_auth_completed", "messenger_auth_failed", "appearance_viewed",
     "appearance_completed", "questionnaire_started", "question_viewed",
     "question_answered", "question_skipped", "question_back", "question_validation_error",
@@ -46,7 +47,7 @@ ALLOWED_PROPERTIES = {
     "response_ms", "screen", "previous_screen", "source", "campaign", "medium",
     "app_mode", "page_version", "connection_type", "conversation_count",
     "document_count", "cached", "reason", "font_size", "stage", "action",
-    "selection_id", "exam_name",
+    "selection_id", "exam_name", "context", "linked_count",
 }
 
 FUNNEL_BREAKDOWNS = {
