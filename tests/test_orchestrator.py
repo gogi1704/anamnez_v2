@@ -414,6 +414,7 @@ class OrchestratorTests(unittest.TestCase):
         project_root = Path(__file__).resolve().parents[1]
         script = (project_root / "static" / "app.js").read_text(encoding="utf-8")
         index = (project_root / "index.html").read_text(encoding="utf-8")
+        main_source = (project_root / "backend" / "main.py").read_text(encoding="utf-8")
         questionnaire = script.split("const onboardingQuestions = [", 1)[1].split(
             "];", 1,
         )[0]
@@ -857,7 +858,7 @@ class OrchestratorTests(unittest.TestCase):
         rich_script = (project_root / "static" / "rich-text.js").read_text(encoding="utf-8")
         rich_styles = (project_root / "static" / "rich-text.css").read_text(encoding="utf-8")
 
-        self.assertIn('/static/rich-text.js?v=20260816-rich-text', index)
+        self.assertIn('/static/rich-text.js?v=20260817-clickable-manager-banner', index)
         self.assertIn('/static/rich-text.js?v=20260816-rich-text', manager_html)
         self.assertIn('window.ConsiliumRichText.render(value)', app_script)
         self.assertIn('window.ConsiliumRichText.render(value)', manager_script)
@@ -1035,10 +1036,14 @@ class OrchestratorTests(unittest.TestCase):
             report = db.admin_manager_attribution("all")
             managers = {item["from_manager"]: item for item in report["managers"]}
             self.assertEqual(managers["manager_1"]["users"], 2)
+            self.assertEqual(managers["manager_1"]["manager_name"], "Красильникова")
             self.assertEqual(managers["manager_1"]["users_with_examinations"], 1)
             self.assertEqual(managers["manager_1"]["examination_conversion"], 50.0)
             self.assertEqual(managers["manager_2"]["users"], 1)
+            self.assertEqual(managers["manager_2"]["manager_name"], "Аминева")
             self.assertEqual(managers["manager_2"]["users_with_examinations"], 1)
+            self.assertEqual(db.from_manager_name("manager_10"), "Черниговцев")
+            self.assertEqual(db.from_manager_name("custom_source"), "custom_source")
 
             table = db.admin_table("users", "manager_1", limit=10)
             self.assertEqual(table["total"], 2)
@@ -1083,6 +1088,13 @@ class OrchestratorTests(unittest.TestCase):
         db.ensure_user(january_id)
         db.ensure_user(february_id)
         try:
+            db.set_current_chel_id(january_id)
+            january_conversation = db.create_conversation("Январский диалог")
+            db.add_message(january_conversation["id"], "user", "Одно сообщение")
+            db.set_current_chel_id(february_id)
+            february_conversation = db.create_conversation("Февральский диалог")
+            for index in range(3):
+                db.add_message(february_conversation["id"], "user", f"Сообщение {index}")
             with db.connection() as conn:
                 conn.execute(
                     "UPDATE users SET created_at = ?, registered_at = ? WHERE chel_id = ?",
@@ -1105,6 +1117,27 @@ class OrchestratorTests(unittest.TestCase):
             self.assertEqual(result["created_from"], "2099-02-01")
             self.assertEqual(result["created_to"], "2099-02-28")
 
+            created_ascending = db.admin_table(
+                "users", "date_filter", limit=10, sort="created_at", order="asc",
+            )
+            created_descending = db.admin_table(
+                "users", "date_filter", limit=10, sort="created_at", order="desc",
+            )
+            self.assertEqual(created_ascending["rows"][0]["chel_id"], january_id)
+            self.assertEqual(created_descending["rows"][0]["chel_id"], february_id)
+            self.assertEqual(created_ascending["sort"], "created_at")
+            self.assertEqual(created_ascending["order"], "asc")
+            messages_ascending = db.admin_table(
+                "users", "date_filter", limit=10, sort="messages", order="asc",
+            )
+            messages_descending = db.admin_table(
+                "users", "date_filter", limit=10, sort="messages", order="desc",
+            )
+            self.assertEqual(messages_ascending["rows"][0]["chel_id"], january_id)
+            self.assertEqual(messages_descending["rows"][0]["chel_id"], february_id)
+            with self.assertRaises(ValueError):
+                db.admin_table("users", sort="messages", order="sideways")
+
             no_search_match = db.admin_table(
                 "users", "january", limit=10,
                 created_from="2099-02-01", created_to="2099-02-28",
@@ -1122,6 +1155,9 @@ class OrchestratorTests(unittest.TestCase):
                     (january_id, february_id),
                 )
                 conn.commit()
+            db.reset_current_user()
+            db.ensure_user("chel_test_default")
+            db.set_current_chel_id("chel_test_default")
 
     def test_device_statistics_classify_and_aggregate_page_openings(self):
         chel_id = "chel_device_stats_1234"
@@ -1201,6 +1237,9 @@ class OrchestratorTests(unittest.TestCase):
         self.assertIn('id="managerCreateForm"', dashboard)
         self.assertIn('id="examinationsTab"', dashboard)
         self.assertIn('id="costsTab"', dashboard)
+        self.assertIn('id="favoritesTab"', dashboard)
+        self.assertIn('id="favoritesAdminView"', dashboard)
+        self.assertIn('id="favoritesGrid"', dashboard)
         self.assertIn('id="costSummaryGrid"', dashboard)
         self.assertIn('id="costModelsTable"', dashboard)
         self.assertIn('id="examinationForm"', dashboard)
@@ -1235,10 +1274,22 @@ class OrchestratorTests(unittest.TestCase):
         self.assertIn("sessionStorage", script)
         self.assertIn("Authorization:`Bearer ${token || ''}`", script)
         self.assertIn("/api/admin/table", script)
+        self.assertIn('data-table-sort="created_at"', dashboard)
+        self.assertIn('data-table-sort="messages"', dashboard)
+        self.assertIn("function updateTableSortIndicators(state)", script)
+        self.assertIn("sort:state.sort,order:state.order", script)
+        self.assertIn(".table-sort", styles)
         self.assertIn("/api/admin/managers", script)
         self.assertIn("/api/admin/examinations", script)
         self.assertIn("/api/admin/ai-costs", script)
         self.assertIn("renderCostSummary", script)
+        self.assertIn("FAVORITES_KEY", script)
+        self.assertIn("function decorateFavoriteSources()", script)
+        self.assertIn("function renderFavorites()", script)
+        self.assertIn("loadFavoriteSources", script)
+        self.assertIn("data-favorite-toggle", script)
+        self.assertIn(".dashboard.show-favorites", styles)
+        self.assertIn(".favorites-grid", styles)
         self.assertIn("let dashboardLoading = false", script)
         self.assertIn("if (dashboardLoading) return", script)
         self.assertIn("response.status === 429 && method === 'GET'", script)
@@ -1405,6 +1456,8 @@ class OrchestratorTests(unittest.TestCase):
                 "region": "Грудь", "symptom_type": "Боль", "intensity": 4,
                 "notes": "После нагрузки",
             })
+            related_conversation = db.create_conversation("Предыдущий диалог")
+            db.add_message(related_conversation["id"], "user", "Старый вопрос")
             conversation = db.create_conversation("Нужна консультация")
             db.add_message(conversation["id"], "user", "Хочу поговорить с менеджером")
             db.update_conversation(
@@ -1451,6 +1504,28 @@ class OrchestratorTests(unittest.TestCase):
             queue = db.manager_list_conversations("Тестовый", "ai_off")
             self.assertEqual(queue[0]["id"], conversation["id"])
             self.assertGreaterEqual(queue[0]["unanswered_user_messages"], 0)
+            self.assertEqual(
+                db.manager_list_conversations("тестовый", "ai_off")[0]["id"],
+                conversation["id"],
+            )
+            self.assertEqual(
+                db.manager_list_conversations("ТЕСТОВЫЙ", "ai_off")[0]["id"],
+                conversation["id"],
+            )
+            grouped_queue = db.manager_list_conversations(
+                "", "open", include_related=True,
+            )
+            self.assertEqual(
+                {item["id"] for item in grouped_queue},
+                {conversation["id"], related_conversation["id"]},
+            )
+            grouped_search = db.manager_list_conversations(
+                related_conversation["id"], "all", include_related=True,
+            )
+            self.assertEqual(
+                {item["id"] for item in grouped_search},
+                {conversation["id"], related_conversation["id"]},
+            )
 
             closed = db.manager_close_conversation(conversation["id"], "Ольга")
             self.assertEqual(closed["human_status"], "closed")
@@ -1491,6 +1566,12 @@ class OrchestratorTests(unittest.TestCase):
         self.assertIn("/api/manager/me", manager_script)
         self.assertNotIn("ADMIN_DASHBOARD_TOKEN", manager_script)
         self.assertIn("/api/manager/conversations/", manager_script)
+        self.assertIn("include_related:'1'", manager_script)
+        self.assertIn("data-person-id", manager_script)
+        self.assertIn("data-person-toggle", manager_script)
+        self.assertIn("collapsedPeople: new Set()", manager_script)
+        self.assertIn("state.collapsedPeople.add(chelId)", manager_script)
+        self.assertIn("chel_id, диалог или обращение", manager)
         self.assertIn("/close", manager_script)
         self.assertIn("playManagerSignal('request')", manager_script)
         self.assertIn("playManagerSignal('message')", manager_script)
@@ -1501,7 +1582,10 @@ class OrchestratorTests(unittest.TestCase):
         self.assertIn('id="chatModeToggle"', index)
         self.assertIn('aria-controls="chatModeDetails"', index)
         self.assertIn('.chat-mode-banner.expanded .chat-mode-details', styles)
-        self.assertIn("$('#chatModeToggle').addEventListener('click'", app)
+        self.assertIn("$('#chatModeBanner').addEventListener('click'", app)
+        self.assertIn("$('#chatModeBanner').addEventListener('keydown'", app)
+        self.assertIn("if (event.target.closest('#chatModeNewDialog')) return", app)
+        self.assertIn('.chat-mode-banner.expandable { cursor:pointer', styles)
         self.assertIn("вы можете продолжить общение с ИИ в новом диалоге", app)
         self.assertIn("$('#chatModeNewDialog').addEventListener('click', newConversation)", app)
         self.assertNotIn("Я правильно понял?", index)
@@ -1786,6 +1870,9 @@ class OrchestratorTests(unittest.TestCase):
     def test_user_app_is_installable_pwa_without_caching_api_data(self):
         project_root = Path(__file__).resolve().parents[1]
         index = (project_root / "index.html").read_text(encoding="utf-8")
+        manager_html = (project_root / "manager.html").read_text(encoding="utf-8")
+        dashboard_html = (project_root / "dashboard.html").read_text(encoding="utf-8")
+        main_source = (project_root / "backend" / "main.py").read_text(encoding="utf-8")
         script = (project_root / "static" / "app.js").read_text(encoding="utf-8")
         worker = (project_root / "service-worker.js").read_text(encoding="utf-8")
         manifest = json.loads(
@@ -1800,6 +1887,11 @@ class OrchestratorTests(unittest.TestCase):
         )
         self.assertIn('rel="manifest"', index)
         self.assertIn('rel="apple-touch-icon"', index)
+        self.assertIn('/static/favicon.svg', index)
+        self.assertIn('/static/favicon.svg', manager_html)
+        self.assertIn('/static/favicon.svg', dashboard_html)
+        self.assertNotIn('rel="icon" href="data:,"', dashboard_html)
+        self.assertIn('STATIC_DIR / "favicon.svg"', main_source)
         self.assertIn('id="menuInstallAppButton"', index)
         self.assertIn('id="installAppModal"', index)
         self.assertIn("beforeinstallprompt", script)
@@ -1808,10 +1900,10 @@ class OrchestratorTests(unittest.TestCase):
         self.assertIn("controllerchange", script)
         self.assertIn("url.pathname.startsWith('/api/')", worker)
         self.assertIn("url.pathname.startsWith('/auth/')", worker)
-        self.assertIn("consilium-shell-v49", worker)
+        self.assertIn("consilium-shell-v51", worker)
         self.assertIn("fetch(request)", worker)
-        self.assertIn("/static/app.js?v=20260816-composer-clean", index)
-        self.assertIn("/static/metrika.js?v=20260814-release-fixes", index)
+        self.assertIn("/static/app.js?v=20260817-clickable-manager-banner", index)
+        self.assertIn("/static/metrika.js?v=20260817-clickable-manager-banner", index)
         self.assertIn('id="welcomeScreen"', index)
         self.assertIn('id="welcomeNextButton"', index)
         self.assertIn("WELCOME_SEEN_KEY", script)
@@ -1841,7 +1933,7 @@ class OrchestratorTests(unittest.TestCase):
         main = (project_root / "backend" / "main.py").read_text(encoding="utf-8")
         config = (project_root / "backend" / "config.py").read_text(encoding="utf-8")
 
-        self.assertIn('src="/static/metrika.js?v=20260814-release-fixes"', index)
+        self.assertIn('src="/static/metrika.js?v=20260817-clickable-manager-banner"', index)
         self.assertIn('YANDEX_METRIKA_COUNTER_ID', config)
         self.assertIn('path == "/api/public-config"', main)
         self.assertIn('"metrika.js"', main)

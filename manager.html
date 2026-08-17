@@ -4,11 +4,15 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="color-scheme" content="light">
+  <meta name="theme-color" content="#176f57">
   <title>Консилиум — панель менеджера</title>
+  <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
+  <link rel="icon" href="/static/icon-192.png" type="image/png" sizes="192x192">
+  <link rel="apple-touch-icon" href="/static/apple-touch-icon.png">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/static/manager.css?v=20260816-rich-text">
+  <link rel="stylesheet" href="/static/manager.css?v=20260817-collapsible-users">
   <link rel="stylesheet" href="/static/rich-text.css?v=20260816-rich-text">
 </head>
 <body>
@@ -37,7 +41,8 @@
         <div><strong id="managerDisplayName">Менеджер</strong><small>на связи</small></div>
       </div>
       <div class="queue-tools">
-        <label class="search-field"><span>⌕</span><input id="queueSearch" type="search" placeholder="Имя, ID или обращение"></label>
+        <label class="search-field"><span>⌕</span><input id="queueSearch" type="search" placeholder="chel_id, диалог или обращение"></label>
+        <small class="search-hint">Поиск выполняется по всем обращениям и диалогам</small>
         <div class="queue-filters" id="queueFilters">
           <button class="active" data-queue="open">Открытые</button>
           <button data-queue="ai_off">ИИ выключен</button>
@@ -115,6 +120,6 @@
 
   <div class="toast hidden" id="managerToast" role="status"></div>
   <script src="/static/rich-text.js?v=20260816-rich-text"></script>
-  <script src="/static/manager.js?v=20260816-rich-text" defer></script>
+  <script src="/static/manager.js?v=20260817-collapsible-users" defer></script>
 </body>
 </html>

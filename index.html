@@ -10,13 +10,15 @@
   <meta name="apple-mobile-web-app-status-bar-style" content="default">
   <meta name="apple-mobile-web-app-title" content="Консилиум">
   <title>Консилиум — персональный помощник по здоровью</title>
+  <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
+  <link rel="icon" href="/static/icon-192.png" type="image/png" sizes="192x192">
   <link rel="manifest" href="/manifest.webmanifest">
   <link rel="apple-touch-icon" href="/static/apple-touch-icon.png">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/static/styles.css?v=20260816-composer-clean">
-  <link rel="stylesheet" href="/static/rich-text.css?v=20260816-rich-text">
+  <link rel="stylesheet" href="/static/styles.css?v=20260817-clickable-manager-banner">
+  <link rel="stylesheet" href="/static/rich-text.css?v=20260817-clickable-manager-banner">
 </head>
 <body>
   <main class="welcome-screen hidden" id="welcomeScreen" aria-live="polite">
@@ -155,7 +157,7 @@
         <span class="mini-avatar specialist" id="handoffTo">КД</span>
         <p id="handoffText">Мария передаёт диалог специалисту</p>
       </section>
-      <section class="chat-mode-banner hidden" id="chatModeBanner" aria-live="polite">
+      <section class="chat-mode-banner hidden" id="chatModeBanner" aria-live="polite" aria-expanded="false" aria-controls="chatModeDetails">
         <span id="chatModeIcon">♙</span>
         <div class="chat-mode-copy">
           <strong id="chatModeTitle">Менеджер подключён</strong>
@@ -498,9 +500,9 @@
     </div>
   </div>
 
-  <script src="/static/metrika.js?v=20260814-release-fixes"></script>
-  <script src="/static/agents.js?v=20260814-release-fixes"></script>
-  <script src="/static/rich-text.js?v=20260816-rich-text"></script>
-  <script src="/static/app.js?v=20260816-composer-clean"></script>
+  <script src="/static/metrika.js?v=20260817-clickable-manager-banner"></script>
+  <script src="/static/agents.js?v=20260817-clickable-manager-banner"></script>
+  <script src="/static/rich-text.js?v=20260817-clickable-manager-banner"></script>
+  <script src="/static/app.js?v=20260817-clickable-manager-banner"></script>
 </body>
 </html>

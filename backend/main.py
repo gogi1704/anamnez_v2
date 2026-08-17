@@ -26,7 +26,7 @@ STATIC_DIR = BASE_DIR / "static"
 ALLOWED_STATIC = {
     "app.js", "agents.js", "styles.css", "metrika.js", "rich-text.js", "rich-text.css", "dashboard.js", "dashboard.css",
     "manager.js", "manager.css", "icon-192.png", "icon-512.png",
-    "icon-maskable-512.png", "apple-touch-icon.png",
+    "icon-maskable-512.png", "apple-touch-icon.png", "favicon.svg",
 }
 SERVER_ERROR_LOG = settings.log_path
 MANAGER_SESSION_COOKIE = "consilium_manager_session"
@@ -105,11 +105,7 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
             except (ValueError, TypeError) as exc:
                 return self._json(422, {"detail": str(exc)})
         if path == "/favicon.ico":
-            self.send_response(204)
-            self._send_security_headers()
-            self.send_header("Cache-Control", "public, max-age=86400")
-            self.end_headers()
-            return
+            return self._send_file(STATIC_DIR / "favicon.svg", "image/svg+xml; charset=utf-8")
         if path == "/api/ready":
             database_ready = False
             try:
@@ -185,6 +181,8 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                     int(query.get("offset", ["0"])[0]),
                     query.get("created_from", [""])[0],
                     query.get("created_to", [""])[0],
+                    query.get("sort", [""])[0],
+                    query.get("order", ["desc"])[0],
                 ))
             except (ValueError, TypeError):
                 return self._json(422, {"detail": "Некорректные параметры таблицы"})
@@ -209,6 +207,7 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                         query.get("query", [""])[0],
                         query.get("queue", ["open"])[0],
                         int(query.get("limit", ["100"])[0]),
+                        query.get("include_related", ["0"])[0] == "1",
                     ))
                 except (ValueError, TypeError) as exc:
                     return self._json(422, {"detail": str(exc)})

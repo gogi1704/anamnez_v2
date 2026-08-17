@@ -1,4 +1,5 @@
 const TOKEN_KEY = 'consilium_admin_dashboard_token';
+const FAVORITES_KEY = 'consilium_admin_analytics_favorites_v1';
 const $ = selector => document.querySelector(selector);
 const agentNames = {
   manager:'Мария · Менеджер', safety:'Алексей · Безопасность',
@@ -55,12 +56,130 @@ let analyticsRecentPage = 1;
 let analyticsFunnelMode = 'start';
 let latestAnalyticsData = null;
 const expandedFunnelRows = new Set();
+const favoriteAnalytics = new Set((() => {
+  try {
+    const value = JSON.parse(localStorage.getItem(FAVORITES_KEY) || '[]');
+    return Array.isArray(value) ? value.filter(item => typeof item === 'string') : [];
+  } catch { return []; }
+})());
+const favoriteDefinitions = [
+  ['dashboard-activity','.activity-panel','Активность','dashboard'],
+  ['dashboard-agents','#agentDistribution','Ответы агентов','dashboard'],
+  ['dashboard-channels','#channelDistribution','Каналы обращений','dashboard'],
+  ['dashboard-devices','#deviceDistribution','Устройства пользователей','dashboard'],
+  ['dashboard-os','#osDistribution','Операционные системы','dashboard'],
+  ['dashboard-browsers','#browserDistribution','Браузеры','dashboard'],
+  ['dashboard-users','#usersTable','Пользователи','dashboard'],
+  ['dashboard-devices-table','#devicesTable','Таблица устройств','dashboard'],
+  ['dashboard-conversations','#conversationsTable','Диалоги','dashboard'],
+  ['dashboard-requests','#requestsTable','Обращения к человеку','dashboard'],
+  ['analytics-funnel','#analyticsFunnel','Полная воронка','analytics'],
+  ['analytics-daily','#analyticsDaily','Пользователи по дням','analytics'],
+  ['analytics-devices','#analyticsDevices','Устройства','analytics'],
+  ['analytics-registrations','#analyticsRegistrations','Способы регистрации','analytics'],
+  ['analytics-sources','#analyticsSources','Источники','analytics'],
+  ['analytics-managers','#managerAttributionTable','Статистика по менеджерам','analytics'],
+  ['analytics-examinations','#analyticsExaminations','Популярность обследований','analytics'],
+  ['analytics-questionnaire','#analyticsQuestionsChart','Статистика по анкете','analytics'],
+  ['analytics-events','#analyticsRecent','Ошибки и последние события','analytics'],
+  ['cost-daily','#costDailyChart','Расход по дням','costs'],
+  ['cost-operations','#costOperationDistribution','Расходы по операциям','costs'],
+  ['cost-models','#costModelsTable','Токены и стоимость по моделям','costs'],
+  ['cost-recent','#costRecentTable','Последние вызовы ИИ','costs'],
+  ['cost-pricing','#costPricingList','Цена за 1 млн токенов','costs'],
+];
 const tableStates = {
-  users:{apiName:'users',prefix:'users',offset:0,limit:25,total:0,query:'',createdFrom:'',createdTo:''},
-  devices:{apiName:'devices',prefix:'devices',offset:0,limit:25,total:0,query:''},
-  conversations:{apiName:'conversations',prefix:'conversations',offset:0,limit:25,total:0,query:''},
-  requests:{apiName:'human_requests',prefix:'requests',offset:0,limit:25,total:0,query:''},
+  users:{apiName:'users',prefix:'users',offset:0,limit:25,total:0,query:'',createdFrom:'',createdTo:'',sort:'last_seen_at',order:'desc'},
+  devices:{apiName:'devices',prefix:'devices',offset:0,limit:25,total:0,query:'',sort:'last_seen_at',order:'desc'},
+  conversations:{apiName:'conversations',prefix:'conversations',offset:0,limit:25,total:0,query:'',sort:'updated_at',order:'desc'},
+  requests:{apiName:'human_requests',prefix:'requests',offset:0,limit:25,total:0,query:'',sort:'updated_at',order:'desc'},
 };
+
+function favoriteSourceBlock(node) {
+  return node?.closest('.panel,.summary-card,.analytics-metric') || node;
+}
+
+function findFavoriteSource(id) {
+  return [...document.querySelectorAll('[data-favorite-id]')]
+    .find(node => node.dataset.favoriteId === id) || null;
+}
+
+function favoriteButton(id, title) {
+  const button = document.createElement('button');
+  const selected = favoriteAnalytics.has(id);
+  button.type = 'button';
+  button.className = `favorite-toggle${selected ? ' selected' : ''}`;
+  button.dataset.favoriteToggle = id;
+  button.setAttribute('aria-pressed', String(selected));
+  button.setAttribute('aria-label', selected ? `Убрать «${title}» из избранного` : `Добавить «${title}» в избранное`);
+  button.title = selected ? 'Убрать из избранного' : 'Добавить в избранное';
+  button.textContent = selected ? '★' : '☆';
+  return button;
+}
+
+function decorateFavoriteSources() {
+  for (const [id,selector,title,view] of favoriteDefinitions) {
+    const block = favoriteSourceBlock($(selector));
+    if (!block) continue;
+    block.dataset.favoriteId = id;
+    block.dataset.favoriteTitle = title;
+    block.dataset.favoriteView = view;
+  }
+  for (const block of document.querySelectorAll('[data-favorite-id]')) {
+    block.classList.add('favorite-source');
+    const title = block.dataset.favoriteTitle || 'Аналитика';
+    const existing = block.querySelector(':scope > .favorite-toggle,:scope > .panel-heading > .favorite-toggle');
+    if (existing) existing.remove();
+    const host = block.querySelector(':scope > .panel-heading') || block;
+    host.append(favoriteButton(block.dataset.favoriteId,title));
+  }
+  $('#favoritesCount').textContent = String(favoriteAnalytics.size);
+}
+
+function saveFavoriteAnalytics() {
+  localStorage.setItem(FAVORITES_KEY,JSON.stringify([...favoriteAnalytics]));
+  decorateFavoriteSources();
+  if (activeAdminView === 'favorites') renderFavorites();
+}
+
+function renderFavorites() {
+  const root = $('#favoritesGrid');
+  root.replaceChildren();
+  if (!favoriteAnalytics.size) {
+    const empty = document.createElement('div');
+    empty.className = 'favorites-empty';
+    empty.innerHTML = '<span>☆</span><h3>Здесь пока пусто</h3><p>Откройте любой раздел аналитики и нажмите звезду у нужного показателя, графика или таблицы.</p>';
+    root.append(empty);
+    return;
+  }
+  for (const id of favoriteAnalytics) {
+    const source = findFavoriteSource(id);
+    if (!source) continue;
+    const title = source.dataset.favoriteTitle || 'Аналитика';
+    const view = source.dataset.favoriteView || 'dashboard';
+    const card = document.createElement('article');
+    card.className = `favorite-card${source.matches('.table-panel,.funnel-panel,.activity-panel,.questionnaire-analytics-panel,.examination-analytics-panel,.cost-chart-panel') ? ' wide' : ''}`;
+    const header = document.createElement('header');
+    const heading = document.createElement('div');
+    const label = document.createElement('strong'); label.textContent = title;
+    const sourceLabel = document.createElement('small');
+    sourceLabel.textContent = ({dashboard:'Дашборд',analytics:'Воронка и поведение',costs:'Расходы'})[view] || 'Аналитика';
+    heading.append(label,sourceLabel);
+    const actions = document.createElement('div');
+    const open = document.createElement('button'); open.type = 'button'; open.className = 'favorite-open'; open.dataset.favoriteOpen = view; open.dataset.favoriteTarget = id; open.textContent = 'Открыть раздел';
+    actions.append(open,favoriteButton(id,title)); header.append(heading,actions);
+    const snapshot = source.cloneNode(true);
+    snapshot.classList.remove('favorite-source');
+    snapshot.classList.add('favorite-snapshot');
+    snapshot.removeAttribute('data-favorite-id');
+    snapshot.removeAttribute('data-favorite-title');
+    snapshot.removeAttribute('data-favorite-view');
+    snapshot.querySelectorAll('.favorite-toggle').forEach(node => node.remove());
+    snapshot.querySelectorAll('[id]').forEach(node => node.removeAttribute('id'));
+    snapshot.querySelectorAll('button,input,select,textarea').forEach(node => { node.disabled = true; });
+    card.append(header,snapshot); root.append(card);
+  }
+}
 
 function formatDate(value, dateOnly = false) {
   if (!value) return '—';
@@ -105,6 +224,9 @@ function renderSummary(summary) {
   for (const [key,label,note] of summaryCards) {
     const card = document.createElement('article');
     card.className = 'summary-card';
+    card.dataset.favoriteId = `dashboard-summary-${key}`;
+    card.dataset.favoriteTitle = label;
+    card.dataset.favoriteView = 'dashboard';
     const name = document.createElement('span');
     const value = document.createElement('strong');
     const helper = document.createElement('small');
@@ -114,6 +236,7 @@ function renderSummary(summary) {
     card.append(name,value,helper);
     root.append(card);
   }
+  decorateFavoriteSources();
 }
 
 function renderActivity(items) {
@@ -287,9 +410,12 @@ function renderCostSummary(data) {
   ];
   const root = $('#costSummaryGrid');
   root.replaceChildren();
-  for (const [label,value,note] of cards) {
+  for (const [index,[label,value,note]] of cards.entries()) {
     const card = document.createElement('article');
     card.className = 'summary-card';
+    card.dataset.favoriteId = `cost-summary-${index}`;
+    card.dataset.favoriteTitle = label;
+    card.dataset.favoriteView = 'costs';
     const name = document.createElement('span');
     const amount = document.createElement('strong');
     const helper = document.createElement('small');
@@ -299,6 +425,7 @@ function renderCostSummary(data) {
     card.append(name,amount,helper);
     root.append(card);
   }
+  decorateFavoriteSources();
   if (Number(summary.unpriced_requests || 0) > 0) {
     const warning = document.createElement('p');
     warning.className = 'cost-warning';
@@ -417,6 +544,8 @@ async function loadCosts() {
   renderCostModels(data.by_model || []);
   renderCostRecent(data.recent || []);
   renderPricing(data.pricing || []);
+  decorateFavoriteSources();
+  if (activeAdminView === 'favorites') renderFavorites();
   $('#costsNotice').textContent = `${data.notice} Обновлено ${formatDate(data.generated_at)}.`;
 }
 
@@ -747,7 +876,11 @@ function renderManagerAttribution(data = {}) {
   }
   for (const item of items) {
     const row = document.createElement('tr');
-    textCell(row,item.from_manager || '—');
+    const managerName = item.manager_name || item.from_manager || '—';
+    const managerLabel = item.from_manager && item.from_manager !== managerName
+      ? `${managerName} (${item.from_manager})`
+      : managerName;
+    textCell(row,managerLabel);
     textCell(row,Number(item.users || 0).toLocaleString('ru-RU'));
     textCell(row,`${Number(item.percent_of_all || 0).toLocaleString('ru-RU')}%`);
     textCell(row,Number(item.users_with_examinations || 0).toLocaleString('ru-RU'));
@@ -760,13 +893,16 @@ function renderAnalytics(data) {
   latestAnalyticsData = data;
   const summary = $('#analyticsSummary');
   summary.replaceChildren();
-  for (const [label,value,note] of [
+  for (const [index,[label,value,note]] of [
     ['Пользователи',data.summary.users,'завершили выбор регистрации'],
     ['Посетители',data.summary.visitors,'включая экран входа'],
     ['Сессии',data.summary.sessions,'визиты в сервис'],
     ['События',data.summary.events,'технические действия'],
-  ]) {
+  ].entries()) {
     const card = document.createElement('article'); card.className = 'analytics-metric';
+    card.dataset.favoriteId = `analytics-summary-${index}`;
+    card.dataset.favoriteTitle = label;
+    card.dataset.favoriteView = 'analytics';
     const title = document.createElement('span'); title.textContent = label;
     const number = document.createElement('strong'); number.textContent = Number(value || 0).toLocaleString('ru-RU');
     const helper = document.createElement('small'); helper.textContent = note;
@@ -827,6 +963,8 @@ function renderAnalytics(data) {
   fillAnalyticsSelect('#analyticsDevice',data.filter_options?.devices || [],'Все устройства');
   fillAnalyticsSelect('#analyticsMethod',data.filter_options?.methods || [],'Все способы');
   fillAnalyticsSelect('#analyticsSource',data.filter_options?.sources || [],'Все источники');
+  decorateFavoriteSources();
+  if (activeAdminView === 'favorites') renderFavorites();
 }
 
 async function loadAnalytics() {
@@ -837,8 +975,25 @@ async function loadAnalytics() {
   renderAnalytics(await adminFetch(`/api/admin/analytics?${params}`));
 }
 
+async function loadFavoriteSources() {
+  const ids = [...favoriteAnalytics];
+  if (ids.some(id => id.startsWith('analytics-'))) await loadAnalytics();
+  if (ids.some(id => id.startsWith('cost-'))) await loadCosts();
+  for (const [id,key] of [
+    ['dashboard-users','users'],
+    ['dashboard-devices-table','devices'],
+    ['dashboard-conversations','conversations'],
+    ['dashboard-requests','requests'],
+  ]) {
+    if (favoriteAnalytics.has(id)) await loadTable(key);
+  }
+  decorateFavoriteSources();
+  renderFavorites();
+}
+
 function showAdminView(view) {
-  activeAdminView = ['analytics','managers','examinations','costs'].includes(view) ? view : 'dashboard';
+  activeAdminView = ['favorites','analytics','managers','examinations','costs'].includes(view) ? view : 'dashboard';
+  const favoritesVisible = activeAdminView === 'favorites';
   const analyticsVisible = activeAdminView === 'analytics';
   const managersVisible = activeAdminView === 'managers';
   const examinationsVisible = activeAdminView === 'examinations';
@@ -847,11 +1002,14 @@ function showAdminView(view) {
   $('#dashboard').classList.toggle('show-examinations', examinationsVisible);
   $('#dashboard').classList.toggle('show-costs', costsVisible);
   $('#dashboard').classList.toggle('show-analytics', analyticsVisible);
+  $('#dashboard').classList.toggle('show-favorites', favoritesVisible);
+  $('#favoritesAdminView').classList.toggle('hidden', !favoritesVisible);
   $('#analyticsAdminView').classList.toggle('hidden', !analyticsVisible);
   $('#managerAdminView').classList.toggle('hidden', !managersVisible);
   $('#examinationAdminView').classList.toggle('hidden', !examinationsVisible);
   $('#costsAdminView').classList.toggle('hidden', !costsVisible);
   $('#dashboardTab').classList.toggle('active', activeAdminView === 'dashboard');
+  $('#favoritesTab').classList.toggle('active', favoritesVisible);
   $('#analyticsTab').classList.toggle('active', analyticsVisible);
   $('#managersTab').classList.toggle('active', managersVisible);
   $('#examinationsTab').classList.toggle('active', examinationsVisible);
@@ -860,6 +1018,7 @@ function showAdminView(view) {
   if (examinationsVisible) loadExaminations().catch(showDashboardError);
   if (costsVisible) loadCosts().catch(showDashboardError);
   if (analyticsVisible) loadAnalytics().catch(showDashboardError);
+  if (favoritesVisible) loadFavoriteSources().catch(showDashboardError);
 }
 
 async function createManager(event) {
@@ -1045,6 +1204,21 @@ function renderTablePage(state) {
   $(`#${state.prefix}Next`).disabled = state.offset + state.limit >= state.total;
 }
 
+function updateTableSortIndicators(state) {
+  const table = $(`#${state.prefix}Table`)?.closest('table');
+  if (!table) return;
+  table.querySelectorAll('[data-table-sort]').forEach(button => {
+    const active = button.dataset.tableSort === state.sort;
+    button.classList.toggle('active',active);
+    button.setAttribute('aria-pressed',String(active));
+    button.title = active
+      ? `Сортировка ${state.order === 'asc' ? 'по возрастанию' : 'по убыванию'}. Нажмите, чтобы изменить направление.`
+      : 'Сортировать по этому столбцу';
+    const icon = button.querySelector('i');
+    if (icon) icon.textContent = active ? (state.order === 'asc' ? '↑' : '↓') : '↕';
+  });
+}
+
 async function loadTable(key, reset = false) {
   const state = tableStates[key];
   if (reset) state.offset = 0;
@@ -1054,6 +1228,7 @@ async function loadTable(key, reset = false) {
   const params = new URLSearchParams({
     name:state.apiName,query:apiQuery,
     limit:String(state.limit),offset:String(state.offset),
+    sort:state.sort,order:state.order,
   });
   if (key === 'users') {
     state.createdFrom = $('#usersDateFrom').value;
@@ -1064,6 +1239,8 @@ async function loadTable(key, reset = false) {
   const data = await adminFetch(`/api/admin/table?${params}`);
   state.total = data.total;
   state.offset = data.offset;
+  state.sort = data.sort || state.sort;
+  state.order = data.order || state.order;
   if (key === 'users') renderUsers(data.rows,data.total,{
     overallTotal:data.overall_total,
     periodTotal:data.period_total,
@@ -1073,6 +1250,7 @@ async function loadTable(key, reset = false) {
   else if (key === 'conversations') renderConversations(data.rows,data.total);
   else renderRequests(data.rows,data.total);
   renderTablePage(state);
+  updateTableSortIndicators(state);
 }
 
 async function loadAllTables() {
@@ -1101,6 +1279,16 @@ function bindTableControls(key) {
     if (state.offset + state.limit < state.total) state.offset += state.limit;
     loadTable(key).catch(showDashboardError);
   });
+  input.closest('.table-panel').querySelector('thead').addEventListener('click', event => {
+    const button = event.target.closest('[data-table-sort]');
+    if (!button) return;
+    const nextSort = button.dataset.tableSort;
+    state.order = state.sort === nextSort && state.order === 'desc' ? 'asc' : 'desc';
+    state.sort = nextSort;
+    state.offset = 0;
+    loadTable(key).catch(showDashboardError);
+  });
+  updateTableSortIndicators(state);
 }
 
 function inputDate(date) {
@@ -1170,6 +1358,7 @@ async function loadDashboard(token = sessionStorage.getItem(TOKEN_KEY)) {
     showDashboard();
     renderDashboard(data);
     if (activeAdminView === 'dashboard') await loadAllTables();
+    else if (activeAdminView === 'favorites') await loadFavoriteSources();
     else if (activeAdminView === 'managers') await loadStaff();
     else if (activeAdminView === 'examinations') await loadExaminations();
     else if (activeAdminView === 'costs') await loadCosts();
@@ -1201,10 +1390,30 @@ $('#logoutButton').addEventListener('click', () => {
   showLogin();
 });
 $('#dashboardTab').addEventListener('click', () => showAdminView('dashboard'));
+$('#favoritesTab').addEventListener('click', () => showAdminView('favorites'));
 $('#analyticsTab').addEventListener('click', () => showAdminView('analytics'));
 $('#managersTab').addEventListener('click', () => showAdminView('managers'));
 $('#examinationsTab').addEventListener('click', () => showAdminView('examinations'));
 $('#costsTab').addEventListener('click', () => showAdminView('costs'));
+document.addEventListener('click', event => {
+  const toggle = event.target.closest('[data-favorite-toggle]');
+  if (toggle) {
+    const id = toggle.dataset.favoriteToggle;
+    if (favoriteAnalytics.has(id)) favoriteAnalytics.delete(id);
+    else favoriteAnalytics.add(id);
+    saveFavoriteAnalytics();
+    return;
+  }
+  const open = event.target.closest('[data-favorite-open]');
+  if (!open) return;
+  showAdminView(open.dataset.favoriteOpen);
+  requestAnimationFrame(() => {
+    const source = findFavoriteSource(open.dataset.favoriteTarget);
+    source?.scrollIntoView({behavior:'smooth',block:'center'});
+    source?.classList.add('favorite-highlight');
+    setTimeout(() => source?.classList.remove('favorite-highlight'),1400);
+  });
+});
 $('#managerCreateForm').addEventListener('submit', createManager);
 $('#userDataCleanupForm').addEventListener('submit', deleteUserData);
 $('#staffList').addEventListener('click', updateManager);
@@ -1250,4 +1459,5 @@ for (const selector of ['#usersDateFrom','#usersDateTo']) {
 }
 
 Object.keys(tableStates).forEach(bindTableControls);
+decorateFavoriteSources();
 loadDashboard();

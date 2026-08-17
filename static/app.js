@@ -1237,8 +1237,17 @@ function updateChatMode(aiEnabled = true, humanStatus = 'none', humanTicketId = 
   const newDialogButton = $('#chatModeNewDialog');
   const toggleButton = $('#chatModeToggle');
   const relevant = !state.aiEnabled || ['pending', 'connected'].includes(state.humanStatus);
+  const expandable = !state.aiEnabled && relevant;
   banner.classList.toggle('hidden', !relevant);
   banner.classList.toggle('ai-paused', !state.aiEnabled);
+  banner.classList.toggle('expandable', expandable);
+  banner.tabIndex = expandable ? 0 : -1;
+  if (!expandable) {
+    banner.classList.remove('expanded');
+    banner.setAttribute('aria-expanded', 'false');
+    toggleButton.setAttribute('aria-expanded', 'false');
+    toggleButton.setAttribute('aria-label', 'Показать подробности');
+  }
   newDialogButton.classList.toggle('hidden', state.aiEnabled || !relevant);
   toggleButton.classList.toggle('hidden', state.aiEnabled || !relevant);
   input.placeholder = state.aiEnabled
@@ -1255,6 +1264,16 @@ function updateChatMode(aiEnabled = true, humanStatus = 'none', humanTicketId = 
   $('#chatModeDetailsText').textContent = state.aiEnabled
     ? ''
     : 'Пока ожидаете ответ, вы можете продолжить общение с ИИ в новом диалоге.';
+}
+
+function toggleChatModeDetails() {
+  const banner = $('#chatModeBanner');
+  const toggle = $('#chatModeToggle');
+  if (!banner.classList.contains('expandable')) return;
+  const expanded = banner.classList.toggle('expanded');
+  banner.setAttribute('aria-expanded', String(expanded));
+  toggle.setAttribute('aria-expanded', String(expanded));
+  toggle.setAttribute('aria-label', expanded ? 'Скрыть подробности' : 'Показать подробности');
 }
 
 function addCouncilResult(result, createdAt = null) {
@@ -2562,12 +2581,14 @@ $('#attachmentInput').addEventListener('change', async event => { await addAttac
 $('#attachmentList').addEventListener('click', event => { const button = event.target.closest('[data-attachment-remove]'); if (button) { state.attachments.splice(Number(button.dataset.attachmentRemove), 1); renderAttachments(); } });
 $('#newChatButton').addEventListener('click', newConversation);
 $('#chatModeNewDialog').addEventListener('click', newConversation);
-$('#chatModeToggle').addEventListener('click', () => {
-  const banner = $('#chatModeBanner');
-  const toggle = $('#chatModeToggle');
-  const expanded = banner.classList.toggle('expanded');
-  toggle.setAttribute('aria-expanded', String(expanded));
-  toggle.setAttribute('aria-label', expanded ? 'Скрыть подробности' : 'Показать подробности');
+$('#chatModeBanner').addEventListener('click', event => {
+  if (event.target.closest('#chatModeNewDialog')) return;
+  toggleChatModeDetails();
+});
+$('#chatModeBanner').addEventListener('keydown', event => {
+  if (event.target !== event.currentTarget || !['Enter', ' '].includes(event.key)) return;
+  event.preventDefault();
+  toggleChatModeDetails();
 });
 $('#conversationList').addEventListener('click', event => { const row = event.target.closest('[data-id]'); if (row) openConversation(row.dataset.id); });
 $('#modalClose').addEventListener('click', resumeAfterHuman);

@@ -1,5 +1,5 @@
-const CACHE_NAME = 'consilium-shell-v49';
-const ASSET_VERSION = '20260816-composer-clean';
+const CACHE_NAME = 'consilium-shell-v51';
+const ASSET_VERSION = '20260817-clickable-manager-banner';
 const APP_SHELL = [
   '/',
   '/manifest.webmanifest',
@@ -7,6 +7,7 @@ const APP_SHELL = [
   `/static/metrika.js?v=${ASSET_VERSION}`,
   `/static/rich-text.css?v=${ASSET_VERSION}`,
   `/static/rich-text.js?v=${ASSET_VERSION}`,
+  '/static/favicon.svg',
   `/static/agents.js?v=${ASSET_VERSION}`,
   `/static/app.js?v=${ASSET_VERSION}`,
   '/static/icon-192.png',

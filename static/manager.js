@@ -9,6 +9,7 @@ const state = {
   detailTimer: null,
   notificationTimer: null,
   notificationSnapshot: null,
+  collapsedPeople: new Set(),
   busy: false,
 };
 let managerAudioContext = null;
@@ -244,20 +245,55 @@ async function pollManagerNotifications() {
 
 async function loadQueue() {
   if (!state.manager || document.visibilityState !== 'visible') return;
-  const params = new URLSearchParams({ queue:state.queue, query:state.search, limit:'150' });
+  const effectiveQueue = state.search ? 'all' : state.queue;
+  const params = new URLSearchParams({
+    queue:effectiveQueue, query:state.search, limit:'150', include_related:'1',
+  });
   try {
     const items = await api(`/api/manager/conversations?${params}`);
-    $('#queueCount').textContent = `${items.length} ${plural(items.length, 'обращение', 'обращения', 'обращений')}`;
+    const people = [];
+    const peopleById = new Map();
+    items.forEach(item => {
+      let person = peopleById.get(item.chel_id);
+      if (!person) {
+        person = { chelId:item.chel_id, name:item.preferred_name, conversations:[] };
+        peopleById.set(item.chel_id, person);
+        people.push(person);
+      }
+      person.conversations.push(item);
+    });
+    $('#queueCount').textContent = people.length
+      ? `${people.length} ${plural(people.length, 'человек', 'человека', 'человек')} · ${items.length} ${plural(items.length, 'диалог', 'диалога', 'диалогов')}`
+      : '0 человек';
     $('#queueUpdated').textContent = `обновлено ${formatDate(new Date())}`;
-    $('#requestList').innerHTML = items.length ? items.map(item => {
-      const name = item.preferred_name || `Пользователь ${item.chel_id.slice(-6)}`;
-      const unread = Number(item.unanswered_user_messages || 0);
-      return `<button class="request-card ${item.id === state.selectedId ? 'active' : ''}" data-conversation-id="${escapeHtml(item.id)}">
-        <span class="request-card-head"><strong>${escapeHtml(name)}</strong><time>${formatDate(item.updated_at)}</time></span>
-        <p>${escapeHtml(plainTextPreview(item.last_message || item.title || 'Нет сообщений'))}</p>
-        <span class="request-meta">${queueLabel(item)}<span>${escapeHtml(item.human_ticket_id || item.id.slice(0, 8))}</span>${unread ? `<i class="unread">${unread}</i>` : ''}</span>
-      </button>`;
-    }).join('') : '<div class="queue-empty">В этой очереди пока нет обращений.</div>';
+    $('#requestList').innerHTML = people.length ? people.map(person => {
+      const name = person.name || `Пользователь ${person.chelId.slice(-6)}`;
+      const ticketCount = person.conversations.filter(item => item.human_ticket_id).length;
+      const unreadTotal = person.conversations.reduce(
+        (total, item) => total + Number(item.unanswered_user_messages || 0), 0,
+      );
+      const cards = person.conversations.map(item => {
+        const unread = Number(item.unanswered_user_messages || 0);
+        const reference = item.human_ticket_id
+          ? `Обращение ${item.human_ticket_id}`
+          : `Диалог ${item.id.slice(0, 8)}`;
+        return `<button class="request-card ${item.id === state.selectedId ? 'active' : ''}" data-conversation-id="${escapeHtml(item.id)}">
+          <span class="request-card-head"><strong>${escapeHtml(item.title || 'Новый диалог')}</strong><time>${formatDate(item.updated_at)}</time></span>
+          <p>${escapeHtml(plainTextPreview(item.last_message || 'Нет сообщений'))}</p>
+          <span class="request-meta">${queueLabel(item)}<span title="${escapeHtml(item.id)}">${escapeHtml(reference)}</span>${unread ? `<i class="unread">${unread}</i>` : ''}</span>
+        </button>`;
+      }).join('');
+      const collapsed = state.collapsedPeople.has(person.chelId);
+      return `<section class="person-group ${person.conversations.some(item => item.id === state.selectedId) ? 'active' : ''}${collapsed ? ' collapsed' : ''}" data-person-id="${escapeHtml(person.chelId)}">
+        <button class="person-group-header" type="button" data-person-toggle="${escapeHtml(person.chelId)}" aria-expanded="${String(!collapsed)}">
+          <span class="person-avatar">${escapeHtml(initials(name))}</span>
+          <span class="person-heading"><strong>${escapeHtml(name)}</strong><code>${escapeHtml(person.chelId)}</code></span>
+          <span class="person-summary"><span class="person-totals">${person.conversations.length} ${plural(person.conversations.length, 'диалог', 'диалога', 'диалогов')}${ticketCount ? `<small>${ticketCount} ${plural(ticketCount, 'обращение', 'обращения', 'обращений')}</small>` : '<small>без обращений</small>'}</span>${unreadTotal ? `<i class="person-unread">${unreadTotal}</i>` : ''}</span>
+          <span class="person-chevron" aria-hidden="true">⌃</span>
+        </button>
+        <div class="person-conversations">${cards}</div>
+      </section>`;
+    }).join('') : `<div class="queue-empty">${state.search ? 'По этому ID или имени ничего не найдено.' : 'В этой очереди пока нет обращений.'}</div>`;
   } catch (error) {
     if (error.status === 401) return showManagerLogin('Сеанс завершён. Войдите снова.');
     toast(error.message, true);
@@ -498,7 +534,16 @@ $('#loginForm').addEventListener('submit', login);
 $('#logoutButton').addEventListener('click', logout);
 $('#requestList').addEventListener('click', event => {
   const card = event.target.closest('[data-conversation-id]');
-  if (card) selectConversation(card.dataset.conversationId);
+  if (card) return selectConversation(card.dataset.conversationId);
+  const toggle = event.target.closest('[data-person-toggle]');
+  if (!toggle) return;
+  const chelId = toggle.dataset.personToggle;
+  const group = toggle.closest('.person-group');
+  const collapsed = !group.classList.contains('collapsed');
+  group.classList.toggle('collapsed', collapsed);
+  toggle.setAttribute('aria-expanded', String(!collapsed));
+  if (collapsed) state.collapsedPeople.add(chelId);
+  else state.collapsedPeople.delete(chelId);
 });
 $('#queueFilters').addEventListener('click', event => {
   const button = event.target.closest('[data-queue]');

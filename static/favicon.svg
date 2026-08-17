@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Консилиум">
+  <rect width="64" height="64" rx="14" fill="#176f57"/>
+  <circle cx="32" cy="32" r="23" fill="#3f8d78"/>
+  <path fill="#fff" d="M21 17h8v12.8L39.2 17h10L37.5 31.7 50.5 47H40L29 34.6V47h-8z"/>
+</svg>

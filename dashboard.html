@@ -5,11 +5,13 @@
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
   <meta name="theme-color" content="#f3f8f5">
   <title>Админ-панель · Консилиум</title>
-  <link rel="icon" href="data:,">
+  <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
+  <link rel="icon" href="/static/icon-192.png" type="image/png" sizes="192x192">
+  <link rel="apple-touch-icon" href="/static/apple-touch-icon.png">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/static/dashboard.css?v=20260815-manager-attribution">
+  <link rel="stylesheet" href="/static/dashboard.css?v=20260817-table-sorting">
 </head>
 <body>
   <main class="dashboard-shell">
@@ -44,12 +46,20 @@
       </header>
 
       <nav class="admin-tabs" aria-label="Разделы админ-панели">
+        <button id="favoritesTab" type="button">★ Избранное <span class="favorites-count" id="favoritesCount">0</span></button>
         <button class="active" id="dashboardTab" type="button">Дашборд</button>
         <button id="analyticsTab" type="button">Воронка и поведение</button>
         <button id="managersTab" type="button">Управление менеджерами</button>
         <button id="examinationsTab" type="button">Дополнительные обследования</button>
         <button id="costsTab" type="button">Расходы</button>
       </nav>
+
+      <section class="favorites-admin hidden" id="favoritesAdminView">
+        <article class="panel favorites-heading-panel">
+          <div class="panel-heading"><div><p class="eyebrow">Персональная подборка</p><h2>Избранная аналитика</h2><p>Нажимайте на звезду у показателей, графиков и таблиц в других разделах — они появятся здесь.</p></div></div>
+        </article>
+        <div class="favorites-grid" id="favoritesGrid"></div>
+      </section>
 
       <section class="analytics-admin hidden" id="analyticsAdminView">
         <article class="panel analytics-heading-panel">
@@ -80,7 +90,7 @@
             <span class="table-count" id="managerAttributionSummary"></span>
           </div>
           <div class="table-scroll"><table>
-            <thead><tr><th>Менеджер</th><th>Пришло пользователей</th><th>Доля от всех</th><th>Выбрали обследования</th><th>Конверсия в выбор</th></tr></thead>
+            <thead><tr><th>Менеджер и метка</th><th>Пришло пользователей</th><th>Доля от всех</th><th>Выбрали обследования</th><th>Конверсия в выбор</th></tr></thead>
             <tbody id="managerAttributionTable"></tbody>
           </table></div>
         </article>
@@ -294,7 +304,7 @@
           <button class="table-clear" id="usersClear" type="button">Сбросить фильтры</button>
         </div>
         <div class="table-scroll"><table>
-          <thead><tr><th>chel_id</th><th>От менеджера</th><th>Первый вход</th><th>Последняя активность</th><th>Анкета</th><th>Мессенджеры</th><th>Диалоги</th><th>Сообщения</th></tr></thead>
+          <thead><tr><th><button class="table-sort" data-table-sort="chel_id">chel_id<i>↕</i></button></th><th><button class="table-sort" data-table-sort="from_manager">От менеджера<i>↕</i></button></th><th><button class="table-sort" data-table-sort="created_at">Первый вход<i>↕</i></button></th><th><button class="table-sort" data-table-sort="last_seen_at">Последняя активность<i>↕</i></button></th><th><button class="table-sort" data-table-sort="onboarding_status">Анкета<i>↕</i></button></th><th><button class="table-sort" data-table-sort="messengers">Мессенджеры<i>↕</i></button></th><th><button class="table-sort" data-table-sort="conversations">Диалоги<i>↕</i></button></th><th><button class="table-sort" data-table-sort="messages">Сообщения<i>↕</i></button></th></tr></thead>
           <tbody id="usersTable"></tbody>
         </table></div>
         <div class="table-pagination"><button id="usersPrev" type="button">← Назад</button><span id="usersPage"></span><button id="usersNext" type="button">Дальше →</button></div>
@@ -310,7 +320,7 @@
           <button class="table-clear" id="devicesClear" type="button">Очистить</button>
         </div>
         <div class="table-scroll"><table>
-          <thead><tr><th>chel_id</th><th>Устройство</th><th>ОС</th><th>Браузер</th><th>Первый вход</th><th>Последний вход</th><th>Открытия</th></tr></thead>
+          <thead><tr><th><button class="table-sort" data-table-sort="chel_id">chel_id<i>↕</i></button></th><th><button class="table-sort" data-table-sort="device_type">Устройство<i>↕</i></button></th><th><button class="table-sort" data-table-sort="operating_system">ОС<i>↕</i></button></th><th><button class="table-sort" data-table-sort="browser">Браузер<i>↕</i></button></th><th><button class="table-sort" data-table-sort="first_seen_at">Первый вход<i>↕</i></button></th><th><button class="table-sort" data-table-sort="last_seen_at">Последний вход<i>↕</i></button></th><th><button class="table-sort" data-table-sort="visit_count">Открытия<i>↕</i></button></th></tr></thead>
           <tbody id="devicesTable"></tbody>
         </table></div>
         <div class="table-pagination"><button id="devicesPrev" type="button">← Назад</button><span id="devicesPage"></span><button id="devicesNext" type="button">Дальше →</button></div>
@@ -326,7 +336,7 @@
           <button class="table-clear" id="conversationsClear" type="button">Очистить</button>
         </div>
         <div class="table-scroll"><table>
-          <thead><tr><th>ID диалога</th><th>chel_id</th><th>Агент</th><th>Статус</th><th>Человек</th><th>Сообщения</th><th>Обновлён</th></tr></thead>
+          <thead><tr><th><button class="table-sort" data-table-sort="id">ID диалога<i>↕</i></button></th><th><button class="table-sort" data-table-sort="chel_id">chel_id<i>↕</i></button></th><th><button class="table-sort" data-table-sort="active_agent">Агент<i>↕</i></button></th><th><button class="table-sort" data-table-sort="status">Статус<i>↕</i></button></th><th><button class="table-sort" data-table-sort="human_status">Человек<i>↕</i></button></th><th><button class="table-sort" data-table-sort="messages">Сообщения<i>↕</i></button></th><th><button class="table-sort" data-table-sort="updated_at">Обновлён<i>↕</i></button></th></tr></thead>
           <tbody id="conversationsTable"></tbody>
         </table></div>
         <div class="table-pagination"><button id="conversationsPrev" type="button">← Назад</button><span id="conversationsPage"></span><button id="conversationsNext" type="button">Дальше →</button></div>
@@ -342,7 +352,7 @@
           <button class="table-clear" id="requestsClear" type="button">Очистить</button>
         </div>
         <div class="table-scroll"><table>
-          <thead><tr><th>Обращение</th><th>chel_id</th><th>Канал</th><th>Статус</th><th>Телефон</th><th>Обновлено</th></tr></thead>
+          <thead><tr><th><button class="table-sort" data-table-sort="ticket_id">Обращение<i>↕</i></button></th><th><button class="table-sort" data-table-sort="chel_id">chel_id<i>↕</i></button></th><th><button class="table-sort" data-table-sort="channel">Канал<i>↕</i></button></th><th><button class="table-sort" data-table-sort="human_status">Статус<i>↕</i></button></th><th><button class="table-sort" data-table-sort="phone">Телефон<i>↕</i></button></th><th><button class="table-sort" data-table-sort="updated_at">Обновлено<i>↕</i></button></th></tr></thead>
           <tbody id="requestsTable"></tbody>
         </table></div>
         <div class="table-pagination"><button id="requestsPrev" type="button">← Назад</button><span id="requestsPage"></span><button id="requestsNext" type="button">Дальше →</button></div>
@@ -351,6 +361,6 @@
       <p class="dashboard-error hidden" id="dashboardError" role="alert"></p>
     </div>
   </main>
-  <script src="/static/dashboard.js?v=20260815-manager-attribution" defer></script>
+  <script src="/static/dashboard.js?v=20260817-manager-names" defer></script>
 </body>
 </html>

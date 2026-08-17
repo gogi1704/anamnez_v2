@@ -17,6 +17,11 @@ _write_lock = threading.Lock()
 _current_chel_id: ContextVar[str] = ContextVar("current_chel_id", default="chel_test_default")
 
 
+def _sqlite_casefold(value: object) -> str:
+    """Unicode-aware normalization for case-insensitive SQLite searches."""
+    return str(value or "").casefold()
+
+
 def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -35,6 +40,26 @@ def normalize_from_manager(value: str | None) -> str:
     if not normalized or normalized.lower() == "direct":
         return ""
     return normalized if re.fullmatch(r"[\w.-]+", normalized, re.UNICODE) else ""
+
+
+FROM_MANAGER_NAMES = {
+    "manager_1": "Красильникова",
+    "manager_2": "Аминева",
+    "manager_3": "Левина",
+    "manager_4": "Бухарова",
+    "manager_5": "Сарасон",
+    "manager_6": "Пятакова",
+    "manager_7": "Зельцер",
+    "manager_8": "Богданова",
+    "manager_9": "Семененко",
+    "manager_10": "Черниговцев",
+}
+
+
+def from_manager_name(value: str | None) -> str:
+    """Return the human-readable name for a traffic attribution marker."""
+    marker = normalize_from_manager(value)
+    return FROM_MANAGER_NAMES.get(marker.casefold(), marker)
 
 
 def ensure_user(
@@ -991,6 +1016,7 @@ def admin_manager_attribution(period: str = "30") -> dict:
         selected = int(row["users_with_examinations"] or 0)
         managers.append({
             "from_manager": row["from_manager"],
+            "manager_name": from_manager_name(row["from_manager"]),
             "users": users,
             "percent_of_all": round(users * 100 / total_users, 1) if total_users else 0,
             "users_with_examinations": selected,
@@ -1023,6 +1049,8 @@ def admin_table(
     offset: int = 0,
     created_from: str = "",
     created_to: str = "",
+    sort: str = "",
+    order: str = "desc",
 ) -> dict:
     """Search and paginate a strict allowlist of non-medical admin table views."""
     name = str(name or "").strip()
@@ -1037,6 +1065,41 @@ def admin_table(
     created_to = _admin_date(created_to, "Конечная дата")
     if created_from and created_to and created_from > created_to:
         raise ValueError("Начальная дата не может быть позже конечной")
+    sort_columns = {
+        "users": {
+            "chel_id": "u.chel_id", "from_manager": "from_manager",
+            "created_at": "u.registered_at", "last_seen_at": "u.last_seen_at",
+            "onboarding_status": "onboarding_status", "messengers": "messengers",
+            "conversations": "conversations", "messages": "messages",
+        },
+        "conversations": {
+            "id": "c.id", "chel_id": "c.chel_id", "active_agent": "c.active_agent",
+            "status": "c.status", "human_status": "c.human_status",
+            "messages": "messages", "updated_at": "c.updated_at",
+        },
+        "human_requests": {
+            "ticket_id": "c.human_ticket_id", "chel_id": "c.chel_id",
+            "channel": "channel", "human_status": "c.human_status",
+            "phone": "c.human_phone", "updated_at": "c.updated_at",
+        },
+        "devices": {
+            "chel_id": "d.chel_id", "device_type": "d.device_type",
+            "operating_system": "d.operating_system", "browser": "d.browser",
+            "first_seen_at": "d.first_seen_at", "last_seen_at": "d.last_seen_at",
+            "visit_count": "d.visit_count",
+        },
+    }
+    default_sorts = {
+        "users": "last_seen_at", "conversations": "updated_at",
+        "human_requests": "updated_at", "devices": "last_seen_at",
+    }
+    sort = str(sort or "").strip()
+    if sort not in sort_columns[name]:
+        sort = default_sorts[name]
+    order = str(order or "desc").strip().lower()
+    if order not in {"asc", "desc"}:
+        raise ValueError("Неизвестное направление сортировки")
+    order_sql = f"{sort_columns[name][sort]} {order.upper()}"
     overall_total = None
     period_total = None
 
@@ -1096,7 +1159,7 @@ def admin_table(
                     LEFT JOIN conversations c ON c.chel_id = u.chel_id
                     LEFT JOIN messages m ON m.conversation_id = c.id
                     WHERE {where}
-                    GROUP BY u.chel_id ORDER BY u.last_seen_at DESC LIMIT ? OFFSET ?""",
+                    GROUP BY u.chel_id ORDER BY {order_sql}, u.chel_id ASC LIMIT ? OFFSET ?""",
                     tuple(params + [limit, offset]),
                 ).fetchall()
             ]
@@ -1124,7 +1187,7 @@ def admin_table(
                     FROM conversations c
                     LEFT JOIN messages m ON m.conversation_id = c.id
                     WHERE {where}
-                    GROUP BY c.id ORDER BY c.updated_at DESC LIMIT ? OFFSET ?""",
+                    GROUP BY c.id ORDER BY {order_sql}, c.id ASC LIMIT ? OFFSET ?""",
                     tuple(params + [limit, offset]),
                 ).fetchall()
             ]
@@ -1150,7 +1213,7 @@ def admin_table(
                     c.human_status, COALESCE(c.human_channel, '') AS channel,
                     c.human_phone, c.created_at, c.updated_at
                 FROM conversations c WHERE {where}
-                ORDER BY c.updated_at DESC LIMIT ? OFFSET ?""",
+                ORDER BY {order_sql}, c.human_ticket_id ASC LIMIT ? OFFSET ?""",
                 tuple(params + [limit, offset]),
             ).fetchall():
                 item = dict(row)
@@ -1181,7 +1244,7 @@ def admin_table(
                     f"""SELECT d.chel_id, d.device_type, d.operating_system,
                         d.browser, d.first_seen_at, d.last_seen_at, d.visit_count
                     FROM user_device_stats d WHERE {where}
-                    ORDER BY d.last_seen_at DESC LIMIT ? OFFSET ?""",
+                    ORDER BY {order_sql}, d.chel_id ASC LIMIT ? OFFSET ?""",
                     tuple(params + [limit, offset]),
                 ).fetchall()
             ]
@@ -1196,6 +1259,8 @@ def admin_table(
         "period_total": int(period_total or 0) if period_total is not None else None,
         "created_from": created_from,
         "created_to": created_to,
+        "sort": sort,
+        "order": order,
         "rows": rows,
     }
 
@@ -1960,6 +2025,7 @@ def revoke_staff_session(token: str) -> None:
 
 def manager_list_conversations(
     query: str = "", queue: str = "open", limit: int = 100,
+    include_related: bool = False,
 ) -> list[dict]:
     """Return the human-support queue. This deliberately contains sensitive data."""
     query = " ".join(str(query or "").split())[:120]
@@ -1967,28 +2033,43 @@ def manager_list_conversations(
     if queue not in {"open", "all", "ai_off"}:
         raise ValueError("Неизвестный фильтр очереди")
     limit = max(10, min(250, int(limit)))
-    escaped = query.replace("\\", "\\\\").replace("%", "\\%").replace("_", "\\_")
-    pattern = f"%{escaped}%"
-    where = ["c.chel_id NOT IN ('chel_legacy', 'chel_test_default')"]
+    search_value = query.casefold()
+    conversation_alias = "c0" if include_related else "c"
+    profile_alias = "p0" if include_related else "p"
+    where = [f"{conversation_alias}.chel_id NOT IN ('chel_legacy', 'chel_test_default')"]
     params: list = []
     if queue == "open":
-        where.append("(c.human_ticket_id IS NOT NULL OR c.ai_enabled = 0)")
-        where.append("c.human_status IN ('pending', 'connected')")
+        where.append(
+            f"({conversation_alias}.human_ticket_id IS NOT NULL "
+            f"OR {conversation_alias}.ai_enabled = 0)"
+        )
+        where.append(f"{conversation_alias}.human_status IN ('pending', 'connected')")
     elif queue == "ai_off":
-        where.append("c.ai_enabled = 0")
+        where.append(f"{conversation_alias}.ai_enabled = 0")
     if query:
-        where.append("""(
-            c.id LIKE ? ESCAPE '\\' OR c.chel_id LIKE ? ESCAPE '\\'
-            OR COALESCE(c.human_ticket_id, '') LIKE ? ESCAPE '\\'
-            OR COALESCE(p.preferred_name, '') LIKE ? ESCAPE '\\'
-            OR COALESCE(p.company_inn, '') LIKE ? ESCAPE '\\'
-            OR COALESCE(c.human_phone, '') LIKE ? ESCAPE '\\'
+        where.append(f"""(
+            INSTR(CASEFOLD({conversation_alias}.id), ?) > 0
+            OR INSTR(CASEFOLD({conversation_alias}.chel_id), ?) > 0
+            OR INSTR(CASEFOLD({conversation_alias}.human_ticket_id), ?) > 0
+            OR INSTR(CASEFOLD({profile_alias}.preferred_name), ?) > 0
+            OR INSTR(CASEFOLD({profile_alias}.company_inn), ?) > 0
+            OR INSTR(CASEFOLD({conversation_alias}.human_phone), ?) > 0
         )""")
-        params.extend([pattern] * 6)
+        params.extend([search_value] * 6)
     where_sql = " AND ".join(where)
     with connection() as conn:
-        rows = conn.execute(
-            f"""SELECT c.id, c.chel_id, c.title, c.active_agent, c.status,
+        if include_related:
+            rows = conn.execute(
+                f"""WITH matched_users AS (
+                    SELECT c0.chel_id, MAX(c0.updated_at) AS matched_updated
+                    FROM conversations c0
+                    LEFT JOIN user_profile p0 ON p0.chel_id = c0.chel_id
+                    WHERE {where_sql}
+                    GROUP BY c0.chel_id
+                    ORDER BY matched_updated DESC
+                    LIMIT ?
+                )
+                SELECT c.id, c.chel_id, c.title, c.active_agent, c.status,
                 c.ai_enabled, c.human_status, c.human_ticket_id,
                 COALESCE(c.human_channel, '') AS human_channel,
                 c.human_phone, c.created_at, c.updated_at,
@@ -2002,13 +2083,37 @@ def manager_list_conversations(
                      WHERE hm.conversation_id = c.id
                        AND json_extract(hm.metadata, '$.sender_type') = 'human_manager'
                    ), 0)) AS unanswered_user_messages
-            FROM conversations c
-            LEFT JOIN user_profile p ON p.chel_id = c.chel_id
-            WHERE {where_sql}
-            ORDER BY CASE WHEN c.ai_enabled = 0 THEN 0 ELSE 1 END,
-                     c.updated_at DESC LIMIT ?""",
-            tuple(params + [limit]),
-        ).fetchall()
+                FROM conversations c
+                JOIN matched_users matched ON matched.chel_id = c.chel_id
+                LEFT JOIN user_profile p ON p.chel_id = c.chel_id
+                ORDER BY matched.matched_updated DESC,
+                         CASE WHEN c.ai_enabled = 0 THEN 0 ELSE 1 END,
+                         c.updated_at DESC""",
+                tuple(params + [limit]),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                f"""SELECT c.id, c.chel_id, c.title, c.active_agent, c.status,
+                    c.ai_enabled, c.human_status, c.human_ticket_id,
+                    COALESCE(c.human_channel, '') AS human_channel,
+                    c.human_phone, c.created_at, c.updated_at,
+                    COALESCE(p.preferred_name, '') AS preferred_name,
+                    (SELECT content FROM messages lm
+                     WHERE lm.conversation_id = c.id ORDER BY lm.id DESC LIMIT 1) AS last_message,
+                    (SELECT COUNT(*) FROM messages um
+                     WHERE um.conversation_id = c.id AND um.role = 'user'
+                       AND um.id > COALESCE((
+                         SELECT MAX(hm.id) FROM messages hm
+                         WHERE hm.conversation_id = c.id
+                           AND json_extract(hm.metadata, '$.sender_type') = 'human_manager'
+                       ), 0)) AS unanswered_user_messages
+                FROM conversations c
+                LEFT JOIN user_profile p ON p.chel_id = c.chel_id
+                WHERE {where_sql}
+                ORDER BY CASE WHEN c.ai_enabled = 0 THEN 0 ELSE 1 END,
+                         c.updated_at DESC LIMIT ?""",
+                tuple(params + [limit]),
+            ).fetchall()
     result = []
     for row in rows:
         item = dict(row)
@@ -2276,6 +2381,7 @@ def connection():
     settings.database_path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(settings.database_path, timeout=15)
     conn.row_factory = sqlite3.Row
+    conn.create_function("CASEFOLD", 1, _sqlite_casefold, deterministic=True)
     conn.execute("PRAGMA foreign_keys = ON")
     try:
         yield conn
