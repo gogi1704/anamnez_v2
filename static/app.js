@@ -331,6 +331,7 @@ const onboardingQuestions = [
   { key:'conditions', title:'Есть хронические заболевания?', lead:'Напишите по одному на строку. Если нет — этот шаг можно пропустить.', type:'textarea', placeholder:'Например:\nГипертония\nАстма', optional:true, list:true },
   { key:'medications', title:'Какие лекарства принимаете постоянно?', lead:'Название и дозировка, если известна. Шаг можно пропустить.', type:'textarea', placeholder:'По одному препарату на строку', optional:true, list:true },
   { key:'allergies', title:'Есть аллергии?', lead:'Укажите лекарства, продукты или другие известные аллергены. Шаг можно пропустить.', type:'textarea', placeholder:'По одному аллергену на строку', optional:true, list:true },
+  { key:'notes', title:'Есть ли у вас жалобы?', lead:'Введите в одном сообщении всё, что вас тревожит: проблему, симптомы и что вы принимаете в связи с ними. Если жалоб нет, напишите «Нет».', type:'textarea', maxlength:1000, placeholder:'Например: две недели болит голова по вечерам, принимаю ибупрофен' },
 ];
 
 async function api(path, options = {}) {
@@ -634,7 +635,7 @@ function renderQuestion() {
   const control = question.choices
     ? `<div class="choice-grid">${question.choices.map(([id,label]) => `<button type="button" class="choice-button ${value === id ? 'selected' : ''}" data-choice="${id}">${label}</button>`).join('')}</div>`
     : question.type === 'textarea'
-      ? `<textarea class="onboarding-input onboarding-input-area" id="onboardingInput" placeholder="${escapeAttr(question.placeholder || '')}">${escapeHtml(Array.isArray(value) ? value.join('\n') : value)}</textarea>`
+      ? `<textarea class="onboarding-input onboarding-input-area" id="onboardingInput" placeholder="${escapeAttr(question.placeholder || '')}" ${question.maxlength ? `maxlength="${question.maxlength}"` : ''}>${escapeHtml(Array.isArray(value) ? value.join('\n') : value)}</textarea>`
       : `<input class="onboarding-input" id="onboardingInput" type="${question.type || 'text'}" value="${escapeAttr(value)}" placeholder="${escapeAttr(question.placeholder || '')}" ${question.inputmode ? `inputmode="${question.inputmode}"` : ''} ${question.maxlength ? `maxlength="${question.maxlength}"` : ''} ${question.min !== undefined ? `min="${question.min}"` : ''} ${question.max !== undefined ? `max="${question.max}"` : ''} ${question.step ? `step="${question.step}"` : ''}>`;
   const notMedicalExam = question.key === 'company_inn'
     ? '<button type="button" class="not-medical-exam-button" data-onboarding-action="skip-medical-exam">Я не на мед-осмотр</button>'
@@ -711,10 +712,66 @@ async function skipMedicalExam() {
   }
 }
 
+const EXAMINATION_AUDIENCES = {
+  fatigue_basic:'Тем, кого беспокоят слабость, сонливость или снижение работоспособности.',
+  fatigue_extended:'Тем, у кого усталость сохраняется длительно или сочетается с другими жалобами.',
+  weight_basic:'Тем, кто хочет разобраться в возможных обменных причинах набора веса.',
+  weight_extended:'Тем, кому нужна более широкая оценка гормональных и обменных факторов веса.',
+  hair_loss:'При заметном выпадении волос, ломкости и подозрении на дефициты.',
+  lipids:'Для оценки сердечно-сосудистого риска, особенно при повышенном давлении или лишнем весе.',
+  liver_basic:'Для базовой проверки показателей печени и поджелудочной железы.',
+  liver_extended:'При необходимости более широкой оценки печени, поджелудочной и желчевыводящих путей.',
+  iron:'При утомляемости, слабости, бледности или подозрении на дефицит железа.',
+  kidneys:'Для базовой оценки функции почек и азотистого обмена.',
+  protein:'Для оценки белкового обмена, питания и синтетической функции печени.',
+  joints:'При боли, скованности или отёчности суставов.',
+  inflammation:'Когда важно дополнительно оценить наличие воспалительной реакции.',
+  thyroid:'При изменениях веса, утомляемости, сердцебиении или других возможных признаках нарушения функции щитовидной железы.',
+  female_hormones:'Женщинам при наличии показаний к оценке гормонального фона; сроки сдачи важно обсудить с врачом.',
+  male_health:'Мужчинам для оценки гормонального фона и показателей предстательной железы с учётом возраста и показаний.',
+  cortisol:'При длительном стрессе и связанных с ним жалобах; показатель зависит от времени сдачи.',
+  vitamin_d:'Тем, кому важно узнать уровень витамина D и обсудить необходимость коррекции.',
+  ferritin:'Для оценки запасов железа, особенно при слабости или выпадении волос.',
+  ca125:'Только при наличии врачебных показаний; онкомаркер не подходит для самостоятельной диагностики.',
+  ca153:'Только при наличии врачебных показаний; онкомаркер не подходит для самостоятельной диагностики.',
+  ca199:'Только при наличии врачебных показаний; онкомаркер не подходит для самостоятельной диагностики.',
+};
+
 function renderExamOffer() {
   trackEvent('examinations_offer_viewed', { screen:'examinations_offer' });
   setOnboardingMeta('Обследования', 72);
-  $('#onboardingContent').innerHTML = `<span class="onboarding-kicker">Необязательный шаг</span><h1>Хотите дополнить картину обследованиями?</h1><div class="exam-offer-guide"><p><strong>Нажимая «Посмотреть варианты»</strong>, вы увидите наборы обследований, подобранные с учётом ответов анкеты.</p><p>Перед выбором можно вернуться и изменить ответы. Позже данные также можно отредактировать в разделе «Мои данные».</p><p>Вы можете пропустить дополнительные обследования — Консилиум всё равно откроется.</p></div><div class="onboarding-actions"><button type="button" class="onboarding-back" data-onboarding-action="question-back">Изменить анкету</button><button type="button" class="onboarding-next" data-onboarding-action="start-exams">Посмотреть варианты</button></div><button type="button" class="exam-skip" data-onboarding-action="review-exam-skip">Пропустить и открыть Консилиум</button>`;
+  $('#onboardingContent').innerHTML = `
+    <span class="onboarding-kicker">После анкеты</span>
+    <h1>Дополнительные обследования</h1>
+    <blockquote class="exam-offer-quote"><strong>Давайте честно: здоровых людей не бывает.</strong><span>У каждого есть своё слабое место, и лучше бы его знать.<br>Пара быстрых обследований — и жить спокойнее.</span></blockquote>
+    <div class="exam-offer-copy">
+      <p>Чтобы получить более полную информацию о состоянии своего здоровья, вы можете пройти дополнительные обследования во время медосмотра.</p>
+      <p class="exam-relative-note"><b>Можно пригласить родственника или друга</b> пройти один или несколько чек-апов. Позаботьтесь о близких — отправьте им ссылку на сервис.</p>
+    </div>
+    <button type="button" class="exam-catalog-button" data-onboarding-action="open-exam-catalog-info"><span>◫</span><span><strong>Посмотреть описания чек-апов</strong><small>Что входит, кому и для чего они нужны</small></span><b>→</b></button>
+    <div class="exam-offer-question"><strong>Хотели бы вы сдать дополнительные анализы во время медосмотра на работе?</strong><small>Выберите соответствующий вариант.</small></div>
+    <div class="onboarding-actions exam-offer-actions"><button type="button" class="onboarding-next" data-onboarding-action="start-exams">Да, выбрать анализы</button><button type="button" class="exam-decline-button" data-onboarding-action="review-exam-skip">Нет, не сейчас</button></div>
+    <button type="button" class="exam-edit-profile" data-onboarding-action="question-back">← Изменить ответы анкеты</button>`;
+}
+
+function renderExamCatalogInfo() {
+  setOnboardingMeta('Описание чек-апов', 76);
+  const tests = state.onboarding?.tests || [];
+  const cards = tests.map(test => `
+    <article class="exam-info-card">
+      <header><strong>${escapeHtml(test.name)}</strong><b>${Number(test.price || 0).toLocaleString('ru')} ₽</b></header>
+      <p><span>Кому подходит</span>${escapeHtml(EXAMINATION_AUDIENCES[test.id] || test.description || 'Тем, кто хочет получить больше информации о состоянии здоровья.')}</p>
+      <p><span>Для чего</span>${escapeHtml(test.description || 'Для дополнительной оценки показателей здоровья.')}</p>
+      <p class="exam-info-includes"><span>Что входит</span>${escapeHtml(test.includes || 'Состав уточняется')}</p>
+    </article>`).join('');
+  $('#onboardingContent').innerHTML = `
+    <div class="exam-info-screen">
+      <span class="onboarding-kicker">Доступные чек-апы</span>
+      <h1>Что можно проверить</h1>
+      <p class="onboarding-lead">Краткое описание поможет сориентироваться. Необходимость обследований и интерпретацию результатов лучше обсуждать с врачом.</p>
+      <div class="exam-info-list">${cards}</div>
+      <div class="exam-info-actions"><button type="button" class="onboarding-next" data-onboarding-action="start-exams">Выбрать анализы</button><button type="button" class="onboarding-back" data-onboarding-action="close-exam-catalog-info">Вернуться к вопросу</button></div>
+    </div>`;
 }
 
 const EXAMINATION_UPGRADE_PAIRS = {
@@ -778,7 +835,22 @@ function renderExamSelection(scrollPosition = null) {
 function renderExamSkipConfirmation() {
   trackEvent('examinations_objection_viewed', { screen:'examinations_skip' });
   setOnboardingMeta('Обследования', 76);
-  $('#onboardingContent').innerHTML = `<span class="onboarding-kicker">Перед тем как продолжить</span><h1>Что дают дополнительные обследования?</h1><p class="onboarding-lead">Сдавая дополнительные обследования, вы получаете:</p><ul class="exam-benefits"><li><span>✓</span><div><strong>Больше информации за один визит</strong><small>Во время медосмотра дополнительные показатели можно проверить без отдельной поездки в лабораторию.</small></div></li><li><span>✓</span><div><strong>Возможность заметить скрытые изменения раньше</strong><small>Некоторые отклонения долго не проявляются заметными симптомами.</small></div></li><li><span>✓</span><div><strong>Результаты онлайн</strong><small>Готовые документы можно получить в Консилиуме по номеру пробирки.</small></div></li><li><span>✓</span><div><strong>Понятную расшифровку</strong><small>Результаты можно сопоставить с анкетой и обсудить со специалистом.</small></div></li></ul><p class="exam-benefits-note">Обследования остаются добровольными. Эта подборка не заменяет назначение врача.</p><div class="onboarding-actions skip-decision-actions"><button type="button" class="exam-refuse" data-onboarding-action="confirm-skip-exams">Всё равно отказаться</button><button type="button" class="onboarding-next" data-onboarding-action="start-exams">Выбрать обследования</button></div>`;
+  $('#onboardingContent').innerHTML = `
+    <span class="onboarding-kicker">Перед тем как продолжить</span>
+    <h1>После обследований вы получите больше, чем результаты</h1>
+    <div class="exam-objection-intro">
+      <p>Врач высшей категории <strong>Татьяна Витальевна</strong> подготовит подробную расшифровку сложных показателей.</p>
+      <p>И самое главное — вы получите <strong>бесплатную консультацию</strong> по результатам.</p>
+      <p>Всё будет доступно в этом сервисе — без очередей и доплат за расшифровку.</p>
+    </div>
+    <ul class="exam-benefits">
+      <li><span>✓</span><div><strong>Ничего дополнительно делать не нужно</strong><small>Выберите обследования сейчас, а в день медосмотра сдайте всё вместе.</small></div></li>
+      <li><span>✓</span><div><strong>Один визит вместо отдельной поездки</strong><small>Вы уже будете на осмотре — дополнительные анализы можно сдать за один раз.</small></div></li>
+      <li><span>✓</span><div><strong>Бесплатная консультация специалиста</strong><small>После готовности дополнительных анализов врач высшей категории поможет разобраться в результатах.</small></div></li>
+      <li><span>✓</span><div><strong>Не придётся записываться отдельно</strong><small>Если отложить обследования, позже могут потребоваться отдельная запись и поездка.</small></div></li>
+    </ul>
+    <p class="exam-benefits-note">Дополнительные обследования добровольны — окончательное решение остаётся за вами.</p>
+    <div class="onboarding-actions skip-decision-actions"><button type="button" class="onboarding-next" data-onboarding-action="start-exams">Выбрать обследования</button><button type="button" class="exam-refuse" data-onboarding-action="confirm-skip-exams">Всё равно отказаться</button></div>`;
 }
 
 async function submitExamSelection(skip = false) {
@@ -1086,6 +1158,8 @@ $('#onboardingContent').addEventListener('click', event => {
   if (action === 'next') nextQuestion();
   else if (action === 'back') { try { captureQuestionAnswer(); } catch {} trackEvent('question_back', { step_number:state.onboardingStep + 1 }); state.onboardingStep -= 1; renderQuestion(); }
   else if (action === 'question-back') { trackEvent('question_back', { screen:'examinations_offer' }); trackEvent('funnel_action', {stage:'examinations_offer',action:'edit_questionnaire'}); if (state.returnToChatAfterExaminations) editProfileFromChatExamFlow(); else { state.onboardingStep = activeOnboardingQuestions().length - 1; renderQuestion(); } }
+  else if (action === 'open-exam-catalog-info') { trackEvent('funnel_action', {stage:'examinations_offer',action:'catalog_info'}); renderExamCatalogInfo(); }
+  else if (action === 'close-exam-catalog-info') renderExamOffer();
   else if (action === 'start-exams') { const afterObjection = Boolean($('#onboardingContent .exam-benefits')); trackEvent('funnel_action', {stage:'examinations_offer',action:afterObjection ? 'choose_after_objection' : 'view_options'}); trackEvent('examinations_opened', { screen:'examinations' }); renderExamSelection(); }
   else if (action === 'exam-offer') { trackEvent('funnel_action', {stage:'examinations_options',action:'options_back'}); if (state.returnToChatAfterExaminations) { state.selectedTests = new Set(state.onboarding?.selected_tests || []); renderCurrentExamSelectionSummary(); } else renderExamOffer(); }
   else if (action === 'review-exam-skip') { const fromOptions = Boolean($('#onboardingContent .exam-list')); trackEvent('funnel_action', {stage:fromOptions ? 'examinations_options' : 'examinations_offer',action:fromOptions ? 'nothing_selected' : 'skip'}); trackEvent('examinations_skip_clicked', { selected_count:state.selectedTests.size }); renderExamSkipConfirmation(); }

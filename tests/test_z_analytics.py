@@ -174,6 +174,7 @@ class AnalyticsTests(unittest.TestCase):
             {"event_id": "detail-font-extra", "session_id": "detail-session-01", "event_name": "appearance_completed", "properties": {"font_size": "extra"}},
             {"event_id": "detail-offer-view", "session_id": "detail-session-01", "event_name": "examinations_offer_viewed", "properties": {}},
             {"event_id": "detail-edit-form", "session_id": "detail-session-01", "event_name": "funnel_action", "properties": {"stage": "examinations_offer", "action": "edit_questionnaire"}},
+            {"event_id": "detail-catalog-info", "session_id": "detail-session-01", "event_name": "funnel_action", "properties": {"stage": "examinations_offer", "action": "catalog_info"}},
             {"event_id": "detail-options-view", "session_id": "detail-session-01", "event_name": "examinations_opened", "properties": {}},
             {"event_id": "detail-online-pay", "session_id": "detail-session-01", "event_name": "funnel_action", "properties": {"stage": "examinations_options", "action": "pay_online"}},
         ]
@@ -197,6 +198,7 @@ class AnalyticsTests(unittest.TestCase):
         self.assertEqual(registration["max"]["users"], 1)
         self.assertEqual(registration["anonymous_button"]["events"], 1)
         self.assertEqual(appearance["extra"]["users"], 1)
+        self.assertEqual(offer["catalog_info"]["users"], 1)
         self.assertEqual(offer["skip"]["users"], 1)
         self.assertEqual(options["pay_online"]["users"], 1)
         self.assertEqual(options["pay_at_exam"]["users"], 1)

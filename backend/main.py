@@ -24,7 +24,8 @@ from .prompts import public_agents
 
 STATIC_DIR = BASE_DIR / "static"
 ALLOWED_STATIC = {
-    "app.js", "agents.js", "styles.css", "metrika.js", "rich-text.js", "rich-text.css", "dashboard.js", "dashboard.css",
+    "app.js", "agents.js", "styles.css", "styles.8aa9735c809a.css", "metrika.js",
+    "rich-text.js", "rich-text.css", "rich-text.2bf1f5fab764.css", "dashboard.js", "dashboard.css",
     "manager.js", "manager.css", "icon-192.png", "icon-512.png",
     "icon-maskable-512.png", "apple-touch-icon.png", "favicon.svg",
 }
@@ -143,7 +144,14 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
             if name not in ALLOWED_STATIC:
                 return self._json(404, {"detail": "Файл не найден"})
             mime = mimetypes.guess_type(name)[0] or "application/octet-stream"
-            return self._send_file(STATIC_DIR / name, f"{mime}; charset=utf-8")
+            immutable = bool(re.search(r"\.[0-9a-f]{12}\.(?:css|js)$", name))
+            return self._send_file(
+                STATIC_DIR / name,
+                f"{mime}; charset=utf-8",
+                cache_control=(
+                    "public, max-age=31536000, immutable" if immutable else "no-store"
+                ),
+            )
         if path in {"/api/admin/dashboard", "/api/admin/table", "/api/admin/ai-costs", "/api/admin/analytics"}:
             if not self._admin_authorized():
                 return
@@ -1350,6 +1358,7 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
 
     def _send_file(
         self, path: Path, content_type: str, *, allow_metrika_frame: bool = False,
+        cache_control: str = "no-store",
     ) -> None:
         if not path.exists():
             return self._json(404, {"detail": "Файл не найден"})
@@ -1358,7 +1367,7 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
         self._send_security_headers(allow_metrika_frame=allow_metrika_frame)
         self.send_header("Content-Type", content_type)
         self.send_header("Content-Length", str(len(body)))
-        self.send_header("Cache-Control", "no-store")
+        self.send_header("Cache-Control", cache_control)
         self._send_identity_cookie()
         self.end_headers()
         self.wfile.write(body)
@@ -1446,8 +1455,17 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
             if settings.yandex_metrika_counter_id.isdigit() else ""
         )
         metrika_frame_ancestors = (
-            "'self' https://metrika.yandex.ru https://metrica.yandex.ru "
-            "https://analytics.yandex.ru https://metr.yandex.ru "
+            "'self' https://metrika.yandex.ru https://metrika.yandex.by "
+            "https://metrika.yandex.com https://metrika.yandex.com.tr "
+            "https://metrika.yandex.kz https://metrika.yandex.uz "
+            "https://metrica.yandex https://metrica.yandex.ru "
+            "https://metrica.yandex.by https://metrica.yandex.com "
+            "https://metrica.yandex.com.tr https://metrica.yandex.kz "
+            "https://analytics.yandex.ru https://analytics.yandex.by "
+            "https://analytics.yandex.com https://analytics.yandex.com.tr "
+            "https://analytics.yandex.kz https://metr.yandex.ru "
+            "https://metr.yandex.by https://metr.yandex.com "
+            "https://metr.yandex.com.tr https://metr.yandex.kz "
             "https://metrika.ya.ru https://metrica.ya.ru "
             "https://webvisor.com https://*.webvisor.com"
             if allow_metrika_frame and settings.yandex_metrika_counter_id.isdigit()

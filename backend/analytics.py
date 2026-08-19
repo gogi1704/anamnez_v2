@@ -65,6 +65,7 @@ FUNNEL_BREAKDOWNS = {
     ],
     "examinations_offer_viewed": [
         ("edit_questionnaire", "Изменить анкету", "funnel_action", "action", "edit_questionnaire"),
+        ("catalog_info", "Описание чек-апов", "funnel_action", "action", "catalog_info"),
         ("view_options", "Посмотреть варианты", "funnel_action", "action", "view_options"),
         ("skip", "Пропустить", "funnel_action", "action", "skip"),
         ("refuse", "↳ Всё равно отказаться", "funnel_action", "action", "refuse"),
@@ -100,7 +101,7 @@ QUESTION_LABELS = {
     "dark_in_eyes": "Потемнение в глазах", "blood_sugar": "Сахар крови",
     "joint_pain": "Суставы", "fatigue": "Усталость",
     "conditions": "Хронические заболевания", "medications": "Лекарства",
-    "allergies": "Аллергии",
+    "allergies": "Аллергии", "notes": "Жалобы",
 }
 
 

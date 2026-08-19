@@ -13,15 +13,33 @@
   let counterReady = false;
   const pendingGoals = [];
 
+  function markElements(root, selector, className) {
+    if (root?.nodeType === Node.ELEMENT_NODE && root.matches(selector)) {
+      root.classList.add(className);
+    }
+    root.querySelectorAll?.(selector).forEach(element => element.classList.add(className));
+  }
+
   function protectSensitiveContent(root = document) {
-    root.querySelectorAll?.('input, textarea, select, [contenteditable="true"]')
-      .forEach(element => element.classList.add('ym-disable-keys'));
-    root.querySelectorAll?.('form')
-      .forEach(element => element.classList.add('ym-disable-submit'));
+    markElements(root, 'input, textarea, select, [contenteditable="true"]', 'ym-disable-keys');
+    markElements(root, 'form', 'ym-disable-submit');
+
+    // Оставляем Метрике структуру интерфейса и кнопки, но скрываем только
+    // пользовательские медицинские данные и содержимое диалогов.
     [
-      '#onboarding', '#appShell', '#humanModal', '#contextModal',
-      '#bodyMapModal', '#healthHistoryModal', '#profileModal', '#labResultsModal',
-    ].forEach(selector => document.querySelector(selector)?.classList.add('ym-hide-content'));
+      '#messages', '#conversationList', '#attachmentList', '#timeline',
+      '#handoffPreview', '#ticketNumber', '#memoryList',
+      '#profileStatus', '#profileCompletion', '#bodyMapStatus',
+      '#bodySymptomCount', '#healthHistoryCount',
+      '#humanModal', '#contextModal', '#bodyMapModal', '#healthHistoryModal',
+      '#profileModal', '#labResultsModal',
+    ].forEach(selector => markElements(root, selector, 'ym-hide-content'));
+
+    [
+      '#messages button', '#humanModal button', '#contextModal button',
+      '#bodyMapModal button', '#healthHistoryModal button',
+      '#profileModal button', '#labResultsModal button',
+    ].forEach(selector => markElements(root, selector, 'ym-show-content'));
   }
 
   function sendGoal(goal) {
