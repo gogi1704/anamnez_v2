@@ -17,7 +17,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/static/styles.8aa9735c809a.css">
+  <link rel="stylesheet" href="/static/styles.215d794e1be6.css">
   <link rel="stylesheet" href="/static/rich-text.2bf1f5fab764.css">
 </head>
 <body>
@@ -276,12 +276,16 @@
       <button class="modal-close" id="capabilitiesClose" aria-label="Закрыть">×</button>
       <div class="modal-icon">✦</div><h2 id="capabilitiesTitle">Что умеет Консилиум</h2>
       <p>Все возможности собраны здесь. Доступность отдельных действий зависит от контекста диалога.</p>
-      <div class="capability-grid">
+      <p class="capability-group-title">Доступные действия</p>
+      <div class="capability-grid capability-action-grid">
         <button class="capability-card accent" id="capabilityProfile"><i>♙</i><span><strong>Мои данные</strong><small>Анкета, номер пробирки и сохранённые факты</small></span><b id="capabilityProfileStatus">Заполнить</b></button>
         <button class="capability-card accent" id="capabilityLabResults"><i>▤</i><span><strong>Результаты анализов</strong><small>Проверка по сохранённому номеру пробирки</small></span><b id="capabilityLabResultsStatus">Открыть</b></button>
         <button class="capability-card accent" id="capabilityBodyMap"><i>◉</i><span><strong>Интерактивная карта тела</strong><small>Область, характер, интенсивность и начало симптома</small></span><b>Открыть</b></button>
         <button class="capability-card accent" id="capabilityHealthHistory"><i>⌁</i><span><strong>Моя история здоровья</strong><small>Симптомы, консультации, документы и обследования по датам</small></span><b>Открыть</b></button>
         <button class="capability-card accent" id="capabilityExaminations"><i>◫</i><span><strong>Дополнительные обследования</strong><small>Выбор и оплата дополнительных обследований</small></span><b>Выбрать</b></button>
+      </div>
+      <p class="capability-group-title capability-info-title">Другие возможности сервиса</p>
+      <div class="capability-grid capability-info-grid">
         <article class="capability-card"><i>✓</i><span><strong>Проверяемый контекст</strong><small>Исправляйте, что специалисты поняли из разговора</small></span></article>
         <article class="capability-card"><i>⌁</i><span><strong>Карта состояния</strong><small>Тема, открытые вопросы и уровень срочности</small></span></article>
         <article class="capability-card"><i>▱</i><span><strong>Фото и документы</strong><small>Изображения, PDF, TXT и CSV до 4 МБ</small></span></article>

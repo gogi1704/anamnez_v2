@@ -1,9 +1,9 @@
-const CACHE_NAME = 'consilium-shell-v54';
+const CACHE_NAME = 'consilium-shell-v56';
 const ASSET_VERSION = '20260819-metrika-replay';
 const APP_SHELL = [
   '/',
   '/manifest.webmanifest',
-  '/static/styles.8aa9735c809a.css',
+  '/static/styles.215d794e1be6.css',
   `/static/metrika.js?v=${ASSET_VERSION}`,
   '/static/rich-text.2bf1f5fab764.css',
   `/static/rich-text.js?v=${ASSET_VERSION}`,

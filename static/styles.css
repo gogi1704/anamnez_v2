@@ -435,3 +435,35 @@ button { color: inherit; }
   .composer { padding-bottom:6px; }
   .composer-meta { display:none; }
 }
+
+/* Non-interactive information uses an editorial treatment, never a button treatment. */
+.onboarding-brand b { padding:0; border:0; border-radius:0; background:transparent; box-shadow:none; letter-spacing:.04em; text-transform:uppercase; }
+.bmi-preview { padding:10px 0 0; border-top:1px solid var(--line); border-radius:0; background:transparent; }
+.exam-intro { padding:5px 0 5px 14px; border:0; border-left:3px solid #cfe2d9; border-radius:0; background:transparent; box-shadow:none; }
+.exam-offer-guide { gap:12px; }
+.exam-offer-guide p { padding:0 0 0 14px; border:0; border-left:2px solid #dce8e1; border-radius:0; background:transparent; box-shadow:none; }
+.exam-offer-quote { padding:5px 0 5px 15px; border-left-width:3px; border-radius:0; background:transparent; box-shadow:none; }
+.exam-relative-note { padding:5px 0 5px 15px; border:0; border-left:3px solid #cfe2d9; border-radius:0; background:transparent; box-shadow:none; }
+.exam-objection-intro { padding:5px 0 5px 15px; border:0; border-left:3px solid #bdd9cc; border-radius:0; background:transparent; box-shadow:none; }
+.exam-benefits { gap:0; border-top:1px solid #dce8e1; }
+.exam-benefits li { padding:14px 0; border:0; border-bottom:1px solid #dce8e1; border-radius:0; background:transparent; box-shadow:none; }
+.exam-benefits li > span { border:1px solid #bed8cb; background:transparent; box-shadow:none; }
+.exam-info-list { gap:0; border-top:1px solid #dce7e1; }
+.exam-info-card { padding:18px 0; border:0; border-bottom:1px solid #dce7e1; border-radius:0; background:transparent; box-shadow:none; }
+.exam-info-includes { padding:9px 0 0; border-top:1px solid #e2ebe6; border-radius:0; background:transparent; }
+.exam-messenger-offer { padding:8px 0 8px 14px; border:0; border-left:3px solid #bdd9cc; border-radius:0; background:transparent; box-shadow:none; }
+.exam-messenger-offer-icon { border:1px solid #cfe2d9; border-radius:50%; background:transparent; box-shadow:none; }
+
+/* Capability affordances: actions look interactive, information stays editorial. */
+.capability-group-title { margin:20px 0 9px; color:#60736a; font-size:calc(8px + var(--text-bump)); font-weight:800; letter-spacing:.08em; text-transform:uppercase; }
+.capability-grid { margin-top:0; }
+.capability-info-title { margin-top:26px; padding-top:18px; border-top:1px solid #dce7e1; }
+button.capability-card.accent { position:relative; border:1px solid #a9cdbb; border-left:4px solid var(--green); background:linear-gradient(135deg,#eaf7f1,#f8fcfa); box-shadow:0 6px 16px rgba(29,118,89,.09); cursor:pointer; transition:border-color .16s ease,box-shadow .16s ease,transform .16s ease,background .16s ease; }
+button.capability-card.accent:hover { border-color:#64a287; background:#e3f4ec; box-shadow:0 9px 22px rgba(29,118,89,.15); transform:translateY(-2px); }
+button.capability-card.accent:active { box-shadow:0 3px 8px rgba(29,118,89,.11); transform:translateY(0); }
+button.capability-card.accent:focus-visible { outline:3px solid rgba(29,118,89,.22); outline-offset:2px; }
+button.capability-card.accent b { max-width:110px; padding:0; overflow:visible; border:0; border-radius:0; background:transparent; color:var(--green-dark); font-size:calc(8px + var(--text-bump)); white-space:nowrap; }
+button.capability-card.accent b::after { content:' →'; font-size:1.12em; }
+article.capability-card { min-height:62px; padding:11px 2px; border:0; border-bottom:1px solid #e0e9e4; border-radius:0; background:transparent; box-shadow:none; }
+article.capability-card i { border:1px solid #d7e5de; border-radius:50%; background:transparent; }
+article.capability-card strong { font-weight:650; }

@@ -24,7 +24,7 @@ from .prompts import public_agents
 
 STATIC_DIR = BASE_DIR / "static"
 ALLOWED_STATIC = {
-    "app.js", "agents.js", "styles.css", "styles.8aa9735c809a.css", "metrika.js",
+    "app.js", "agents.js", "styles.css", "styles.215d794e1be6.css", "metrika.js",
     "rich-text.js", "rich-text.css", "rich-text.2bf1f5fab764.css", "dashboard.js", "dashboard.css",
     "manager.js", "manager.css", "icon-192.png", "icon-512.png",
     "icon-maskable-512.png", "apple-touch-icon.png", "favicon.svg",
