@@ -58,7 +58,7 @@ ALLOWED_EVENTS = {
     "examinations_skipped", "examinations_selection_completed", "examination_selection_confirmed", "payment_viewed",
     "payment_method_selected", "payment_online_unavailable", "payment_completed",
     "payment_unavailable_viewed",
-    "onboarding_completed", "completion_viewed", "capabilities_viewed",
+    "onboarding_completed", "completion_viewed", "completion_skipped_viewed", "capabilities_viewed",
     "capabilities_closed", "install_offer_viewed", "install_clicked", "install_dismissed",
     "app_installed", "app_opened", "chat_opened", "conversation_created", "message_sent",
     "first_message_sent", "ai_response_completed", "ai_response_error", "council_started",
@@ -268,7 +268,7 @@ def _metric2_screen_definitions() -> list[dict]:
             "legacy_reach": [_metric2_spec("examinations_objection_viewed")],
             "actions": [
                 {"id": "choose", "label": "Выбрать обследования", "target": "exam_selection", "legacy": [_metric2_spec("funnel_action", action="choose_after_objection")]},
-                {"id": "refuse", "label": "Всё равно отказаться", "target_label": "Завершение без обследований", "legacy": [_metric2_spec("funnel_action", action="refuse")]},
+                {"id": "refuse", "label": "Всё равно отказаться", "target": "completion_skipped", "legacy": [_metric2_spec("funnel_action", action="refuse")]},
             ],
         },
         {
@@ -307,6 +307,17 @@ def _metric2_screen_definitions() -> list[dict]:
                 {"id": "install", "label": "Установить приложение", "target_label": "Установка приложения", "legacy": [_metric2_spec("install_clicked", screen="exam_completion")]},
                 {"id": "later", "label": "Установлю позже", "target_label": "Переход в сервис", "legacy": [_metric2_spec("install_dismissed", screen="exam_completion")]},
                 {"id": "link_messenger", "label": "Привязать мессенджер", "target_label": "Привязка мессенджера", "legacy": [_metric2_spec("messenger_link_modal_viewed", source="exam_completion")]},
+            ],
+        },
+        {
+            "id": "completion_skipped", "title": "Анкета завершена без обследований", "stage": "Завершение",
+            "kind": "completion_skipped", "description": "Финальный экран после подтверждённого отказа от дополнительных обследований.",
+            "parent_id": "exam_objection", "branch": True, "display_as_main": True,
+            "legacy_reach": [_metric2_spec("completion_skipped_viewed")],
+            "actions": [
+                {"id": "install", "label": "Установить приложение", "target_label": "Установка приложения", "legacy": [_metric2_spec("install_clicked", screen="exam_skip_completion")]},
+                {"id": "continue", "label": "Перейти в Консилиум", "target_label": "Переход в сервис", "legacy": [_metric2_spec("install_dismissed", screen="exam_skip_completion")]},
+                {"id": "link_messenger", "label": "Привязать мессенджер", "target_label": "Привязка мессенджера", "legacy": [_metric2_spec("messenger_link_modal_viewed", source="exam_skip_completion")]},
             ],
         },
     ])
@@ -935,7 +946,10 @@ def metric2_report(
         "summary": {
             "start_users": start_users,
             "screens": len(result_screens),
-            "reached_completion": len(screen_users.get("completion", set())),
+            "reached_completion": len(
+                screen_users.get("completion", set())
+                | screen_users.get("completion_skipped", set())
+            ),
         },
         "screens": result_screens,
         "filter_options": filter_options,

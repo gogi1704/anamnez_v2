@@ -237,6 +237,38 @@ class AnalyticsTests(unittest.TestCase):
         self.assertEqual(screens["exam_selection"]["users"], 0)
         self.assertNotIn("chat", [item["id"] for item in report["screens"]])
 
+    def test_metric2_reports_skipped_examinations_completion_screen(self):
+        events = []
+        for index, definition in enumerate(analytics._metric2_screen_definitions()):
+            if definition.get("branch"):
+                continue
+            events.append({
+                "event_id": f"metric-skip-main-{index:04d}",
+                "session_id": "metric-session-skip",
+                "event_name": "onboarding_screen_viewed",
+                "properties": {"screen": definition["id"], "context": "onboarding"},
+            })
+            if definition["id"] == "exam_offer":
+                break
+        events.extend([
+            {"event_id": "metric-skip-objection", "session_id": "metric-session-skip", "event_name": "onboarding_screen_viewed", "properties": {"screen": "exam_objection", "context": "onboarding"}},
+            {"event_id": "metric-skip-refuse", "session_id": "metric-session-skip", "event_name": "onboarding_screen_action", "properties": {"screen": "exam_objection", "action": "refuse", "context": "onboarding"}},
+            {"event_id": "metric-skip-completion", "session_id": "metric-session-skip", "event_name": "onboarding_screen_viewed", "properties": {"screen": "completion_skipped", "previous_screen": "exam_objection", "context": "onboarding"}},
+            {"event_id": "metric-skip-link", "session_id": "metric-session-skip", "event_name": "onboarding_screen_action", "properties": {"screen": "completion_skipped", "action": "link_messenger", "context": "onboarding"}},
+        ])
+        analytics.record_events("CHEL-METRIC-SKIP", events)
+
+        report = analytics.metric2_report("30")
+        screens = {item["id"]: item for item in report["screens"]}
+        completion = screens["completion_skipped"]
+        self.assertEqual(completion["users"], 1)
+        self.assertEqual(completion["percent_of_start"], 100.0)
+        self.assertEqual(completion["percent_of_parent"], 100.0)
+        self.assertTrue(completion["branch"])
+        actions = {item["id"]: item for item in completion["actions"]}
+        self.assertEqual(actions["link_messenger"]["users"], 1)
+        self.assertEqual(actions["link_messenger"]["percent_of_screen"], 100.0)
+
     def test_metric2_legacy_events_cannot_exceed_the_start_cohort(self):
         for index in range(10):
             events = [{

@@ -999,7 +999,7 @@ class OrchestratorTests(unittest.TestCase):
         rich_script = (project_root / "static" / "rich-text.js").read_text(encoding="utf-8")
         rich_styles = (project_root / "static" / "rich-text.css").read_text(encoding="utf-8")
 
-        self.assertIn('/static/rich-text.js?v=20260823-metric2-exact-v2', index)
+        self.assertIn('/static/rich-text.js?v=20260823-skip-completion-v2', index)
         self.assertIn('/static/rich-text.js?v=20260816-rich-text', manager_html)
         self.assertIn('window.ConsiliumRichText.render(value)', app_script)
         self.assertIn('window.ConsiliumRichText.render(value)', manager_script)
@@ -1482,6 +1482,7 @@ class OrchestratorTests(unittest.TestCase):
             "Выбрать обследования", "Всё равно отказаться", "Ничего не выбирать",
             "Оплатить онлайн", "Оплатить на медосмотре", "Понятно",
             "Привязать мессенджер", "Установить приложение", "Установлю позже",
+            "Перейти в Консилиум",
         ):
             self.assertIn(text, index + app, f"Кнопка отсутствует в приложении: {text}")
             self.assertIn(text, script, f"Кнопка отсутствует в Метрике 2.0: {text}")
@@ -1500,6 +1501,15 @@ class OrchestratorTests(unittest.TestCase):
         self.assertIn("skip", notes_actions)
         self.assertIn("screen.id === 'question_company_inn'", script)
         self.assertIn("action.id !== 'skip'", script)
+        skipped_completion = screens["completion_skipped"]
+        self.assertEqual(skipped_completion["parent_id"], "exam_objection")
+        self.assertTrue(skipped_completion["branch"])
+        self.assertTrue(skipped_completion["display_as_main"])
+        self.assertIn("screen.branch && !screen.display_as_main", script)
+        self.assertEqual(
+            {item["id"] for item in skipped_completion["actions"]},
+            {"install", "continue", "link_messenger"},
+        )
 
     def test_manager_messenger_api_and_deep_link_are_present(self):
         project_root = Path(__file__).resolve().parents[1]
@@ -2103,6 +2113,16 @@ class OrchestratorTests(unittest.TestCase):
         self.assertIn("Не придётся записываться отдельно", script)
         self.assertIn("Всё равно отказаться", script)
         self.assertIn('data-onboarding-action="confirm-skip-exams"', script)
+        self.assertIn("function renderExamSkipCompletion()", script)
+        self.assertIn("completion_skipped_viewed", script)
+        self.assertIn("Спасибо! Ваши ответы сохранены.", script)
+        self.assertIn("В Консилиуме вы сможете:", script)
+        self.assertIn('data-onboarding-action="install-after-skip"', script)
+        self.assertIn('data-onboarding-action="continue-after-skip"', script)
+        self.assertIn('data-onboarding-action="link-messenger-after-skip"', script)
+        self.assertIn("state.onboarding.payment_status === 'skipped'", script)
+        self.assertIn("if (state.returnToChatAfterExaminations) return openMainApp({ skipIntro:true });", script)
+        self.assertIn("renderExamSkipCompletion();", script)
         self.assertNotIn("Мы можем показать наборы из проекта медосмотров", script)
         self.assertIn(".exam-skip { width:100%; min-height:44px;", styles)
         self.assertIn(".exam-info-card", styles)
@@ -2154,14 +2174,14 @@ class OrchestratorTests(unittest.TestCase):
         self.assertIn("controllerchange", script)
         self.assertIn("url.pathname.startsWith('/api/')", worker)
         self.assertIn("url.pathname.startsWith('/auth/')", worker)
-        self.assertIn("consilium-shell-v67", worker)
+        self.assertIn("consilium-shell-v69", worker)
         self.assertIn("fetch(request)", worker)
         self.assertIn("/static/styles.07ffaefb4795.css", index)
         self.assertIn("/static/rich-text.2bf1f5fab764.css", index)
         self.assertTrue((project_root / "static" / "styles.07ffaefb4795.css").is_file())
         self.assertTrue((project_root / "static" / "rich-text.2bf1f5fab764.css").is_file())
-        self.assertIn("/static/app.js?v=20260823-metric2-exact-v2", index)
-        self.assertIn("/static/metrika.js?v=20260823-metric2-exact-v2", index)
+        self.assertIn("/static/app.js?v=20260823-skip-completion-v2", index)
+        self.assertIn("/static/metrika.js?v=20260823-skip-completion-v2", index)
         self.assertIn('id="welcomeScreen"', index)
         self.assertIn('id="welcomeNextButton"', index)
         self.assertIn("WELCOME_SEEN_KEY", script)
@@ -2191,7 +2211,7 @@ class OrchestratorTests(unittest.TestCase):
         main = (project_root / "backend" / "main.py").read_text(encoding="utf-8")
         config = (project_root / "backend" / "config.py").read_text(encoding="utf-8")
 
-        self.assertIn('src="/static/metrika.js?v=20260823-metric2-exact-v2"', index)
+        self.assertIn('src="/static/metrika.js?v=20260823-skip-completion-v2"', index)
         self.assertIn('YANDEX_METRIKA_COUNTER_ID', config)
         self.assertIn('path == "/api/public-config"', main)
         self.assertIn('"metrika.js"', main)
@@ -2491,6 +2511,7 @@ class OrchestratorTests(unittest.TestCase):
         self.assertIn('id="menuMessengerLinkButton"', index)
         self.assertIn('id="messengerLinkModal"', index)
         self.assertIn('data-onboarding-action="link-messenger-after-exams"', script)
+        self.assertIn('data-onboarding-action="link-messenger-after-skip"', script)
         self.assertIn("state.identity?.authenticated ? ''", script)
         self.assertIn("consilium_messenger_link_pending", script)
         self.assertIn("/api/auth/messenger/start", script)

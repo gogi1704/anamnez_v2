@@ -894,7 +894,9 @@ async function submitExamSelection(skip = false) {
     window.consiliumMetrikaGoal?.('exam_selection_completed');
     if (skip) {
       window.consiliumMetrikaGoal?.('onboarding_completed');
-      return openMainApp({ skipIntro:state.returnToChatAfterExaminations });
+      if (state.returnToChatAfterExaminations) return openMainApp({ skipIntro:true });
+      renderExamSkipCompletion();
+      return;
     }
     renderPayment();
   } catch (error) { showOnboardingError(error.message); }
@@ -1099,6 +1101,48 @@ function renderExamCompletion() {
   }
 }
 
+function renderExamSkipCompletion() {
+  trackEvent('completion_skipped_viewed', { screen:'exam_skip_completion' });
+  trackOnboardingScreen('completion_skipped');
+  setOnboardingMeta('Готово', 100);
+  const messengerOffer = state.identity?.authenticated ? '' : `
+    <section class="exam-messenger-offer">
+      <span class="exam-messenger-offer-icon" aria-hidden="true">↗</span>
+      <div><strong>Не потеряйте доступ</strong><p>Привяжите Telegram или MAX, чтобы открыть анкету, историю диалогов и результаты с другого устройства или после очистки браузера.</p></div>
+      <button type="button" data-onboarding-action="link-messenger-after-skip">Привязать мессенджер</button>
+    </section>`;
+  $('#onboardingContent').innerHTML = `
+    <div class="exam-completion exam-skip-completion">
+      <div class="exam-completion-mark" aria-hidden="true">✓</div>
+      <span class="onboarding-kicker">Анкета завершена</span>
+      <h1>Спасибо! Ваши ответы сохранены.</h1>
+      <div class="exam-completion-copy">
+        <p>Вы решили пока не выбирать дополнительные обследования. Если захотите, к ним можно будет вернуться позже через меню сервиса.</p>
+        <p><strong>В Консилиуме вы сможете:</strong></p>
+        <ul class="exam-chat-benefits">
+          <li>задавать медицинскому помощнику вопросы о здоровье, питании и медицинском осмотре;</li>
+          <li>получать результаты анализов по номеру пробирки и просить помочь с расшифровкой;</li>
+          <li>сохранять историю обращений и важные сведения о здоровье;</li>
+          <li>при необходимости пригласить медицинского специалиста в чат.</li>
+        </ul>
+        ${messengerOffer}
+        <div class="exam-install-note">
+          <span aria-hidden="true">📱</span>
+          <p><strong>Установите приложение на устройство.</strong> Так Консилиум будет всегда под рукой, а вернуться к вопросам о здоровье станет проще.</p>
+        </div>
+      </div>
+      <div class="exam-completion-actions">
+        <button type="button" class="onboarding-next exam-install-button" data-onboarding-action="install-after-skip"><span aria-hidden="true">＋</span> Установить приложение</button>
+        <button type="button" class="exam-later-button" data-onboarding-action="continue-after-skip">Перейти в Консилиум</button>
+      </div>
+    </div>`;
+  if (state.messengerLinkJustCompleted) {
+    const provider = state.messengerLinkJustCompleted;
+    state.messengerLinkJustCompleted = '';
+    requestAnimationFrame(() => openMessengerLinkModal({source:'exam_skip_completion', justLinked:provider}));
+  }
+}
+
 async function finishExamOnboarding(installApp = false) {
   const buttons = $('#onboardingContent').querySelectorAll('[data-onboarding-action]');
   buttons.forEach(button => { button.disabled = true; });
@@ -1123,6 +1167,14 @@ async function loadOnboarding() {
   seedOnboardingAnswers(state.profile);
   state.selectedTests = new Set(state.onboarding.selected_tests || []);
   if (state.onboarding.status === 'complete') {
+    if (
+      state.onboarding.payment_status === 'skipped'
+      && !state.onboarding.intro_seen
+    ) {
+      $('#onboarding').classList.remove('hidden');
+      $('#appShell').classList.add('hidden');
+      return renderExamSkipCompletion();
+    }
     if (
       state.onboarding.selected_tests?.length
       && ['demo_paid','paid_online','pay_at_exam'].includes(state.onboarding.payment_status)
@@ -1217,6 +1269,9 @@ $('#onboardingContent').addEventListener('click', event => {
   else if (action === 'install-after-exams') { trackOnboardingAction('install', 'completion'); trackEvent('install_clicked', { screen:'exam_completion' }); finishExamOnboarding(true); }
   else if (action === 'later-after-exams') { trackOnboardingAction('later', 'completion'); trackEvent('install_dismissed', { screen:'exam_completion' }); finishExamOnboarding(false); }
   else if (action === 'link-messenger-after-exams') { trackOnboardingAction('link_messenger', 'completion'); openMessengerLinkModal({source:'exam_completion'}); }
+  else if (action === 'install-after-skip') { trackOnboardingAction('install', 'completion_skipped'); trackEvent('install_clicked', { screen:'exam_skip_completion' }); finishExamOnboarding(true); }
+  else if (action === 'continue-after-skip') { trackOnboardingAction('continue', 'completion_skipped'); trackEvent('install_dismissed', { screen:'exam_skip_completion' }); finishExamOnboarding(false); }
+  else if (action === 'link-messenger-after-skip') { trackOnboardingAction('link_messenger', 'completion_skipped'); openMessengerLinkModal({source:'exam_skip_completion'}); }
   else if (action === 'skip-medical-exam') skipMedicalExam();
   else if (action === 'save-appearance') { trackOnboardingAction('continue', 'appearance'); saveAppearance(); }
 });

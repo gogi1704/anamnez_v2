@@ -1046,6 +1046,7 @@ function metric2PreviewMarkup(screen, large = false) {
     content = `<small>ПОСЛЕДНИЙ ШАГ</small><b>Проверим заказ</b><p>Выберите, как вам будет удобнее оплатить дополнительные обследования.</p><span class="metric2-mock-test"><strong>${escapeHtml(selected?.name || 'Выбранное обследование')}</strong><em>${Number(selected?.price || 0).toLocaleString('ru-RU')} ₽</em></span><span class="metric2-mock-total">Итого <b>${Number(selected?.price || 0).toLocaleString('ru-RU')} ₽</b></span>${action('Оплатить онлайн')}${action('Оплатить на медосмотре')}${action('← Вернуться к обследованиям',true)}`;
   } else if (kind === 'payment_unavailable') content = `<div class="metric2-mock-modal"><span class="metric2-mock-icon">⌛</span><b>Онлайн-оплата временно недоступна</b><p>Мы уже работаем над её подключением. Пока вы можете выбрать оплату на медицинском осмотре.</p>${action('Понятно')}</div>`;
   else if (kind === 'completion') content = `<span class="metric2-mock-emoji">🎉</span><small>ОБСЛЕДОВАНИЯ ВЫБРАНЫ</small><b>Отлично! Вы выбрали дополнительные обследования.</b><p>В день медицинского осмотра наша бригада сообщит вам <strong>индивидуальный номер пробирки</strong>.</p><p>Чтобы получить результаты анализов, достаточно будет ввести этот номер в соответствующее поле нашего сервиса.</p><p class="metric2-mock-note">№ Сейчас у вас этого номера еще нет — это нормально. Когда он появится, просто напишите в чат нашему менеджеру. Он подскажет, куда ввести этот номер и как получить результаты.</p><p>После этого сообщения для вас откроется чат, в котором вы сможете:</p><ul><li>узнать, как получить результаты анализов;</li><li>задать любые вопросы о медицинском осмотре;</li><li>получить консультацию по анализам, питанию и вопросам здоровья.</li></ul><p>Как только результаты будут готовы, вы сможете <strong>бесплатно получить их расшифровку</strong> у нашего специалиста.</p><p class="metric2-mock-note"><strong>📱 Также рекомендуем установить наше приложение на смартфон.</strong> Так вы не потеряете доступ к своим результатам, сможете в любой момент обратиться к онлайн-врачу и всегда будете иметь все необходимые медицинские сервисы под рукой.</p><p>💬 Не стесняйтесь писать в чат — мы всегда рады помочь!</p><span class="metric2-mock-info"><b>↗ Сохраните результаты и расшифровки</b><small>Привяжите Telegram или MAX, чтобы вернуться к анкете, выбранным обследованиям и готовым результатам с другого устройства.</small></span>${action('Привязать мессенджер')}${action('＋ Установить приложение')}${action('Установлю позже',true)}`;
+  else if (kind === 'completion_skipped') content = `<span class="metric2-mock-icon">✓</span><small>АНКЕТА ЗАВЕРШЕНА</small><b>Спасибо! Ваши ответы сохранены.</b><p>Вы решили пока не выбирать дополнительные обследования. Если захотите, к ним можно будет вернуться позже через меню сервиса.</p><p><strong>В Консилиуме вы сможете:</strong></p><ul><li>задавать медицинскому помощнику вопросы о здоровье, питании и медицинском осмотре;</li><li>получать результаты анализов по номеру пробирки и просить помочь с расшифровкой;</li><li>сохранять историю обращений и важные сведения о здоровье;</li><li>при необходимости пригласить медицинского специалиста в чат.</li></ul><span class="metric2-mock-info"><b>↗ Не потеряйте доступ</b><small>Привяжите Telegram или MAX, чтобы открыть анкету, историю диалогов и результаты с другого устройства или после очистки браузера.</small></span>${action('Привязать мессенджер')}<p class="metric2-mock-note"><strong>📱 Установите приложение на устройство.</strong> Так Консилиум будет всегда под рукой, а вернуться к вопросам о здоровье станет проще.</p>${action('＋ Установить приложение')}${action('Перейти в Консилиум',true)}`;
   else content = `<small>${escapeHtml(screen.stage || '')}</small><b>${escapeHtml(screen.title)}</b><p>${escapeHtml(screen.description || '')}</p>`;
 
   const standalone = ['welcome','registration','warning'].includes(kind);
@@ -1055,7 +1056,7 @@ function metric2PreviewMarkup(screen, large = false) {
     : kind === 'exam_catalog' ? 'Описание чек-апов'
     : ['exam_offer','exam_objection','exam_selection'].includes(kind) ? 'Обследования'
     : ['payment','payment_unavailable'].includes(kind) ? 'Оплата'
-    : kind === 'completion' ? 'Готово'
+    : ['completion','completion_skipped'].includes(kind) ? 'Готово'
     : (screen.stage || '').split(' · ')[0] || 'Анкета';
   const progress = kind === 'appearance' ? 2
     : kind.startsWith('question_') ? 5 + Math.round((Math.max(0,questionIndex) / metric2QuestionContent.length) * 60)
@@ -1064,7 +1065,7 @@ function metric2PreviewMarkup(screen, large = false) {
     : kind === 'exam_selection' ? 80
     : kind === 'payment' ? 92
     : kind === 'payment_unavailable' ? 92
-    : kind === 'completion' ? 100 : 0;
+    : ['completion','completion_skipped'].includes(kind) ? 100 : 0;
   const appHeader = standalone ? '' : `<div class="metric2-phone-app"><span class="metric2-phone-brand"><b>К</b><span><strong>Консилиум</strong><small>Персональный старт</small></span></span><em>${escapeHtml(stage)}</em></div><div class="metric2-phone-progress"><i style="width:${progress}%"></i></div>`;
   const safety = standalone ? '' : '<div class="metric2-phone-safety">Данные используются для персонализации ответов. Сервис не заменяет очную диагностику и экстренную помощь.</div>';
   return `<div class="metric2-phone ${kind}${large ? ' large' : ''}"><div class="metric2-phone-status"><span>11:37</span><span>● ▰</span></div>${appHeader}<div class="metric2-phone-content">${content}</div>${safety}<div class="metric2-phone-home"></div></div>`;
@@ -1087,19 +1088,22 @@ function renderMetric2(data) {
   const root = $('#metric2Flow');
   root.replaceChildren();
   const titleById = Object.fromEntries((data.screens || []).map(item => [item.id,item.title]));
-  for (const [index,screen] of (data.screens || []).entries()) {
+  let mainSequence = 0;
+  for (const screen of (data.screens || [])) {
+    const visualBranch = Boolean(screen.branch && !screen.display_as_main);
+    if (!visualBranch) mainSequence += 1;
     const item = document.createElement('article');
-    item.className = `metric2-screen-row${screen.branch ? ' branch' : ''}`;
+    item.className = `metric2-screen-row${visualBranch ? ' branch' : ''}`;
     if (screen.branch) item.dataset.parent = screen.parent_id || '';
     const sequence = document.createElement('div'); sequence.className = 'metric2-sequence';
-    sequence.innerHTML = `<span>${screen.branch ? '↳' : index + 1}</span><i></i>`;
+    sequence.innerHTML = `<span>${visualBranch ? '↳' : mainSequence}</span><i></i>`;
     const open = document.createElement('button'); open.type = 'button'; open.className = 'metric2-screen-open'; open.dataset.metric2Screen = screen.id;
     open.innerHTML = metric2PreviewMarkup(screen);
     const stats = document.createElement('div'); stats.className = 'metric2-screen-stats';
     const comparison = screen.id === 'welcome' ? 'Первый экран — база расчёта'
       : screen.branch ? `${screen.percent_of_parent}% от экрана «${escapeHtml(titleById[screen.parent_id] || 'родительский экран')}»`
       : `${screen.percent_of_parent}% от предыдущего основного экрана`;
-    stats.innerHTML = `<span class="metric2-stage">${screen.branch ? 'Ответвление · ' : ''}${escapeHtml(screen.stage || '')}</span><h3>${escapeHtml(screen.title)}</h3><div class="metric2-reach"><strong>${Number(screen.percent_of_start || 0).toLocaleString('ru-RU')}%</strong><span>от первого экрана</span></div><p><b>${Number(screen.users || 0).toLocaleString('ru-RU')}</b> пользователей · ${comparison}</p><div class="metric2-reach-track"><i style="width:${Math.min(100,Number(screen.percent_of_start || 0))}%"></i></div><button type="button" data-metric2-screen="${escapeHtml(screen.id)}">Открыть экран и нажатия →</button>`;
+    stats.innerHTML = `<span class="metric2-stage">${visualBranch ? 'Ответвление · ' : ''}${escapeHtml(screen.stage || '')}</span><h3>${escapeHtml(screen.title)}</h3><div class="metric2-reach"><strong>${Number(screen.percent_of_start || 0).toLocaleString('ru-RU')}%</strong><span>от первого экрана</span></div><p><b>${Number(screen.users || 0).toLocaleString('ru-RU')}</b> пользователей · ${comparison}</p><div class="metric2-reach-track"><i style="width:${Math.min(100,Number(screen.percent_of_start || 0))}%"></i></div><button type="button" data-metric2-screen="${escapeHtml(screen.id)}">Открыть экран и нажатия →</button>`;
     item.append(sequence,open,stats); root.append(item);
   }
   if (!(data.screens || []).length) root.innerHTML = '<p class="form-error">Пока нет данных по стартовым экранам</p>';
