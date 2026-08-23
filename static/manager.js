@@ -392,11 +392,7 @@ function renderMessages() {
 }
 
 function agentName(id) {
-  return ({
-    manager:'Мария', safety:'Алексей', therapist:'Ирина', cardiologist:'Дмитрий',
-    neurologist:'Ольга', dermatologist:'Анна', pediatrician:'Сергей',
-    psychologist:'Елена', general:'Максим',
-  })[id] || 'Специалист';
+  return 'Ольга · Медицинский помощник';
 }
 
 function valueLabel(key, value) {

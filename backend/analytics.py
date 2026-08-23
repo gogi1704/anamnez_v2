@@ -15,11 +15,39 @@ from .config import settings
 
 
 _write_lock = threading.Lock()
+TEST_COMPANY_INN = "123123"
+REPORT_TIMEZONE = timezone(timedelta(hours=3))
+
+
+def _statistics_excluded_chel_ids() -> set[str]:
+    """Load user identities excluded from every product-analytics report."""
+    excluded = {"chel_legacy", "chel_test_default"}
+    main_conn = None
+    try:
+        main_conn = sqlite3.connect(settings.database_path, timeout=5)
+        excluded.update(
+            str(row[0]) for row in main_conn.execute(
+                "SELECT chel_id FROM user_profile WHERE TRIM(company_inn) = ?",
+                (TEST_COMPANY_INN,),
+            ).fetchall()
+        )
+    except sqlite3.Error:
+        # The primary database can still be bootstrapping when analytics starts.
+        pass
+    finally:
+        if main_conn is not None:
+            main_conn.close()
+    return excluded
+
+
+def _is_test_user(chel_id: str) -> bool:
+    return str(chel_id or "") in _statistics_excluded_chel_ids()
 
 ALLOWED_EVENTS = {
     "landing_viewed", "welcome_viewed", "welcome_continued", "auth_gate_viewed",
     "registration_method_selected", "anonymous_warning_viewed", "anonymous_warning_cancelled",
     "registration_completed", "registration_failed", "messenger_auth_started", "funnel_action",
+    "onboarding_screen_viewed", "onboarding_screen_action",
     "messenger_link_modal_viewed",
     "messenger_auth_completed", "messenger_auth_failed", "appearance_viewed",
     "appearance_completed", "questionnaire_started", "question_viewed",
@@ -29,6 +57,7 @@ ALLOWED_EVENTS = {
     "examinations_skip_clicked", "examinations_objection_viewed", "examinations_skip_recovered",
     "examinations_skipped", "examinations_selection_completed", "examination_selection_confirmed", "payment_viewed",
     "payment_method_selected", "payment_online_unavailable", "payment_completed",
+    "payment_unavailable_viewed",
     "onboarding_completed", "completion_viewed", "capabilities_viewed",
     "capabilities_closed", "install_offer_viewed", "install_clicked", "install_dismissed",
     "app_installed", "app_opened", "chat_opened", "conversation_created", "message_sent",
@@ -104,6 +133,185 @@ QUESTION_LABELS = {
     "allergies": "Аллергии", "notes": "Жалобы",
 }
 
+METRIC2_QUESTIONS = [
+    ("company_inn", "Сообщите ИНН вашего предприятия", "input"),
+    ("preferred_name", "Как к вам обращаться?", "input"),
+    ("age", "Сколько вам полных лет?", "input"),
+    ("sex", "Укажите пол для медицинского контекста", "choices"),
+    ("height_cm", "Какой у вас рост?", "input"),
+    ("weight_kg", "Какой у вас вес?", "input"),
+    ("smoking", "Вы курите?", "choices"),
+    ("alcohol", "Как часто вы употребляете алкоголь?", "choices"),
+    ("activity", "Какой у вас уровень активности?", "choices"),
+    ("blood_pressure", "Как вы оцениваете своё давление?", "choices"),
+    ("dark_in_eyes", "Темнеет ли в глазах при резком подъёме?", "choices"),
+    ("blood_sugar", "Знаете ли вы уровень сахара в крови?", "choices"),
+    ("joint_pain", "Бывают боли или отёчность суставов?", "choices"),
+    ("fatigue", "Беспокоит длительная усталость?", "choices"),
+    ("conditions", "Есть хронические заболевания?", "textarea"),
+    ("medications", "Какие лекарства принимаете постоянно?", "textarea"),
+    ("allergies", "Есть аллергии?", "textarea"),
+    ("notes", "Есть ли у вас жалобы?", "textarea"),
+]
+METRIC2_OPTIONAL_QUESTIONS = {
+    "preferred_name", "conditions", "medications", "allergies", "notes",
+}
+
+
+def _metric2_spec(event: str, **properties) -> dict:
+    return {"event": event, "properties": properties}
+
+
+def _metric2_screen_definitions() -> list[dict]:
+    screens = [
+        {
+            "id": "welcome", "title": "Приветствие", "stage": "Начало",
+            "kind": "welcome", "description": "Первый экран нового пользователя.",
+            "legacy_reach": [_metric2_spec("welcome_viewed")],
+            "actions": [{"id": "continue", "label": "Далее", "target": "registration", "legacy": [_metric2_spec("welcome_continued")]}],
+        },
+        {
+            "id": "registration", "title": "Выбор способа входа", "stage": "Регистрация",
+            "kind": "registration", "description": "Telegram, MAX или анонимный вход.",
+            "legacy_reach": [_metric2_spec("auth_gate_viewed")],
+            "actions": [
+                {"id": "telegram", "label": "Продолжить с Telegram", "legacy": [_metric2_spec("registration_method_selected", provider="telegram")]},
+                {"id": "max", "label": "Продолжить с MAX", "legacy": [_metric2_spec("registration_method_selected", provider="max")]},
+                {"id": "anonymous", "label": "Войти анонимно", "target": "anonymous_warning", "legacy": [_metric2_spec("anonymous_warning_viewed")]},
+            ],
+        },
+        {
+            "id": "anonymous_warning", "title": "Предупреждение об анонимном входе", "stage": "Регистрация",
+            "kind": "warning", "description": "Ответвление после выбора анонимного входа.",
+            "parent_id": "registration", "branch": True,
+            "legacy_reach": [_metric2_spec("anonymous_warning_viewed")],
+            "actions": [
+                {"id": "anonymous_confirm", "label": "Понимаю, продолжить", "target": "appearance", "legacy": [_metric2_spec("registration_completed", method="anonymous")]},
+                {"id": "anonymous_cancel", "label": "Назад", "target": "registration", "legacy": [_metric2_spec("anonymous_warning_cancelled")]},
+                {"id": "anonymous_close", "label": "Закрыть (×)", "target": "registration", "legacy": []},
+            ],
+        },
+        {
+            "id": "appearance", "title": "Выбор размера текста", "stage": "Настройка",
+            "kind": "appearance", "description": "Размер интерфейса перед анкетой.",
+            "legacy_reach": [_metric2_spec("appearance_viewed")],
+            "actions": [
+                {"id": "size_standard", "label": "Обычный", "legacy": [_metric2_spec("appearance_completed", font_size="standard")]},
+                {"id": "size_large", "label": "Крупный", "legacy": [_metric2_spec("appearance_completed", font_size="large")]},
+                {"id": "size_extra", "label": "Очень крупный", "legacy": [_metric2_spec("appearance_completed", font_size="extra")]},
+                {"id": "continue", "label": "Продолжить", "target": "question_company_inn", "legacy": []},
+            ],
+        },
+    ]
+    for index, (key, title, kind) in enumerate(METRIC2_QUESTIONS):
+        next_target = (
+            f"question_{METRIC2_QUESTIONS[index + 1][0]}"
+            if index + 1 < len(METRIC2_QUESTIONS) else "exam_offer"
+        )
+        previous_target = (
+            f"question_{METRIC2_QUESTIONS[index - 1][0]}" if index else "appearance"
+        )
+        actions = [{
+            "id": "answer",
+            "label": "Завершить анкету" if index == len(METRIC2_QUESTIONS) - 1 else "Продолжить",
+            "target": next_target,
+            "legacy": [_metric2_spec("question_answered", question_key=key)],
+        }]
+        if key in METRIC2_OPTIONAL_QUESTIONS:
+            actions.append({
+                "id": "skip", "label": "Пропустить", "target": next_target,
+                "legacy": [_metric2_spec("question_skipped", question_key=key)],
+            })
+        if kind == "choices":
+            # Track only the interaction, never the selected medical value.
+            actions.insert(0, {
+                "id": "select_option", "label": "Выбор варианта ответа",
+                "legacy": [],
+            })
+        if index:
+            actions.append({"id": "back", "label": "Назад", "target": previous_target, "legacy": []})
+        if key == "company_inn":
+            actions.append({"id": "not_medical_exam", "label": "Я не на мед-осмотр", "target_label": "Переход в сервис", "legacy": [_metric2_spec("not_medical_exam_selected")]})
+        screens.append({
+            "id": f"question_{key}", "title": title, "stage": f"Анкета · {index + 1}/{len(METRIC2_QUESTIONS)}",
+            "kind": f"question_{kind}", "question_key": key,
+            "description": "Вопрос анкеты. Значения ответов в аналитику не передаются.",
+            "legacy_reach": [_metric2_spec("question_viewed", question_key=key)],
+            "actions": actions,
+        })
+    screens.extend([
+        {
+            "id": "exam_offer", "title": "Предложение дополнительных обследований", "stage": "Обследования",
+            "kind": "exam_offer", "description": "Основное предложение после завершения анкеты.",
+            "legacy_reach": [_metric2_spec("examinations_offer_viewed")],
+            "actions": [
+                {"id": "catalog_info", "label": "Посмотреть описания чек-апов", "target": "exam_catalog", "legacy": [_metric2_spec("funnel_action", action="catalog_info")]},
+                {"id": "view_options", "label": "Да, выбрать анализы", "target": "exam_selection", "legacy": [_metric2_spec("funnel_action", action="view_options")]},
+                {"id": "skip", "label": "Нет, не сейчас", "target": "exam_objection", "legacy": [_metric2_spec("funnel_action", action="skip")]},
+                {"id": "edit_questionnaire", "label": "Изменить ответы анкеты", "target": "question_notes", "legacy": [_metric2_spec("funnel_action", action="edit_questionnaire")]},
+            ],
+        },
+        {
+            "id": "exam_catalog", "title": "Описание чек-апов", "stage": "Обследования · ответвление",
+            "kind": "exam_catalog", "description": "Список составов, показаний и цен.",
+            "parent_id": "exam_offer", "branch": True,
+            "legacy_reach": [_metric2_spec("funnel_action", action="catalog_info")],
+            "actions": [
+                {"id": "choose", "label": "Выбрать анализы", "target": "exam_selection", "legacy": []},
+                {"id": "back", "label": "Вернуться к вопросу", "target": "exam_offer", "legacy": []},
+            ],
+        },
+        {
+            "id": "exam_objection", "title": "Отработка возражения", "stage": "Обследования · ответвление",
+            "kind": "exam_objection", "description": "Показывается после попытки отказаться.",
+            "parent_id": "exam_offer", "branch": True,
+            "legacy_reach": [_metric2_spec("examinations_objection_viewed")],
+            "actions": [
+                {"id": "choose", "label": "Выбрать обследования", "target": "exam_selection", "legacy": [_metric2_spec("funnel_action", action="choose_after_objection")]},
+                {"id": "refuse", "label": "Всё равно отказаться", "target_label": "Завершение без обследований", "legacy": [_metric2_spec("funnel_action", action="refuse")]},
+            ],
+        },
+        {
+            "id": "exam_selection", "title": "Выбор наборов обследований", "stage": "Обследования",
+            "kind": "exam_selection", "description": "Карточки обследований и итоговая сумма.",
+            "legacy_reach": [_metric2_spec("examinations_opened")],
+            "actions": [
+                {"id": "select_exam", "label": "Выбрали хотя бы один набор", "legacy": [_metric2_spec("examination_selected")]},
+                {"id": "continue", "label": "Далее", "target": "payment", "legacy": [_metric2_spec("examinations_selection_completed")]},
+                {"id": "back", "label": "Назад", "target": "exam_offer", "legacy": [_metric2_spec("funnel_action", action="options_back")]},
+                {"id": "nothing", "label": "Ничего не выбирать", "target": "exam_objection", "legacy": [_metric2_spec("funnel_action", action="nothing_selected")]},
+            ],
+        },
+        {
+            "id": "payment", "title": "Выбор способа оплаты", "stage": "Оплата",
+            "kind": "payment", "description": "Состав заказа, сумма и способ оплаты.",
+            "legacy_reach": [_metric2_spec("payment_viewed")],
+            "actions": [
+                {"id": "pay_online", "label": "Оплатить онлайн", "target": "payment_unavailable", "legacy": [_metric2_spec("funnel_action", action="pay_online")]},
+                {"id": "pay_at_exam", "label": "Оплатить на медосмотре", "target": "completion", "legacy": [_metric2_spec("funnel_action", action="pay_at_exam")]},
+                {"id": "back", "label": "Вернуться к обследованиям", "target": "exam_selection", "legacy": []},
+            ],
+        },
+        {
+            "id": "payment_unavailable", "title": "Онлайн-оплата временно недоступна", "stage": "Оплата · ответвление",
+            "kind": "payment_unavailable", "description": "Временная заглушка онлайн-оплаты.",
+            "parent_id": "payment", "branch": True,
+            "legacy_reach": [_metric2_spec("payment_unavailable_viewed")],
+            "actions": [{"id": "close", "label": "Понятно", "target": "payment", "legacy": []}],
+        },
+        {
+            "id": "completion", "title": "Обследования выбраны", "stage": "Завершение",
+            "kind": "completion", "description": "Финальный экран перед переходом в сервис.",
+            "legacy_reach": [_metric2_spec("completion_viewed")],
+            "actions": [
+                {"id": "install", "label": "Установить приложение", "target_label": "Установка приложения", "legacy": [_metric2_spec("install_clicked", screen="exam_completion")]},
+                {"id": "later", "label": "Установлю позже", "target_label": "Переход в сервис", "legacy": [_metric2_spec("install_dismissed", screen="exam_completion")]},
+                {"id": "link_messenger", "label": "Привязать мессенджер", "target_label": "Привязка мессенджера", "legacy": [_metric2_spec("messenger_link_modal_viewed", source="exam_completion")]},
+            ],
+        },
+    ])
+    return screens
+
 
 def _now() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -114,6 +322,12 @@ def connection():
     settings.analytics_database_path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(settings.analytics_database_path, timeout=5)
     conn.row_factory = sqlite3.Row
+    excluded_from_statistics = _statistics_excluded_chel_ids()
+    conn.create_function(
+        "IS_STATS_USER", 1,
+        lambda value: 0 if str(value or "") in excluded_from_statistics else 1,
+        deterministic=True,
+    )
     conn.execute("PRAGMA busy_timeout = 5000")
     try:
         yield conn
@@ -232,6 +446,8 @@ def _device(user_agent: str) -> dict:
 def record_events(chel_id: str, events: list[dict], *, user_agent: str = "", is_server: bool = False) -> dict:
     if not settings.analytics_enabled or not isinstance(events, list):
         return {"accepted": 0, "duplicates": 0}
+    if _is_test_user(chel_id):
+        return {"accepted": 0, "duplicates": 0}
     now = _now()
     device = _device(user_agent)
     prepared = []
@@ -325,12 +541,32 @@ def _period_start(period: str) -> str | None:
     return start.isoformat()
 
 
-def _filters(period: str, device: str, method: str, source: str) -> tuple[str, list]:
-    clauses, params = [], []
-    start = _period_start(period)
-    if start:
-        clauses.append("e.received_at >= ?")
-        params.append(start)
+def _filters(
+    period: str, device: str, method: str, source: str,
+    date_from: str = "", date_to: str = "",
+) -> tuple[str, list]:
+    clauses, params = ["IS_STATS_USER(e.chel_id) = 1"], []
+    date_from = str(date_from or "").strip()
+    date_to = str(date_to or "").strip()
+    try:
+        from_date = datetime.strptime(date_from, "%Y-%m-%d").replace(tzinfo=REPORT_TIMEZONE) if date_from else None
+        to_date = datetime.strptime(date_to, "%Y-%m-%d").replace(tzinfo=REPORT_TIMEZONE) if date_to else None
+    except ValueError as exc:
+        raise ValueError("Дата должна быть указана в формате ГГГГ-ММ-ДД") from exc
+    if from_date and to_date and from_date > to_date:
+        raise ValueError("Дата начала периода не может быть позже даты окончания")
+    if from_date or to_date:
+        if from_date:
+            clauses.append("e.received_at >= ?")
+            params.append(from_date.astimezone(timezone.utc).isoformat())
+        if to_date:
+            clauses.append("e.received_at < ?")
+            params.append((to_date + timedelta(days=1)).astimezone(timezone.utc).isoformat())
+    else:
+        start = _period_start(period)
+        if start:
+            clauses.append("e.received_at >= ?")
+            params.append(start)
     if device:
         clauses.append("e.device_type = ?")
         params.append(device)
@@ -352,10 +588,11 @@ def _filters(period: str, device: str, method: str, source: str) -> tuple[str, l
 def admin_report(
     period: str = "30", device: str = "", method: str = "", source: str = "",
     recent_page: int = 1, recent_limit: int = 25,
+    date_from: str = "", date_to: str = "",
 ) -> dict:
     recent_page = max(1, int(recent_page))
     recent_limit = max(10, min(int(recent_limit), 100))
-    where, params = _filters(period, device, method, source)
+    where, params = _filters(period, device, method, source, date_from, date_to)
     join = " FROM analytics_events e LEFT JOIN analytics_sessions s ON s.session_id=e.session_id "
     with connection() as conn:
         def scalar(expression: str) -> int:
@@ -462,14 +699,14 @@ def admin_report(
                 item["properties"] = {}
             recent.append(item)
         filter_options = {
-            "devices": [row[0] for row in conn.execute("SELECT DISTINCT device_type FROM analytics_events ORDER BY device_type") if row[0]],
+            "devices": [row[0] for row in conn.execute("SELECT DISTINCT device_type FROM analytics_events WHERE IS_STATS_USER(chel_id) = 1 ORDER BY device_type") if row[0]],
             "methods": [row[0] for row in conn.execute(
                 "SELECT DISTINCT COALESCE(NULLIF(json_extract(properties,'$.method'),''),registration_method) method "
-                "FROM analytics_events WHERE event_name='registration_completed' "
+                "FROM analytics_events WHERE IS_STATS_USER(chel_id) = 1 AND event_name='registration_completed' "
                 "AND COALESCE(NULLIF(json_extract(properties,'$.method'),''),registration_method) "
                 "IN ('anonymous','max','telegram') ORDER BY method"
             )],
-            "sources": [row[0] for row in conn.execute("SELECT DISTINCT entry_source FROM analytics_sessions WHERE entry_source<>'' ORDER BY entry_source LIMIT 100")],
+            "sources": [row[0] for row in conn.execute("SELECT DISTINCT entry_source FROM analytics_sessions WHERE IS_STATS_USER(chel_id) = 1 AND entry_source<>'' ORDER BY entry_source LIMIT 100")],
         }
         registrations = grouped("COALESCE(NULLIF(json_extract(e.properties,'$.method'),''),e.registration_method)", "registration_completed")
         devices = grouped("e.device_type")
@@ -543,7 +780,7 @@ def admin_report(
             "selected_items": sum(item["users"] for item in examinations),
         }
     return {
-        "generated_at": _now(), "period": period,
+        "generated_at": _now(), "period": period, "date_from": date_from, "date_to": date_to,
         "summary": {"users": registered_users, "visitors": total_users, "sessions": total_sessions, "events": total_events},
         "funnel": funnel, "daily": daily, "questions": questions,
         "registrations": registrations, "devices": devices,
@@ -557,6 +794,152 @@ def admin_report(
         },
         "filter_options": filter_options,
         "privacy": "Медицинские ответы, сообщения, телефоны и номера пробирок не сохраняются.",
+    }
+
+
+def metric2_report(
+    period: str = "30", device: str = "", method: str = "", source: str = "",
+    date_from: str = "", date_to: str = "",
+) -> dict:
+    """Return screen-by-screen onboarding analytics without storing answers."""
+    where, params = _filters(period, device, method, source, date_from, date_to)
+    join = " FROM analytics_events e LEFT JOIN analytics_sessions s ON s.session_id=e.session_id "
+    definitions = _metric2_screen_definitions()
+    relevant_events = {"onboarding_screen_viewed", "onboarding_screen_action"}
+    for definition in definitions:
+        relevant_events.update(
+            spec["event"] for spec in definition.get("legacy_reach", [])
+        )
+        for action in definition.get("actions", []):
+            relevant_events.update(spec["event"] for spec in action.get("legacy", []))
+    relevant_events = sorted(relevant_events)
+    event_filter = " AND e.event_name IN (" + ",".join("?" for _ in relevant_events) + ")"
+    with connection() as conn:
+        rows = conn.execute(
+            "SELECT e.event_name, e.chel_id, e.properties" + join + where + event_filter,
+            [*params, *relevant_events],
+        ).fetchall()
+        parsed_rows = []
+        for row in rows:
+            try:
+                properties = json.loads(row["properties"] or "{}")
+            except (json.JSONDecodeError, TypeError):
+                properties = {}
+            parsed_rows.append({
+                "event": str(row["event_name"] or ""),
+                "chel_id": str(row["chel_id"] or ""),
+                "properties": properties if isinstance(properties, dict) else {},
+            })
+
+        def matches(row: dict, spec: dict) -> bool:
+            if row["event"] != spec.get("event"):
+                return False
+            return all(
+                str(row["properties"].get(key, "")) == str(value)
+                for key, value in spec.get("properties", {}).items()
+            )
+
+        def users_for(specs: list[dict]) -> set[str]:
+            return {
+                row["chel_id"] for row in parsed_rows
+                if row["chel_id"] and any(matches(row, spec) for spec in specs)
+            }
+
+        screen_users: dict[str, set[str]] = {}
+        generic_tracking: dict[str, bool] = {}
+        for definition in definitions:
+            generic = _metric2_spec(
+                "onboarding_screen_viewed", screen=definition["id"], context="onboarding",
+            )
+            generic_users = users_for([generic])
+            generic_tracking[definition["id"]] = bool(generic_users)
+            screen_users[definition["id"]] = (
+                generic_users if generic_users
+                else users_for(definition.get("legacy_reach", []))
+            )
+
+        # A funnel is a cohort, not a collection of unrelated event totals.
+        # Every later screen is therefore limited to users who reached the
+        # preceding main screen; a branch is limited to its parent screen.
+        start_cohort = set(screen_users.get("welcome", set()))
+        previous_main_users = start_cohort
+        for definition in definitions:
+            screen_id = definition["id"]
+            if screen_id == "welcome":
+                screen_users[screen_id] = start_cohort
+            elif definition.get("branch"):
+                screen_users[screen_id] &= screen_users.get(
+                    definition.get("parent_id", ""), set()
+                )
+            else:
+                screen_users[screen_id] &= previous_main_users
+                previous_main_users = screen_users[screen_id]
+
+        start_users = len(screen_users.get("welcome", set()))
+        result_screens, previous_main_id = [], ""
+        for definition in definitions:
+            screen_id = definition["id"]
+            reached = screen_users[screen_id]
+            parent_id = definition.get("parent_id") or previous_main_id
+            parent_count = len(screen_users.get(parent_id, set())) if parent_id else 0
+            actions = []
+            for action in definition.get("actions", []):
+                generic = _metric2_spec(
+                    "onboarding_screen_action", screen=screen_id,
+                    action=action["id"], context="onboarding",
+                )
+                action_users = users_for(
+                    [generic] if generic_tracking[screen_id] else action.get("legacy", [])
+                ) & reached
+                target_id = action.get("target", "")
+                actions.append({
+                    "id": action["id"], "label": action["label"],
+                    "users": len(action_users),
+                    "percent_of_screen": round(len(action_users) / len(reached) * 100, 1) if reached else 0.0,
+                    "target": target_id,
+                    "target_label": action.get("target_label", ""),
+                })
+            item = {
+                key: value for key, value in definition.items()
+                if key not in {"legacy_reach", "actions"}
+            }
+            item.update({
+                "users": len(reached),
+                "percent_of_start": round(len(reached) / start_users * 100, 1) if start_users else 0.0,
+                "comparison_id": parent_id,
+                "percent_of_parent": round(len(reached) / parent_count * 100, 1) if parent_count else (100.0 if screen_id == "welcome" and reached else 0.0),
+                "actions": actions,
+            })
+            result_screens.append(item)
+            if not definition.get("branch"):
+                previous_main_id = screen_id
+
+        filter_options = {
+            "devices": [row[0] for row in conn.execute(
+                "SELECT DISTINCT device_type FROM analytics_events "
+                "WHERE IS_STATS_USER(chel_id) = 1 ORDER BY device_type"
+            ) if row[0]],
+            "methods": [row[0] for row in conn.execute(
+                "SELECT DISTINCT COALESCE(NULLIF(json_extract(properties,'$.method'),''),registration_method) method "
+                "FROM analytics_events WHERE IS_STATS_USER(chel_id) = 1 AND event_name='registration_completed' "
+                "AND COALESCE(NULLIF(json_extract(properties,'$.method'),''),registration_method) "
+                "IN ('anonymous','max','telegram') ORDER BY method"
+            ) if row[0]],
+            "sources": [row[0] for row in conn.execute(
+                "SELECT DISTINCT entry_source FROM analytics_sessions "
+                "WHERE IS_STATS_USER(chel_id) = 1 AND entry_source<>'' ORDER BY entry_source LIMIT 100"
+            ) if row[0]],
+        }
+    return {
+        "generated_at": _now(), "period": period, "date_from": date_from, "date_to": date_to,
+        "summary": {
+            "start_users": start_users,
+            "screens": len(result_screens),
+            "reached_completion": len(screen_users.get("completion", set())),
+        },
+        "screens": result_screens,
+        "filter_options": filter_options,
+        "privacy": "Ответы анкеты и медицинские данные в Метрику 2.0 не передаются.",
     }
 
 

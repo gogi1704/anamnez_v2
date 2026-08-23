@@ -1,5 +1,6 @@
 import json
 import os
+import re
 import tempfile
 import unittest
 from datetime import datetime, timedelta, timezone
@@ -10,7 +11,9 @@ from unittest.mock import patch
 
 _temp_dir = tempfile.TemporaryDirectory()
 os.environ["DATABASE_PATH"] = str(Path(_temp_dir.name) / "test.db")
+os.environ["ANALYTICS_DATABASE_PATH"] = str(Path(_temp_dir.name) / "analytics.db")
 
+from backend import analytics
 from backend import database as db  # noqa: E402
 from backend.ai_costs import usage_record  # noqa: E402
 from backend.lab_results import (  # noqa: E402
@@ -175,100 +178,105 @@ class OrchestratorTests(unittest.TestCase):
         self.assertEqual(fake.route_calls[1]["conversation"]["active_agent"], "neurologist")
         self.assertGreaterEqual(len(fake.route_calls[1]["history"]), 3)
 
-    def test_human_ticket_immediately_pauses_ai_in_current_dialogue(self):
+    def test_human_offer_keeps_ai_active_until_user_confirms(self):
         service = ConversationOrchestrator(FakeLLM())
-        result = service.process(None, "Позовите живого оператора")
-        ticket = result.human_ticket_id
+        with patch.object(db, "enqueue_manager_notifications") as notify:
+            result = service.process(None, "Позовите живого оператора")
+
         self.assertTrue(result.human_escalation)
-        self.assertRegex(ticket, r"^H-[A-F0-9]{6}$")
-
+        self.assertIsNone(result.human_ticket_id)
+        self.assertIn("только после подтверждения", result.assistant_message["content"])
         saved = db.get_conversation(result.conversation_id)
-        self.assertEqual(saved["status"], "waiting_human")
-        self.assertEqual(saved["human_status"], "pending")
-        self.assertEqual(saved["human_ticket_id"], ticket)
-        self.assertFalse(saved["ai_enabled"])
+        self.assertEqual(saved["status"], "active")
+        self.assertEqual(saved["human_status"], "none")
+        self.assertIsNone(saved["human_ticket_id"])
+        self.assertTrue(saved["ai_enabled"])
+        notify.assert_not_called()
 
-    def test_repeated_human_request_reuses_ticket(self):
+    def test_repeated_human_offer_still_does_not_create_request(self):
         service = ConversationOrchestrator(FakeLLM())
         first = service.process(None, "Позови человека")
         repeated = service.process(first.conversation_id, "Подключи оператора")
-        self.assertEqual(first.human_ticket_id, repeated.human_ticket_id)
-        self.assertIn("подготовлено", repeated.assistant_message["content"])
-        self.assertIn("ИИ в этом диалоге приостановлен", repeated.assistant_message["content"])
 
-    def test_closed_human_request_gets_new_ticket_when_requested_again(self):
-        service = ConversationOrchestrator(FakeLLM())
-        first = service.process(None, "Позови человека")
-        db.set_human_channel(first.conversation_id, "chat")
-        closed = db.manager_close_conversation(first.conversation_id, "Ольга")
-        self.assertEqual(closed["human_status"], "closed")
+        self.assertTrue(first.human_escalation)
+        self.assertTrue(repeated.human_escalation)
+        self.assertIsNone(first.human_ticket_id)
+        self.assertIsNone(repeated.human_ticket_id)
+        saved = db.get_conversation(first.conversation_id)
+        self.assertTrue(saved["ai_enabled"])
+        self.assertEqual(saved["human_status"], "none")
 
-        repeated = service.process(first.conversation_id, "Позови человека снова")
-        self.assertNotEqual(first.human_ticket_id, repeated.human_ticket_id)
-        self.assertIsNone(repeated.human_channel)
+    def test_confirming_specialist_chat_creates_request_pauses_ai_and_notifies_once(self):
+        offered = ConversationOrchestrator(FakeLLM()).process(None, "Позови человека")
+        analytics_events = []
+        handler = SimpleNamespace(
+            _json=lambda status, payload: (status, payload),
+            _track_analytics=lambda event, metadata=None: analytics_events.append((event, metadata)),
+        )
 
-    def test_human_channel_is_persisted_and_ai_stays_paused(self):
-        service = ConversationOrchestrator(FakeLLM())
-        result = service.process(None, "Позови человека")
-        saved = db.set_human_channel(result.conversation_id, "chat")
+        with patch.object(db, "enqueue_manager_notifications") as notify:
+            status, response = ConsiliumHandler._set_human_preference(
+                handler,
+                {"conversation_id": offered.conversation_id, "channel": "chat"},
+            )
+            repeated_status, repeated_response = ConsiliumHandler._set_human_preference(
+                handler,
+                {"conversation_id": offered.conversation_id, "channel": "chat"},
+            )
 
-        self.assertEqual(saved["human_channel"], "chat")
-        self.assertEqual(saved["human_status"], "pending")
+        self.assertEqual(status, 200)
+        self.assertEqual(repeated_status, 200)
+        self.assertRegex(response["ticket_id"], r"^H-[A-F0-9]{6}$")
+        self.assertEqual(repeated_response["ticket_id"], response["ticket_id"])
+        saved = db.get_conversation(offered.conversation_id)
         self.assertEqual(saved["status"], "waiting_human")
-        self.assertFalse(saved["ai_enabled"])
-
-        queued, after_message = db.add_user_message_waiting_for_manager(
-            result.conversation_id, "А пока ответьте на мой вопрос"
-        )
-        self.assertTrue(queued["metadata"]["awaiting_manager"])
-        self.assertEqual(after_message["human_channel"], "chat")
-        self.assertFalse(after_message["ai_enabled"])
-
-    def test_russian_phone_is_normalized_and_saved_for_call(self):
-        self.assertEqual(
-            ConsiliumHandler._normalize_russian_phone("8 (999) 123-45-67"),
-            "+79991234567",
-        )
-        self.assertEqual(
-            ConsiliumHandler._normalize_russian_phone("495 123 45 67"),
-            "+74951234567",
-        )
-        with self.assertRaisesRegex(ValueError, "российский номер"):
-            ConsiliumHandler._normalize_russian_phone("+1 202 555 0100")
-
-        result = ConversationOrchestrator(FakeLLM()).process(None, "Позови человека")
-        saved = db.set_human_channel(result.conversation_id, "call", "+79991234567")
-        self.assertEqual(saved["human_channel"], "call")
-        self.assertEqual(saved["human_phone"], "+79991234567")
-        self.assertFalse(saved["ai_enabled"])
-
-    def test_text_call_choice_opens_phone_prompt_for_pending_handoff(self):
-        fake = FakeLLM()
-        service = ConversationOrchestrator(fake)
-        handoff = service.process(None, "Позови человека")
-
-        call_choice = service.process(handoff.conversation_id, "созвон")
-        saved = db.get_conversation(handoff.conversation_id)
-
-        self.assertEqual(call_choice.action, "human_channel_prompt")
-        self.assertEqual(call_choice.human_channel_prompt, "call")
-        self.assertEqual(call_choice.human_ticket_id, handoff.human_ticket_id)
-        self.assertIn("На какой номер вам позвонить?", call_choice.assistant_message["content"])
         self.assertEqual(saved["human_status"], "pending")
-        self.assertIsNone(saved["human_channel"])
-        self.assertEqual(len(fake.route_calls), 0)
+        self.assertEqual(saved["human_channel"], "chat")
+        self.assertFalse(saved["ai_enabled"])
+        notify.assert_called_once()
+        self.assertEqual(notify.call_args.args[:2], ("new_request", offered.conversation_id))
+        self.assertEqual(
+            [event for event, _ in analytics_events].count("human_requested"), 1,
+        )
 
-    def test_negative_call_phrase_does_not_open_phone_prompt(self):
-        fake = FakeLLM()
-        service = ConversationOrchestrator(fake)
-        handoff = service.process(None, "Позови человека")
+    def test_specialist_confirmation_endpoint_rejects_call_channel(self):
+        offered = ConversationOrchestrator(FakeLLM()).process(None, "Позови человека")
+        handler = SimpleNamespace(
+            _json=lambda status, payload: (status, payload),
+            _track_analytics=lambda event, metadata=None: None,
+        )
+        status, response = ConsiliumHandler._set_human_preference(
+            handler,
+            {"conversation_id": offered.conversation_id, "channel": "call"},
+        )
 
-        response = service.process(handoff.conversation_id, "Не хочу созвон, продолжим здесь")
+        self.assertEqual(status, 422)
+        self.assertIn("чат с медицинским специалистом", response["detail"])
+        saved = db.get_conversation(offered.conversation_id)
+        self.assertTrue(saved["ai_enabled"])
+        self.assertEqual(saved["human_status"], "none")
+        self.assertIsNone(saved["human_ticket_id"])
+    def test_human_modal_offers_specialist_chat_or_ai_without_call(self):
+        project_root = Path(__file__).resolve().parents[1]
+        index = (project_root / "index.html").read_text(encoding="utf-8")
+        script = (project_root / "static" / "app.js").read_text(encoding="utf-8")
 
-        self.assertEqual(response.action, "human_preference")
-        self.assertEqual(response.human_channel, "chat")
-        self.assertFalse(db.get_conversation(handoff.conversation_id)["ai_enabled"])
-
+        self.assertIn("Чат с медицинским специалистом", index)
+        self.assertIn("Не звать медицинского специалиста", index)
+        self.assertIn("Остаться в текущем чате с ИИ", index)
+        self.assertNotIn('id="humanCallButton"', index)
+        self.assertNotIn('id="callPhoneStep"', index)
+        self.assertNotIn('id="ticketNumber"', index)
+        decline_flow = script.split("function declineHumanSpecialist()", 1)[1].split(
+            "function setHumanChoiceDisabled", 1,
+        )[0]
+        confirm_flow = script.split("async function chooseHumanSpecialistChat()", 1)[1].split(
+            "function closeFunctionMenu", 1,
+        )[0]
+        self.assertIn("updateChatMode(true, 'none', null)", decline_flow)
+        self.assertNotIn("/api/human-preference", decline_flow)
+        self.assertIn("/api/human-preference", confirm_flow)
+        self.assertIn("channel:'chat'", confirm_flow)
     def test_critical_phrase_bypasses_ai_router(self):
         fake = FakeLLM()
         result = ConversationOrchestrator(fake).process(None, "У меня сильная боль в груди, задыхаюсь")
@@ -315,7 +323,7 @@ class OrchestratorTests(unittest.TestCase):
         self.assertEqual(third.assistant_message["metadata"]["assessment_questions_total"], 5)
         self.assertTrue(fourth.human_escalation)
         self.assertEqual(fourth.agent, "manager")
-        self.assertIn("чат с менеджером или созвон", fourth.assistant_message["content"])
+        self.assertIn("подтверждения", fourth.assistant_message["content"])
 
     def test_medical_agent_can_offer_human_before_question_limit_when_context_is_sufficient(self):
         service = ConversationOrchestrator(EarlyHumanMedicalLLM())
@@ -324,7 +332,7 @@ class OrchestratorTests(unittest.TestCase):
 
         self.assertEqual(first.assistant_message["metadata"]["assessment_questions_asked"], 2)
         self.assertTrue(second.human_escalation)
-        self.assertIn("чат с менеджером или созвон", second.assistant_message["content"])
+        self.assertIn("подтверждения", second.assistant_message["content"])
 
     def test_human_reminder_has_two_blank_lines(self):
         text = "Да, я здесь. Обращение H-939398 уже передано человеку; ожидайте ответа специалиста."
@@ -407,8 +415,117 @@ class OrchestratorTests(unittest.TestCase):
 
         valid = ConsiliumHandler._validate_profile({"company_inn": "7707083893"})
         self.assertEqual(valid["company_inn"], "7707083893")
-        with self.assertRaises(ValueError):
-            ConsiliumHandler._validate_profile({"company_inn": "123"})
+        test_valid = ConsiliumHandler._validate_profile({"company_inn": "123123"})
+        self.assertEqual(test_valid["company_inn"], "123123")
+        self.assertIn("value !== '123123'", script)
+        for invalid_inn in ("123", "123122", "123124", "1231234", "123456789"):
+            with self.subTest(company_inn=invalid_inn), self.assertRaises(ValueError):
+                ConsiliumHandler._validate_profile({"company_inn": invalid_inn})
+
+    def test_test_inn_user_is_excluded_from_every_statistics_surface(self):
+        analytics.init_db()
+        regular_id = "chel_stats_regular_inn"
+        test_id = "chel_stats_test_inn"
+        manager_marker = "manager_test_inn"
+        dashboard_before = db.admin_dashboard(days=7)["summary"]
+        costs_before = db.admin_ai_costs("all")["all_time"]["requests"]
+        analytics_before = analytics.admin_report(period="all")["summary"]
+        try:
+            for chel_id, company_inn in (
+                (regular_id, "7707083893"),
+                (test_id, db.TEST_COMPANY_INN),
+            ):
+                db.ensure_user(chel_id, pending=True, from_manager=manager_marker)
+                db.set_current_chel_id(chel_id)
+                db.mark_current_user_registered("anonymous")
+                if chel_id == test_id:
+                    preexisting = analytics.record_events(chel_id, [{
+                        "event_id": "web-test-inn-before-profile",
+                        "session_id": "ses-test-inn-before-profile",
+                        "event_name": "welcome_viewed",
+                    }])
+                    self.assertEqual(preexisting["accepted"], 1)
+                db.save_profile({"company_inn": company_inn})
+                if chel_id == test_id:
+                    with analytics.connection() as analytics_conn:
+                        remaining = analytics_conn.execute(
+                            "SELECT COUNT(*) FROM analytics_events WHERE chel_id = ?",
+                            (test_id,),
+                        ).fetchone()[0]
+                    self.assertEqual(remaining, 0)
+                db.save_onboarding(status="payment", selected_tests=["lipids"])
+                db.record_device_access(
+                    "Mozilla/5.0 (Linux; Android 14) AppleWebKit/537.36 Chrome/126.0 Mobile"
+                )
+                conversation = db.create_conversation("Проверка статистики")
+                db.add_message(conversation["id"], "user", "Тестовое сообщение")
+                usage_id = db.record_ai_usage({
+                    "chel_id": chel_id, "operation": "routing", "model": "test-model",
+                    "input_tokens": 10, "output_tokens": 5, "total_tokens": 15,
+                    "pricing_known": True, "total_cost_usd": 0.001,
+                })
+                accepted = analytics.record_events(chel_id, [{
+                    "event_id": f"web-{chel_id}-registration",
+                    "session_id": f"ses-{chel_id}-registration",
+                    "event_name": "registration_completed",
+                    "properties": {"method": "anonymous"},
+                }])
+                if chel_id == test_id:
+                    self.assertEqual(usage_id, 0)
+                    self.assertEqual(accepted["accepted"], 0)
+                else:
+                    self.assertGreater(usage_id, 0)
+                    self.assertEqual(accepted["accepted"], 1)
+
+            dashboard_after = db.admin_dashboard(days=7)["summary"]
+            self.assertEqual(
+                dashboard_after["users_total"], dashboard_before["users_total"] + 1,
+            )
+            self.assertEqual(
+                dashboard_after["conversations_total"],
+                dashboard_before["conversations_total"] + 1,
+            )
+            self.assertEqual(db.admin_table("users", test_id)["total"], 0)
+            self.assertEqual(db.admin_table("conversations", test_id)["total"], 0)
+            self.assertEqual(db.admin_table("devices", test_id)["total"], 0)
+
+            manager_report = db.admin_manager_attribution("all")
+            manager_row = next(
+                item for item in manager_report["managers"]
+                if item["from_manager"] == manager_marker
+            )
+            self.assertEqual(manager_row["users"], 1)
+            self.assertEqual(manager_row["users_with_examinations"], 1)
+
+            costs_after = db.admin_ai_costs("all")["all_time"]["requests"]
+            self.assertEqual(costs_after, costs_before + 1)
+            analytics_after = analytics.admin_report(period="all")["summary"]
+            self.assertEqual(
+                analytics_after["users"], analytics_before["users"] + 1,
+            )
+            self.assertEqual(
+                analytics_after["visitors"], analytics_before["visitors"] + 1,
+            )
+        finally:
+            for chel_id in (regular_id, test_id):
+                analytics.delete_user_data(chel_id)
+                db.set_current_chel_id(chel_id)
+                db.reset_current_user()
+            db.ensure_user("chel_test_default")
+            db.set_current_chel_id("chel_test_default")
+
+    def test_headache_suggestion_does_not_invent_duration(self):
+        project_root = Path(__file__).resolve().parents[1]
+        index = (project_root / "index.html").read_text(encoding="utf-8")
+
+        self.assertIn(
+            'data-prompt="У меня болит голова">Болит голова</button>',
+            index,
+        )
+        self.assertNotIn(
+            'data-prompt="У меня второй день болит голова"',
+            index,
+        )
 
     def test_profile_measurement_ranges_match_questionnaire_and_server(self):
         project_root = Path(__file__).resolve().parents[1]
@@ -565,14 +682,27 @@ class OrchestratorTests(unittest.TestCase):
         project_root = Path(__file__).resolve().parents[1]
         index = (project_root / "index.html").read_text(encoding="utf-8")
         script = (project_root / "static" / "app.js").read_text(encoding="utf-8")
+        agents_script = (project_root / "static" / "agents.js").read_text(encoding="utf-8")
+        manager_script = (project_root / "static" / "manager.js").read_text(encoding="utf-8")
         public_ui = index + script
 
-        self.assertIn("Я Мария, ваш ИИ-менеджер", script)
+        self.assertIn("Я Ольга, ваш медицинский помощник", script)
+        self.assertIn("Ольга", index)
+        self.assertIn("Медицинский помощник", index)
+        self.assertIn("name: 'Ольга'", agents_script)
+        self.assertIn("role: 'Медицинский помощник'", agents_script)
+        self.assertIn("state.active = 'manager'", script)
+        self.assertIn("$('#handoffBanner').classList.add('hidden')", script)
+        self.assertIn("Ольга · Медицинский помощник", manager_script)
+        for retired_name in ("Мария", "Ирина", "Дмитрий", "Анна", "Сергей", "Елена", "Максим"):
+            self.assertNotIn(retired_name, agents_script)
+        for retired_role in ("ИИ-менеджер", "Терапевт", "Кардиолог", "Невролог", "Дерматолог", "Педиатр", "Психолог"):
+            self.assertNotIn(retired_role, agents_script)
         self.assertIn("Задавайте вопросы о здоровье, питании, спорте", script)
         self.assertNotIn("AI-оркестратор", public_ui)
         self.assertNotIn("Команда агентов", public_ui)
         self.assertNotIn("План проекта", public_ui)
-        self.assertIn("Здоровье и образ жизни", public_ui)
+        self.assertIn("Медицинский помощник", public_ui)
 
         manager_prompt = PROFILES["manager"].prompt
         lifestyle_prompt = PROFILES["general"].prompt
@@ -583,6 +713,17 @@ class OrchestratorTests(unittest.TestCase):
         self.assertIn("спорт, нагрузки, восстановление, сон, питание", ORCHESTRATOR_PROMPT)
         self.assertIn("respond + manager", ORCHESTRATOR_PROMPT)
         self.assertIn("Не выполняй задачи про программирование", lifestyle_prompt)
+
+    def test_chat_attachment_button_uses_paperclip_icon(self):
+        project_root = Path(__file__).resolve().parents[1]
+        index = (project_root / "index.html").read_text(encoding="utf-8")
+        styles = (project_root / "static" / "styles.css").read_text(encoding="utf-8")
+        button = index.split('class="attach-button"', 1)[1].split('</button>', 1)[0]
+        self.assertIn('id="attachButton"', button)
+        self.assertIn('aria-label="Прикрепить файл"', button)
+        self.assertIn('<svg viewBox="0 0 24 24"', button)
+        self.assertNotIn('＋', button)
+        self.assertIn('.attach-button svg', styles)
 
     def test_lab_result_helpers_normalize_med_id_and_extract_document_links(self):
         self.assertEqual(normalize_med_id(" 12345.0 "), "12345")
@@ -858,7 +999,7 @@ class OrchestratorTests(unittest.TestCase):
         rich_script = (project_root / "static" / "rich-text.js").read_text(encoding="utf-8")
         rich_styles = (project_root / "static" / "rich-text.css").read_text(encoding="utf-8")
 
-        self.assertIn('/static/rich-text.js?v=20260819-exam-funnel-v2', index)
+        self.assertIn('/static/rich-text.js?v=20260823-metric2-exact-v2', index)
         self.assertIn('/static/rich-text.js?v=20260816-rich-text', manager_html)
         self.assertIn('window.ConsiliumRichText.render(value)', app_script)
         self.assertIn('window.ConsiliumRichText.render(value)', manager_script)
@@ -1240,6 +1381,21 @@ class OrchestratorTests(unittest.TestCase):
         self.assertIn('id="favoritesTab"', dashboard)
         self.assertIn('id="favoritesAdminView"', dashboard)
         self.assertIn('id="favoritesGrid"', dashboard)
+        self.assertIn('id="metric2Tab"', dashboard)
+        self.assertIn('id="metric2AdminView"', dashboard)
+        self.assertIn('id="metric2Flow"', dashboard)
+        self.assertIn('id="metric2Modal"', dashboard)
+        self.assertIn('id="analyticsDateFrom" type="date"', dashboard)
+        self.assertIn('id="analyticsDateTo" type="date"', dashboard)
+        self.assertIn('id="metric2DateFrom" type="date"', dashboard)
+        self.assertIn('id="metric2DateTo" type="date"', dashboard)
+        self.assertIn("/api/admin/metric2", script)
+        self.assertIn("function appendDateRange", script)
+        self.assertIn("params.set('date_from', dateFrom)", script)
+        self.assertIn("function metric2PreviewMarkup", script)
+        self.assertIn("function openMetric2Screen", script)
+        self.assertIn(".metric2-screen-row", styles)
+        self.assertIn(".metric2-modal-layout", styles)
         self.assertIn('id="costSummaryGrid"', dashboard)
         self.assertIn('id="costModelsTable"', dashboard)
         self.assertIn('id="examinationForm"', dashboard)
@@ -1254,6 +1410,7 @@ class OrchestratorTests(unittest.TestCase):
         self.assertIn('id="staffNotifyRequests"', dashboard)
         self.assertIn('id="userDataCleanupForm"', dashboard)
         self.assertIn('id="userDataCleanupId"', dashboard)
+
         self.assertNotIn('id="deleteMyDataButton"', dashboard)
         self.assertIn("/api/admin/users/delete-data", script)
         self.assertNotIn("/api/admin/my-user-id", script)
@@ -1301,6 +1458,48 @@ class OrchestratorTests(unittest.TestCase):
         self.assertIn('data-staff-action="delete"', script)
         self.assertIn("method:'DELETE'", script)
         self.assertIn("@media (max-width:700px)", styles)
+
+    def test_metric2_preview_copy_and_controls_match_real_onboarding(self):
+        project_root = Path(__file__).resolve().parents[1]
+        index = (project_root / "index.html").read_text(encoding="utf-8")
+        app = (project_root / "static" / "app.js").read_text(encoding="utf-8")
+        script = (project_root / "static" / "dashboard.js").read_text(encoding="utf-8")
+        analytics_source = (project_root / "backend" / "analytics.py").read_text(encoding="utf-8")
+        main_source = (project_root / "backend" / "main.py").read_text(encoding="utf-8")
+
+        questions = app.split("const onboardingQuestions = [", 1)[1].split("];", 1)[0]
+        for field in ("title", "lead", "placeholder"):
+            for value in re.findall(rf"{field}:'((?:\\'|[^'])*)'", questions):
+                self.assertIn(value, script, f"Метрика 2.0 не повторяет {field}: {value}")
+        for label in re.findall(r"\['[^']+','([^']+)'\]", questions):
+            self.assertIn(label, script, f"Нет варианта ответа в превью: {label}")
+
+        for text in (
+            "Продолжить с Telegram", "Продолжить с MAX", "Подтверждение через бота",
+            "Войти анонимно", "Понимаю, продолжить", "Какой размер текста вам удобен?",
+            "Я не на мед-осмотр", "Посмотреть описания чек-апов",
+            "Да, выбрать анализы", "Нет, не сейчас", "Изменить ответы анкеты",
+            "Выбрать обследования", "Всё равно отказаться", "Ничего не выбирать",
+            "Оплатить онлайн", "Оплатить на медосмотре", "Понятно",
+            "Привязать мессенджер", "Установить приложение", "Установлю позже",
+        ):
+            self.assertIn(text, index + app, f"Кнопка отсутствует в приложении: {text}")
+            self.assertIn(text, script, f"Кнопка отсутствует в Метрике 2.0: {text}")
+
+        self.assertIn("trackOnboardingAction('select_option'", app)
+        self.assertIn('"id": "select_option"', analytics_source)
+        self.assertIn('"label": "Выбор варианта ответа"', analytics_source)
+        self.assertIn("report[\"examinations\"] = db.list_examinations()", main_source)
+        self.assertNotIn("Краткое пояснение к вопросу", script)
+        self.assertNotIn("Вариант ответа", script)
+
+        screens = {item["id"]: item for item in analytics._metric2_screen_definitions()}
+        inn_actions = {item["id"] for item in screens["question_company_inn"]["actions"]}
+        notes_actions = {item["id"] for item in screens["question_notes"]["actions"]}
+        self.assertEqual(inn_actions, {"answer", "not_medical_exam"})
+        self.assertIn("skip", notes_actions)
+        self.assertIn("screen.id === 'question_company_inn'", script)
+        self.assertIn("action.id !== 'skip'", script)
 
     def test_manager_messenger_api_and_deep_link_are_present(self):
         project_root = Path(__file__).resolve().parents[1]
@@ -1594,7 +1793,7 @@ class OrchestratorTests(unittest.TestCase):
         self.assertIn('id="editHandoffContext"', app)
         self.assertIn("returnToHumanAfterContextEdit", app)
         self.assertIn("/updates?after_id=", app)
-        self.assertIn("Сообщение ожидает ответа менеджера", app)
+        self.assertIn("Сообщение ожидает ответа медицинского специалиста", app)
         self.assertIn("playUserMessageSound()", app)
         self.assertIn('id="mobileHeaderDialogsButton"', index)
         self.assertIn('id="mobileDialogsUnread"', index)
@@ -1840,6 +2039,37 @@ class OrchestratorTests(unittest.TestCase):
         self.assertNotIn('id="resetUserButton"', index)
         self.assertNotIn("$('#resetUserButton')", script)
 
+    def test_capabilities_offer_confirmed_full_user_data_deletion(self):
+        project_root = Path(__file__).resolve().parents[1]
+        index = (project_root / "index.html").read_text(encoding="utf-8")
+        script = (project_root / "static" / "app.js").read_text(encoding="utf-8")
+        styles = (project_root / "static" / "styles.css").read_text(encoding="utf-8")
+        main_source = (project_root / "backend" / "main.py").read_text(encoding="utf-8")
+
+        capabilities = index.split('id="capabilitiesModal"', 1)[1].split(
+            'id="installAppModal"', 1,
+        )[0]
+        self.assertIn('id="capabilityDeleteData"', capabilities)
+        self.assertGreater(
+            capabilities.index('id="capabilityDeleteData"'),
+            capabilities.index('capability-info-grid'),
+        )
+        self.assertIn('id="deleteMyDataModal"', index)
+        self.assertIn("Это действие нельзя отменить", index)
+        self.assertIn("привязка Telegram или MAX и доступ к текущему профилю", index)
+        self.assertIn("потребуется зарегистрироваться и заполнить анкету заново", index)
+        self.assertIn("/api/delete-my-data", script)
+        self.assertIn("'X-Consilium-Action':'delete-my-data'", script)
+        self.assertIn("localStorage.clear()", script)
+        self.assertIn("sessionStorage.clear()", script)
+        self.assertIn("caches.keys()", script)
+        self.assertIn('path == "/api/delete-my-data"', main_source)
+        self.assertIn("db.admin_delete_user_data(chel_id)", main_source)
+        self.assertIn("analytics.delete_user_data(chel_id)", main_source)
+        self.assertIn("self._clear_user_session = True", main_source)
+        self.assertIn(".capability-danger-zone", styles)
+        self.assertIn(".delete-my-data-modal", styles)
+
     def test_exam_offer_explains_choices_and_confirms_skipping(self):
         project_root = Path(__file__).resolve().parents[1]
         index = (project_root / "index.html").read_text(encoding="utf-8")
@@ -1850,8 +2080,10 @@ class OrchestratorTests(unittest.TestCase):
         )[0]
         self.assertIn("key:'notes'", questionnaire)
         self.assertIn("Есть ли у вас жалобы?", questionnaire)
-        self.assertIn("Если жалоб нет, напишите «Нет»", questionnaire)
+        self.assertIn("Если жалоб нет, этот вопрос можно пропустить", questionnaire)
         self.assertIn("maxlength:1000", questionnaire)
+        self.assertIn("placeholder:'Например: две недели болит голова по вечерам, принимаю ибупрофен', optional:true", questionnaire)
+        self.assertIn("if (question.optional && empty) return 'Пропустить'", script)
         self.assertIn("Жалобы и дополнительные сведения", index)
         self.assertIn("Давайте честно: здоровых людей не бывает", script)
         self.assertIn("Можно пригласить родственника или друга", script)
@@ -1922,14 +2154,14 @@ class OrchestratorTests(unittest.TestCase):
         self.assertIn("controllerchange", script)
         self.assertIn("url.pathname.startsWith('/api/')", worker)
         self.assertIn("url.pathname.startsWith('/auth/')", worker)
-        self.assertIn("consilium-shell-v56", worker)
+        self.assertIn("consilium-shell-v67", worker)
         self.assertIn("fetch(request)", worker)
-        self.assertIn("/static/styles.215d794e1be6.css", index)
+        self.assertIn("/static/styles.07ffaefb4795.css", index)
         self.assertIn("/static/rich-text.2bf1f5fab764.css", index)
-        self.assertTrue((project_root / "static" / "styles.215d794e1be6.css").is_file())
+        self.assertTrue((project_root / "static" / "styles.07ffaefb4795.css").is_file())
         self.assertTrue((project_root / "static" / "rich-text.2bf1f5fab764.css").is_file())
-        self.assertIn("/static/app.js?v=20260819-exam-funnel-v2", index)
-        self.assertIn("/static/metrika.js?v=20260819-exam-funnel-v2", index)
+        self.assertIn("/static/app.js?v=20260823-metric2-exact-v2", index)
+        self.assertIn("/static/metrika.js?v=20260823-metric2-exact-v2", index)
         self.assertIn('id="welcomeScreen"', index)
         self.assertIn('id="welcomeNextButton"', index)
         self.assertIn("WELCOME_SEEN_KEY", script)
@@ -1959,7 +2191,7 @@ class OrchestratorTests(unittest.TestCase):
         main = (project_root / "backend" / "main.py").read_text(encoding="utf-8")
         config = (project_root / "backend" / "config.py").read_text(encoding="utf-8")
 
-        self.assertIn('src="/static/metrika.js?v=20260819-exam-funnel-v2"', index)
+        self.assertIn('src="/static/metrika.js?v=20260823-metric2-exact-v2"', index)
         self.assertIn('YANDEX_METRIKA_COUNTER_ID', config)
         self.assertIn('path == "/api/public-config"', main)
         self.assertIn('"metrika.js"', main)
@@ -2007,7 +2239,7 @@ class OrchestratorTests(unittest.TestCase):
         add_message = script.split("function addMessage(", 1)[1].split(
             "function addCouncilResult(", 1,
         )[0]
-        human_flow = script.split("async function chooseHumanChannel(", 1)[1].split(
+        human_flow = script.split("async function chooseHumanSpecialistChat(", 1)[1].split(
             "async function requestSecondOpinion(", 1,
         )[0]
 

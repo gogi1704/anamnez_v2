@@ -24,7 +24,7 @@ from .prompts import public_agents
 
 STATIC_DIR = BASE_DIR / "static"
 ALLOWED_STATIC = {
-    "app.js", "agents.js", "styles.css", "styles.215d794e1be6.css", "metrika.js",
+    "app.js", "agents.js", "styles.css", "styles.07ffaefb4795.css", "metrika.js",
     "rich-text.js", "rich-text.css", "rich-text.2bf1f5fab764.css", "dashboard.js", "dashboard.css",
     "manager.js", "manager.css", "icon-192.png", "icon-512.png",
     "icon-maskable-512.png", "apple-touch-icon.png", "favicon.svg",
@@ -152,12 +152,26 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                     "public, max-age=31536000, immutable" if immutable else "no-store"
                 ),
             )
-        if path in {"/api/admin/dashboard", "/api/admin/table", "/api/admin/ai-costs", "/api/admin/analytics"}:
+        if path in {"/api/admin/dashboard", "/api/admin/table", "/api/admin/ai-costs", "/api/admin/analytics", "/api/admin/metric2"}:
             if not self._admin_authorized():
                 return
             if path == "/api/admin/dashboard":
                 return self._json(200, db.admin_dashboard())
             query = parse_qs(parsed.query)
+            if path == "/api/admin/metric2":
+                try:
+                    report = analytics.metric2_report(
+                        query.get("period", ["30"])[0],
+                        query.get("device", [""])[0],
+                        query.get("method", [""])[0],
+                        query.get("source", [""])[0],
+                        query.get("date_from", [""])[0],
+                        query.get("date_to", [""])[0],
+                    )
+                    report["examinations"] = db.list_examinations()
+                    return self._json(200, report)
+                except (ValueError, TypeError) as exc:
+                    return self._json(422, {"detail": str(exc)})
             if path == "/api/admin/analytics":
                 try:
                     period = query.get("period", ["30"])[0]
@@ -168,8 +182,14 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                         query.get("source", [""])[0],
                         int(query.get("recent_page", ["1"])[0]),
                         int(query.get("recent_limit", ["25"])[0]),
+                        query.get("date_from", [""])[0],
+                        query.get("date_to", [""])[0],
                     )
-                    report["manager_attribution"] = db.admin_manager_attribution(period)
+                    report["manager_attribution"] = db.admin_manager_attribution(
+                        period,
+                        query.get("date_from", [""])[0],
+                        query.get("date_to", [""])[0],
+                    )
                     return self._json(200, report)
                 except (ValueError, TypeError) as exc:
                     return self._json(422, {"detail": str(exc)})
@@ -657,6 +677,29 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
             return self._json(200, {
                 "status": "reset", "chel_id": new_chel_id, "identity_preserved": False,
             })
+        if path == "/api/delete-my-data":
+            if self.headers.get("X-Consilium-Action") != "delete-my-data":
+                return self._json(403, {"detail": "Подтвердите полное удаление данных"})
+            try:
+                payload = self._read_json()
+                if str(payload.get("confirmation", "")).strip() != "delete-my-data":
+                    raise ValueError("Подтверждение удаления не получено")
+                chel_id = db.current_chel_id()
+                main_result = db.admin_delete_user_data(chel_id)
+                analytics_result = analytics.delete_user_data(chel_id)
+                new_chel_id = f"chel_{secrets.token_hex(16)}"
+                db.ensure_user(new_chel_id, pending=True)
+                db.set_current_chel_id(new_chel_id)
+                self._identity_cookie_required = True
+                self._clear_user_session = True
+                return self._json(200, {
+                    "status": "deleted",
+                    "chel_id": new_chel_id,
+                    "identity_preserved": False,
+                    "deleted": main_result["deleted"] + sum(analytics_result.values()),
+                })
+            except ValueError as exc:
+                return self._json(422, {"detail": str(exc)})
         if path == "/api/memories":
             try:
                 payload = self._read_json()
@@ -872,16 +915,7 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
             self._track_analytics("message_sent")
             if is_first_message:
                 self._track_analytics("first_message_sent")
-            handoff_choice = bool(
-                conversation
-                and conversation.get("human_status") == "pending"
-                and not conversation.get("human_channel")
-                and (
-                    orchestrator._wants_human_call(message)
-                    or orchestrator._wants_human_chat(message)
-                )
-            )
-            if conversation and not bool(conversation.get("ai_enabled", 1)) and not handoff_choice:
+            if conversation and not bool(conversation.get("ai_enabled", 1)):
                 user_message, updated = db.add_user_message_waiting_for_manager(
                     conversation_id, message, attachments,
                 )
@@ -916,7 +950,7 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                 "response_ms": int((time.perf_counter() - chat_started) * 1000),
             })
             if response.get("action") == "human":
-                self._track_analytics("human_requested")
+                self._track_analytics("human_offer_shown")
             return self._json(200, response)
         except LLMNotConfigured as exc:
             return self._json(503, {"detail": str(exc)})
@@ -1068,46 +1102,46 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
     def _set_human_preference(self, payload: dict) -> None:
         conversation_id = str(payload.get("conversation_id", "")).strip()
         channel = str(payload.get("channel", "")).strip()
-        if channel not in {"chat", "call"}:
-            return self._json(422, {"detail": "Выберите чат или созвон"})
+        if channel != "chat":
+            return self._json(422, {"detail": "Доступен чат с медицинским специалистом"})
         conversation = db.get_conversation(conversation_id)
         if not conversation:
             return self._json(404, {"detail": "Диалог не найден"})
-        if conversation.get("human_status") != "pending" or not conversation.get("human_ticket_id"):
-            return self._json(409, {"detail": "Сначала запросите подключение человека"})
 
-        phone = None
-        if channel == "call":
-            try:
-                phone = self._normalize_russian_phone(payload.get("phone", ""))
-            except ValueError as exc:
-                return self._json(422, {"detail": str(exc)})
-        db.set_human_channel(conversation_id, channel, phone)
-        self._track_analytics("human_channel_selected", {"channel": channel})
-        if channel == "chat":
-            text = (
-                "Обращение передано менеджеру в формате чата. ИИ в этом диалоге приостановлен. "
-                "Пишите сюда — менеджер увидит сообщения и ответит в этой переписке. "
-                "Пока ожидаете ответа, для общения с ИИ можно открыть новый диалог."
-            )
-        else:
-            masked_phone = f"+7 ••• •••-{phone[-4:-2]}-{phone[-2:]}"
-            text = (
-                f"Запрос на созвон принят. Контактный номер {masked_phone} сохранён и передан менеджеру вместе со сводкой. "
-                "ИИ в этом диалоге приостановлен: новые сообщения здесь получает менеджер. "
-                "Включить ИИ в этом диалоге снова сможет менеджер. Пока ожидаете звонка, с ИИ можно общаться в новом диалоге."
-            )
+        confirmed, created = db.confirm_human_chat(
+            conversation_id, f"H-{secrets.token_hex(3).upper()}"
+        )
+        if not confirmed:
+            return self._json(404, {"detail": "Диалог не найден"})
+        ticket_id = confirmed["human_ticket_id"]
+        already_requested = not created
+        self._track_analytics("human_channel_selected", {"channel": "chat"})
+        if not already_requested:
+            self._track_analytics("human_requested")
+
+        text = (
+            "Обращение передано медицинскому специалисту. ИИ в этом диалоге приостановлен. "
+            "Пишите сюда — специалист увидит сообщения и ответит в этой переписке. "
+            "Пока ожидаете ответа, для общения с ИИ можно открыть новый диалог."
+        )
         message = db.add_message(
             conversation_id, "assistant", text, "manager",
-            {"action": "human_preference", "human_channel": channel, "human_ticket_id": conversation["human_ticket_id"]},
+            {
+                "action": "human_preference",
+                "human_channel": "chat",
+                "human_ticket_id": ticket_id,
+            },
         )
+        if not already_requested:
+            db.enqueue_manager_notifications(
+                "new_request", conversation_id, message_id=message["id"],
+            )
         return self._json(200, {
             "conversation_id": conversation_id,
-            "ticket_id": conversation["human_ticket_id"],
-            "channel": channel,
+            "ticket_id": ticket_id,
+            "channel": "chat",
             "human_status": "pending",
             "ai_enabled": False,
-            "masked_phone": f"+7 ••• •••-{phone[-4:-2]}-{phone[-2:]}" if phone else None,
             "assistant_message": message,
         })
 
@@ -1196,7 +1230,9 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
             return [" ".join(str(item).split())[:200] for item in value if str(item).strip()][:20]
 
         company_inn = "".join(str(payload.get("company_inn", "")).split())
-        if company_inn and (not company_inn.isdigit() or len(company_inn) not in {10, 12}):
+        if company_inn and company_inn != db.TEST_COMPANY_INN and (
+            not company_inn.isdigit() or len(company_inn) not in {10, 12}
+        ):
             raise ValueError("ИНН должен состоять из 10 или 12 цифр")
 
         result = {
@@ -1352,6 +1388,7 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
         self._send_identity_cookie()
+        self._send_cleared_user_session_cookie()
         self._send_manager_cookie()
         self.end_headers()
         self.wfile.write(body)
@@ -1419,6 +1456,20 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
             f"chel_id={db.current_chel_id()}",
             "Path=/",
             "Max-Age=31536000",
+            "HttpOnly",
+            "SameSite=Lax",
+        ]
+        if settings.cookie_secure or self.headers.get("X-Forwarded-Proto", "").lower() == "https":
+            parts.append("Secure")
+        self.send_header("Set-Cookie", "; ".join(parts))
+
+    def _send_cleared_user_session_cookie(self) -> None:
+        if not getattr(self, "_clear_user_session", False):
+            return
+        parts = [
+            f"{settings.session_cookie_name}=",
+            "Path=/",
+            "Max-Age=0",
             "HttpOnly",
             "SameSite=Lax",
         ]

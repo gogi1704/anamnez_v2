@@ -52,6 +52,7 @@ let installAfterCapabilities = false;
 let analyticsFlushTimer = null;
 let analyticsSending = false;
 let questionShownAt = 0;
+let currentOnboardingAnalyticsScreen = '';
 
 const ANALYTICS_QUEUE_KEY = 'consilium_analytics_queue_v1';
 const ANALYTICS_SESSION_KEY = 'consilium_analytics_session_v1';
@@ -113,6 +114,25 @@ function trackEvent(eventName, properties = {}) {
   clearTimeout(analyticsFlushTimer);
   analyticsFlushTimer = setTimeout(() => flushAnalytics(), queue.length >= 10 ? 800 : 6000);
   trackMetrikaGoal(eventName, properties);
+}
+
+function onboardingAnalyticsContext() {
+  return state.returnToChatAfterExaminations ? 'chat' : 'onboarding';
+}
+
+function trackOnboardingScreen(screen) {
+  const previousScreen = currentOnboardingAnalyticsScreen;
+  currentOnboardingAnalyticsScreen = screen;
+  trackEvent('onboarding_screen_viewed', {
+    screen, previous_screen:previousScreen, context:onboardingAnalyticsContext(),
+  });
+}
+
+function trackOnboardingAction(action, screen = currentOnboardingAnalyticsScreen) {
+  if (!screen || !action) return;
+  trackEvent('onboarding_screen_action', {
+    screen, action, context:onboardingAnalyticsContext(),
+  });
 }
 
 function trackMetrikaGoal(eventName, properties = {}) {
@@ -331,7 +351,7 @@ const onboardingQuestions = [
   { key:'conditions', title:'Есть хронические заболевания?', lead:'Напишите по одному на строку. Если нет — этот шаг можно пропустить.', type:'textarea', placeholder:'Например:\nГипертония\nАстма', optional:true, list:true },
   { key:'medications', title:'Какие лекарства принимаете постоянно?', lead:'Название и дозировка, если известна. Шаг можно пропустить.', type:'textarea', placeholder:'По одному препарату на строку', optional:true, list:true },
   { key:'allergies', title:'Есть аллергии?', lead:'Укажите лекарства, продукты или другие известные аллергены. Шаг можно пропустить.', type:'textarea', placeholder:'По одному аллергену на строку', optional:true, list:true },
-  { key:'notes', title:'Есть ли у вас жалобы?', lead:'Введите в одном сообщении всё, что вас тревожит: проблему, симптомы и что вы принимаете в связи с ними. Если жалоб нет, напишите «Нет».', type:'textarea', maxlength:1000, placeholder:'Например: две недели болит голова по вечерам, принимаю ибупрофен' },
+  { key:'notes', title:'Есть ли у вас жалобы?', lead:'Введите в одном сообщении всё, что вас тревожит: проблему, симптомы и что вы принимаете в связи с ними. Если жалоб нет, этот вопрос можно пропустить.', type:'textarea', maxlength:1000, placeholder:'Например: две недели болит голова по вечерам, принимаю ибупрофен', optional:true },
 ];
 
 async function api(path, options = {}) {
@@ -371,6 +391,7 @@ function showWelcome(nextAction) {
   $('#welcomeScreen').classList.remove('hidden');
   $('#welcomeScreen').scrollTop = 0;
   trackEvent('welcome_viewed', {screen:'welcome'});
+  trackOnboardingScreen('welcome');
 }
 
 async function continueFromWelcome() {
@@ -379,6 +400,7 @@ async function continueFromWelcome() {
   button.disabled = true;
   localStorage.setItem(WELCOME_SEEN_KEY, '1');
   trackEvent('welcome_continued', {screen:'welcome'});
+  trackOnboardingAction('continue', 'welcome');
   $('#welcomeScreen').classList.add('hidden');
   try {
     if (nextAction) await nextAction();
@@ -411,6 +433,7 @@ function showAuthGate() {
   $('#onboarding').classList.add('hidden');
   $('#appShell').classList.add('hidden');
   trackEvent('auth_gate_viewed', {screen:'registration'});
+  trackOnboardingScreen('registration');
 }
 
 function messengerName(provider) {
@@ -513,6 +536,7 @@ $('#welcomeNextButton').addEventListener('click', continueFromWelcome);
 
 async function startMessengerAuth(provider) {
   trackEvent('registration_method_selected', {provider,method:provider,screen:'registration'});
+  trackOnboardingAction(provider, 'registration');
   trackEvent('messenger_auth_started', {provider,method:provider});
   const button = provider === 'telegram' ? $('#telegramAuthButton') : $('#maxAuthButton');
   button.disabled = true;
@@ -534,16 +558,19 @@ $('#maxAuthButton').addEventListener('click', () => startMessengerAuth('max'));
 $('#anonymousAuthButton').addEventListener('click', () => {
   trackEvent('registration_method_selected', {provider:'anonymous',method:'anonymous',screen:'registration'});
   trackEvent('anonymous_warning_viewed', {screen:'registration'});
+  trackOnboardingAction('anonymous', 'registration');
+  trackOnboardingScreen('anonymous_warning');
   $('#anonymousWarning').classList.remove('hidden');
 });
-$('#anonymousWarningClose').addEventListener('click', () => { trackEvent('anonymous_warning_cancelled'); closeAnonymousWarning(); });
-$('#anonymousWarningCancel').addEventListener('click', () => { trackEvent('anonymous_warning_cancelled'); closeAnonymousWarning(); });
+$('#anonymousWarningClose').addEventListener('click', () => { trackEvent('anonymous_warning_cancelled'); trackOnboardingAction('anonymous_close', 'anonymous_warning'); currentOnboardingAnalyticsScreen = 'registration'; closeAnonymousWarning(); });
+$('#anonymousWarningCancel').addEventListener('click', () => { trackEvent('anonymous_warning_cancelled'); trackOnboardingAction('anonymous_cancel', 'anonymous_warning'); currentOnboardingAnalyticsScreen = 'registration'; closeAnonymousWarning(); });
 $('#anonymousWarning').addEventListener('click', event => {
   if (event.target === $('#anonymousWarning')) closeAnonymousWarning();
 });
 $('#anonymousWarningConfirm').addEventListener('click', async () => {
   try {
     trackEvent('registration_method_selected', {provider:'anonymous',method:'anonymous',result:'confirmed'});
+    trackOnboardingAction('anonymous_confirm', 'anonymous_warning');
     const registration = await api('/api/register-choice', {
       method:'POST',
       body:JSON.stringify({ method:'anonymous' }),
@@ -599,6 +626,7 @@ function renderAppearance() {
   setOnboardingMeta('Настройка', 2);
   $('#onboardingContent').innerHTML = `<span class="onboarding-kicker">Перед началом</span><h1>Какой размер текста вам удобен?</h1><p class="onboarding-lead">Вы увидите изменение сразу. Позже размер можно поменять через меню функций.</p><div class="appearance-options">${fontSizeChoices('appearance-choice')}</div><div class="onboarding-actions"><button type="button" class="onboarding-next" data-onboarding-action="save-appearance">Продолжить</button></div>`;
   trackEvent('appearance_viewed', {screen:'appearance'});
+  trackOnboardingScreen('appearance');
 }
 
 async function saveAppearance(size = state.fontSize) {
@@ -615,9 +643,9 @@ function showOnboardingError(message) {
 }
 
 function onboardingNextLabel(question, value, isLast) {
-  if (isLast) return 'Завершить анкету';
   const empty = Array.isArray(value) ? !value.length : !String(value ?? '').trim();
-  return question.optional && empty ? 'Пропустить' : 'Продолжить';
+  if (question.optional && empty) return 'Пропустить';
+  return isLast ? 'Завершить анкету' : 'Продолжить';
 }
 
 function renderQuestion() {
@@ -631,6 +659,7 @@ function renderQuestion() {
     question_key:question.key, step_number:state.onboardingStep + 1,
     optional:Boolean(question.optional), screen:'questionnaire',
   });
+  trackOnboardingScreen(`question_${question.key}`);
   setOnboardingMeta('Анкета', 5 + Math.round((state.onboardingStep / questions.length) * 60));
   const control = question.choices
     ? `<div class="choice-grid">${question.choices.map(([id,label]) => `<button type="button" class="choice-button ${value === id ? 'selected' : ''}" data-choice="${id}">${label}</button>`).join('')}</div>`
@@ -644,11 +673,11 @@ function renderQuestion() {
   $('#onboardingInput')?.focus();
 }
 
-function captureQuestionAnswer() {
+function captureQuestionAnswer({ trackAction = true } = {}) {
   const question = activeOnboardingQuestions()[state.onboardingStep];
   if (!question.choices) {
     let value = $('#onboardingInput').value.trim();
-    if (question.key === 'company_inn' && !/^\d{10}(?:\d{2})?$/.test(value)) {
+    if (question.key === 'company_inn' && value !== '123123' && !/^\d{10}(?:\d{2})?$/.test(value)) {
       throw new Error('Введите ИНН предприятия: 10 или 12 цифр');
     }
     if (question.list) value = value.split('\n').map(item => item.trim()).filter(Boolean);
@@ -669,6 +698,7 @@ function captureQuestionAnswer() {
     question_key:question.key, step_number:state.onboardingStep + 1,
     optional:Boolean(question.optional), duration_ms:Math.round(performance.now() - questionShownAt),
   });
+  if (trackAction) trackOnboardingAction(empty ? 'skip' : 'answer', `question_${question.key}`);
 }
 
 async function nextQuestion() {
@@ -703,6 +733,7 @@ async function skipMedicalExam() {
   const button = $('#onboardingContent [data-onboarding-action="skip-medical-exam"]');
   if (button) button.disabled = true;
   try {
+    trackOnboardingAction('not_medical_exam', 'question_company_inn');
     state.onboarding = await api('/api/onboarding/not-medical-exam', { method:'POST', body:'{}' });
     state.profile = state.onboarding.profile;
     await openMainApp();
@@ -739,6 +770,7 @@ const EXAMINATION_AUDIENCES = {
 
 function renderExamOffer() {
   trackEvent('examinations_offer_viewed', { screen:'examinations_offer' });
+  trackOnboardingScreen('exam_offer');
   setOnboardingMeta('Обследования', 72);
   $('#onboardingContent').innerHTML = `
     <span class="onboarding-kicker">После анкеты</span>
@@ -755,6 +787,7 @@ function renderExamOffer() {
 }
 
 function renderExamCatalogInfo() {
+  trackOnboardingScreen('exam_catalog');
   setOnboardingMeta('Описание чек-апов', 76);
   const tests = state.onboarding?.tests || [];
   const cards = tests.map(test => `
@@ -803,6 +836,7 @@ function selectExamination(id) {
 }
 
 function renderExamSelection(scrollPosition = null) {
+  trackOnboardingScreen('exam_selection');
   normalizeSelectedTestPairs();
   setOnboardingMeta('Обследования', 80);
   const recommended = new Set(state.onboarding.recommended_test_ids || []);
@@ -834,6 +868,7 @@ function renderExamSelection(scrollPosition = null) {
 
 function renderExamSkipConfirmation() {
   trackEvent('examinations_objection_viewed', { screen:'examinations_skip' });
+  trackOnboardingScreen('exam_objection');
   setOnboardingMeta('Обследования', 76);
   $('#onboardingContent').innerHTML = `
     <span class="onboarding-kicker">Перед тем как продолжить</span>
@@ -904,6 +939,7 @@ function renderCurrentExamSelectionSummary() {
 
 function renderPayment() {
   trackEvent('payment_viewed', { screen:'payment', selected_count:selectedTestDetails().length });
+  trackOnboardingScreen('payment');
   setOnboardingMeta('Оплата', 92);
   const selected = selectedTestDetails();
   const total = selected.reduce((sum,test) => sum + test.price, 0);
@@ -954,13 +990,14 @@ function showOnlinePaymentUnavailable() {
       <p>Мы уже работаем над её подключением. Пока вы можете выбрать оплату на медицинском осмотре.</p>
       <button type="button" data-close-payment-unavailable>Понятно</button>
     </div>`;
-  const close = () => backdrop.remove();
+  const close = () => { trackOnboardingAction('close', 'payment_unavailable'); currentOnboardingAnalyticsScreen = 'payment'; backdrop.remove(); };
   backdrop.addEventListener('click', event => {
     if (event.target === backdrop || event.target.closest('[data-close-payment-unavailable]')) close();
   });
   document.body.appendChild(backdrop);
   backdrop.querySelector('button').focus();
   trackEvent('payment_unavailable_viewed', {provider:'yookassa'});
+  trackOnboardingScreen('payment_unavailable');
 }
 
 async function handlePaymentReturn() {
@@ -1009,6 +1046,7 @@ async function confirmPaymentAtExam() {
 
 function renderExamCompletion() {
   trackEvent('completion_viewed', { screen:'exam_completion' });
+  trackOnboardingScreen('completion');
   setOnboardingMeta('Готово', 100);
   const messengerOffer = state.identity?.authenticated ? '' : `
     <section class="exam-messenger-offer">
@@ -1126,12 +1164,14 @@ $('#onboardingContent').addEventListener('click', event => {
   const choice = event.target.closest('[data-choice]');
   if (choice) {
     const question = activeOnboardingQuestions()[state.onboardingStep];
+    trackOnboardingAction('select_option', `question_${question.key}`);
     state.onboardingAnswers[question.key] = choice.dataset.choice;
     renderQuestion();
     return;
   }
   const appearance = event.target.closest('.appearance-choice[data-size]');
   if (appearance) {
+    trackOnboardingAction(`size_${appearance.dataset.size}`, 'appearance');
     applyFontSize(appearance.dataset.size);
     renderAppearance();
     return;
@@ -1150,34 +1190,35 @@ $('#onboardingContent').addEventListener('click', event => {
       recommended:(state.onboarding.recommended_test_ids || []).includes(id),
       selected_count:state.selectedTests.size,
     });
+    if (!selection.removing) trackOnboardingAction('select_exam', 'exam_selection');
     renderExamSelection(scrollPosition);
     return;
   }
   const action = event.target.closest('[data-onboarding-action]')?.dataset.onboardingAction;
   if (!action) return;
   if (action === 'next') nextQuestion();
-  else if (action === 'back') { try { captureQuestionAnswer(); } catch {} trackEvent('question_back', { step_number:state.onboardingStep + 1 }); state.onboardingStep -= 1; renderQuestion(); }
-  else if (action === 'question-back') { trackEvent('question_back', { screen:'examinations_offer' }); trackEvent('funnel_action', {stage:'examinations_offer',action:'edit_questionnaire'}); if (state.returnToChatAfterExaminations) editProfileFromChatExamFlow(); else { state.onboardingStep = activeOnboardingQuestions().length - 1; renderQuestion(); } }
-  else if (action === 'open-exam-catalog-info') { trackEvent('funnel_action', {stage:'examinations_offer',action:'catalog_info'}); renderExamCatalogInfo(); }
-  else if (action === 'close-exam-catalog-info') renderExamOffer();
-  else if (action === 'start-exams') { const afterObjection = Boolean($('#onboardingContent .exam-benefits')); trackEvent('funnel_action', {stage:'examinations_offer',action:afterObjection ? 'choose_after_objection' : 'view_options'}); trackEvent('examinations_opened', { screen:'examinations' }); renderExamSelection(); }
-  else if (action === 'exam-offer') { trackEvent('funnel_action', {stage:'examinations_options',action:'options_back'}); if (state.returnToChatAfterExaminations) { state.selectedTests = new Set(state.onboarding?.selected_tests || []); renderCurrentExamSelectionSummary(); } else renderExamOffer(); }
-  else if (action === 'review-exam-skip') { const fromOptions = Boolean($('#onboardingContent .exam-list')); trackEvent('funnel_action', {stage:fromOptions ? 'examinations_options' : 'examinations_offer',action:fromOptions ? 'nothing_selected' : 'skip'}); trackEvent('examinations_skip_clicked', { selected_count:state.selectedTests.size }); renderExamSkipConfirmation(); }
-  else if (action === 'confirm-skip-exams') { trackEvent('funnel_action', {stage:'examinations_offer',action:'refuse'}); trackEvent('examinations_skipped', { screen:'examinations_skip' }); submitExamSelection(true); }
-  else if (action === 'continue-payment') submitExamSelection(false);
-  else if (action === 'back-to-exams') renderExamSelection();
-  else if (action === 'pay-online') { trackEvent('funnel_action', {stage:'examinations_options',action:'pay_online'}); startOnlinePayment(); }
-  else if (action === 'pay-at-exam') { trackEvent('funnel_action', {stage:'examinations_options',action:'pay_at_exam'}); confirmPaymentAtExam(); }
+  else if (action === 'back') { const question = activeOnboardingQuestions()[state.onboardingStep]; try { captureQuestionAnswer({trackAction:false}); } catch {} trackOnboardingAction('back', `question_${question.key}`); trackEvent('question_back', { step_number:state.onboardingStep + 1 }); state.onboardingStep -= 1; renderQuestion(); }
+  else if (action === 'question-back') { trackOnboardingAction('edit_questionnaire', 'exam_offer'); trackEvent('question_back', { screen:'examinations_offer' }); trackEvent('funnel_action', {stage:'examinations_offer',action:'edit_questionnaire'}); if (state.returnToChatAfterExaminations) editProfileFromChatExamFlow(); else { state.onboardingStep = activeOnboardingQuestions().length - 1; renderQuestion(); } }
+  else if (action === 'open-exam-catalog-info') { trackOnboardingAction('catalog_info', 'exam_offer'); trackEvent('funnel_action', {stage:'examinations_offer',action:'catalog_info'}); renderExamCatalogInfo(); }
+  else if (action === 'close-exam-catalog-info') { trackOnboardingAction('back', 'exam_catalog'); renderExamOffer(); }
+  else if (action === 'start-exams') { const sourceScreen = currentOnboardingAnalyticsScreen; const afterObjection = sourceScreen === 'exam_objection'; trackOnboardingAction(sourceScreen === 'exam_catalog' ? 'choose' : afterObjection ? 'choose' : 'view_options', sourceScreen); trackEvent('funnel_action', {stage:'examinations_offer',action:afterObjection ? 'choose_after_objection' : 'view_options'}); trackEvent('examinations_opened', { screen:'examinations' }); renderExamSelection(); }
+  else if (action === 'exam-offer') { trackOnboardingAction('back', 'exam_selection'); trackEvent('funnel_action', {stage:'examinations_options',action:'options_back'}); if (state.returnToChatAfterExaminations) { state.selectedTests = new Set(state.onboarding?.selected_tests || []); renderCurrentExamSelectionSummary(); } else renderExamOffer(); }
+  else if (action === 'review-exam-skip') { const fromOptions = Boolean($('#onboardingContent .exam-list')); trackOnboardingAction(fromOptions ? 'nothing' : 'skip', fromOptions ? 'exam_selection' : 'exam_offer'); trackEvent('funnel_action', {stage:fromOptions ? 'examinations_options' : 'examinations_offer',action:fromOptions ? 'nothing_selected' : 'skip'}); trackEvent('examinations_skip_clicked', { selected_count:state.selectedTests.size }); renderExamSkipConfirmation(); }
+  else if (action === 'confirm-skip-exams') { trackOnboardingAction('refuse', 'exam_objection'); trackEvent('funnel_action', {stage:'examinations_offer',action:'refuse'}); trackEvent('examinations_skipped', { screen:'examinations_skip' }); submitExamSelection(true); }
+  else if (action === 'continue-payment') { trackOnboardingAction('continue', 'exam_selection'); submitExamSelection(false); }
+  else if (action === 'back-to-exams') { trackOnboardingAction('back', 'payment'); renderExamSelection(); }
+  else if (action === 'pay-online') { trackOnboardingAction('pay_online', 'payment'); trackEvent('funnel_action', {stage:'examinations_options',action:'pay_online'}); startOnlinePayment(); }
+  else if (action === 'pay-at-exam') { trackOnboardingAction('pay_at_exam', 'payment'); trackEvent('funnel_action', {stage:'examinations_options',action:'pay_at_exam'}); confirmPaymentAtExam(); }
   else if (action === 'back-to-payment') renderPayment();
   else if (action === 'check-payment') { const orderId = event.target.closest('[data-order-id]')?.dataset.orderId; if (orderId) { const url = new URL(location.href); url.searchParams.set('payment_return', orderId); history.replaceState({}, '', url); handlePaymentReturn(); } }
   else if (action === 'edit-current-exams') { trackEvent('funnel_action', {stage:'chat_examinations',action:'edit_selection'}); renderExamSelection(); }
   else if (action === 'close-current-exams') openMainApp({ skipIntro:true });
   else if (action === 'open-app') openMainApp();
-  else if (action === 'install-after-exams') { trackEvent('install_clicked', { screen:'exam_completion' }); finishExamOnboarding(true); }
-  else if (action === 'later-after-exams') { trackEvent('install_dismissed', { screen:'exam_completion' }); finishExamOnboarding(false); }
-  else if (action === 'link-messenger-after-exams') openMessengerLinkModal({source:'exam_completion'});
+  else if (action === 'install-after-exams') { trackOnboardingAction('install', 'completion'); trackEvent('install_clicked', { screen:'exam_completion' }); finishExamOnboarding(true); }
+  else if (action === 'later-after-exams') { trackOnboardingAction('later', 'completion'); trackEvent('install_dismissed', { screen:'exam_completion' }); finishExamOnboarding(false); }
+  else if (action === 'link-messenger-after-exams') { trackOnboardingAction('link_messenger', 'completion'); openMessengerLinkModal({source:'exam_completion'}); }
   else if (action === 'skip-medical-exam') skipMedicalExam();
-  else if (action === 'save-appearance') saveAppearance();
+  else if (action === 'save-appearance') { trackOnboardingAction('continue', 'appearance'); saveAppearance(); }
 });
 
 $('#onboardingContent').addEventListener('input', event => {
@@ -1197,9 +1238,8 @@ $('#onboardingContent').addEventListener('focusin', event => {
 });
 
 function setActiveAgent(id) {
-  if (!AGENTS[id]) id = 'manager';
-  state.active = id;
-  const agent = AGENTS[id];
+  state.active = 'manager';
+  const agent = AGENTS.manager;
   $('#headerAvatar').textContent = agent.initials;
   $('#headerName').textContent = agent.name;
   $('#headerRole').textContent = agent.role;
@@ -1298,7 +1338,7 @@ function addMessage(sender, text, agentId = state.active, urgent = false, create
     : formatAssistantText(text);
   wrapper.innerHTML = sender === 'user'
     ? `<div class="bubble user-bubble">${attachmentBadges}<p>${escapeHtml(text)}</p><span>${time}</span></div>`
-    : `<div class="message-avatar">${humanManager ? 'Ч' : agent.initials}</div><div><div class="message-author"><strong>${humanManager ? escapeHtml(metadata.manager_name || 'Менеджер') : agent.name}</strong><span>${humanManager ? 'Человек' : agent.role}</span>${cached}</div><div class="bubble agent-bubble">${assistantContent}${labDocuments}<span>${time}</span></div></div>`;
+    : `<div class="message-avatar">${humanManager ? 'Ч' : agent.initials}</div><div><div class="message-author"><strong>${humanManager ? escapeHtml(metadata.manager_name || 'Менеджер') : agent.name}</strong><span>${humanManager ? 'Менеджер' : agent.role}</span>${cached}</div><div class="bubble agent-bubble">${assistantContent}${labDocuments}<span>${time}</span></div></div>`;
   messages.appendChild(wrapper);
   scrollChatToBottom();
   return wrapper;
@@ -1326,15 +1366,15 @@ function updateChatMode(aiEnabled = true, humanStatus = 'none', humanTicketId = 
   toggleButton.classList.toggle('hidden', state.aiEnabled || !relevant);
   input.placeholder = state.aiEnabled
     ? 'Задайте вопрос о здоровье...'
-    : 'Напишите менеджеру...';
+    : 'Напишите медицинскому специалисту...';
   if (!relevant) return;
   $('#chatModeIcon').textContent = state.aiEnabled ? '✓' : '♙';
   $('#chatModeTitle').textContent = state.aiEnabled
     ? 'ИИ снова отвечает в этом диалоге'
-    : state.humanStatus === 'connected' ? 'С вами общается менеджер' : 'Ожидаем ответа менеджера';
+    : state.humanStatus === 'connected' ? 'С вами общается медицинский специалист' : 'Ожидаем ответа медицинского специалиста';
   $('#chatModeText').textContent = state.aiEnabled
     ? `Менеджер включил ИИ${humanTicketId ? ` · обращение ${humanTicketId}` : ''}.`
-    : 'ИИ в этом диалоге приостановлен. Новые сообщения получит менеджер.';
+    : 'ИИ в этом диалоге приостановлен. Новые сообщения получит медицинский специалист.';
   $('#chatModeDetailsText').textContent = state.aiEnabled
     ? ''
     : 'Пока ожидаете ответ, вы можете продолжить общение с ИИ в новом диалоге.';
@@ -1351,19 +1391,10 @@ function toggleChatModeDetails() {
 }
 
 function addCouncilResult(result, createdAt = null) {
-  const messageId = Number(result.message?.id || 0);
-  if (messageId) {
-    state.lastMessageId = Math.max(state.lastMessageId, messageId);
-    const existing = messages.querySelector(`[data-message-id="${messageId}"]`);
-    if (existing) return existing;
-  }
-  const wrapper = document.createElement('div');
-  wrapper.className = 'council-result';
-  if (messageId) wrapper.dataset.messageId = String(messageId);
-  wrapper.innerHTML = `<div class="council-title"><span>◎</span><div><strong>Консилиум завершён</strong><small>${result.agents.length} специалиста дали разные профильные оценки</small></div></div><div class="opinion-grid">${result.opinions.map(opinion => { const agent = AGENTS[opinion.agent] || AGENTS.manager; return `<article><div><i>${agent.initials}</i><span><strong>${agent.name}</strong><small>${agent.role}</small></span></div>${opinion.focus ? `<em class="council-focus">${escapeHtml(opinion.focus)}</em>` : ''}<div class="council-opinion-text">${formatAssistantText(opinion.message)}</div></article>`; }).join('')}</div><div class="council-synthesis"><strong>Общий вывод Марии</strong>${formatAssistantText(result.message.content)}</div>`;
-  messages.appendChild(wrapper);
-  scrollChatToBottom();
-  return wrapper;
+  return addMessage(
+    'agent', result.message?.content || '', 'manager', false, createdAt,
+    { ...(result.message?.metadata || {}), _message_id:result.message?.id },
+  );
 }
 
 function showTyping(agentId = 'manager') {
@@ -1377,7 +1408,7 @@ function showTyping(agentId = 'manager') {
 }
 
 function resetTimeline() {
-  timeline.innerHTML = `<div class="empty-state"><div class="empty-icon">⌁</div><strong>Здесь появятся следующие шаги</strong><p>Покажем, кто из специалистов помогает и что происходит дальше.</p></div>`;
+  timeline.innerHTML = `<div class="empty-state"><div class="empty-icon">⌁</div><strong>Здесь появятся следующие шаги</strong><p>Покажем, что происходит с вашим обращением и какие шаги будут дальше.</p></div>`;
 }
 
 function addTimeline(agentId, title, detail, status = 'done') {
@@ -1390,19 +1421,13 @@ function addTimeline(agentId, title, detail, status = 'done') {
 }
 
 function showHandoff(fromId, toId) {
-  if (!fromId || fromId === toId || !AGENTS[fromId] || !AGENTS[toId]) return;
-  const banner = $('#handoffBanner');
-  $('#handoffFrom').textContent = AGENTS[fromId].initials;
-  $('#handoffTo').textContent = AGENTS[toId].initials;
-  $('#handoffText').textContent = `${AGENTS[fromId].name} передаёт диалог: ${AGENTS[toId].role.toLowerCase()}`;
-  banner.classList.remove('hidden');
-  setTimeout(() => banner.classList.add('hidden'), 3800);
+  $('#handoffBanner').classList.add('hidden');
 }
 
 async function processMessage(text) {
   if (state.processing) return;
   state.processing = true;
-  $('#taskStatus').textContent = 'Подбираю подходящего специалиста';
+  $('#taskStatus').textContent = 'Ольга изучает вопрос';
   $('#suggestions').classList.add('hidden');
   const outgoingAttachments = [...state.attachments];
   addMessage('user', text || 'Прикреплён файл для анализа', state.active, false, null, { attachments: outgoingAttachments });
@@ -1426,9 +1451,8 @@ async function processMessage(text) {
     updateChatMode(result.ai_enabled !== false, result.human_status, result.human_ticket_id);
     if (result.assistant_message) {
       showHandoff(result.handoff_from, result.agent);
-      if (result.handoff_from) addTimeline(result.handoff_from, 'Подключён специалист', result.handoff_reason);
       setActiveAgent(result.agent);
-      addTimeline(result.agent, result.emergency ? 'Срочная оценка' : 'Специалист ответил', result.handoff_reason, 'active');
+      addTimeline(result.agent, result.emergency ? 'Срочная оценка' : 'Ольга ответила', result.handoff_reason, 'active');
       addMessage(
         'agent', result.assistant_message.content, result.agent, result.emergency,
         result.assistant_message.created_at,
@@ -1441,20 +1465,16 @@ async function processMessage(text) {
     renderInsights();
 
     if (result.action === 'waiting_human') {
-      $('#taskStatus').textContent = 'Сообщение ожидает ответа менеджера';
-      addTimeline('manager', 'Сообщение передано', 'Менеджер увидит его в своей очереди', 'active');
+      $('#taskStatus').textContent = 'Сообщение ожидает ответа медицинского специалиста';
+      addTimeline('manager', 'Сообщение передано', 'Медицинский специалист увидит его в своей очереди', 'active');
     } else if (result.action === 'human_preference') {
-      $('#taskStatus').textContent = 'Сообщения ждут ответа менеджера';
+      $('#taskStatus').textContent = 'Сообщения ждут ответа медицинского специалиста';
     } else if (result.action === 'lab_results_prompt') {
       await openLabResults();
       $('#taskStatus').textContent = 'Укажите номер пробирки';
     } else if (result.human_escalation) {
-      await openHumanModal(result.human_ticket_id);
-      $('#taskStatus').textContent = 'ИИ приостановлен · выберите чат или созвон';
-    } else if (result.human_channel_prompt === 'call') {
-      await openHumanModal(result.human_ticket_id);
-      showCallPhoneStep();
-      $('#taskStatus').textContent = 'Укажите номер для созвона';
+      await openHumanModal();
+      $('#taskStatus').textContent = 'Ожидает вашего решения · ИИ продолжает работать';
     } else {
       $('#taskStatus').textContent = result.emergency ? 'Требуется срочное действие' : 'Контекст сохранён';
     }
@@ -1564,7 +1584,7 @@ function conversationSummary(item) {
       return `Тема: ${topic}`;
     }
   } catch {}
-  if (item.human_status === 'pending') return 'Ожидает ответа менеджера';
+  if (item.human_status === 'pending') return 'Ожидает ответа медицинского специалиста';
   if (item.human_status === 'connected') return 'Менеджер подключён';
   return 'История разговора сохранена';
 }
@@ -1645,7 +1665,6 @@ async function openConversation(id) {
         );
       }
     });
-    data.handoffs.forEach(h => addTimeline(h.to_agent, 'Передача управления', h.reason));
     setActiveAgent(data.active_agent);
     try { state.context = JSON.parse(data.context_summary || '{}'); } catch { state.context = null; }
     const medicalAgents = ['therapist','cardiologist','neurologist','dermatologist','pediatrician','psychologist'];
@@ -1686,14 +1705,12 @@ function newConversation() {
   setActiveAgent('manager');
   $('#suggestions').classList.remove('hidden');
   $('#taskStatus').textContent = 'Ожидает задачу';
-  addMessage('agent', 'Здравствуйте! Я Мария, ваш ИИ-менеджер. Задавайте вопросы о здоровье, питании, спорте или возможностях сервиса — я помогу разобраться и при необходимости подключу подходящего специалиста.', 'manager');
+  addMessage('agent', 'Здравствуйте! Я Ольга, ваш медицинский помощник. Задавайте вопросы о здоровье, питании, спорте или возможностях сервиса — я помогу разобраться и при необходимости предложу подключить человека.', 'manager');
   loadConversationList();
 }
 
-async function openHumanModal(ticketId = null) {
-  $('#ticketNumber').textContent = ticketId || `H-${String(Date.now()).slice(-6)}`;
+async function openHumanModal() {
   setHumanChoiceDisabled(false);
-  resetCallPhoneStep();
   $('#handoffPreview').innerHTML = '<span>Подготавливаю сводку…</span>';
   $('#humanModal').classList.remove('hidden');
   if (state.conversationId) {
@@ -1706,61 +1723,26 @@ async function openHumanModal(ticketId = null) {
 }
 function closeHumanModal() {
   $('#humanModal').classList.add('hidden');
-  resetCallPhoneStep();
 }
-function resumeAfterHuman() {
+function declineHumanSpecialist() {
   closeHumanModal();
-  $('#taskStatus').textContent = 'ИИ приостановлен · ожидаем менеджера';
-  input.placeholder = 'Напишите менеджеру...';
+  $('#taskStatus').textContent = 'ИИ продолжает отвечать';
+  updateChatMode(true, 'none', null);
   focusChatInput();
-}
-function startNewAiConversationAfterHuman() {
-  closeHumanModal();
-  newConversation();
 }
 function setHumanChoiceDisabled(disabled) {
   $('#humanChatButton').disabled = disabled;
-  $('#humanCallButton').disabled = disabled;
-  $('#confirmCallButton').disabled = disabled || !normalizeRussianPhone($('#callPhoneInput').value);
+  $('#humanDeclineButton').disabled = disabled;
 }
 
-function normalizeRussianPhone(value) {
-  let digits = String(value || '').replace(/\D/g, '');
-  if (digits.length === 10) digits = `7${digits}`;
-  else if (digits.length === 11 && digits.startsWith('8')) digits = `7${digits.slice(1)}`;
-  return /^7[3489]\d{9}$/.test(digits) ? `+${digits}` : null;
-}
-
-function resetCallPhoneStep() {
-  document.querySelector('.human-options').classList.remove('hidden');
-  $('#callPhoneStep').classList.add('hidden');
-  $('#callPhoneInput').value = '';
-  $('#callPhoneError').classList.add('hidden');
-  $('#confirmCallButton').disabled = true;
-}
-
-function showCallPhoneStep() {
-  document.querySelector('.human-options').classList.add('hidden');
-  $('#callPhoneStep').classList.remove('hidden');
-  $('#callPhoneInput').focus();
-}
-
-function validateCallPhone(showError = false) {
-  const normalized = normalizeRussianPhone($('#callPhoneInput').value);
-  const hasValue = Boolean($('#callPhoneInput').value.trim());
-  $('#confirmCallButton').disabled = !normalized || state.processing;
-  $('#callPhoneError').classList.toggle('hidden', !showError && !hasValue || Boolean(normalized));
-  return normalized;
-}
-
-async function chooseHumanChannel(channel, phone = null) {
+async function chooseHumanSpecialistChat() {
   if (!state.conversationId || state.processing) return;
   state.processing = true;
   setHumanChoiceDisabled(true);
   try {
     const result = await api('/api/human-preference', {
       method: 'POST',
-      body: JSON.stringify({ conversation_id: state.conversationId, channel, phone }),
+      body: JSON.stringify({ conversation_id: state.conversationId, channel:'chat' }),
     });
     closeHumanModal();
     updateChatMode(false, result.human_status, result.ticket_id);
@@ -1770,26 +1752,18 @@ async function chooseHumanChannel(channel, phone = null) {
       result.assistant_message.created_at,
       { ...(result.assistant_message.metadata || {}), _message_id:result.assistant_message.id },
     );
-    $('#taskStatus').textContent = channel === 'chat'
-      ? 'Сообщения ждут ответа менеджера'
-      : 'Созвон запрошен · ожидаем менеджера';
-    input.placeholder = 'Напишите менеджеру...';
+    $('#taskStatus').textContent = 'Сообщения ждут ответа медицинского специалиста';
+    input.placeholder = 'Напишите медицинскому специалисту...';
     await markConversationRead(state.conversationId);
     await loadConversationList();
   } catch (error) {
     addSystemError(error.message);
     setHumanChoiceDisabled(false);
-    if (channel === 'call') {
-      $('#callPhoneStep').classList.remove('hidden');
-      document.querySelector('.human-options').classList.add('hidden');
-      validateCallPhone(true);
-    }
   } finally {
     state.processing = false;
     focusChatInput();
   }
 }
-
 function closeFunctionMenu() {
   $('#functionMenu').classList.add('hidden');
   $('#functionMenuButton').setAttribute('aria-expanded', 'false');
@@ -1805,6 +1779,57 @@ function openCapabilities() {
   closeFunctionMenu();
   $('#capabilitiesModal').classList.remove('hidden');
   trackEvent('capabilities_viewed', {screen:'capabilities'});
+}
+
+function openDeleteMyDataConfirmation() {
+  const error = $('#deleteMyDataError');
+  error.textContent = '';
+  error.classList.add('hidden');
+  $('#deleteMyDataConfirm').disabled = false;
+  $('#deleteMyDataConfirm').textContent = 'Удалить всё';
+  $('#deleteMyDataModal').classList.remove('hidden');
+  requestAnimationFrame(() => $('#deleteMyDataCancel').focus());
+}
+
+function closeDeleteMyDataConfirmation() {
+  if ($('#deleteMyDataConfirm').disabled) return;
+  $('#deleteMyDataModal').classList.add('hidden');
+}
+
+async function clearLocalUserData() {
+  localStorage.clear();
+  sessionStorage.clear();
+  if ('caches' in window) {
+    try {
+      const cacheNames = await caches.keys();
+      await Promise.all(cacheNames.map(cacheName => caches.delete(cacheName)));
+    } catch (error) {
+      console.warn('Не удалось очистить кэш приложения', error);
+    }
+  }
+}
+
+async function deleteMyData() {
+  const confirmButton = $('#deleteMyDataConfirm');
+  const errorBox = $('#deleteMyDataError');
+  confirmButton.disabled = true;
+  confirmButton.textContent = 'Удаляем…';
+  errorBox.textContent = '';
+  errorBox.classList.add('hidden');
+  try {
+    await api('/api/delete-my-data', {
+      method:'POST',
+      headers:{'X-Consilium-Action':'delete-my-data'},
+      body:JSON.stringify({confirmation:'delete-my-data'}),
+    });
+    await clearLocalUserData();
+    window.location.replace('/');
+  } catch (error) {
+    errorBox.textContent = `Не удалось удалить данные: ${error.message}`;
+    errorBox.classList.remove('hidden');
+    confirmButton.disabled = false;
+    confirmButton.textContent = 'Удалить всё';
+  }
 }
 
 function renderFontSizeModal() {
@@ -1884,7 +1909,7 @@ async function saveContext() {
       const ticketId = state.contextEditTicketId;
       state.returnToHumanAfterContextEdit = false;
       state.contextEditTicketId = null;
-      await openHumanModal(ticketId);
+      await openHumanModal();
     }
   } catch (error) { addSystemError(error.message); }
 }
@@ -1895,7 +1920,7 @@ function closeContextEditor() {
   const ticketId = state.contextEditTicketId;
   state.returnToHumanAfterContextEdit = false;
   state.contextEditTicketId = null;
-  openHumanModal(ticketId);
+  openHumanModal();
 }
 
 async function loadMemories() {
@@ -2153,7 +2178,7 @@ async function interpretLabResults(documentId, sourceButton) {
   buttons.forEach(button => { button.disabled = true; });
   const originalText = sourceButton?.textContent;
   if (sourceButton) sourceButton.textContent = 'Расшифровываю…';
-  $('#taskStatus').textContent = 'Терапевт анализирует результаты и анкету';
+  $('#taskStatus').textContent = 'Ольга анализирует результаты и анкету';
   try {
     const result = await api('/api/lab-results/interpret', {
       method:'POST',
@@ -2219,7 +2244,7 @@ async function deleteMemory(id) {
 
 const durationLabels = { minutes:'Несколько минут', hours:'Несколько часов', days:'Несколько дней', weeks:'Несколько недель', months:'Несколько месяцев' };
 const patternLabels = { constant:'Постоянно', episodes:'Приступами', movement:'При движении', touch:'При прикосновении', unknown:'Не уверен(а)' };
-const agentLabels = { manager:'ИИ-менеджер', safety:'Контроль безопасности', therapist:'Терапевт', cardiologist:'Кардиолог', neurologist:'Невролог', dermatologist:'Дерматолог', pediatrician:'Педиатр', psychologist:'Психолог', general:'Здоровье и образ жизни' };
+const agentLabels = Object.fromEntries(Object.keys(AGENTS).map(id => [id, 'Ольга · Медицинский помощник']));
 
 async function loadBodySymptoms() {
   try { state.bodySymptoms = await api('/api/body-symptoms'); }
@@ -2334,13 +2359,13 @@ function healthEventMarkup(item) {
     meta = `<span>Интенсивность: ${details.intensity}/10</span><span>${patternLabels[details.pattern] || details.pattern}</span>${details.duration ? `<span>${durationLabels[details.duration] || details.duration}</span>` : ''}${details.notes ? `<span>${escapeHtml(details.notes)}</span>` : ''}`;
     actions = `<button data-symptom-status="${details.id}" data-next-status="${details.status === 'active' ? 'resolved' : 'active'}">${details.status === 'active' ? 'Отметить улучшение' : 'Вернуть в активные'}</button><button class="danger" data-symptom-delete="${details.id}">Удалить</button>`;
   } else if (item.type === 'consultation') {
-    summary = `Специалист: ${agentLabels[details.agent_id] || details.agent_id || 'врач-консультант'}`;
+    summary = agentLabels[details.agent_id] || 'Ольга · Медицинский помощник';
     actions = `<button data-history-conversation="${escapeHtml(details.conversation_id)}">Открыть диалог</button>`;
   } else if (item.type === 'document') {
     summary = item.summary || 'Добавлен медицинский документ';
     if (details.conversation_id) actions = `<button data-history-conversation="${escapeHtml(details.conversation_id)}">Открыть диалог</button>`;
   } else if (item.type === 'council') {
-    meta = (details.agents || []).map(agent => `<span>${escapeHtml(agentLabels[agent] || agent)}</span>`).join('');
+    meta = '<span>Ольга · Медицинский помощник</span>';
     if (details.conversation_id) actions = `<button data-history-conversation="${escapeHtml(details.conversation_id)}">Открыть заключение</button>`;
   }
   return `<article class="health-event" data-type="${item.type}">
@@ -2488,9 +2513,10 @@ function closeVisibleModal() {
   switch (layer.id) {
     case 'anonymousWarning': closeAnonymousWarning(); break;
     case 'fontSizeModal': closeFontSizeModal(); break;
-    case 'humanModal': resumeAfterHuman(); break;
+    case 'humanModal': declineHumanSpecialist(); break;
     case 'contextModal': closeContextEditor(); break;
     case 'capabilitiesModal': void closeCapabilities(); break;
+    case 'deleteMyDataModal': closeDeleteMyDataConfirmation(); break;
     case 'installAppModal': closeInstallApp(); break;
     case 'messengerLinkModal': closeMessengerLinkModal(); break;
     case 'bodyMapModal': closeBodyMap(); break;
@@ -2516,13 +2542,7 @@ function closeTopUiLayer() {
     syncVisualViewport();
     return true;
   }
-  if (
-    !$('#humanModal').classList.contains('hidden')
-    && !$('#callPhoneStep').classList.contains('hidden')
-  ) {
-    resetCallPhoneStep();
-    return true;
-  }
+
   if (closeVisibleModal()) return true;
   if (!$('#functionMenu').classList.contains('hidden')) {
     closeFunctionMenu();
@@ -2574,6 +2594,13 @@ $('#capabilityLabResults').addEventListener('click', () => { closeCapabilities()
 $('#capabilityBodyMap').addEventListener('click', () => { closeCapabilities(); openBodyMap(); });
 $('#capabilityHealthHistory').addEventListener('click', () => { closeCapabilities(); openHealthHistory(); });
 $('#capabilityExaminations').addEventListener('click', openExaminationsFromCapabilities);
+$('#capabilityDeleteData').addEventListener('click', openDeleteMyDataConfirmation);
+$('#deleteMyDataClose').addEventListener('click', closeDeleteMyDataConfirmation);
+$('#deleteMyDataCancel').addEventListener('click', closeDeleteMyDataConfirmation);
+$('#deleteMyDataConfirm').addEventListener('click', deleteMyData);
+$('#deleteMyDataModal').addEventListener('click', event => {
+  if (event.target.id === 'deleteMyDataModal') closeDeleteMyDataConfirmation();
+});
 $('#functionMenuButton').addEventListener('click', toggleFunctionMenu);
 $('#functionMenu').addEventListener('click', event => { if (event.target.closest('button')) closeFunctionMenu(); });
 $('#menuFontSizeButton').addEventListener('click', openFontSizeModal);
@@ -2665,21 +2692,14 @@ $('#chatModeBanner').addEventListener('keydown', event => {
   toggleChatModeDetails();
 });
 $('#conversationList').addEventListener('click', event => { const row = event.target.closest('[data-id]'); if (row) openConversation(row.dataset.id); });
-$('#modalClose').addEventListener('click', resumeAfterHuman);
-$('#modalOkay').addEventListener('click', startNewAiConversationAfterHuman);
-$('#humanChatButton').addEventListener('click', () => chooseHumanChannel('chat'));
-$('#humanCallButton').addEventListener('click', showCallPhoneStep);
-$('#callPhoneBack').addEventListener('click', resetCallPhoneStep);
-$('#callPhoneInput').addEventListener('input', () => validateCallPhone(false));
-$('#confirmCallButton').addEventListener('click', () => {
-  const phone = validateCallPhone(true);
-  if (phone) chooseHumanChannel('call', phone);
-});
-$('#humanModal').addEventListener('click', event => { if (event.target.id === 'humanModal') resumeAfterHuman(); });
+$('#modalClose').addEventListener('click', declineHumanSpecialist);
+$('#humanChatButton').addEventListener('click', chooseHumanSpecialistChat);
+$('#humanDeclineButton').addEventListener('click', declineHumanSpecialist);
+$('#humanModal').addEventListener('click', event => { if (event.target.id === 'humanModal') declineHumanSpecialist(); });
 $('#handoffPreview').addEventListener('click', event => {
   if (event.target.id !== 'editHandoffContext') return;
   state.returnToHumanAfterContextEdit = true;
-  state.contextEditTicketId = $('#ticketNumber').textContent;
+  state.contextEditTicketId = null;
   closeHumanModal();
   openContextEditor();
 });

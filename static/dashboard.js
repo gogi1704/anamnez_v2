@@ -55,6 +55,7 @@ let activeAdminView = 'dashboard';
 let analyticsRecentPage = 1;
 let analyticsFunnelMode = 'start';
 let latestAnalyticsData = null;
+let latestMetric2Data = null;
 const expandedFunnelRows = new Set();
 const favoriteAnalytics = new Set((() => {
   try {
@@ -763,8 +764,8 @@ function fillAnalyticsSelect(selector, values, emptyLabel) {
   const select = $(selector);
   const current = select.value;
   select.replaceChildren(new Option(emptyLabel,''), ...values.map(value => new Option(
-    selector === '#analyticsDevice' ? (deviceNames[value] || value)
-      : selector === '#analyticsMethod' ? (registrationNames[value] || value)
+    selector.toLowerCase().includes('device') ? (deviceNames[value] || value)
+      : selector.toLowerCase().includes('method') ? (registrationNames[value] || value)
       : value,
     value,
   )));
@@ -972,7 +973,175 @@ async function loadAnalytics() {
   for (const [key,selector] of [['device','#analyticsDevice'],['method','#analyticsMethod'],['source','#analyticsSource']]) {
     if ($(selector).value) params.set(key,$(selector).value);
   }
+  appendDateRange(params, '#analyticsDateFrom', '#analyticsDateTo');
   renderAnalytics(await adminFetch(`/api/admin/analytics?${params}`));
+}
+
+function appendDateRange(params, fromSelector, toSelector) {
+  const dateFrom = $(fromSelector).value;
+  const dateTo = $(toSelector).value;
+  if (dateFrom && dateTo && dateFrom > dateTo) {
+    throw new Error('Дата начала периода не может быть позже даты окончания');
+  }
+  if (dateFrom) params.set('date_from', dateFrom);
+  if (dateTo) params.set('date_to', dateTo);
+}
+
+const metric2QuestionContent = [
+  {key:'company_inn',title:'Сообщите ИНН вашего предприятия',lead:'Если вы не владеете этой информацией, пожалуйста, уточните её у вашего работодателя.',placeholder:'10 или 12 цифр'},
+  {key:'preferred_name',title:'Как к вам обращаться?',lead:'Имя необязательно, но с ним общение будет естественнее.',placeholder:'Например, Алексей',optional:true},
+  {key:'age',title:'Сколько вам полных лет?',lead:'Возраст помогает специалистам точнее учитывать риски и нормы.',placeholder:'От 18 до 99'},
+  {key:'sex',title:'Укажите пол для медицинского контекста',lead:'Это важно для интерпретации части симптомов и обследований.',choices:['Женский','Мужской']},
+  {key:'height_cm',title:'Какой у вас рост?',lead:'Введите значение в сантиметрах.',placeholder:'От 50 до 250'},
+  {key:'weight_kg',title:'Какой у вас вес?',lead:'Введите актуальный вес в килограммах.',placeholder:'От 40 до 250'},
+  {key:'smoking',title:'Вы курите?',lead:'Учитываются сигареты, электронные сигареты и другие способы употребления никотина.',choices:['Не курю','Курил(а) раньше','Курю сейчас']},
+  {key:'alcohol',title:'Как часто вы употребляете алкоголь?',lead:'Выберите наиболее близкий вариант.',choices:['Не употребляю','Редко / по праздникам','Примерно раз в неделю','Чаще раза в неделю']},
+  {key:'activity',title:'Какой у вас уровень активности?',lead:'Ориентируйтесь на обычный день: низкий — до 5 000 шагов в день, средний — 5–10 тысяч шагов в день, высокий — более 10 тысяч шагов в день или регулярный спорт.',choices:['Низкий','Средний','Высокий']},
+  {key:'blood_pressure',title:'Как вы оцениваете своё давление?',lead:'Если не измеряли или не уверены, выберите «Не знаю».',choices:['Обычно в норме','Бывает повышенным','Бывает пониженным','Сильно меняется','Не знаю']},
+  {key:'dark_in_eyes',title:'Темнеет ли в глазах при резком подъёме?',lead:'Например, когда быстро встаёте с кровати или стула.',choices:['Нет','Да','Не уверен(а)']},
+  {key:'blood_sugar',title:'Знаете ли вы уровень сахара в крови?',lead:'Это не оценка диагноза — только уже известная вам информация.',choices:['Был в норме','Бывал повышен','Не измерял(а) / не знаю']},
+  {key:'joint_pain',title:'Бывают боли или отёчность суставов?',lead:'В том числе при нагрузке или смене погоды.',choices:['Нет','Да','Не уверен(а)']},
+  {key:'fatigue',title:'Беспокоит длительная усталость?',lead:'Имеется в виду усталость, которая сохраняется после обычного отдыха.',choices:['Нет','Да','Не уверен(а)']},
+  {key:'conditions',title:'Есть хронические заболевания?',lead:'Напишите по одному на строку. Если нет — этот шаг можно пропустить.',placeholder:'Например:\nГипертония\nАстма',optional:true,textarea:true},
+  {key:'medications',title:'Какие лекарства принимаете постоянно?',lead:'Название и дозировка, если известна. Шаг можно пропустить.',placeholder:'По одному препарату на строку',optional:true,textarea:true},
+  {key:'allergies',title:'Есть аллергии?',lead:'Укажите лекарства, продукты или другие известные аллергены. Шаг можно пропустить.',placeholder:'По одному аллергену на строку',optional:true,textarea:true},
+  {key:'notes',title:'Есть ли у вас жалобы?',lead:'Введите в одном сообщении всё, что вас тревожит: проблему, симптомы и что вы принимаете в связи с ними. Если жалоб нет, этот вопрос можно пропустить.',placeholder:'Например: две недели болит голова по вечерам, принимаю ибупрофен',optional:true,textarea:true},
+];
+
+const metric2ExamAudiences = {
+  fatigue_basic:'Тем, кого беспокоят слабость, сонливость или снижение работоспособности.',fatigue_extended:'Тем, у кого усталость сохраняется длительно или сочетается с другими жалобами.',weight_basic:'Тем, кто хочет разобраться в возможных обменных причинах набора веса.',weight_extended:'Тем, кому нужна более широкая оценка гормональных и обменных факторов веса.',hair_loss:'При заметном выпадении волос, ломкости и подозрении на дефициты.',lipids:'Для оценки сердечно-сосудистого риска, особенно при повышенном давлении или лишнем весе.',liver_basic:'Для базовой проверки показателей печени и поджелудочной железы.',liver_extended:'При необходимости более широкой оценки печени, поджелудочной и желчевыводящих путей.',iron:'При утомляемости, слабости, бледности или подозрении на дефицит железа.',kidneys:'Для базовой оценки функции почек и азотистого обмена.',protein:'Для оценки белкового обмена, питания и синтетической функции печени.',joints:'При боли, скованности или отёчности суставов.',inflammation:'Когда важно дополнительно оценить наличие воспалительной реакции.',thyroid:'При изменениях веса, утомляемости, сердцебиении или других возможных признаках нарушения функции щитовидной железы.',female_hormones:'Женщинам при наличии показаний к оценке гормонального фона; сроки сдачи важно обсудить с врачом.',male_health:'Мужчинам для оценки гормонального фона и показателей предстательной железы с учётом возраста и показаний.',cortisol:'При длительном стрессе и связанных с ним жалобах; показатель зависит от времени сдачи.',vitamin_d:'Тем, кому важно узнать уровень витамина D и обсудить необходимость коррекции.',ferritin:'Для оценки запасов железа, особенно при слабости или выпадении волос.',ca125:'Только при наличии врачебных показаний; онкомаркер не подходит для самостоятельной диагностики.',ca153:'Только при наличии врачебных показаний; онкомаркер не подходит для самостоятельной диагностики.',ca199:'Только при наличии врачебных показаний; онкомаркер не подходит для самостоятельной диагностики.',
+};
+
+function metric2PreviewMarkup(screen, large = false) {
+  const kind = screen.kind || '';
+  const action = (label,secondary = false) => `<span class="metric2-mock-button${secondary ? ' secondary' : ''}">${escapeHtml(label)}</span>`;
+  const messengerAction = (icon,label) => `<span class="metric2-mock-button metric2-mock-messenger"><i>${escapeHtml(icon)}</i><span><b>${escapeHtml(label)}</b><small>Подтверждение через бота</small></span></span>`;
+  const examinations = latestMetric2Data?.examinations || [];
+  let content = '';
+  if (kind === 'welcome') content = `<div class="metric2-mock-brand"><span>К</span><div><strong>Консилиум</strong><small>Забота о здоровье начинается здесь</small></div></div><span class="metric2-mock-emoji">👋</span><b>Привет!</b><p>Совсем скоро вам предстоит плановый медицинский осмотр. Мы рады, что вы проходите его вместе с нами.</p><p>Для начала просим вас ответить на несколько простых вопросов — это займет всего пару минут и поможет сделать обследование более полезным для вас.</p><p>После анкеты вы сможете ознакомиться с дополнительными обследованиями. Иногда именно они помогают обнаружить проблемы, которые никак себя не проявляют. Как любит говорить наш главный врач:</p><blockquote>«Здоровых людей не бывает — бывают недообследованные».</blockquote><p>И это еще не всё! В конце вас ждет небольшой сюрприз — мы покажем новый сервис, который сейчас разрабатываем специально для того, чтобы заботиться о своем здоровье было проще, удобнее и выгоднее.</p>${action('Далее →')}<span class="metric2-mock-time">◷ Анкета займёт около 2 минут</span>`;
+  else if (kind === 'registration') content = `<div class="metric2-mock-brand"><span>К</span><div><strong>Консилиум</strong><small>Ваше личное пространство здоровья</small></div></div><small>БЕЗ ПАРОЛЯ</small><b>Войдите через удобный мессенджер</b><p>Так анкета, история диалогов и результаты останутся доступны на другом устройстве и после очистки браузера.</p>${messengerAction('➤','Продолжить с Telegram')}${messengerAction('М','Продолжить с MAX')}<span class="metric2-mock-link">Войти анонимно</span><p class="metric2-mock-note">Консилиум не получает пароль от мессенджера. Сохраняется только его технический ID для восстановления доступа.</p>`;
+  else if (kind === 'warning') content = `<div class="metric2-mock-modal"><span class="metric2-mock-close">×</span><span class="metric2-mock-icon">!</span><b>Продолжить без мессенджера?</b><p>Данные будут связаны только с этим браузером.</p><ul><li>после очистки cookies доступ может потеряться;</li><li>на другом телефоне или компьютере история не откроется;</li><li>восстановить анонимный профиль служба поддержки не сможет.</li></ul><p class="metric2-mock-note">Мессенджер можно будет привязать позже без повторного заполнения анкеты.</p><div class="metric2-mock-actions">${action('Назад',true)}${action('Понимаю, продолжить')}</div></div>`;
+  else if (kind === 'appearance') content = `<small>ПЕРЕД НАЧАЛОМ</small><b>Какой размер текста вам удобен?</b><p>Вы увидите изменение сразу. Позже размер можно поменять через меню функций.</p><span class="metric2-mock-choice"><b>Аа &nbsp; Обычный</b><small>Чуть крупнее базового интерфейса</small></span><span class="metric2-mock-choice"><b>Аа &nbsp; Крупный</b><small>Комфортно для большинства экранов</small></span><span class="metric2-mock-choice selected"><b>Аа &nbsp; Очень крупный</b><small>Максимальная читаемость</small></span>${action('Продолжить')}`;
+  else if (kind.startsWith('question_')) {
+    const index = metric2QuestionContent.findIndex(item => item.key === screen.question_key);
+    const question = metric2QuestionContent[index] || {title:screen.title,lead:'',placeholder:''};
+    const control = question.choices
+      ? question.choices.map(label => `<span class="metric2-mock-choice">${escapeHtml(label)}</span>`).join('')
+      : `<span class="metric2-mock-input${question.textarea ? ' textarea' : ''}">${escapeHtml(question.placeholder || '')}</span>`;
+    const nextLabel = question.optional ? 'Пропустить' : 'Продолжить';
+    const controls = index > 0 ? `<div class="metric2-mock-actions">${action('Назад',true)}${action(nextLabel)}</div>` : action(nextLabel);
+    const notMedical = question.key === 'company_inn' ? action('Я не на мед-осмотр',true) : '';
+    content = `<small>ШАГ ${index + 1} ИЗ ${metric2QuestionContent.length}</small><b>${escapeHtml(question.title)}</b><p>${escapeHtml(question.lead)}</p>${control}${controls}${notMedical}`;
+  } else if (kind === 'exam_offer') content = `<small>ПОСЛЕ АНКЕТЫ</small><b>Дополнительные обследования</b><blockquote><strong>Давайте честно: здоровых людей не бывает.</strong><br>У каждого есть своё слабое место, и лучше бы его знать.<br>Пара быстрых обследований — и жить спокойнее.</blockquote><p>Чтобы получить более полную информацию о состоянии своего здоровья, вы можете пройти дополнительные обследования во время медосмотра.</p><p class="metric2-mock-note"><b>Можно пригласить родственника или друга</b> пройти один или несколько чек-апов. Позаботьтесь о близких — отправьте им ссылку на сервис.</p><span class="metric2-mock-info"><b>◫ Посмотреть описания чек-апов</b><small>Что входит, кому и для чего они нужны →</small></span><span class="metric2-mock-question"><b>Хотели бы вы сдать дополнительные анализы во время медосмотра на работе?</b><small>Выберите соответствующий вариант.</small></span>${action('Да, выбрать анализы')}${action('Нет, не сейчас',true)}<span class="metric2-mock-link">← Изменить ответы анкеты</span>`;
+  else if (kind === 'exam_catalog') {
+    const cards = examinations.map(test => `<span class="metric2-mock-catalog-card"><header><strong>${escapeHtml(test.name)}</strong><em>${Number(test.price || 0).toLocaleString('ru-RU')} ₽</em></header><small>КОМУ ПОДХОДИТ</small><p>${escapeHtml(metric2ExamAudiences[test.id] || test.description || 'Тем, кто хочет получить больше информации о состоянии здоровья.')}</p><small>ДЛЯ ЧЕГО</small><p>${escapeHtml(test.description || 'Для дополнительной оценки показателей здоровья.')}</p><small>ЧТО ВХОДИТ</small><p>${escapeHtml(test.includes || 'Состав уточняется')}</p></span>`).join('');
+    content = `<small>ДОСТУПНЫЕ ЧЕК-АПЫ</small><b>Что можно проверить</b><p>Краткое описание поможет сориентироваться. Необходимость обследований и интерпретацию результатов лучше обсуждать с врачом.</p>${cards}${action('Выбрать анализы')}${action('Вернуться к вопросу',true)}`;
+  } else if (kind === 'exam_objection') content = `<small>ПЕРЕД ТЕМ КАК ПРОДОЛЖИТЬ</small><b>После обследований вы получите больше, чем результаты</b><p>Врач высшей категории <strong>Татьяна Витальевна</strong> подготовит подробную расшифровку сложных показателей.</p><p>И самое главное — вы получите <strong>бесплатную консультацию</strong> по результатам.</p><p>Всё будет доступно в этом сервисе — без очередей и доплат за расшифровку.</p><span class="metric2-mock-benefit"><b>✓ Ничего дополнительно делать не нужно</b><small>Выберите обследования сейчас, а в день медосмотра сдайте всё вместе.</small></span><span class="metric2-mock-benefit"><b>✓ Один визит вместо отдельной поездки</b><small>Вы уже будете на осмотре — дополнительные анализы можно сдать за один раз.</small></span><span class="metric2-mock-benefit"><b>✓ Бесплатная консультация специалиста</b><small>После готовности дополнительных анализов врач высшей категории поможет разобраться в результатах.</small></span><span class="metric2-mock-benefit"><b>✓ Не придётся записываться отдельно</b><small>Если отложить обследования, позже могут потребоваться отдельная запись и поездка.</small></span><p class="metric2-mock-note">Дополнительные обследования добровольны — окончательное решение остаётся за вами.</p>${action('Выбрать обследования')}${action('Всё равно отказаться',true)}`;
+  else if (kind === 'exam_selection') {
+    const cards = examinations.map((test,index) => `<span class="metric2-mock-test${index === 0 ? ' selected' : ''}"><strong>${index === 0 ? '✓ ' : ''}${escapeHtml(test.name)}</strong><em>${Number(test.price || 0).toLocaleString('ru-RU')} ₽</em><small>${escapeHtml(test.description || '')}</small><small>${escapeHtml(test.includes || '')}</small></span>`).join('');
+    const selected = examinations[0];
+    content = `<small>ВЫБОР АНАЛИЗОВ</small><b>Выберите интересующие наборы</b><p>Рекомендации отмечены по ответам анкеты и не являются назначением.</p>${cards}<span class="metric2-mock-total">Выбрано: ${selected ? 1 : 0}<b>${Number(selected?.price || 0).toLocaleString('ru-RU')} ₽</b></span><div class="metric2-mock-actions">${action('Назад',true)}${action('Далее')}</div>${action('Ничего не выбирать',true)}`;
+  } else if (kind === 'payment') {
+    const selected = examinations[0];
+    content = `<small>ПОСЛЕДНИЙ ШАГ</small><b>Проверим заказ</b><p>Выберите, как вам будет удобнее оплатить дополнительные обследования.</p><span class="metric2-mock-test"><strong>${escapeHtml(selected?.name || 'Выбранное обследование')}</strong><em>${Number(selected?.price || 0).toLocaleString('ru-RU')} ₽</em></span><span class="metric2-mock-total">Итого <b>${Number(selected?.price || 0).toLocaleString('ru-RU')} ₽</b></span>${action('Оплатить онлайн')}${action('Оплатить на медосмотре')}${action('← Вернуться к обследованиям',true)}`;
+  } else if (kind === 'payment_unavailable') content = `<div class="metric2-mock-modal"><span class="metric2-mock-icon">⌛</span><b>Онлайн-оплата временно недоступна</b><p>Мы уже работаем над её подключением. Пока вы можете выбрать оплату на медицинском осмотре.</p>${action('Понятно')}</div>`;
+  else if (kind === 'completion') content = `<span class="metric2-mock-emoji">🎉</span><small>ОБСЛЕДОВАНИЯ ВЫБРАНЫ</small><b>Отлично! Вы выбрали дополнительные обследования.</b><p>В день медицинского осмотра наша бригада сообщит вам <strong>индивидуальный номер пробирки</strong>.</p><p>Чтобы получить результаты анализов, достаточно будет ввести этот номер в соответствующее поле нашего сервиса.</p><p class="metric2-mock-note">№ Сейчас у вас этого номера еще нет — это нормально. Когда он появится, просто напишите в чат нашему менеджеру. Он подскажет, куда ввести этот номер и как получить результаты.</p><p>После этого сообщения для вас откроется чат, в котором вы сможете:</p><ul><li>узнать, как получить результаты анализов;</li><li>задать любые вопросы о медицинском осмотре;</li><li>получить консультацию по анализам, питанию и вопросам здоровья.</li></ul><p>Как только результаты будут готовы, вы сможете <strong>бесплатно получить их расшифровку</strong> у нашего специалиста.</p><p class="metric2-mock-note"><strong>📱 Также рекомендуем установить наше приложение на смартфон.</strong> Так вы не потеряете доступ к своим результатам, сможете в любой момент обратиться к онлайн-врачу и всегда будете иметь все необходимые медицинские сервисы под рукой.</p><p>💬 Не стесняйтесь писать в чат — мы всегда рады помочь!</p><span class="metric2-mock-info"><b>↗ Сохраните результаты и расшифровки</b><small>Привяжите Telegram или MAX, чтобы вернуться к анкете, выбранным обследованиям и готовым результатам с другого устройства.</small></span>${action('Привязать мессенджер')}${action('＋ Установить приложение')}${action('Установлю позже',true)}`;
+  else content = `<small>${escapeHtml(screen.stage || '')}</small><b>${escapeHtml(screen.title)}</b><p>${escapeHtml(screen.description || '')}</p>`;
+
+  const standalone = ['welcome','registration','warning'].includes(kind);
+  const questionIndex = metric2QuestionContent.findIndex(item => item.key === screen.question_key);
+  const stage = kind === 'appearance' ? 'Настройка'
+    : kind.startsWith('question_') ? 'Анкета'
+    : kind === 'exam_catalog' ? 'Описание чек-апов'
+    : ['exam_offer','exam_objection','exam_selection'].includes(kind) ? 'Обследования'
+    : ['payment','payment_unavailable'].includes(kind) ? 'Оплата'
+    : kind === 'completion' ? 'Готово'
+    : (screen.stage || '').split(' · ')[0] || 'Анкета';
+  const progress = kind === 'appearance' ? 2
+    : kind.startsWith('question_') ? 5 + Math.round((Math.max(0,questionIndex) / metric2QuestionContent.length) * 60)
+    : kind === 'exam_offer' ? 72
+    : ['exam_catalog','exam_objection'].includes(kind) ? 76
+    : kind === 'exam_selection' ? 80
+    : kind === 'payment' ? 92
+    : kind === 'payment_unavailable' ? 92
+    : kind === 'completion' ? 100 : 0;
+  const appHeader = standalone ? '' : `<div class="metric2-phone-app"><span class="metric2-phone-brand"><b>К</b><span><strong>Консилиум</strong><small>Персональный старт</small></span></span><em>${escapeHtml(stage)}</em></div><div class="metric2-phone-progress"><i style="width:${progress}%"></i></div>`;
+  const safety = standalone ? '' : '<div class="metric2-phone-safety">Данные используются для персонализации ответов. Сервис не заменяет очную диагностику и экстренную помощь.</div>';
+  return `<div class="metric2-phone ${kind}${large ? ' large' : ''}"><div class="metric2-phone-status"><span>11:37</span><span>● ▰</span></div>${appHeader}<div class="metric2-phone-content">${content}</div>${safety}<div class="metric2-phone-home"></div></div>`;
+}
+
+function renderMetric2(data) {
+  data = {
+    ...data,
+    screens:(data.screens || []).map(screen => screen.id === 'question_company_inn'
+      ? {...screen,actions:(screen.actions || []).filter(action => action.id !== 'skip')}
+      : screen),
+  };
+  latestMetric2Data = data;
+  const summary = $('#metric2Summary');
+  summary.innerHTML = [
+    ['На первом экране',data.summary?.start_users || 0,'100% — база расчёта'],
+    ['Экранов в пути',data.summary?.screens || 0,'включая ответвления'],
+    ['Дошли до завершения',data.summary?.reached_completion || 0,'уникальных пользователей'],
+  ].map(([label,value,note]) => `<article class="analytics-metric"><span>${label}</span><strong>${Number(value).toLocaleString('ru-RU')}</strong><small>${note}</small></article>`).join('');
+  const root = $('#metric2Flow');
+  root.replaceChildren();
+  const titleById = Object.fromEntries((data.screens || []).map(item => [item.id,item.title]));
+  for (const [index,screen] of (data.screens || []).entries()) {
+    const item = document.createElement('article');
+    item.className = `metric2-screen-row${screen.branch ? ' branch' : ''}`;
+    if (screen.branch) item.dataset.parent = screen.parent_id || '';
+    const sequence = document.createElement('div'); sequence.className = 'metric2-sequence';
+    sequence.innerHTML = `<span>${screen.branch ? '↳' : index + 1}</span><i></i>`;
+    const open = document.createElement('button'); open.type = 'button'; open.className = 'metric2-screen-open'; open.dataset.metric2Screen = screen.id;
+    open.innerHTML = metric2PreviewMarkup(screen);
+    const stats = document.createElement('div'); stats.className = 'metric2-screen-stats';
+    const comparison = screen.id === 'welcome' ? 'Первый экран — база расчёта'
+      : screen.branch ? `${screen.percent_of_parent}% от экрана «${escapeHtml(titleById[screen.parent_id] || 'родительский экран')}»`
+      : `${screen.percent_of_parent}% от предыдущего основного экрана`;
+    stats.innerHTML = `<span class="metric2-stage">${screen.branch ? 'Ответвление · ' : ''}${escapeHtml(screen.stage || '')}</span><h3>${escapeHtml(screen.title)}</h3><div class="metric2-reach"><strong>${Number(screen.percent_of_start || 0).toLocaleString('ru-RU')}%</strong><span>от первого экрана</span></div><p><b>${Number(screen.users || 0).toLocaleString('ru-RU')}</b> пользователей · ${comparison}</p><div class="metric2-reach-track"><i style="width:${Math.min(100,Number(screen.percent_of_start || 0))}%"></i></div><button type="button" data-metric2-screen="${escapeHtml(screen.id)}">Открыть экран и нажатия →</button>`;
+    item.append(sequence,open,stats); root.append(item);
+  }
+  if (!(data.screens || []).length) root.innerHTML = '<p class="form-error">Пока нет данных по стартовым экранам</p>';
+  fillAnalyticsSelect('#metric2Device',data.filter_options?.devices || [],'Все устройства');
+  fillAnalyticsSelect('#metric2Method',data.filter_options?.methods || [],'Все способы');
+  fillAnalyticsSelect('#metric2Source',data.filter_options?.sources || [],'Все источники');
+}
+
+function openMetric2Screen(screenId) {
+  const screen = latestMetric2Data?.screens?.find(item => item.id === screenId);
+  if (!screen) return;
+  const titleById = Object.fromEntries(latestMetric2Data.screens.map(item => [item.id,item.title]));
+  $('#metric2ModalPreview').innerHTML = metric2PreviewMarkup(screen,true);
+  $('#metric2ModalStage').textContent = screen.stage || '';
+  $('#metric2ModalTitle').textContent = screen.title;
+  $('#metric2ModalDescription').textContent = screen.description || '';
+  $('#metric2ModalReach').innerHTML = `<strong>${Number(screen.percent_of_start || 0).toLocaleString('ru-RU')}%</strong><span>${Number(screen.users || 0).toLocaleString('ru-RU')} пользователей увидели экран</span>`;
+  const actions = $('#metric2ModalActions'); actions.replaceChildren();
+  for (const action of screen.actions || []) {
+    const target = action.target ? titleById[action.target] : action.target_label;
+    const row = document.createElement('article'); row.className = 'metric2-action-row';
+    row.innerHTML = `<div><strong>${escapeHtml(action.label)}</strong><b>${Number(action.percent_of_screen || 0).toLocaleString('ru-RU')}%</b></div><div class="metric2-action-track"><i style="width:${Math.min(100,Number(action.percent_of_screen || 0))}%"></i></div><p>${Number(action.users || 0).toLocaleString('ru-RU')} пользователей${target ? ` · переход → ${escapeHtml(target)}` : ''}</p>`;
+    actions.append(row);
+  }
+  if (!(screen.actions || []).length) actions.innerHTML = '<p class="form-error">На этом экране нет отдельных действий</p>';
+  $('#metric2Modal').classList.remove('hidden');
+  document.body.classList.add('metric2-modal-open');
+  $('.metric2-modal-close').focus();
+}
+
+function closeMetric2Modal() {
+  $('#metric2Modal').classList.add('hidden');
+  document.body.classList.remove('metric2-modal-open');
+}
+
+async function loadMetric2() {
+  const params = new URLSearchParams({period:$('#metric2Period').value});
+  for (const [key,selector] of [['device','#metric2Device'],['method','#metric2Method'],['source','#metric2Source']]) {
+    if ($(selector).value) params.set(key,$(selector).value);
+  }
+  appendDateRange(params, '#metric2DateFrom', '#metric2DateTo');
+  renderMetric2(await adminFetch(`/api/admin/metric2?${params}`));
 }
 
 async function loadFavoriteSources() {
@@ -992,9 +1161,10 @@ async function loadFavoriteSources() {
 }
 
 function showAdminView(view) {
-  activeAdminView = ['favorites','analytics','managers','examinations','costs'].includes(view) ? view : 'dashboard';
+  activeAdminView = ['favorites','analytics','metric2','managers','examinations','costs'].includes(view) ? view : 'dashboard';
   const favoritesVisible = activeAdminView === 'favorites';
   const analyticsVisible = activeAdminView === 'analytics';
+  const metric2Visible = activeAdminView === 'metric2';
   const managersVisible = activeAdminView === 'managers';
   const examinationsVisible = activeAdminView === 'examinations';
   const costsVisible = activeAdminView === 'costs';
@@ -1002,15 +1172,18 @@ function showAdminView(view) {
   $('#dashboard').classList.toggle('show-examinations', examinationsVisible);
   $('#dashboard').classList.toggle('show-costs', costsVisible);
   $('#dashboard').classList.toggle('show-analytics', analyticsVisible);
+  $('#dashboard').classList.toggle('show-metric2', metric2Visible);
   $('#dashboard').classList.toggle('show-favorites', favoritesVisible);
   $('#favoritesAdminView').classList.toggle('hidden', !favoritesVisible);
   $('#analyticsAdminView').classList.toggle('hidden', !analyticsVisible);
+  $('#metric2AdminView').classList.toggle('hidden', !metric2Visible);
   $('#managerAdminView').classList.toggle('hidden', !managersVisible);
   $('#examinationAdminView').classList.toggle('hidden', !examinationsVisible);
   $('#costsAdminView').classList.toggle('hidden', !costsVisible);
   $('#dashboardTab').classList.toggle('active', activeAdminView === 'dashboard');
   $('#favoritesTab').classList.toggle('active', favoritesVisible);
   $('#analyticsTab').classList.toggle('active', analyticsVisible);
+  $('#metric2Tab').classList.toggle('active', metric2Visible);
   $('#managersTab').classList.toggle('active', managersVisible);
   $('#examinationsTab').classList.toggle('active', examinationsVisible);
   $('#costsTab').classList.toggle('active', costsVisible);
@@ -1018,6 +1191,7 @@ function showAdminView(view) {
   if (examinationsVisible) loadExaminations().catch(showDashboardError);
   if (costsVisible) loadCosts().catch(showDashboardError);
   if (analyticsVisible) loadAnalytics().catch(showDashboardError);
+  if (metric2Visible) loadMetric2().catch(showDashboardError);
   if (favoritesVisible) loadFavoriteSources().catch(showDashboardError);
 }
 
@@ -1363,6 +1537,7 @@ async function loadDashboard(token = sessionStorage.getItem(TOKEN_KEY)) {
     else if (activeAdminView === 'examinations') await loadExaminations();
     else if (activeAdminView === 'costs') await loadCosts();
     else if (activeAdminView === 'analytics') await loadAnalytics();
+    else if (activeAdminView === 'metric2') await loadMetric2();
     clearInterval(refreshTimer);
     refreshTimer = setInterval(() => loadDashboard(),60000);
   } catch (error) {
@@ -1392,9 +1567,21 @@ $('#logoutButton').addEventListener('click', () => {
 $('#dashboardTab').addEventListener('click', () => showAdminView('dashboard'));
 $('#favoritesTab').addEventListener('click', () => showAdminView('favorites'));
 $('#analyticsTab').addEventListener('click', () => showAdminView('analytics'));
+$('#metric2Tab').addEventListener('click', () => showAdminView('metric2'));
 $('#managersTab').addEventListener('click', () => showAdminView('managers'));
 $('#examinationsTab').addEventListener('click', () => showAdminView('examinations'));
 $('#costsTab').addEventListener('click', () => showAdminView('costs'));
+$('#metric2Apply').addEventListener('click', () => loadMetric2().catch(showDashboardError));
+$('#metric2Flow').addEventListener('click', event => {
+  const target = event.target.closest('[data-metric2-screen]');
+  if (target) openMetric2Screen(target.dataset.metric2Screen);
+});
+$('#metric2Modal').addEventListener('click', event => {
+  if (event.target.closest('[data-metric2-close]')) closeMetric2Modal();
+});
+document.addEventListener('keydown', event => {
+  if (event.key === 'Escape' && !$('#metric2Modal').classList.contains('hidden')) closeMetric2Modal();
+});
 document.addEventListener('click', event => {
   const toggle = event.target.closest('[data-favorite-toggle]');
   if (toggle) {

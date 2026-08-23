@@ -1,7 +1,6 @@
 import json
 import hashlib
 import re
-import uuid
 
 from . import database as db
 from .config import settings
@@ -13,24 +12,6 @@ from .schemas import AgentResult, ChatResponse, RouteDecision, normalize_context
 HUMAN_REQUEST = re.compile(
     r"\b(?:позов\w*|подключ\w*|перевед\w*|соедин\w*|хочу поговорить с)\s+"
     r"(?:жив\w*\s+)?(?:чел\w*|оператор\w*|врач\w*|специалист\w*)\b",
-    re.IGNORECASE,
-)
-HUMAN_CALL_CHOICE = re.compile(
-    r"(?:^\s*(?:созвон|звонок|по\s+телефону)\s*[.!?]*\s*$|"
-    r"\bвыбира\w*\s+(?:вариант\s+)?созвон\b|"
-    r"\b(?:хочу|предпочитаю|давайте|нужен)\s+(?:на\s+)?созвон\b|"
-    r"\b(?:созвонимся|позвоните\s+мне|по\s+телефону)\b)",
-    re.IGNORECASE,
-)
-HUMAN_CALL_REJECTION = re.compile(
-    r"\b(?:не\s+(?:хочу|нужен|выбираю)|без|отказываюсь\s+от)\s+созвон\w*\b",
-    re.IGNORECASE,
-)
-HUMAN_CHAT_CHOICE = re.compile(
-    r"(?:^\s*(?:чат|в\s+чате|здесь)\s*[.!?]*\s*$|"
-    r"\bвыбира\w*\s+(?:вариант\s+)?чат\b|"
-    r"\b(?:хочу|предпочитаю|давайте|нужен)\s+(?:в\s+)?чат\b|"
-    r"\b(?:продолжим|пишите|ответьте)\s+(?:в\s+чате|здесь)\b)",
     re.IGNORECASE,
 )
 CRITICAL_RISK = re.compile(
@@ -135,84 +116,6 @@ class ConversationOrchestrator:
                 conversation, user_message, previous_context, attachment_meta
             )
 
-        if (
-            conversation.get("human_status") == "pending"
-            and not conversation.get("human_channel")
-            and self._wants_human_call(user_text)
-        ):
-            ticket_id = conversation.get("human_ticket_id")
-            answer = (
-                "Вы выбрали созвон. На какой номер вам позвонить? "
-                "Укажите российский номер в появившемся поле. ИИ в этом диалоге приостановлен, "
-                "пока обращение обрабатывает менеджер."
-            )
-            assistant_message = db.add_message(
-                conversation_id, "assistant", answer, "manager",
-                {
-                    "action": "human_channel_prompt",
-                    "human_channel_prompt": "call",
-                    "human_ticket_id": ticket_id,
-                },
-            )
-            db.update_conversation(
-                conversation_id,
-                active_agent="manager",
-                context_summary=json.dumps(previous_context, ensure_ascii=False),
-                status="waiting_human",
-                human_status="pending",
-                human_ticket_id=ticket_id,
-                human_channel=None,
-            )
-            return ChatResponse(
-                conversation_id=conversation_id,
-                user_message=user_message,
-                assistant_message=assistant_message,
-                agent="manager",
-                handoff_from=None,
-                handoff_reason="Пользователь выбрал созвон для подготовленного обращения",
-                action="human_channel_prompt",
-                human_escalation=False,
-                human_ticket_id=ticket_id,
-                human_channel_prompt="call",
-                context=previous_context,
-                attachments=attachment_meta,
-            )
-
-        if (
-            conversation.get("human_status") == "pending"
-            and not conversation.get("human_channel")
-            and self._wants_human_chat(user_text)
-        ):
-            ticket_id = conversation.get("human_ticket_id")
-            db.set_human_channel(conversation_id, "chat")
-            answer = (
-                f"Выбран чат с менеджером по обращению {ticket_id}. ИИ в этом диалоге приостановлен. "
-                "Пишите сюда — менеджер увидит сообщения и ответит в этой переписке. "
-                "Пока ожидаете ответа, для общения с ИИ можно открыть новый диалог."
-            )
-            assistant_message = db.add_message(
-                conversation_id, "assistant", answer, "manager",
-                {
-                    "action": "human_preference",
-                    "human_channel": "chat",
-                    "human_ticket_id": ticket_id,
-                },
-            )
-            return ChatResponse(
-                conversation_id=conversation_id,
-                user_message=user_message,
-                assistant_message=assistant_message,
-                agent="manager",
-                handoff_from=None,
-                handoff_reason="Пользователь выбрал чат с менеджером для подготовленного обращения",
-                action="human_preference",
-                human_escalation=False,
-                human_ticket_id=ticket_id,
-                human_channel="chat",
-                context=previous_context,
-                attachments=attachment_meta,
-            )
-
         decision = self._normalize_route(
             self._decide(user_text, history, conversation, previous_context, attachments), previous_agent
         )
@@ -237,7 +140,6 @@ class ConversationOrchestrator:
         handoff_reason = decision.reason
         human_ticket_id = conversation.get("human_ticket_id")
         human_status = conversation.get("human_status", "none")
-        human_status_before = human_status
         human_channel = conversation.get("human_channel")
         emergency = action == "emergency"
         urgency = "emergency" if emergency else "routine"
@@ -255,7 +157,6 @@ class ConversationOrchestrator:
             human_ticket_id, answer = self._prepare_human_handoff(
                 history, context, decision, conversation, human_status, human_ticket_id, human_channel
             )
-            human_status = "pending"
             target = "manager"
         else:
             result = self.llm.answer(target, history, context, decision, conversation, attachments)
@@ -275,7 +176,7 @@ class ConversationOrchestrator:
                     result.next_action = "human"
                     result.handoff_reason = (
                         "Собран максимально допустимый объём уточнений; "
-                        "пора предложить чат с менеджером или созвон"
+                        "пора предложить чат с медицинским специалистом"
                     )
                     answer = ""
                     missing_information = []
@@ -316,7 +217,7 @@ class ConversationOrchestrator:
                         second_result.next_action = "human"
                         second_result.handoff_reason = (
                             "Собран максимально допустимый объём уточнений; "
-                            "пора предложить чат с менеджером или созвон"
+                            "пора предложить чат с медицинским специалистом"
                         )
                         answer = ""
                         missing_information = []
@@ -326,7 +227,6 @@ class ConversationOrchestrator:
                     human_ticket_id, answer = self._prepare_human_handoff(
                         history, context, human_decision, conversation, human_status, human_ticket_id, human_channel
                     )
-                    human_status = "pending"
                     db.add_handoff(conversation_id, target, "manager", second_result.handoff_reason or "Агент запросил участие человека")
                     handoff_from = target
                     handoff_reason = second_result.handoff_reason or "Агент запросил участие человека"
@@ -361,7 +261,6 @@ class ConversationOrchestrator:
                 human_ticket_id, answer = self._prepare_human_handoff(
                     history, context, human_decision, conversation, human_status, human_ticket_id, human_channel
                 )
-                human_status = "pending"
                 handoff_from = target if target != "manager" else handoff_from
                 handoff_reason = result.handoff_reason or "Агент запросил участие человека"
                 if target != "manager":
@@ -392,7 +291,12 @@ class ConversationOrchestrator:
             "attachments": attachment_meta,
         }
         assistant_message = db.add_message(conversation_id, "assistant", answer, target, metadata)
-        status = "waiting_human" if action == "human" or not bool(conversation.get("ai_enabled", 1)) else "active"
+        status = (
+            "waiting_human"
+            if not bool(conversation.get("ai_enabled", 1))
+            or human_status in {"pending", "connected"}
+            else "active"
+        )
         db.update_conversation(
             conversation_id,
             active_agent=target,
@@ -401,12 +305,8 @@ class ConversationOrchestrator:
             human_status=human_status,
             human_ticket_id=human_ticket_id,
             human_channel=human_channel,
-            ai_enabled=False if action == "human" else None,
+            ai_enabled=None,
         )
-        if action == "human" and human_status_before not in {"pending", "connected"}:
-            db.enqueue_manager_notifications(
-                "new_request", conversation_id, message_id=assistant_message["id"],
-            )
 
         return ChatResponse(
             conversation_id=conversation_id,
@@ -697,14 +597,6 @@ class ConversationOrchestrator:
             decision.reason = "Продолжение AI-диалога; прежнее обращение человеку не повторяется"
         return decision
 
-    @staticmethod
-    def _wants_human_call(text: str) -> bool:
-        return bool(HUMAN_CALL_CHOICE.search(text)) and not HUMAN_CALL_REJECTION.search(text)
-
-    @staticmethod
-    def _wants_human_chat(text: str) -> bool:
-        return bool(HUMAN_CHAT_CHOICE.search(text))
-
     def second_opinion(self, conversation_id: str) -> dict:
         conversation = db.get_conversation(conversation_id)
         if not conversation:
@@ -932,41 +824,28 @@ class ConversationOrchestrator:
     def _prepare_human_handoff(
         self, history: list[dict], context: dict, decision: RouteDecision,
         conversation: dict, status: str, ticket_id: str | None, channel: str | None,
-    ) -> tuple[str, str]:
-        ticket_id = ticket_id or f"H-{uuid.uuid4().hex[:6].upper()}"
-        if status == "pending":
-            if channel == "chat":
-                return ticket_id, (
-                    f"Обращение {ticket_id} уже передано менеджеру в формате чата. ИИ в этом диалоге приостановлен. "
-                    "Пишите сюда — сообщения дождутся ответа менеджера. Для общения с ИИ откройте новый диалог."
-                )
-            if channel == "call":
-                return ticket_id, (
-                    f"Для обращения {ticket_id} уже выбран созвон. ИИ в этом диалоге приостановлен, "
-                    "пока менеджер обрабатывает заявку. Для общения с ИИ откройте новый диалог."
-                )
-            return ticket_id, (
-                f"Обращение {ticket_id} подготовлено. ИИ в этом диалоге приостановлен. "
-                "Выберите формат связи с менеджером: чат или созвон. "
-                "Для общения с ИИ пока ожидаете ответ откройте новый диалог."
-            )
-
+    ) -> tuple[None, str]:
         draft = ""
         try:
             manager_conversation = {**conversation, "active_agent": "manager"}
-            draft = self.llm.answer("manager", history, context, decision, manager_conversation).message.strip()
+            draft = self.llm.answer(
+                "manager", history, context, decision, manager_conversation
+            ).message.strip()
             draft = self._limit_questions(draft, 0)
         except (LLMNotConfigured, LLMProviderError, ValueError):
-            draft = "Понимаю — здесь лучше дать вам возможность поговорить с человеком. Я сохраню контекст этой переписки, чтобы не пришлось начинать сначала."
+            draft = (
+                "Понимаю — здесь может быть полезен разговор с медицинским "
+                "специалистом. Контекст этой переписки уже подготовлен."
+            )
 
         choice = (
-            f"Обращение {ticket_id} подготовлено. ИИ в этом диалоге приостановлен, чтобы сообщения ждали менеджера. "
-            "Выберите удобный формат: чат с менеджером или созвон. "
-                "Пока ожидаете ответа, можно открыть новый диалог и продолжить общение с ИИ там."
+            "Если хотите, подключу медицинского специалиста к этому чату. "
+            "Обращение будет создано только после подтверждения в появившемся окне. "
+            "Если специалист сейчас не нужен, оставайтесь в этом диалоге — ИИ продолжит отвечать."
         )
         if not draft:
-            return ticket_id, choice
-        return ticket_id, f"{draft}\n\n{choice}"
+            return None, choice
+        return None, f"{draft}\n\n{choice}"
 
     @staticmethod
     def _title(text: str) -> str:

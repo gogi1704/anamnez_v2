@@ -15,6 +15,35 @@ from .config import settings
 
 _write_lock = threading.Lock()
 _current_chel_id: ContextVar[str] = ContextVar("current_chel_id", default="chel_test_default")
+TEST_COMPANY_INN = "123123"
+
+
+def _test_company_inn_chel_ids(conn: sqlite3.Connection) -> set[str]:
+    """Return identities that use the dedicated testing INN."""
+    try:
+        return {
+            str(row[0]) for row in conn.execute(
+                "SELECT chel_id FROM user_profile WHERE TRIM(company_inn) = ?",
+                (TEST_COMPANY_INN,),
+            ).fetchall()
+        }
+    except sqlite3.OperationalError:
+        # The profile table does not exist during the first database bootstrap.
+        return set()
+
+
+def _statistics_excluded_chel_ids(conn: sqlite3.Connection) -> set[str]:
+    """Return identities that must never contribute to product statistics."""
+    return {"chel_legacy", "chel_test_default"} | _test_company_inn_chel_ids(conn)
+
+
+def is_test_user(chel_id: str | None = None) -> bool:
+    """Return True only when the user entered the dedicated testing INN."""
+    candidate = str(chel_id or current_chel_id()).strip()
+    if not candidate:
+        return False
+    with connection() as conn:
+        return candidate in _test_company_inn_chel_ids(conn)
 
 
 def _sqlite_casefold(value: object) -> str:
@@ -579,6 +608,8 @@ def current_external_identities() -> list[dict]:
 
 def record_ai_usage(item: dict) -> int:
     """Persist privacy-safe token counters and the cost-rate snapshot for one call."""
+    if is_test_user(str(item.get("chel_id") or current_chel_id())):
+        return 0
     integer_fields = (
         "input_tokens", "cached_input_tokens", "output_tokens",
         "reasoning_tokens", "total_tokens",
@@ -638,7 +669,8 @@ def admin_ai_costs(period: str = "30", recent_limit: int = 100) -> dict:
         days = int(period)
         started_at = (now - timedelta(days=days - 1)).date().isoformat()
         chart_days = days
-    where = "created_at >= ?" if started_at else "1=1"
+    date_where = "created_at >= ?" if started_at else "1=1"
+    where = f"IS_TEST_INN_USER(chel_id) = 0 AND {date_where}"
     params = (started_at,) if started_at else ()
 
     summary_sql = """SELECT COUNT(*) AS requests,
@@ -671,7 +703,9 @@ def admin_ai_costs(period: str = "30", recent_limit: int = 100) -> dict:
         summary = normalized_summary(conn.execute(
             f"{summary_sql} WHERE {where}", params,
         ).fetchone())
-        all_time = normalized_summary(conn.execute(summary_sql).fetchone())
+        all_time = normalized_summary(conn.execute(
+            f"{summary_sql} WHERE IS_TEST_INN_USER(chel_id) = 0"
+        ).fetchone())
         by_model = [dict(row) for row in conn.execute(
             f"""SELECT model, pricing_key, pricing_known, COUNT(*) AS requests,
                 SUM(input_tokens) AS input_tokens,
@@ -695,7 +729,8 @@ def admin_ai_costs(period: str = "30", recent_limit: int = 100) -> dict:
         daily_rows = conn.execute(
             """SELECT SUBSTR(created_at, 1, 10) AS day, COUNT(*) AS requests,
                 SUM(total_tokens) AS total_tokens, SUM(total_cost_usd) AS total_cost_usd
-            FROM ai_usage WHERE created_at >= ? GROUP BY day ORDER BY day""",
+            FROM ai_usage WHERE IS_TEST_INN_USER(chel_id) = 0 AND created_at >= ?
+            GROUP BY day ORDER BY day""",
             (chart_start,),
         ).fetchall()
         daily_map = {row["day"]: dict(row) for row in daily_rows}
@@ -744,7 +779,7 @@ def admin_dashboard(days: int = 14, limit: int = 100) -> dict:
     limit = max(10, min(250, int(limit)))
     now = datetime.now(timezone.utc)
     first_day = (now - timedelta(days=days - 1)).date()
-    real_users = "chel_id NOT IN ('chel_legacy', 'chel_test_default') AND registered_at IS NOT NULL"
+    real_users = "IS_STATS_USER(chel_id) = 1 AND registered_at IS NOT NULL"
 
     with connection() as conn:
         def scalar(query: str, params: tuple = ()) -> int:
@@ -761,36 +796,36 @@ def admin_dashboard(days: int = 14, limit: int = 100) -> dict:
                 JOIN users u ON u.chel_id=e.chel_id
                 WHERE e.access_status = 'active'
                   AND u.registered_at IS NOT NULL
-                  AND e.chel_id NOT IN ('chel_legacy', 'chel_test_default')"""
+                  AND IS_STATS_USER(e.chel_id) = 1"""
             ),
             "onboarding_complete": scalar(
                 """SELECT COUNT(*) FROM onboarding_state
                 WHERE status = 'complete'
-                  AND chel_id NOT IN ('chel_legacy', 'chel_test_default')"""
+                  AND IS_STATS_USER(chel_id) = 1"""
             ),
             "profiles_with_tube": scalar(
                 """SELECT COUNT(*) FROM user_profile
                 WHERE TRIM(tube_number) <> ''
-                  AND chel_id NOT IN ('chel_legacy', 'chel_test_default')"""
+                  AND IS_STATS_USER(chel_id) = 1"""
             ),
             "conversations_total": scalar(
                 """SELECT COUNT(*) FROM conversations
-                WHERE chel_id NOT IN ('chel_legacy', 'chel_test_default')"""
+                WHERE IS_STATS_USER(chel_id) = 1"""
             ),
             "messages_total": scalar(
                 """SELECT COUNT(*) FROM messages m
                 JOIN conversations c ON c.id = m.conversation_id
-                WHERE c.chel_id NOT IN ('chel_legacy', 'chel_test_default')"""
+                WHERE IS_STATS_USER(c.chel_id) = 1"""
             ),
             "human_requests": scalar(
                 """SELECT COUNT(*) FROM conversations
                 WHERE human_ticket_id IS NOT NULL
-                  AND chel_id NOT IN ('chel_legacy', 'chel_test_default')"""
+                  AND IS_STATS_USER(chel_id) = 1"""
             ),
             "human_pending": scalar(
                 """SELECT COUNT(*) FROM conversations
                 WHERE human_status = 'pending'
-                  AND chel_id NOT IN ('chel_legacy', 'chel_test_default')"""
+                  AND IS_STATS_USER(chel_id) = 1"""
             ),
         }
 
@@ -803,14 +838,14 @@ def admin_dashboard(days: int = 14, limit: int = 100) -> dict:
         message_rows = conn.execute(
             """SELECT SUBSTR(m.created_at, 1, 10) AS day, COUNT(*) AS value
             FROM messages m JOIN conversations c ON c.id = m.conversation_id
-            WHERE c.chel_id NOT IN ('chel_legacy', 'chel_test_default')
+            WHERE IS_STATS_USER(c.chel_id) = 1
               AND m.created_at >= ? GROUP BY day""",
             (first_day.isoformat(),),
         ).fetchall()
         conversation_rows = conn.execute(
             """SELECT SUBSTR(created_at, 1, 10) AS day, COUNT(*) AS value
             FROM conversations
-            WHERE chel_id NOT IN ('chel_legacy', 'chel_test_default')
+            WHERE IS_STATS_USER(chel_id) = 1
               AND created_at >= ? GROUP BY day""",
             (first_day.isoformat(),),
         ).fetchall()
@@ -833,7 +868,7 @@ def admin_dashboard(days: int = 14, limit: int = 100) -> dict:
                 """SELECT m.agent_id, COUNT(*) AS value
                 FROM messages m JOIN conversations c ON c.id = m.conversation_id
                 WHERE m.role = 'assistant'
-                  AND c.chel_id NOT IN ('chel_legacy', 'chel_test_default')
+                  AND IS_STATS_USER(c.chel_id) = 1
                 GROUP BY m.agent_id ORDER BY value DESC"""
             ).fetchall()
         ]
@@ -842,7 +877,7 @@ def admin_dashboard(days: int = 14, limit: int = 100) -> dict:
             for row in conn.execute(
                 """SELECT COALESCE(human_channel, 'not_selected') AS channel, COUNT(*) AS value
                 FROM conversations WHERE human_ticket_id IS NOT NULL
-                  AND chel_id NOT IN ('chel_legacy', 'chel_test_default')
+                  AND IS_STATS_USER(chel_id) = 1
                 GROUP BY channel ORDER BY value DESC"""
             ).fetchall()
         ]
@@ -856,7 +891,7 @@ def admin_dashboard(days: int = 14, limit: int = 100) -> dict:
                 """SELECT d.device_type, COUNT(DISTINCT d.chel_id) AS users,
                     SUM(d.visit_count) AS visits
                 FROM user_device_stats d JOIN users u ON u.chel_id=d.chel_id
-                WHERE d.chel_id NOT IN ('chel_legacy', 'chel_test_default')
+                WHERE IS_STATS_USER(d.chel_id) = 1
                   AND u.registered_at IS NOT NULL
                 GROUP BY d.device_type ORDER BY users DESC, visits DESC"""
             ).fetchall()
@@ -871,7 +906,7 @@ def admin_dashboard(days: int = 14, limit: int = 100) -> dict:
                 """SELECT d.operating_system, COUNT(DISTINCT d.chel_id) AS users,
                     SUM(d.visit_count) AS visits
                 FROM user_device_stats d JOIN users u ON u.chel_id=d.chel_id
-                WHERE d.chel_id NOT IN ('chel_legacy', 'chel_test_default')
+                WHERE IS_STATS_USER(d.chel_id) = 1
                   AND u.registered_at IS NOT NULL
                 GROUP BY d.operating_system ORDER BY users DESC, visits DESC"""
             ).fetchall()
@@ -886,7 +921,7 @@ def admin_dashboard(days: int = 14, limit: int = 100) -> dict:
                 """SELECT d.browser, COUNT(DISTINCT d.chel_id) AS users,
                     SUM(d.visit_count) AS visits
                 FROM user_device_stats d JOIN users u ON u.chel_id=d.chel_id
-                WHERE d.chel_id NOT IN ('chel_legacy', 'chel_test_default')
+                WHERE IS_STATS_USER(d.chel_id) = 1
                   AND u.registered_at IS NOT NULL
                 GROUP BY d.browser ORDER BY users DESC, visits DESC"""
             ).fetchall()
@@ -894,7 +929,7 @@ def admin_dashboard(days: int = 14, limit: int = 100) -> dict:
         summary["tracked_devices"] = scalar(
             """SELECT COUNT(DISTINCT d.chel_id) FROM user_device_stats d
             JOIN users u ON u.chel_id=d.chel_id
-            WHERE d.chel_id NOT IN ('chel_legacy', 'chel_test_default')
+            WHERE IS_STATS_USER(d.chel_id) = 1
               AND u.registered_at IS NOT NULL"""
         )
 
@@ -911,7 +946,7 @@ def admin_dashboard(days: int = 14, limit: int = 100) -> dict:
                   ON e.chel_id = u.chel_id AND e.access_status = 'active'
                 LEFT JOIN conversations c ON c.chel_id = u.chel_id
                 LEFT JOIN messages m ON m.conversation_id = c.id
-                WHERE u.{real_users}
+                WHERE IS_STATS_USER(u.chel_id) = 1 AND u.registered_at IS NOT NULL
                 GROUP BY u.chel_id ORDER BY u.last_seen_at DESC LIMIT ?""",
                 (limit,),
             ).fetchall()
@@ -923,7 +958,7 @@ def admin_dashboard(days: int = 14, limit: int = 100) -> dict:
                     c.created_at, c.updated_at, COUNT(m.id) AS messages
                 FROM conversations c
                 LEFT JOIN messages m ON m.conversation_id = c.id
-                WHERE c.chel_id NOT IN ('chel_legacy', 'chel_test_default')
+                WHERE IS_STATS_USER(c.chel_id) = 1
                 GROUP BY c.id ORDER BY c.updated_at DESC LIMIT ?""",
                 (limit,),
             ).fetchall()
@@ -934,7 +969,7 @@ def admin_dashboard(days: int = 14, limit: int = 100) -> dict:
                 COALESCE(human_channel, '') AS channel, human_phone,
                 created_at, updated_at
             FROM conversations WHERE human_ticket_id IS NOT NULL
-              AND chel_id NOT IN ('chel_legacy', 'chel_test_default')
+              AND IS_STATS_USER(chel_id) = 1
             ORDER BY updated_at DESC LIMIT ?""",
             (limit,),
         ).fetchall():
@@ -965,11 +1000,24 @@ def admin_dashboard(days: int = 14, limit: int = 100) -> dict:
     }
 
 
-def admin_manager_attribution(period: str = "30") -> dict:
+def admin_manager_attribution(
+    period: str = "30", date_from: str = "", date_to: str = "",
+) -> dict:
     """Aggregate immutable manager attribution for registered users."""
     period = str(period or "30").strip().lower()
     now = datetime.now(timezone.utc)
-    if period == "all":
+    date_from = str(date_from or "").strip()
+    date_to = str(date_to or "").strip()
+    try:
+        custom_from = date.fromisoformat(date_from) if date_from else None
+        custom_to = date.fromisoformat(date_to) if date_to else None
+    except ValueError as exc:
+        raise ValueError("Дата должна быть указана в формате ГГГГ-ММ-ДД") from exc
+    if custom_from and custom_to and custom_from > custom_to:
+        raise ValueError("Дата начала периода не может быть позже даты окончания")
+    if custom_from or custom_to:
+        started_at = ""
+    elif period == "all":
         started_at = ""
     elif period == "today":
         started_at = now.date().isoformat()
@@ -980,12 +1028,25 @@ def admin_manager_attribution(period: str = "30") -> dict:
             raise ValueError("Неизвестный период статистики") from exc
         started_at = (now - timedelta(days=days - 1)).date().isoformat()
 
-    where = """u.chel_id NOT IN ('chel_legacy', 'chel_test_default')
+    where = """IS_STATS_USER(u.chel_id) = 1
         AND u.registered_at IS NOT NULL"""
     params: list[str] = []
-    if started_at:
+    report_timezone = timezone(timedelta(hours=3))
+    if custom_from:
+        from_boundary = datetime.combine(
+            custom_from, datetime.min.time(), tzinfo=report_timezone,
+        ).astimezone(timezone.utc).isoformat()
+        where += " AND u.registered_at >= ?"
+        params.append(from_boundary)
+    elif started_at:
         where += " AND SUBSTR(u.registered_at, 1, 10) >= ?"
         params.append(started_at)
+    if custom_to:
+        to_boundary = datetime.combine(
+            custom_to + timedelta(days=1), datetime.min.time(), tzinfo=report_timezone,
+        ).astimezone(timezone.utc).isoformat()
+        where += " AND u.registered_at < ?"
+        params.append(to_boundary)
 
     with connection() as conn:
         total_users = int(conn.execute(
@@ -1024,7 +1085,8 @@ def admin_manager_attribution(period: str = "30") -> dict:
         })
     return {
         "period": period,
-        "period_started_at": started_at or None,
+        "period_started_at": date_from or started_at or None,
+        "period_ended_at": date_to or None,
         "total_users": total_users,
         "attributed_users": attributed_users,
         "attributed_percent": round(attributed_users * 100 / total_users, 1) if total_users else 0,
@@ -1105,7 +1167,7 @@ def admin_table(
 
     with connection() as conn:
         if name == "users":
-            where = """u.chel_id NOT IN ('chel_legacy', 'chel_test_default')
+            where = """IS_STATS_USER(u.chel_id) = 1
                 AND u.registered_at IS NOT NULL"""
             params: list = []
             period_where = where
@@ -1128,7 +1190,7 @@ def admin_table(
                 params.extend([pattern, pattern, pattern, pattern])
             overall_total = conn.execute(
                 """SELECT COUNT(*) FROM users
-                WHERE chel_id NOT IN ('chel_legacy', 'chel_test_default')
+                WHERE IS_STATS_USER(chel_id) = 1
                   AND registered_at IS NOT NULL"""
             ).fetchone()[0]
             period_total = conn.execute(
@@ -1164,7 +1226,7 @@ def admin_table(
                 ).fetchall()
             ]
         elif name == "conversations":
-            where = """c.chel_id NOT IN ('chel_legacy', 'chel_test_default')"""
+            where = """IS_STATS_USER(c.chel_id) = 1"""
             params = []
             if query:
                 where += """ AND (
@@ -1193,7 +1255,7 @@ def admin_table(
             ]
         elif name == "human_requests":
             where = """c.human_ticket_id IS NOT NULL
-                AND c.chel_id NOT IN ('chel_legacy', 'chel_test_default')"""
+                AND IS_STATS_USER(c.chel_id) = 1"""
             params = []
             if query:
                 where += """ AND (
@@ -1221,7 +1283,7 @@ def admin_table(
                 item["phone"] = f"•••• {phone[-4:]}" if len(phone) >= 4 else ""
                 rows.append(item)
         else:
-            where = """d.chel_id NOT IN ('chel_legacy', 'chel_test_default')
+            where = """IS_STATS_USER(d.chel_id) = 1
                 AND EXISTS (
                     SELECT 1 FROM users u
                     WHERE u.chel_id=d.chel_id AND u.registered_at IS NOT NULL
@@ -2382,6 +2444,18 @@ def connection():
     conn = sqlite3.connect(settings.database_path, timeout=15)
     conn.row_factory = sqlite3.Row
     conn.create_function("CASEFOLD", 1, _sqlite_casefold, deterministic=True)
+    test_company_inn_users = _test_company_inn_chel_ids(conn)
+    excluded_from_statistics = {"chel_legacy", "chel_test_default"} | test_company_inn_users
+    conn.create_function(
+        "IS_STATS_USER", 1,
+        lambda value: 0 if str(value or "") in excluded_from_statistics else 1,
+        deterministic=True,
+    )
+    conn.create_function(
+        "IS_TEST_INN_USER", 1,
+        lambda value: 1 if str(value or "") in test_company_inn_users else 0,
+        deterministic=True,
+    )
     conn.execute("PRAGMA foreign_keys = ON")
     try:
         yield conn
@@ -3073,6 +3147,40 @@ def update_conversation(
         conn.commit()
 
 
+def confirm_human_chat(conversation_id: str, proposed_ticket_id: str) -> tuple[dict | None, bool]:
+    """Atomically creates or reuses a confirmed specialist chat request."""
+    owner = current_chel_id()
+    now = utc_now()
+    with _write_lock, connection() as conn:
+        row = conn.execute(
+            "SELECT * FROM conversations WHERE id = ? AND chel_id = ?",
+            (conversation_id, owner),
+        ).fetchone()
+        if not row:
+            return None, False
+        current = dict(row)
+        already_requested = bool(
+            current.get("human_ticket_id")
+            and current.get("human_status") in {"pending", "connected"}
+        )
+        ticket_id = (
+            current["human_ticket_id"] if already_requested else proposed_ticket_id
+        )
+        conn.execute(
+            """UPDATE conversations
+            SET active_agent = 'manager', status = 'waiting_human',
+                human_status = 'pending', human_ticket_id = ?, human_channel = 'chat',
+                human_phone = NULL, ai_enabled = 0, updated_at = ?
+            WHERE id = ? AND chel_id = ?""",
+            (ticket_id, now, conversation_id, owner),
+        )
+        conn.commit()
+        saved = conn.execute(
+            "SELECT * FROM conversations WHERE id = ? AND chel_id = ?",
+            (conversation_id, owner),
+        ).fetchone()
+    return (dict(saved) if saved else None), not already_requested
+
 def set_human_channel(conversation_id: str, channel: str, phone: str | None = None) -> dict | None:
     if channel not in {"chat", "call"}:
         raise ValueError("Неизвестный способ связи")
@@ -3350,7 +3458,15 @@ def save_profile(profile: dict) -> dict:
             (current_chel_id(), *values),
         )
         conn.commit()
-    return get_profile()
+    saved_profile = get_profile()
+    if saved_profile.get("company_inn") == TEST_COMPANY_INN:
+        try:
+            from . import analytics
+            analytics.delete_user_data(current_chel_id())
+        except Exception:
+            # Analytics cleanup must never block questionnaire completion.
+            pass
+    return saved_profile
 
 
 def profile_fingerprint(profile: dict | None = None) -> str:

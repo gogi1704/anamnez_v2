@@ -203,6 +203,95 @@ class AnalyticsTests(unittest.TestCase):
         self.assertEqual(options["pay_online"]["users"], 1)
         self.assertEqual(options["pay_at_exam"]["users"], 1)
 
+    def test_metric2_reports_screen_reach_actions_and_branches(self):
+        analytics.record_events("CHEL-METRIC-ONE", [
+            {"event_id": "metric-one-welcome", "session_id": "metric-session-one", "event_name": "onboarding_screen_viewed", "properties": {"screen": "welcome", "context": "onboarding"}},
+            {"event_id": "metric-one-continue", "session_id": "metric-session-one", "event_name": "onboarding_screen_action", "properties": {"screen": "welcome", "action": "continue", "context": "onboarding"}},
+            {"event_id": "metric-one-register", "session_id": "metric-session-one", "event_name": "onboarding_screen_viewed", "properties": {"screen": "registration", "previous_screen": "welcome", "context": "onboarding"}},
+            {"event_id": "metric-one-anonymous", "session_id": "metric-session-one", "event_name": "onboarding_screen_action", "properties": {"screen": "registration", "action": "anonymous", "context": "onboarding"}},
+            {"event_id": "metric-one-warning", "session_id": "metric-session-one", "event_name": "onboarding_screen_viewed", "properties": {"screen": "anonymous_warning", "previous_screen": "registration", "context": "onboarding"}},
+        ])
+        analytics.record_events("CHEL-METRIC-TWO", [{
+            "event_id": "metric-two-welcome", "session_id": "metric-session-two",
+            "event_name": "onboarding_screen_viewed",
+            "properties": {"screen": "welcome", "context": "onboarding"},
+        }])
+        # A chat-context visit must never enter the onboarding funnel.
+        analytics.record_events("CHEL-METRIC-CHAT", [{
+            "event_id": "metric-chat-exams", "session_id": "metric-session-chat",
+            "event_name": "onboarding_screen_viewed",
+            "properties": {"screen": "exam_selection", "context": "chat"},
+        }])
+
+        report = analytics.metric2_report("30")
+        screens = {item["id"]: item for item in report["screens"]}
+        self.assertEqual(report["summary"]["start_users"], 2)
+        self.assertEqual(screens["welcome"]["percent_of_start"], 100.0)
+        self.assertEqual(screens["registration"]["users"], 1)
+        self.assertEqual(screens["registration"]["percent_of_start"], 50.0)
+        self.assertTrue(screens["anonymous_warning"]["branch"])
+        self.assertEqual(screens["anonymous_warning"]["percent_of_parent"], 100.0)
+        welcome_actions = {item["id"]: item for item in screens["welcome"]["actions"]}
+        self.assertEqual(welcome_actions["continue"]["users"], 1)
+        self.assertEqual(welcome_actions["continue"]["percent_of_screen"], 50.0)
+        self.assertEqual(screens["exam_selection"]["users"], 0)
+        self.assertNotIn("chat", [item["id"] for item in report["screens"]])
+
+    def test_metric2_legacy_events_cannot_exceed_the_start_cohort(self):
+        for index in range(10):
+            events = [{
+                "event_id": f"legacy-auth-{index:04d}",
+                "session_id": f"legacy-session-{index:04d}",
+                "event_name": "auth_gate_viewed", "properties": {},
+            }]
+            if index < 6:
+                events.insert(0, {
+                    "event_id": f"legacy-welcome-{index:04d}",
+                    "session_id": f"legacy-session-{index:04d}",
+                    "event_name": "welcome_viewed", "properties": {},
+                })
+            analytics.record_events(f"CHEL-LEGACY-{index}", events)
+
+        report = analytics.metric2_report("30")
+        screens = {item["id"]: item for item in report["screens"]}
+        self.assertEqual(screens["welcome"]["users"], 6)
+        self.assertEqual(screens["registration"]["users"], 6)
+        self.assertEqual(screens["registration"]["percent_of_start"], 100.0)
+        self.assertTrue(all(item["percent_of_start"] <= 100 for item in report["screens"]))
+
+    def test_reports_support_inclusive_custom_date_range(self):
+        for index in range(2):
+            analytics.record_events(f"CHEL-DATE-{index}", [{
+                "event_id": f"date-welcome-{index:04d}",
+                "session_id": f"date-session-{index:04d}",
+                "event_name": "welcome_viewed", "properties": {},
+            }])
+        with analytics.connection() as conn:
+            conn.execute(
+                "UPDATE analytics_events SET received_at='2026-08-10T12:00:00+00:00' "
+                "WHERE chel_id='CHEL-DATE-0'"
+            )
+            conn.execute(
+                "UPDATE analytics_events SET received_at='2026-08-11T12:00:00+00:00' "
+                "WHERE chel_id='CHEL-DATE-1'"
+            )
+            conn.commit()
+
+        report = analytics.admin_report(
+            "all", date_from="2026-08-10", date_to="2026-08-10",
+        )
+        metric2 = analytics.metric2_report(
+            "all", date_from="2026-08-10", date_to="2026-08-10",
+        )
+        self.assertEqual(report["summary"]["visitors"], 1)
+        self.assertEqual(metric2["summary"]["start_users"], 1)
+        self.assertEqual(report["date_from"], "2026-08-10")
+        self.assertEqual(report["date_to"], "2026-08-10")
+        with self.assertRaisesRegex(ValueError, "начала периода"):
+            analytics.metric2_report(
+                "all", date_from="2026-08-12", date_to="2026-08-10",
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -17,7 +17,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/static/styles.215d794e1be6.css">
+  <link rel="stylesheet" href="/static/styles.07ffaefb4795.css">
   <link rel="stylesheet" href="/static/rich-text.2bf1f5fab764.css">
 </head>
 <body>
@@ -118,9 +118,9 @@
         <button class="mobile-header-dialogs" id="mobileHeaderDialogsButton" type="button" aria-label="Открыть диалоги, новых сообщений нет">
           <span aria-hidden="true">≡</span><small>Диалоги</small><b class="hidden" id="mobileDialogsUnread">0</b>
         </button>
-        <div class="active-avatar" id="headerAvatar">МН</div>
+        <div class="active-avatar" id="headerAvatar">ОП</div>
         <div class="chat-title">
-          <div><strong id="headerName">Мария</strong><span class="role" id="headerRole">ИИ-менеджер</span></div>
+          <div><strong id="headerName">Ольга</strong><span class="role" id="headerRole">Медицинский помощник</span></div>
           <span class="online"><i></i>на связи</span>
         </div>
         <div class="header-actions">
@@ -134,7 +134,7 @@
               <button id="menuMessengerLinkButton" role="menuitem"><i>↗</i><span>Привязать мессенджер<small id="menuMessengerLinkStatus">Telegram или MAX</small></span></button>
               <button id="menuLabResultsButton" role="menuitem"><i>▤</i><span>Результаты анализов<small id="menuLabResultsStatus">Проверить по номеру пробирки</small></span></button>
               <button id="mobileDialogsButton" role="menuitem"><i>≡</i><span>Мои диалоги<small>Открыть историю переписок</small></span></button>
-              <button id="humanButton" role="menuitem"><i>♙</i><span>Позвать человека<small>Чат или созвон</small></span></button>
+              <button id="humanButton" role="menuitem"><i>♙</i><span>Позвать человека<small>Медицинский специалист</small></span></button>
               <button id="menuBodyMapButton" role="menuitem"><i>◉</i><span>Карта тела<small>Отметить область и симптом</small></span></button>
               <button id="menuHealthHistoryButton" role="menuitem"><i>⌁</i><span>История здоровья<small>События и динамика по датам</small></span></button>
               <div class="function-menu-separator" role="separator"></div>
@@ -152,10 +152,10 @@
       </header>
 
       <section class="handoff-banner hidden" id="handoffBanner" aria-live="polite">
-        <span class="mini-avatar" id="handoffFrom">МН</span>
+        <span class="mini-avatar" id="handoffFrom">ОП</span>
         <span class="handoff-line"></span>
-        <span class="mini-avatar specialist" id="handoffTo">КД</span>
-        <p id="handoffText">Мария передаёт диалог специалисту</p>
+        <span class="mini-avatar specialist" id="handoffTo">ОП</span>
+        <p id="handoffText">Ольга изучает ваш вопрос</p>
       </section>
       <section class="chat-mode-banner hidden" id="chatModeBanner" aria-live="polite" aria-expanded="false" aria-controls="chatModeDetails">
         <span id="chatModeIcon">♙</span>
@@ -175,7 +175,7 @@
       <section class="messages" id="messages" aria-live="polite" aria-label="Сообщения"></section>
 
       <div class="suggestions" id="suggestions">
-        <button data-prompt="У меня второй день болит голова">Болит голова</button>
+        <button data-prompt="У меня болит голова">Болит голова</button>
         <button data-prompt="Помоги составить здоровый рацион">Здоровое питание</button>
         <button data-prompt="Я хочу поговорить с человеком">Позвать человека</button>
       </div>
@@ -184,7 +184,9 @@
         <label class="sr-only" for="messageInput">Сообщение</label>
         <textarea id="messageInput" rows="1" placeholder="Задайте вопрос о здоровье..." autocomplete="off"></textarea>
         <input class="sr-only" type="file" id="attachmentInput" accept="image/jpeg,image/png,image/webp,image/gif,application/pdf,text/plain,text/csv" multiple>
-        <button type="button" class="attach-button" id="attachButton" aria-label="Прикрепить файл">＋</button>
+        <button type="button" class="attach-button" id="attachButton" aria-label="Прикрепить файл" title="Прикрепить файл">
+          <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m18.38 12.74-7.7 7.69a4.5 4.5 0 0 1-6.36-6.36L15.26 3.13a3 3 0 0 1 4.24 4.24L8.55 18.32a1.5 1.5 0 0 1-2.12-2.12l7.94-7.94"/></svg>
+        </button>
         <button type="submit" class="send-button" aria-label="Отправить">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12 14-7-4 14-3-5-7-2Z"/><path d="m12 14 7-9"/></svg>
         </button>
@@ -205,7 +207,7 @@
         <div class="empty-state">
           <div class="empty-icon">⌁</div>
           <strong>Здесь появятся следующие шаги</strong>
-          <p>Покажем, кто из специалистов помогает и что происходит дальше.</p>
+          <p>Покажем, что происходит с вашим обращением и какие шаги будут дальше.</p>
         </div>
       </div>
       <div class="safety-card">
@@ -229,33 +231,23 @@
     <div class="modal">
       <button class="modal-close" id="modalClose" aria-label="Закрыть">×</button>
       <div class="modal-icon">♙</div>
-      <h2 id="humanTitle">Как связаться с менеджером?</h2>
-      <p>Контекст разговора уже подготовлен. ИИ в этом диалоге приостановлен, чтобы новые сообщения ждали ответа менеджера.</p>
+      <h2 id="humanTitle">Подключить медицинского специалиста?</h2>
+      <p>Контекст разговора уже подготовлен. Обращение будет создано только после вашего подтверждения.</p>
       <div class="handoff-review">
         <strong>Проверьте сведения обращения</strong>
-        <p>Если что-то указано неточно, исправьте сведения — менеджер увидит обновлённую версию.</p>
+        <p>Если что-то указано неточно, исправьте сведения — медицинский специалист увидит обновлённую версию.</p>
         <div class="handoff-preview" id="handoffPreview"><span>Подготавливаю сводку…</span></div>
       </div>
-      <div class="ticket"><span>Номер обращения</span><strong id="ticketNumber">H-000000</strong></div>
-      <div class="human-options" aria-label="Способ связи">
+      <div class="human-options" aria-label="Подключение медицинского специалиста">
         <button class="human-option" id="humanChatButton">
           <span class="human-option-icon" aria-hidden="true">⌨</span>
-          <span><strong>Чат с менеджером</strong><small>Менеджер ответит в этой переписке</small></span>
+          <span><strong>Чат с медицинским специалистом</strong><small>Специалист получит обращение и ответит в этой переписке</small></span>
         </button>
-        <button class="human-option" id="humanCallButton">
-          <span class="human-option-icon" aria-hidden="true">☎</span>
-          <span><strong>Созвон</strong><small>Оставить номер для звонка менеджера</small></span>
+        <button class="human-option human-option-decline" id="humanDeclineButton">
+          <span class="human-option-icon" aria-hidden="true">✦</span>
+          <span><strong>Не звать медицинского специалиста</strong><small>Остаться в текущем чате с ИИ</small></span>
         </button>
       </div>
-      <div class="call-phone-step hidden" id="callPhoneStep">
-        <button class="call-phone-back" id="callPhoneBack" type="button">← Выбрать другой способ</button>
-        <strong>На какой номер позвонить?</strong>
-        <p>Укажите российский номер. Он будет передан менеджеру только вместе с этим обращением.</p>
-        <label class="field-label">Номер телефона<input id="callPhoneInput" type="tel" inputmode="tel" autocomplete="tel" maxlength="30" placeholder="+7 999 123-45-67"></label>
-        <span class="call-phone-error hidden" id="callPhoneError" role="alert">Введите российский номер в формате +7 999 123-45-67</span>
-        <button class="primary-button" id="confirmCallButton" type="button" disabled>Запросить созвон</button>
-      </div>
-      <button class="secondary-button" id="modalOkay">Открыть новый диалог с ИИ</button>
     </div>
   </div>
 
@@ -290,8 +282,36 @@
         <article class="capability-card"><i>⌁</i><span><strong>Карта состояния</strong><small>Тема, открытые вопросы и уровень срочности</small></span></article>
         <article class="capability-card"><i>▱</i><span><strong>Фото и документы</strong><small>Изображения, PDF, TXT и CSV до 4 МБ</small></span></article>
         <article class="capability-card"><i>◇</i><span><strong>Управляемая память</strong><small>Сохраняйте и удаляйте важные предпочтения</small></span></article>
-        <article class="capability-card"><i>↗</i><span><strong>Передача человеку</strong><small>Предпросмотр сводки, чат или созвон</small></span></article>
+        <article class="capability-card"><i>↗</i><span><strong>Передача человеку</strong><small>Предпросмотр сводки и чат с медицинским специалистом</small></span></article>
         <article class="capability-card"><i>☰</i><span><strong>Меню функций</strong><small>Диалоги, мои данные, результаты и связь с человеком</small></span></article>
+      </div>
+      <div class="capability-danger-zone">
+        <p class="capability-group-title">Управление данными</p>
+        <button class="capability-delete-data" id="capabilityDeleteData" type="button">
+          <i aria-hidden="true">×</i>
+          <span><strong>Удалить мои данные</strong><small>Полностью очистить профиль и начать заново</small></span>
+        </button>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal-backdrop hidden" id="deleteMyDataModal" role="dialog" aria-modal="true" aria-labelledby="deleteMyDataTitle" aria-describedby="deleteMyDataDescription">
+    <div class="modal delete-my-data-modal">
+      <button class="modal-close" id="deleteMyDataClose" type="button" aria-label="Закрыть">×</button>
+      <div class="delete-my-data-icon" aria-hidden="true">!</div>
+      <h2 id="deleteMyDataTitle">Удалить все ваши данные?</h2>
+      <p id="deleteMyDataDescription">Это действие нельзя отменить. Будут безвозвратно удалены:</p>
+      <ul class="delete-my-data-list">
+        <li>анкета, жалобы и сохранённые данные;</li>
+        <li>диалоги, обращения и история сообщений;</li>
+        <li>результаты, расшифровки и выбранные обследования;</li>
+        <li>привязка Telegram или MAX и доступ к текущему профилю.</li>
+      </ul>
+      <p class="delete-my-data-warning">После удаления сервис откроется как для нового пользователя. Чтобы вернуться, потребуется зарегистрироваться и заполнить анкету заново.</p>
+      <p class="delete-my-data-error hidden" id="deleteMyDataError" role="alert"></p>
+      <div class="delete-my-data-actions">
+        <button class="secondary-button" id="deleteMyDataCancel" type="button">Отмена</button>
+        <button class="danger-button" id="deleteMyDataConfirm" type="button">Удалить всё</button>
       </div>
     </div>
   </div>
@@ -504,9 +524,9 @@
     </div>
   </div>
 
-  <script src="/static/metrika.js?v=20260819-exam-funnel-v2"></script>
-  <script src="/static/agents.js?v=20260819-exam-funnel-v2"></script>
-  <script src="/static/rich-text.js?v=20260819-exam-funnel-v2"></script>
-  <script src="/static/app.js?v=20260819-exam-funnel-v2"></script>
+  <script src="/static/metrika.js?v=20260823-metric2-exact-v2"></script>
+  <script src="/static/agents.js?v=20260823-metric2-exact-v2"></script>
+  <script src="/static/rich-text.js?v=20260823-metric2-exact-v2"></script>
+  <script src="/static/app.js?v=20260823-metric2-exact-v2"></script>
 </body>
 </html>
