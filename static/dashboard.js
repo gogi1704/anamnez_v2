@@ -1137,6 +1137,10 @@ function openMetric2Screen(screenId) {
   }
   if (!(screen.actions || []).length) actions.innerHTML = '<p class="form-error">На этом экране нет отдельных действий</p>';
   const transitions = $('#metric2ModalTransitions'); transitions.replaceChildren();
+  const routeNote = document.createElement('p');
+  routeNote.className = 'metric2-route-note';
+  routeNote.textContent = 'Прямые переходы подтверждены логикой экранов. Если между двумя записанными экранами не хватает обязательных шагов, такая связь вынесена отдельно как неполный маршрут и не считается прямым переходом.';
+  transitions.append(routeNote);
   const transitionSection = (title,items,direction) => {
     const section = document.createElement('section');
     section.innerHTML = `<h4>${title}</h4>`;
@@ -1144,18 +1148,43 @@ function openMetric2Screen(screenId) {
     for (const item of items || []) {
       const row = document.createElement('button');
       row.type = 'button';
-      row.className = 'metric2-transition-row';
+      row.className = `metric2-transition-row${item.direct === false ? ' incomplete' : ''}`;
       row.dataset.metric2Screen = item.screen_id;
       row.setAttribute('aria-label', `Открыть экран «${item.title}»`);
       const localPercent = direction === 'in' ? item.percent_of_source : item.percent_of_screen;
-      row.innerHTML = `<div><strong>${escapeHtml(item.title)}</strong><span><b>${Number(item.users || 0).toLocaleString('ru-RU')}</b><i aria-hidden="true">→</i></span></div><p><span>${Number(localPercent || 0).toLocaleString('ru-RU')}% ${direction === 'in' ? 'от исходного экрана' : 'от этого экрана'}</span><span>${Number(item.percent_of_start || 0).toLocaleString('ru-RU')}% от первого экрана</span></p>`;
+      row.innerHTML = `${item.direct === false ? '<em>Неполный маршрут</em>' : ''}<div><strong>${escapeHtml(item.title)}</strong><span><b>${Number(item.users || 0).toLocaleString('ru-RU')}</b><i aria-hidden="true">→</i></span></div><p><span>${Number(localPercent || 0).toLocaleString('ru-RU')}% ${direction === 'in' ? 'от исходного экрана' : 'от этого экрана'}</span><span>${Number(item.percent_of_start || 0).toLocaleString('ru-RU')}% от первого экрана</span></p><small>${escapeHtml(item.explanation || '')}</small>`;
       list.append(row);
     }
     if (!(items || []).length) list.innerHTML = `<p class="form-error">${direction === 'in' ? 'Это первый экран или переходов пока нет' : 'Переходов на другие экраны пока нет'}</p>`;
     section.append(list); transitions.append(section);
   };
-  transitionSection('Откуда пришли',screen.incoming_transitions || [],'in');
-  transitionSection('Куда перешли',screen.outgoing_transitions || [],'out');
+  const incomingTransitions = screen.incoming_transitions || [];
+  const outgoingTransitions = screen.outgoing_transitions || [];
+  transitionSection('Откуда пришли — прямые переходы', incomingTransitions.filter(item => item.direct !== false), 'in');
+  transitionSection('Куда перешли — прямые переходы', outgoingTransitions.filter(item => item.direct !== false), 'out');
+  const incompleteTransitions = [
+    ...incomingTransitions.filter(item => item.direct === false).map(item => ({...item, gapDirection: 'in'})),
+    ...outgoingTransitions.filter(item => item.direct === false).map(item => ({...item, gapDirection: 'out'})),
+  ];
+  if (incompleteTransitions.length) {
+    const section = document.createElement('section');
+    section.className = 'metric2-incomplete-section';
+    section.innerHTML = '<h4>Неполные связи данных</h4><p>Это не прямые переходы. В истории этих пользователей отсутствуют обязательные промежуточные экраны.</p>';
+    const list = document.createElement('div');
+    list.className = 'metric2-transition-list';
+    for (const item of incompleteTransitions) {
+      const row = document.createElement('button');
+      row.type = 'button';
+      row.className = 'metric2-transition-row incomplete';
+      row.dataset.metric2Screen = item.screen_id;
+      row.setAttribute('aria-label', `Открыть связанный экран «${item.title}»`);
+      const localPercent = item.gapDirection === 'in' ? item.percent_of_source : item.percent_of_screen;
+      row.innerHTML = `<em>${item.gapDirection === 'in' ? 'До этого экрана' : 'После этого экрана'} · неполный маршрут</em><div><strong>${escapeHtml(item.title)}</strong><span><b>${Number(item.users || 0).toLocaleString('ru-RU')}</b><i aria-hidden="true">→</i></span></div><p><span>${Number(localPercent || 0).toLocaleString('ru-RU')}% ${item.gapDirection === 'in' ? 'от связанного экрана' : 'от этого экрана'}</span><span>${Number(item.percent_of_start || 0).toLocaleString('ru-RU')}% от первого экрана</span></p><small>${escapeHtml(item.explanation || '')}</small>`;
+      list.append(row);
+    }
+    section.append(list);
+    transitions.append(section);
+  }
   $('#metric2Modal').classList.remove('hidden');
   document.body.classList.add('metric2-modal-open');
   $('.metric2-modal-close').focus();

@@ -920,6 +920,39 @@ def metric2_report(
             for source_id, target_id in zip(path, path[1:]):
                 edge_users[(source_id, target_id)].add(chel_id)
 
+        transition_explanations = {
+            ("welcome", "registration"): "Новый пользователь продолжил и выбрал способ входа.",
+            ("welcome", "appearance"): "Пользователь пришёл по ссылке уже авторизованным через Telegram или MAX, поэтому повторный выбор способа входа не потребовался.",
+            ("registration", "anonymous_warning"): "Пользователь выбрал анонимный вход.",
+            ("registration", "appearance"): "Пользователь завершил вход через Telegram или MAX.",
+            ("anonymous_warning", "appearance"): "Пользователь подтвердил анонимный вход.",
+        }
+
+        def transition_explanation(source_id: str, target_id: str) -> str:
+            known = transition_explanations.get((source_id, target_id))
+            if known:
+                return known
+            labels = [
+                action["label"]
+                for action in definition_by_id[source_id].get("actions", [])
+                if action.get("target") == target_id
+            ]
+            if labels:
+                return "Переход после действия: " + " / ".join(labels) + "."
+            return (
+                "Это не прямой переход: между экранами отсутствуют события. "
+                "Пользователь мог пройти промежуточные шаги в старой версии, "
+                "либо они были исключены как повторные просмотры и возвраты."
+            )
+
+        def is_direct_transition(source_id: str, target_id: str) -> bool:
+            if (source_id, target_id) in transition_explanations:
+                return True
+            return any(
+                action.get("target") == target_id
+                for action in definition_by_id[source_id].get("actions", [])
+            )
+
         start_users = len(screen_users.get("welcome", set()))
         result_screens, previous_main_id = [], ""
         for definition in definitions:
@@ -953,6 +986,8 @@ def metric2_report(
                     incoming.append({
                         "screen_id": source_id,
                         "title": definition_by_id[source_id]["title"],
+                        "direct": is_direct_transition(source_id, target_id),
+                        "explanation": transition_explanation(source_id, target_id),
                         "users": len(transition_users),
                         "percent_of_screen": round(len(transition_users) / len(reached) * 100, 1) if reached else 0.0,
                         "percent_of_source": round(len(transition_users) / source_count * 100, 1) if source_count else 0.0,
@@ -964,6 +999,8 @@ def metric2_report(
                     outgoing.append({
                         "screen_id": target_id,
                         "title": definition_by_id[target_id]["title"],
+                        "direct": is_direct_transition(source_id, target_id),
+                        "explanation": transition_explanation(source_id, target_id),
                         "users": len(transition_users),
                         "percent_of_screen": round(len(transition_users) / len(reached) * 100, 1) if reached else 0.0,
                         "percent_of_target": round(len(transition_users) / target_count * 100, 1) if target_count else 0.0,

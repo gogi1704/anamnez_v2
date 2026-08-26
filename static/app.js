@@ -420,20 +420,17 @@ function hasCompletedQuestionnaire(onboarding) {
   );
 }
 
-async function enterKnownUser({ messengerLogin = false } = {}) {
-  if (messengerLogin) {
-    const onboarding = await api('/api/onboarding');
-    if (hasCompletedQuestionnaire(onboarding)) {
-      localStorage.setItem(WELCOME_SEEN_KEY, '1');
-      await startApplication({ openCompletedMessengerAccount:true, initialOnboarding:onboarding });
-      return;
-    }
+async function enterKnownUser() {
+  const onboarding = await api('/api/onboarding');
+  if (hasCompletedQuestionnaire(onboarding)) {
+    localStorage.setItem(WELCOME_SEEN_KEY, '1');
+    await startApplication({ openCompletedMessengerAccount:true, initialOnboarding:onboarding });
+    return;
   }
   if (localStorage.getItem(WELCOME_SEEN_KEY)) {
     await startApplication();
     return;
   }
-  const onboarding = await api('/api/onboarding');
   if (onboarding.status === 'complete') {
     localStorage.setItem(WELCOME_SEEN_KEY, '1');
     await startApplication();
@@ -2819,7 +2816,7 @@ async function init() {
     if (identity.authenticated) {
       localStorage.removeItem(ANONYMOUS_ACCESS_KEY);
       if (forceWelcomePreview) showWelcome(startApplication);
-      else if (!(await handlePaymentReturn())) await enterKnownUser({messengerLogin:messengerLoginCompleted});
+      else if (!(await handlePaymentReturn())) await enterKnownUser();
     } else if (messengerLoginRequired) {
       showAuthGate();
       setAuthStatus('Эта ссылка принадлежит другому пользователю. Войдите через свой мессенджер.', true);

@@ -245,6 +245,7 @@ class AnalyticsTests(unittest.TestCase):
             {"event_id": "path-one-registration-return", "session_id": "path-session-one", "event_name": "onboarding_screen_viewed", "properties": {"screen": "registration", "context": "onboarding"}},
             {"event_id": "path-one-warning-repeat", "session_id": "path-session-one", "event_name": "onboarding_screen_viewed", "properties": {"screen": "anonymous_warning", "context": "onboarding"}},
             {"event_id": "path-one-appearance", "session_id": "path-session-one", "event_name": "onboarding_screen_viewed", "properties": {"screen": "appearance", "context": "onboarding"}},
+            {"event_id": "path-one-offer-with-gap", "session_id": "path-session-one", "event_name": "onboarding_screen_viewed", "properties": {"screen": "exam_offer", "context": "onboarding"}},
         ])
         analytics.record_events("CHEL-METRIC-PATH-TWO", [
             {"event_id": "path-two-welcome", "session_id": "path-session-two", "event_name": "onboarding_screen_viewed", "properties": {"screen": "welcome", "context": "onboarding"}},
@@ -269,7 +270,14 @@ class AnalyticsTests(unittest.TestCase):
             item["screen_id"]: item for item in screens["anonymous_warning"]["outgoing_transitions"]
         }
         self.assertEqual(warning_destinations["appearance"]["users"], 1)
+        self.assertTrue(warning_destinations["appearance"]["direct"])
+        self.assertIn("анонимный вход", warning_destinations["appearance"]["explanation"])
         self.assertNotIn("registration", warning_destinations)
+        appearance_destinations = {
+            item["screen_id"]: item for item in screens["appearance"]["outgoing_transitions"]
+        }
+        self.assertFalse(appearance_destinations["exam_offer"]["direct"])
+        self.assertIn("не прямой переход", appearance_destinations["exam_offer"]["explanation"])
 
     def test_metric2_reports_skipped_examinations_completion_screen(self):
         events = []
