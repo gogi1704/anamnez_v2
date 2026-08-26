@@ -54,7 +54,11 @@ class Settings:
         "YOOKASSA_PAYMENT_MODE", "full_prepayment",
     ).strip()
     log_path: Path = Path(os.getenv("LOG_PATH", BASE_DIR / "server-error.log"))
+    # The structured conversation summary and questionnaire are passed separately,
+    # so the model only needs a bounded recent transcript.  Limiting both message
+    # count and text size prevents a long-running chat from growing in cost forever.
     max_history_messages: int = int(os.getenv("MAX_HISTORY_MESSAGES", "30"))
+    max_history_chars: int = int(os.getenv("MAX_HISTORY_CHARS", "16000"))
     host: str = os.getenv("HOST", "127.0.0.1")
     port: int = int(os.getenv("PORT", "8000"))
     auto_open_browser: bool = env_bool("AUTO_OPEN_BROWSER", True)

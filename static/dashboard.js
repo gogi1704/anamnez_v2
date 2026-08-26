@@ -1082,7 +1082,7 @@ function renderMetric2(data) {
   const summary = $('#metric2Summary');
   summary.innerHTML = [
     ['На первом экране',data.summary?.start_users || 0,'100% — база расчёта'],
-    ['Экранов в пути',data.summary?.screens || 0,'включая ответвления'],
+    ['Уникальных переходов',data.summary?.unique_transitions || 0,'повторы и возвраты исключены'],
     ['Дошли до завершения',data.summary?.reached_completion || 0,'уникальных пользователей'],
   ].map(([label,value,note]) => `<article class="analytics-metric"><span>${label}</span><strong>${Number(value).toLocaleString('ru-RU')}</strong><small>${note}</small></article>`).join('');
   const root = $('#metric2Flow');
@@ -1103,7 +1103,8 @@ function renderMetric2(data) {
     const comparison = screen.id === 'welcome' ? 'Первый экран — база расчёта'
       : screen.branch ? `${screen.percent_of_parent}% от экрана «${escapeHtml(titleById[screen.parent_id] || 'родительский экран')}»`
       : `${screen.percent_of_parent}% от предыдущего основного экрана`;
-    stats.innerHTML = `<span class="metric2-stage">${visualBranch ? 'Ответвление · ' : ''}${escapeHtml(screen.stage || '')}</span><h3>${escapeHtml(screen.title)}</h3><div class="metric2-reach"><strong>${Number(screen.percent_of_start || 0).toLocaleString('ru-RU')}%</strong><span>от первого экрана</span></div><p><b>${Number(screen.users || 0).toLocaleString('ru-RU')}</b> пользователей · ${comparison}</p><div class="metric2-reach-track"><i style="width:${Math.min(100,Number(screen.percent_of_start || 0))}%"></i></div><button type="button" data-metric2-screen="${escapeHtml(screen.id)}">Открыть экран и нажатия →</button>`;
+    const dropoff = screen.id === 'welcome' ? '' : `<div class="metric2-row-dropoff"><b>Не дошли: ${Number(screen.dropoff_users || 0).toLocaleString('ru-RU')}</b><span>${Number(screen.dropoff_percent_of_parent || 0).toLocaleString('ru-RU')}% от предыдущего · ${Number(screen.dropoff_percent_of_start || 0).toLocaleString('ru-RU')}% от первого</span></div>`;
+    stats.innerHTML = `<span class="metric2-stage">${visualBranch ? 'Ответвление · ' : ''}${escapeHtml(screen.stage || '')}</span><h3>${escapeHtml(screen.title)}</h3><div class="metric2-reach"><strong>${Number(screen.percent_of_start || 0).toLocaleString('ru-RU')}%</strong><span>от первого экрана</span></div><p><b>${Number(screen.users || 0).toLocaleString('ru-RU')}</b> пользователей · ${comparison}</p>${dropoff}<div class="metric2-reach-track"><i style="width:${Math.min(100,Number(screen.percent_of_start || 0))}%"></i></div><button type="button" data-metric2-screen="${escapeHtml(screen.id)}">Открыть экран и всю статистику →</button>`;
     item.append(sequence,open,stats); root.append(item);
   }
   if (!(data.screens || []).length) root.innerHTML = '<p class="form-error">Пока нет данных по стартовым экранам</p>';
@@ -1120,15 +1121,41 @@ function openMetric2Screen(screenId) {
   $('#metric2ModalStage').textContent = screen.stage || '';
   $('#metric2ModalTitle').textContent = screen.title;
   $('#metric2ModalDescription').textContent = screen.description || '';
-  $('#metric2ModalReach').innerHTML = `<strong>${Number(screen.percent_of_start || 0).toLocaleString('ru-RU')}%</strong><span>${Number(screen.users || 0).toLocaleString('ru-RU')} пользователей увидели экран</span>`;
+  const comparisonTitle = screen.comparison_id ? titleById[screen.comparison_id] || 'предыдущий экран' : '';
+  const finishLabel = screen.terminal ? 'Завершили путь здесь' : 'Не перешли дальше';
+  $('#metric2ModalReach').innerHTML = `
+    <article><span>Пришли на экран</span><strong>${Number(screen.users || 0).toLocaleString('ru-RU')}</strong><small><span>${Number(screen.percent_of_start || 0).toLocaleString('ru-RU')}% от первого</span>${screen.comparison_id ? `<span>${Number(screen.percent_of_parent || 0).toLocaleString('ru-RU')}% от «${escapeHtml(comparisonTitle)}»</span>` : ''}</small></article>
+    <article><span>Перешли на другой экран</span><strong>${Number(screen.outgoing_users || 0).toLocaleString('ru-RU')}</strong><small><span>${Number(screen.outgoing_percent_of_screen || 0).toLocaleString('ru-RU')}% от этого экрана</span><span>${Number(screen.outgoing_percent_of_start || 0).toLocaleString('ru-RU')}% от первого</span></small></article>
+    <article class="${screen.terminal ? 'terminal' : 'dropoff'}"><span>${finishLabel}</span><strong>${Number(screen.stopped_users || 0).toLocaleString('ru-RU')}</strong><small><span>${Number(screen.stopped_percent_of_screen || 0).toLocaleString('ru-RU')}% от этого экрана</span><span>${Number(screen.stopped_percent_of_start || 0).toLocaleString('ru-RU')}% от первого</span></small></article>
+    ${screen.comparison_id ? `<article class="dropoff"><span>Не дошли с предыдущего</span><strong>${Number(screen.dropoff_users || 0).toLocaleString('ru-RU')}</strong><small><span>${Number(screen.dropoff_percent_of_parent || 0).toLocaleString('ru-RU')}% от «${escapeHtml(comparisonTitle)}»</span><span>${Number(screen.dropoff_percent_of_start || 0).toLocaleString('ru-RU')}% от первого</span></small></article>` : ''}`;
   const actions = $('#metric2ModalActions'); actions.replaceChildren();
   for (const action of screen.actions || []) {
     const target = action.target ? titleById[action.target] : action.target_label;
     const row = document.createElement('article'); row.className = 'metric2-action-row';
-    row.innerHTML = `<div><strong>${escapeHtml(action.label)}</strong><b>${Number(action.percent_of_screen || 0).toLocaleString('ru-RU')}%</b></div><div class="metric2-action-track"><i style="width:${Math.min(100,Number(action.percent_of_screen || 0))}%"></i></div><p>${Number(action.users || 0).toLocaleString('ru-RU')} пользователей${target ? ` · переход → ${escapeHtml(target)}` : ''}</p>`;
+    row.innerHTML = `<div><strong>${escapeHtml(action.label)}</strong><b>${Number(action.percent_of_screen || 0).toLocaleString('ru-RU')}%</b></div><div class="metric2-action-track"><i style="width:${Math.min(100,Number(action.percent_of_screen || 0))}%"></i></div><p>${Number(action.users || 0).toLocaleString('ru-RU')} уникальных пользователей · ${Number(action.percent_of_start || 0).toLocaleString('ru-RU')}% от первого${target ? ` · действие ведёт → ${escapeHtml(target)}` : ''}</p>`;
     actions.append(row);
   }
   if (!(screen.actions || []).length) actions.innerHTML = '<p class="form-error">На этом экране нет отдельных действий</p>';
+  const transitions = $('#metric2ModalTransitions'); transitions.replaceChildren();
+  const transitionSection = (title,items,direction) => {
+    const section = document.createElement('section');
+    section.innerHTML = `<h4>${title}</h4>`;
+    const list = document.createElement('div'); list.className = 'metric2-transition-list';
+    for (const item of items || []) {
+      const row = document.createElement('button');
+      row.type = 'button';
+      row.className = 'metric2-transition-row';
+      row.dataset.metric2Screen = item.screen_id;
+      row.setAttribute('aria-label', `Открыть экран «${item.title}»`);
+      const localPercent = direction === 'in' ? item.percent_of_source : item.percent_of_screen;
+      row.innerHTML = `<div><strong>${escapeHtml(item.title)}</strong><span><b>${Number(item.users || 0).toLocaleString('ru-RU')}</b><i aria-hidden="true">→</i></span></div><p><span>${Number(localPercent || 0).toLocaleString('ru-RU')}% ${direction === 'in' ? 'от исходного экрана' : 'от этого экрана'}</span><span>${Number(item.percent_of_start || 0).toLocaleString('ru-RU')}% от первого экрана</span></p>`;
+      list.append(row);
+    }
+    if (!(items || []).length) list.innerHTML = `<p class="form-error">${direction === 'in' ? 'Это первый экран или переходов пока нет' : 'Переходов на другие экраны пока нет'}</p>`;
+    section.append(list); transitions.append(section);
+  };
+  transitionSection('Откуда пришли',screen.incoming_transitions || [],'in');
+  transitionSection('Куда перешли',screen.outgoing_transitions || [],'out');
   $('#metric2Modal').classList.remove('hidden');
   document.body.classList.add('metric2-modal-open');
   $('.metric2-modal-close').focus();
@@ -1581,6 +1608,11 @@ $('#metric2Flow').addEventListener('click', event => {
   if (target) openMetric2Screen(target.dataset.metric2Screen);
 });
 $('#metric2Modal').addEventListener('click', event => {
+  const screenLink = event.target.closest('[data-metric2-screen]');
+  if (screenLink) {
+    openMetric2Screen(screenLink.dataset.metric2Screen);
+    return;
+  }
   if (event.target.closest('[data-metric2-close]')) closeMetric2Modal();
 });
 document.addEventListener('keydown', event => {

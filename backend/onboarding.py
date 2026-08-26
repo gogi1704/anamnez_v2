@@ -101,7 +101,15 @@ def recommend_test_ids(profile: dict) -> list[str]:
         result.append("lipids")
     if profile.get("joint_pain") == "yes":
         result.append("joints")
-    return list(dict.fromkeys(result))
+    recommendations = list(dict.fromkeys(result))
+    # An extended complex covers the same questionnaire indication as its
+    # basic counterpart, so both cards should be marked as suitable. This does
+    # not preselect either complex and does not change their mutual exclusion.
+    for basic_id, extended_id in EXAMINATION_UPGRADE_PAIRS.items():
+        if basic_id in recommendations and extended_id not in recommendations:
+            basic_index = recommendations.index(basic_id)
+            recommendations.insert(basic_index + 1, extended_id)
+    return recommendations
 
 
 def public_onboarding(

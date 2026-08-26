@@ -11,7 +11,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/static/dashboard.css?v=20260823-skip-completion-v2">
+  <link rel="stylesheet" href="/static/dashboard.css?v=20260826-metric2-paths-v4">
 </head>
 <body>
   <main class="dashboard-shell">
@@ -391,11 +391,19 @@
     <section class="metric2-modal-card">
       <button class="metric2-modal-close" type="button" data-metric2-close aria-label="Закрыть">×</button>
       <div class="metric2-modal-layout">
-        <div id="metric2ModalPreview"></div>
-        <div class="metric2-modal-info"><p class="eyebrow" id="metric2ModalStage"></p><h2 id="metric2ModalTitle"></h2><p id="metric2ModalDescription"></p><div class="metric2-modal-reach" id="metric2ModalReach"></div><h3>Нажатия и переходы</h3><div class="metric2-actions" id="metric2ModalActions"></div></div>
+        <div class="metric2-modal-preview-column"><div id="metric2ModalPreview"></div></div>
+        <div class="metric2-modal-info">
+          <p class="eyebrow" id="metric2ModalStage"></p><h2 id="metric2ModalTitle"></h2><p id="metric2ModalDescription"></p>
+          <h3>Кнопки и действия</h3><div class="metric2-actions" id="metric2ModalActions"></div>
+        </div>
+        <aside class="metric2-modal-stats">
+          <h3>Путь и конверсия</h3>
+          <div class="metric2-modal-reach" id="metric2ModalReach"></div>
+          <div class="metric2-transitions" id="metric2ModalTransitions"></div>
+        </aside>
       </div>
     </section>
   </div>
-  <script src="/static/dashboard.js?v=20260823-skip-completion-v2" defer></script>
+  <script src="/static/dashboard.js?v=20260826-metric2-paths-v4" defer></script>
 </body>
 </html>

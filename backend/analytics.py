@@ -7,6 +7,7 @@ import re
 import sqlite3
 import threading
 import uuid
+from collections import defaultdict
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -812,7 +813,12 @@ def metric2_report(
     period: str = "30", device: str = "", method: str = "", source: str = "",
     date_from: str = "", date_to: str = "",
 ) -> dict:
-    """Return screen-by-screen onboarding analytics without storing answers."""
+    """Return unique-user onboarding paths without storing questionnaire answers.
+
+    A user's route contains only the first visit to every screen.  For example,
+    ``A -> B -> A -> C`` becomes ``A -> B -> C``.  This prevents refreshes,
+    back-navigation and repeated modal opens from inflating reach or transitions.
+    """
     where, params = _filters(period, device, method, source, date_from, date_to)
     join = " FROM analytics_events e LEFT JOIN analytics_sessions s ON s.session_id=e.session_id "
     definitions = _metric2_screen_definitions()
@@ -827,7 +833,10 @@ def metric2_report(
     event_filter = " AND e.event_name IN (" + ",".join("?" for _ in relevant_events) + ")"
     with connection() as conn:
         rows = conn.execute(
-            "SELECT e.event_name, e.chel_id, e.properties" + join + where + event_filter,
+            "SELECT e.rowid event_order, e.event_name, e.chel_id, e.session_id, "
+            "e.properties, e.client_at, e.received_at" + join + where + event_filter +
+            " ORDER BY e.chel_id, COALESCE(NULLIF(e.client_at,''),e.received_at), "
+            "e.received_at, e.rowid",
             [*params, *relevant_events],
         ).fetchall()
         parsed_rows = []
@@ -839,7 +848,11 @@ def metric2_report(
             parsed_rows.append({
                 "event": str(row["event_name"] or ""),
                 "chel_id": str(row["chel_id"] or ""),
+                "session_id": str(row["session_id"] or ""),
                 "properties": properties if isinstance(properties, dict) else {},
+                "client_at": str(row["client_at"] or ""),
+                "received_at": str(row["received_at"] or ""),
+                "event_order": int(row["event_order"] or 0),
             })
 
         def matches(row: dict, spec: dict) -> bool:
@@ -856,35 +869,56 @@ def metric2_report(
                 if row["chel_id"] and any(matches(row, spec) for spec in specs)
             }
 
-        screen_users: dict[str, set[str]] = {}
-        generic_tracking: dict[str, bool] = {}
-        for definition in definitions:
-            generic = _metric2_spec(
-                "onboarding_screen_viewed", screen=definition["id"], context="onboarding",
+        definition_by_id = {definition["id"]: definition for definition in definitions}
+        generic_paths: dict[str, list[tuple[tuple, str]]] = defaultdict(list)
+        legacy_paths: dict[str, list[tuple[tuple, str]]] = defaultdict(list)
+        for row in parsed_rows:
+            chel_id = row["chel_id"]
+            if not chel_id:
+                continue
+            order_key = (
+                row["client_at"] or row["received_at"],
+                row["received_at"], row["event_order"],
             )
-            generic_users = users_for([generic])
-            generic_tracking[definition["id"]] = bool(generic_users)
-            screen_users[definition["id"]] = (
-                generic_users if generic_users
-                else users_for(definition.get("legacy_reach", []))
-            )
+            properties = row["properties"]
+            if (
+                row["event"] == "onboarding_screen_viewed"
+                and properties.get("context") == "onboarding"
+                and properties.get("screen") in definition_by_id
+            ):
+                generic_paths[chel_id].append((order_key, properties["screen"]))
+                continue
+            for definition in definitions:
+                if any(matches(row, spec) for spec in definition.get("legacy_reach", [])):
+                    legacy_paths[chel_id].append((order_key, definition["id"]))
 
-        # A funnel is a cohort, not a collection of unrelated event totals.
-        # Every later screen is therefore limited to users who reached the
-        # preceding main screen; a branch is limited to its parent screen.
-        start_cohort = set(screen_users.get("welcome", set()))
-        previous_main_users = start_cohort
-        for definition in definitions:
-            screen_id = definition["id"]
-            if screen_id == "welcome":
-                screen_users[screen_id] = start_cohort
-            elif definition.get("branch"):
-                screen_users[screen_id] &= screen_users.get(
-                    definition.get("parent_id", ""), set()
-                )
-            else:
-                screen_users[screen_id] &= previous_main_users
-                previous_main_users = screen_users[screen_id]
+        # Modern tracking is authoritative for a user. Legacy reach events are
+        # used only for older users who have no generic screen-view events.
+        canonical_paths: dict[str, list[str]] = {}
+        for chel_id in set(generic_paths) | set(legacy_paths):
+            raw_path = generic_paths.get(chel_id) or legacy_paths.get(chel_id, [])
+            seen, path = set(), []
+            for _, screen_id in sorted(raw_path, key=lambda item: item[0]):
+                if screen_id in seen:
+                    continue
+                seen.add(screen_id)
+                path.append(screen_id)
+            if "welcome" not in path:
+                continue
+            canonical_paths[chel_id] = path[path.index("welcome"):]
+
+        start_cohort = set(canonical_paths)
+        screen_users: dict[str, set[str]] = {
+            definition["id"]: {
+                chel_id for chel_id, path in canonical_paths.items()
+                if definition["id"] in path
+            }
+            for definition in definitions
+        }
+        edge_users: dict[tuple[str, str], set[str]] = defaultdict(set)
+        for chel_id, path in canonical_paths.items():
+            for source_id, target_id in zip(path, path[1:]):
+                edge_users[(source_id, target_id)].add(chel_id)
 
         start_users = len(screen_users.get("welcome", set()))
         result_screens, previous_main_id = [], ""
@@ -892,24 +926,54 @@ def metric2_report(
             screen_id = definition["id"]
             reached = screen_users[screen_id]
             parent_id = definition.get("parent_id") or previous_main_id
-            parent_count = len(screen_users.get(parent_id, set())) if parent_id else 0
+            parent_users = screen_users.get(parent_id, set()) if parent_id else set()
+            parent_count = len(parent_users)
             actions = []
             for action in definition.get("actions", []):
                 generic = _metric2_spec(
                     "onboarding_screen_action", screen=screen_id,
                     action=action["id"], context="onboarding",
                 )
-                action_users = users_for(
-                    [generic] if generic_tracking[screen_id] else action.get("legacy", [])
-                ) & reached
+                action_users = users_for([generic, *action.get("legacy", [])]) & reached
                 target_id = action.get("target", "")
                 actions.append({
                     "id": action["id"], "label": action["label"],
                     "users": len(action_users),
                     "percent_of_screen": round(len(action_users) / len(reached) * 100, 1) if reached else 0.0,
+                    "percent_of_start": round(len(action_users) / start_users * 100, 1) if start_users else 0.0,
                     "target": target_id,
                     "target_label": action.get("target_label", ""),
                 })
+            incoming = []
+            outgoing = []
+            outgoing_user_ids: set[str] = set()
+            for (source_id, target_id), transition_users in edge_users.items():
+                if target_id == screen_id:
+                    source_count = len(screen_users.get(source_id, set()))
+                    incoming.append({
+                        "screen_id": source_id,
+                        "title": definition_by_id[source_id]["title"],
+                        "users": len(transition_users),
+                        "percent_of_screen": round(len(transition_users) / len(reached) * 100, 1) if reached else 0.0,
+                        "percent_of_source": round(len(transition_users) / source_count * 100, 1) if source_count else 0.0,
+                        "percent_of_start": round(len(transition_users) / start_users * 100, 1) if start_users else 0.0,
+                    })
+                if source_id == screen_id:
+                    target_count = len(screen_users.get(target_id, set()))
+                    outgoing_user_ids.update(transition_users)
+                    outgoing.append({
+                        "screen_id": target_id,
+                        "title": definition_by_id[target_id]["title"],
+                        "users": len(transition_users),
+                        "percent_of_screen": round(len(transition_users) / len(reached) * 100, 1) if reached else 0.0,
+                        "percent_of_target": round(len(transition_users) / target_count * 100, 1) if target_count else 0.0,
+                        "percent_of_start": round(len(transition_users) / start_users * 100, 1) if start_users else 0.0,
+                    })
+            incoming.sort(key=lambda item: (-item["users"], item["title"]))
+            outgoing.sort(key=lambda item: (-item["users"], item["title"]))
+            arrived_from_parent = reached & parent_users
+            dropoff_users = max(0, parent_count - len(arrived_from_parent))
+            stopped_users = max(0, len(reached) - len(outgoing_user_ids))
             item = {
                 key: value for key, value in definition.items()
                 if key not in {"legacy_reach", "actions"}
@@ -918,7 +982,20 @@ def metric2_report(
                 "users": len(reached),
                 "percent_of_start": round(len(reached) / start_users * 100, 1) if start_users else 0.0,
                 "comparison_id": parent_id,
-                "percent_of_parent": round(len(reached) / parent_count * 100, 1) if parent_count else (100.0 if screen_id == "welcome" and reached else 0.0),
+                "comparison_users": parent_count,
+                "percent_of_parent": round(len(arrived_from_parent) / parent_count * 100, 1) if parent_count else (100.0 if screen_id == "welcome" and reached else 0.0),
+                "dropoff_users": dropoff_users,
+                "dropoff_percent_of_parent": round(dropoff_users / parent_count * 100, 1) if parent_count else 0.0,
+                "dropoff_percent_of_start": round(dropoff_users / start_users * 100, 1) if start_users else 0.0,
+                "outgoing_users": len(outgoing_user_ids),
+                "outgoing_percent_of_screen": round(len(outgoing_user_ids) / len(reached) * 100, 1) if reached else 0.0,
+                "outgoing_percent_of_start": round(len(outgoing_user_ids) / start_users * 100, 1) if start_users else 0.0,
+                "stopped_users": stopped_users,
+                "stopped_percent_of_screen": round(stopped_users / len(reached) * 100, 1) if reached else 0.0,
+                "stopped_percent_of_start": round(stopped_users / start_users * 100, 1) if start_users else 0.0,
+                "terminal": screen_id in {"completion", "completion_skipped"},
+                "incoming_transitions": incoming,
+                "outgoing_transitions": outgoing,
                 "actions": actions,
             })
             result_screens.append(item)
@@ -950,10 +1027,11 @@ def metric2_report(
                 screen_users.get("completion", set())
                 | screen_users.get("completion_skipped", set())
             ),
+            "unique_transitions": sum(len(users) for users in edge_users.values()),
         },
         "screens": result_screens,
         "filter_options": filter_options,
-        "privacy": "Ответы анкеты и медицинские данные в Метрику 2.0 не передаются.",
+        "privacy": "Каждый пользователь и переход учитываются один раз. Повторные открытия и возвраты не увеличивают показатели; ответы анкеты и медицинские данные не передаются.",
     }
 
 

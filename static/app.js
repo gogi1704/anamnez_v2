@@ -413,7 +413,22 @@ async function continueFromWelcome() {
   }
 }
 
-async function enterKnownUser() {
+function hasCompletedQuestionnaire(onboarding) {
+  return Boolean(
+    onboarding?.profile?.updated_at
+    && ['exams','payment','complete'].includes(onboarding?.status)
+  );
+}
+
+async function enterKnownUser({ messengerLogin = false } = {}) {
+  if (messengerLogin) {
+    const onboarding = await api('/api/onboarding');
+    if (hasCompletedQuestionnaire(onboarding)) {
+      localStorage.setItem(WELCOME_SEEN_KEY, '1');
+      await startApplication({ openCompletedMessengerAccount:true, initialOnboarding:onboarding });
+      return;
+    }
+  }
   if (localStorage.getItem(WELCOME_SEEN_KEY)) {
     await startApplication();
     return;
@@ -525,11 +540,11 @@ function closeAnonymousWarning() {
   $('#anonymousWarning').classList.add('hidden');
 }
 
-async function startApplication() {
+async function startApplication(options = {}) {
   $('#welcomeScreen').classList.add('hidden');
   $('#authGate').classList.add('hidden');
   closeAnonymousWarning();
-  await loadOnboarding();
+  await loadOnboarding(options);
 }
 
 $('#welcomeNextButton').addEventListener('click', continueFromWelcome);
@@ -1159,13 +1174,16 @@ async function finishExamOnboarding(installApp = false) {
   }
 }
 
-async function loadOnboarding() {
+async function loadOnboarding({ openCompletedMessengerAccount = false, initialOnboarding = null } = {}) {
   state.returnToChatAfterExaminations = false;
-  state.onboarding = await api('/api/onboarding');
+  state.onboarding = initialOnboarding || await api('/api/onboarding');
   applyFontSize(state.onboarding.font_size || 'extra');
   state.profile = state.onboarding.profile;
   seedOnboardingAnswers(state.profile);
   state.selectedTests = new Set(state.onboarding.selected_tests || []);
+  if (openCompletedMessengerAccount && hasCompletedQuestionnaire(state.onboarding)) {
+    return openMainApp({ skipIntro:true });
+  }
   if (state.onboarding.status === 'complete') {
     if (
       state.onboarding.payment_status === 'skipped'
@@ -1567,8 +1585,6 @@ function renderInsights() {
   $('#urgencyMarker').style.left = `${position}%`;
   $('#urgencyLabel').textContent = label;
   $('#stateTopic').textContent = context.current_topic || 'Тема уточняется';
-  const count = context.open_questions?.length || 0;
-  $('#stateQuestions').textContent = count ? `Осталось вопросов: ${count}` : 'Вопросы собраны';
 }
 
 async function loadConversationList() {
@@ -2793,11 +2809,17 @@ async function init() {
     updateMessengerLinkMenu();
     const entryParams = new URLSearchParams(window.location.search);
     const messengerLoginRequired = entryParams.get('auth') === 'messenger_required';
+    const messengerLoginCompleted = entryParams.get('auth') === 'messenger_login';
     const forceWelcomePreview = entryParams.get('welcome') === '1';
+    if (messengerLoginCompleted) {
+      entryParams.delete('auth');
+      const cleanQuery = entryParams.toString();
+      history.replaceState({}, '', `${window.location.pathname}${cleanQuery ? `?${cleanQuery}` : ''}`);
+    }
     if (identity.authenticated) {
       localStorage.removeItem(ANONYMOUS_ACCESS_KEY);
       if (forceWelcomePreview) showWelcome(startApplication);
-      else if (!(await handlePaymentReturn())) await enterKnownUser();
+      else if (!(await handlePaymentReturn())) await enterKnownUser({messengerLogin:messengerLoginCompleted});
     } else if (messengerLoginRequired) {
       showAuthGate();
       setAuthStatus('Эта ссылка принадлежит другому пользователю. Войдите через свой мессенджер.', true);

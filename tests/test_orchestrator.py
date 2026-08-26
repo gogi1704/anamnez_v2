@@ -16,6 +16,7 @@ os.environ["ANALYTICS_DATABASE_PATH"] = str(Path(_temp_dir.name) / "analytics.db
 from backend import analytics
 from backend import database as db  # noqa: E402
 from backend.ai_costs import usage_record  # noqa: E402
+from backend.config import settings  # noqa: E402
 from backend.lab_results import (  # noqa: E402
     LabResult, extract_urls, lab_result_documents, normalize_med_id,
 )
@@ -310,7 +311,7 @@ class OrchestratorTests(unittest.TestCase):
         self.assertEqual(result.assistant_message["metadata"]["assessment_questions_asked"], 2)
         self.assertEqual(result.assistant_message["metadata"]["assessment_questions_total"], 2)
 
-    def test_medical_assessment_stops_after_five_questions_and_offers_human(self):
+    def test_medical_dialogue_does_not_force_human_after_five_questions(self):
         service = ConversationOrchestrator(QuestioningMedicalLLM())
         first = service.process(None, "У меня кашель")
         second = service.process(first.conversation_id, "Начался вчера, температура 37,5")
@@ -319,13 +320,14 @@ class OrchestratorTests(unittest.TestCase):
 
         self.assertEqual(first.assistant_message["metadata"]["assessment_questions_asked"], 2)
         self.assertEqual(second.assistant_message["metadata"]["assessment_questions_asked"], 2)
-        self.assertEqual(third.assistant_message["metadata"]["assessment_questions_asked"], 1)
-        self.assertEqual(third.assistant_message["metadata"]["assessment_questions_total"], 5)
-        self.assertTrue(fourth.human_escalation)
-        self.assertEqual(fourth.agent, "manager")
-        self.assertIn("подтверждения", fourth.assistant_message["content"])
+        self.assertEqual(third.assistant_message["metadata"]["assessment_questions_asked"], 2)
+        self.assertEqual(third.assistant_message["metadata"]["assessment_questions_total"], 6)
+        self.assertFalse(fourth.human_escalation)
+        self.assertEqual(fourth.agent, "therapist")
+        self.assertEqual(fourth.assistant_message["content"].count("?"), 2)
+        self.assertEqual(fourth.assistant_message["metadata"]["assessment_questions_total"], 8)
 
-    def test_medical_agent_can_offer_human_before_question_limit_when_context_is_sufficient(self):
+    def test_medical_agent_can_offer_human_when_context_makes_it_useful(self):
         service = ConversationOrchestrator(EarlyHumanMedicalLLM())
         first = service.process(None, "У меня второй день болит горло")
         second = service.process(first.conversation_id, "Температуры нет, становится легче")
@@ -333,6 +335,44 @@ class OrchestratorTests(unittest.TestCase):
         self.assertEqual(first.assistant_message["metadata"]["assessment_questions_asked"], 2)
         self.assertTrue(second.human_escalation)
         self.assertIn("подтверждения", second.assistant_message["content"])
+
+    def test_history_context_is_bounded_by_messages_and_characters(self):
+        history = [
+            {"id": index, "role": "user", "content": str(index) * 700, "metadata": {}}
+            for index in range(1, 8)
+        ]
+        bounded = ConversationOrchestrator._bound_history(history, 1600)
+
+        self.assertEqual([item["id"] for item in bounded], [6, 7])
+        self.assertLessEqual(sum(len(item["content"]) for item in bounded), 1600)
+        self.assertEqual(bounded[-1]["content"], history[-1]["content"])
+
+        oversized = ConversationOrchestrator._bound_history([
+            {"id": 1, "role": "user", "content": "начало" + "я" * 2500, "metadata": {}},
+        ], 1000)
+        self.assertEqual(len(oversized), 1)
+        self.assertEqual(len(oversized[0]["content"]), 1000)
+        self.assertTrue(oversized[0]["content"].endswith("я" * 100))
+
+    def test_long_dialogue_warns_once_before_context_window_is_full(self):
+        conversation = db.create_conversation("Длинный диалог")
+        for index in range(settings.max_history_messages - 5):
+            db.add_message(
+                conversation["id"],
+                "user" if index % 2 == 0 else "assistant",
+                f"Сообщение {index + 1}",
+                "therapist" if index % 2 else None,
+            )
+
+        service = ConversationOrchestrator(FakeLLM())
+        warned = service.process(conversation["id"], "Продолжим обсуждение")
+        repeated = service.process(conversation["id"], "Ещё один вопрос")
+
+        self.assertTrue(warned.assistant_message["metadata"]["context_limit_warning"])
+        self.assertIn("Диалог стал длинным", warned.assistant_message["content"])
+        self.assertIn("последних 30 сообщений", warned.assistant_message["content"])
+        self.assertFalse(repeated.assistant_message["metadata"]["context_limit_warning"])
+        self.assertNotIn("Диалог стал длинным", repeated.assistant_message["content"])
 
     def test_human_reminder_has_two_blank_lines(self):
         text = "Да, я здесь. Обращение H-939398 уже передано человеку; ожидайте ответа специалиста."
@@ -703,6 +743,9 @@ class OrchestratorTests(unittest.TestCase):
         self.assertNotIn("Команда агентов", public_ui)
         self.assertNotIn("План проекта", public_ui)
         self.assertIn("Медицинский помощник", public_ui)
+        self.assertNotIn('id="stateQuestions"', index)
+        self.assertNotIn("Осталось вопросов", script)
+        self.assertNotIn("Вопросы собраны", script)
 
         manager_prompt = PROFILES["manager"].prompt
         lifestyle_prompt = PROFILES["general"].prompt
@@ -999,7 +1042,7 @@ class OrchestratorTests(unittest.TestCase):
         rich_script = (project_root / "static" / "rich-text.js").read_text(encoding="utf-8")
         rich_styles = (project_root / "static" / "rich-text.css").read_text(encoding="utf-8")
 
-        self.assertIn('/static/rich-text.js?v=20260823-skip-completion-v2', index)
+        self.assertIn('/static/rich-text.js?v=20260825-messenger-return-v1', index)
         self.assertIn('/static/rich-text.js?v=20260816-rich-text', manager_html)
         self.assertIn('window.ConsiliumRichText.render(value)', app_script)
         self.assertIn('window.ConsiliumRichText.render(value)', manager_script)
@@ -1394,8 +1437,11 @@ class OrchestratorTests(unittest.TestCase):
         self.assertIn("params.set('date_from', dateFrom)", script)
         self.assertIn("function metric2PreviewMarkup", script)
         self.assertIn("function openMetric2Screen", script)
+        self.assertIn("row.dataset.metric2Screen = item.screen_id", script)
+        self.assertIn("screenLink.dataset.metric2Screen", script)
         self.assertIn(".metric2-screen-row", styles)
         self.assertIn(".metric2-modal-layout", styles)
+        self.assertIn(".metric2-transition-row:hover", styles)
         self.assertIn('id="costSummaryGrid"', dashboard)
         self.assertIn('id="costModelsTable"', dashboard)
         self.assertIn('id="examinationForm"', dashboard)
@@ -2174,14 +2220,14 @@ class OrchestratorTests(unittest.TestCase):
         self.assertIn("controllerchange", script)
         self.assertIn("url.pathname.startsWith('/api/')", worker)
         self.assertIn("url.pathname.startsWith('/auth/')", worker)
-        self.assertIn("consilium-shell-v69", worker)
+        self.assertIn("consilium-shell-v71", worker)
         self.assertIn("fetch(request)", worker)
         self.assertIn("/static/styles.07ffaefb4795.css", index)
         self.assertIn("/static/rich-text.2bf1f5fab764.css", index)
         self.assertTrue((project_root / "static" / "styles.07ffaefb4795.css").is_file())
         self.assertTrue((project_root / "static" / "rich-text.2bf1f5fab764.css").is_file())
-        self.assertIn("/static/app.js?v=20260823-skip-completion-v2", index)
-        self.assertIn("/static/metrika.js?v=20260823-skip-completion-v2", index)
+        self.assertIn("/static/app.js?v=20260825-messenger-return-v1", index)
+        self.assertIn("/static/metrika.js?v=20260825-messenger-return-v1", index)
         self.assertIn('id="welcomeScreen"', index)
         self.assertIn('id="welcomeNextButton"', index)
         self.assertIn("WELCOME_SEEN_KEY", script)
@@ -2211,7 +2257,7 @@ class OrchestratorTests(unittest.TestCase):
         main = (project_root / "backend" / "main.py").read_text(encoding="utf-8")
         config = (project_root / "backend" / "config.py").read_text(encoding="utf-8")
 
-        self.assertIn('src="/static/metrika.js?v=20260823-skip-completion-v2"', index)
+        self.assertIn('src="/static/metrika.js?v=20260825-messenger-return-v1"', index)
         self.assertIn('YANDEX_METRIKA_COUNTER_ID', config)
         self.assertIn('path == "/api/public-config"', main)
         self.assertIn('"metrika.js"', main)
@@ -2435,7 +2481,10 @@ class OrchestratorTests(unittest.TestCase):
             handler = FakeHandler("consilium_session=matching-session")
             ConsiliumHandler._consume_messenger_login(handler, "used-token")
             self.assertEqual(handler.status, 303)
-            self.assertEqual(handler.response_headers["Location"], "/")
+            self.assertEqual(
+                handler.response_headers["Location"],
+                "/?auth=messenger_login",
+            )
             set_current.assert_called_once_with("chel_owner")
 
         with (
@@ -2503,6 +2552,18 @@ class OrchestratorTests(unittest.TestCase):
         self.assertIn("/api/auth/messenger/start", script)
         self.assertIn("identity.authenticated", script)
 
+    def test_returning_messenger_user_with_questionnaire_opens_chat_directly(self):
+        project_root = Path(__file__).resolve().parents[1]
+        script = (project_root / "static" / "app.js").read_text(encoding="utf-8")
+        main_source = (project_root / "backend" / "main.py").read_text(encoding="utf-8")
+        self.assertIn('entryParams.get(\'auth\') === \'messenger_login\'', script)
+        self.assertIn("function hasCompletedQuestionnaire(onboarding)", script)
+        self.assertIn("onboarding?.profile?.updated_at", script)
+        self.assertIn("['exams','payment','complete'].includes(onboarding?.status)", script)
+        self.assertIn("openCompletedMessengerAccount:true", script)
+        self.assertIn("return openMainApp({ skipIntro:true });", script)
+        self.assertIn('self.send_header("Location", "/?auth=messenger_login")', main_source)
+
     def test_messenger_can_be_linked_from_menu_and_after_examinations(self):
         project_root = Path(__file__).resolve().parents[1]
         index = (project_root / "index.html").read_text(encoding="utf-8")
@@ -2553,7 +2614,9 @@ class OrchestratorTests(unittest.TestCase):
         self.assertEqual(state["font_size"], "large")
         self.assertEqual(len(TEST_CATALOG), 22)
         self.assertIn("fatigue_basic", recommend_test_ids(profile))
+        self.assertIn("fatigue_extended", recommend_test_ids(profile))
         self.assertIn("weight_basic", recommend_test_ids(profile))
+        self.assertIn("weight_extended", recommend_test_ids(profile))
 
     def test_extended_examinations_replace_matching_basic_complexes(self):
         self.assertEqual(EXAMINATION_UPGRADE_PAIRS, {

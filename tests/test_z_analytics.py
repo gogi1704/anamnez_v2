@@ -237,6 +237,40 @@ class AnalyticsTests(unittest.TestCase):
         self.assertEqual(screens["exam_selection"]["users"], 0)
         self.assertNotIn("chat", [item["id"] for item in report["screens"]])
 
+    def test_metric2_builds_unique_paths_and_ignores_repeated_views(self):
+        analytics.record_events("CHEL-METRIC-PATH-ONE", [
+            {"event_id": "path-one-welcome", "session_id": "path-session-one", "event_name": "onboarding_screen_viewed", "properties": {"screen": "welcome", "context": "onboarding"}},
+            {"event_id": "path-one-registration", "session_id": "path-session-one", "event_name": "onboarding_screen_viewed", "properties": {"screen": "registration", "context": "onboarding"}},
+            {"event_id": "path-one-warning", "session_id": "path-session-one", "event_name": "onboarding_screen_viewed", "properties": {"screen": "anonymous_warning", "context": "onboarding"}},
+            {"event_id": "path-one-registration-return", "session_id": "path-session-one", "event_name": "onboarding_screen_viewed", "properties": {"screen": "registration", "context": "onboarding"}},
+            {"event_id": "path-one-warning-repeat", "session_id": "path-session-one", "event_name": "onboarding_screen_viewed", "properties": {"screen": "anonymous_warning", "context": "onboarding"}},
+            {"event_id": "path-one-appearance", "session_id": "path-session-one", "event_name": "onboarding_screen_viewed", "properties": {"screen": "appearance", "context": "onboarding"}},
+        ])
+        analytics.record_events("CHEL-METRIC-PATH-TWO", [
+            {"event_id": "path-two-welcome", "session_id": "path-session-two", "event_name": "onboarding_screen_viewed", "properties": {"screen": "welcome", "context": "onboarding"}},
+            {"event_id": "path-two-registration", "session_id": "path-session-two", "event_name": "onboarding_screen_viewed", "properties": {"screen": "registration", "context": "onboarding"}},
+        ])
+        analytics.record_events("CHEL-METRIC-PATH-THREE", [{
+            "event_id": "path-three-welcome", "session_id": "path-session-three",
+            "event_name": "onboarding_screen_viewed",
+            "properties": {"screen": "welcome", "context": "onboarding"},
+        }])
+
+        report = analytics.metric2_report("30")
+        screens = {item["id"]: item for item in report["screens"]}
+        self.assertEqual(report["summary"]["start_users"], 3)
+        self.assertEqual(screens["registration"]["users"], 2)
+        self.assertEqual(screens["registration"]["outgoing_users"], 1)
+        self.assertEqual(screens["registration"]["stopped_users"], 1)
+        self.assertEqual(screens["appearance"]["users"], 1)
+        self.assertEqual(screens["appearance"]["dropoff_users"], 1)
+        self.assertEqual(screens["appearance"]["dropoff_percent_of_parent"], 50.0)
+        warning_destinations = {
+            item["screen_id"]: item for item in screens["anonymous_warning"]["outgoing_transitions"]
+        }
+        self.assertEqual(warning_destinations["appearance"]["users"], 1)
+        self.assertNotIn("registration", warning_destinations)
+
     def test_metric2_reports_skipped_examinations_completion_screen(self):
         events = []
         for index, definition in enumerate(analytics._metric2_screen_definitions()):

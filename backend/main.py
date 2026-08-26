@@ -1062,7 +1062,7 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                 db.set_current_chel_id(owner_chel_id)
                 self.send_response(303)
                 self._send_security_headers()
-                self.send_header("Location", "/")
+                self.send_header("Location", "/?auth=messenger_login")
                 self.send_header("Cache-Control", "no-store")
                 self.end_headers()
                 return
@@ -1084,7 +1084,7 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
         })
         self.send_response(303)
         self._send_security_headers()
-        self.send_header("Location", "/")
+        self.send_header("Location", "/?auth=messenger_login")
         self.send_header("Cache-Control", "no-store")
         self._send_session_cookie(login["session"])
         self.send_header(

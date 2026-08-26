@@ -48,7 +48,6 @@ MEDICAL_AGENTS = {
     "therapist", "cardiologist", "neurologist", "dermatologist",
     "pediatrician", "psychologist",
 }
-ASSESSMENT_QUESTION_LIMIT = 5
 QUESTIONS_PER_MESSAGE_LIMIT = 2
 
 
@@ -99,7 +98,7 @@ class ConversationOrchestrator:
         previous_agent = conversation["active_agent"]
         attachment_meta = [{"name": item.get("name"), "type": item.get("type")} for item in (attachments or [])]
         user_message = db.add_message(conversation_id, "user", user_text, metadata={"attachments": attachment_meta})
-        history = db.list_messages(conversation_id, settings.max_history_messages)
+        history = self._recent_history(conversation_id)
         previous_context = self._load_context(conversation.get("context_summary", ""))
         previous_question_count = self._assessment_question_count(
             history, previous_context.get("current_topic", "")
@@ -162,9 +161,8 @@ class ConversationOrchestrator:
             result = self.llm.answer(target, history, context, decision, conversation, attachments)
             answer = result.message
             urgency = result.urgency
-            remaining_questions = max(0, ASSESSMENT_QUESTION_LIMIT - question_count_before)
             if target in MEDICAL_AGENTS:
-                per_turn_limit = min(QUESTIONS_PER_MESSAGE_LIMIT, remaining_questions)
+                per_turn_limit = QUESTIONS_PER_MESSAGE_LIMIT
                 answer = self._limit_questions(answer, per_turn_limit)
                 missing_information = result.missing_information[:per_turn_limit]
                 if result.next_action == "ask":
@@ -172,15 +170,6 @@ class ConversationOrchestrator:
                         per_turn_limit,
                         max(self._question_count(answer), len(missing_information)),
                     )
-                if question_count_before >= ASSESSMENT_QUESTION_LIMIT and result.next_action != "emergency":
-                    result.next_action = "human"
-                    result.handoff_reason = (
-                        "Собран максимально допустимый объём уточнений; "
-                        "пора предложить чат с медицинским специалистом"
-                    )
-                    answer = ""
-                    missing_information = []
-                    assessment_questions_this_turn = 0
             else:
                 missing_information = result.missing_information
 
@@ -199,10 +188,7 @@ class ConversationOrchestrator:
                 urgency = second_result.urgency
                 missing_information = second_result.missing_information
                 if target in MEDICAL_AGENTS:
-                    per_turn_limit = min(
-                        QUESTIONS_PER_MESSAGE_LIMIT,
-                        max(0, ASSESSMENT_QUESTION_LIMIT - question_count_before),
-                    )
+                    per_turn_limit = QUESTIONS_PER_MESSAGE_LIMIT
                     answer = self._limit_questions(answer, per_turn_limit)
                     missing_information = second_result.missing_information[:per_turn_limit]
                     if second_result.next_action == "ask":
@@ -210,18 +196,6 @@ class ConversationOrchestrator:
                             per_turn_limit,
                             max(self._question_count(answer), len(missing_information)),
                         )
-                    if (
-                        question_count_before >= ASSESSMENT_QUESTION_LIMIT
-                        and second_result.next_action != "emergency"
-                    ):
-                        second_result.next_action = "human"
-                        second_result.handoff_reason = (
-                            "Собран максимально допустимый объём уточнений; "
-                            "пора предложить чат с медицинским специалистом"
-                        )
-                        answer = ""
-                        missing_information = []
-                        assessment_questions_this_turn = 0
                 if second_result.next_action == "human":
                     human_decision = RouteDecision("human", "manager", second_result.handoff_reason, context)
                     human_ticket_id, answer = self._prepare_human_handoff(
@@ -272,6 +246,26 @@ class ConversationOrchestrator:
                 emergency = True
 
         answer = self._format_human_reminder(answer)
+        context_limit_warning = False
+        if action not in {"human", "emergency"}:
+            context_usage = db.conversation_context_usage(conversation_id)
+            warning_message_threshold = max(4, settings.max_history_messages - 4)
+            warning_char_threshold = max(1000, int(settings.max_history_chars * 0.85))
+            context_limit_warning = bool(
+                not context_usage["warning_shown"]
+                and (
+                    context_usage["message_count"] >= warning_message_threshold
+                    or context_usage["content_chars"] >= warning_char_threshold
+                )
+            )
+            if context_limit_warning:
+                answer = (
+                    f"{answer}\n\n"
+                    "💡 **Диалог стал длинным.** Скоро часть ранних сообщений может "
+                    f"перестать попадать в контекст: я учитываю до последних "
+                    f"{settings.max_history_messages} сообщений. Если хотите обсудить "
+                    "новую тему и сохранить её полный контекст, лучше начать новый диалог."
+                )
         metadata = {
             "action": action,
             "handoff_from": handoff_from,
@@ -283,12 +277,10 @@ class ConversationOrchestrator:
             "urgency": urgency,
             "missing_information": missing_information,
             "assessment_questions_asked": assessment_questions_this_turn,
-            "assessment_questions_total": min(
-                ASSESSMENT_QUESTION_LIMIT,
-                question_count_before + assessment_questions_this_turn,
-            ),
+            "assessment_questions_total": question_count_before + assessment_questions_this_turn,
             "assessment_topic": context.get("current_topic", ""),
             "attachments": attachment_meta,
+            "context_limit_warning": context_limit_warning,
         }
         assistant_message = db.add_message(conversation_id, "assistant", answer, target, metadata)
         status = (
@@ -607,7 +599,7 @@ class ConversationOrchestrator:
         conversation["_messenger_access"] = _messenger_access_for_ai()
         conversation["_body_symptoms"] = db.list_body_symptoms(status="active", limit=20)
         context = self._load_context(conversation.get("context_summary", ""))
-        history = db.list_messages(conversation_id, settings.max_history_messages)
+        history = self._recent_history(conversation_id)
         primary = conversation.get("active_agent", "therapist")
         alternate = self._council_agents(primary)[0]
         decision = RouteDecision("handoff", alternate, f"Независимое второе мнение после {primary}", context)
@@ -628,7 +620,7 @@ class ConversationOrchestrator:
         conversation["_messenger_access"] = _messenger_access_for_ai()
         conversation["_body_symptoms"] = db.list_body_symptoms(status="active", limit=20)
         context = self._load_context(conversation.get("context_summary", ""))
-        history = db.list_messages(conversation_id, settings.max_history_messages)
+        history = self._recent_history(conversation_id)
         primary = conversation.get("active_agent", "therapist")
         agents = [primary] + [agent for agent in self._council_agents(primary) if agent != primary]
         agents = [agent for agent in agents if agent not in {"manager", "safety", "general"}][:3]
@@ -748,6 +740,35 @@ class ConversationOrchestrator:
     def _question_count(text: str) -> int:
         return len(re.findall(r"\?", text or ""))
 
+    @staticmethod
+    def _bound_history(history: list[dict], max_chars: int) -> list[dict]:
+        """Keep the newest complete turns within a predictable text budget.
+
+        Questionnaire data and the accumulated structured summary are supplied to
+        the model separately, so older transcript text can be dropped safely.  The
+        newest message is always retained; an exceptionally long one is truncated
+        from the beginning so that the user's latest wording remains available.
+        """
+        budget = max(1000, int(max_chars or 0))
+        selected: list[dict] = []
+        used = 0
+        for message in reversed(history):
+            content = str(message.get("content", ""))
+            cost = len(content)
+            if selected and used + cost > budget:
+                break
+            item = message
+            if not selected and cost > budget:
+                item = {**message, "content": content[-budget:]}
+                cost = budget
+            selected.append(item)
+            used += cost
+        return list(reversed(selected))
+
+    def _recent_history(self, conversation_id: str) -> list[dict]:
+        history = db.list_messages(conversation_id, settings.max_history_messages)
+        return self._bound_history(history, settings.max_history_chars)
+
     @classmethod
     def _limit_questions(cls, text: str, limit: int) -> str:
         """Оставляет в ответе не больше limit явных вопросов, сохраняя пояснения."""
@@ -794,19 +815,19 @@ class ConversationOrchestrator:
                 total += max(0, min(QUESTIONS_PER_MESSAGE_LIMIT, int(stored)))
             except (TypeError, ValueError):
                 continue
-        return min(ASSESSMENT_QUESTION_LIMIT, total)
+        return total
 
     @staticmethod
     def _consultation_progress(question_count: int) -> dict:
-        asked = max(0, min(ASSESSMENT_QUESTION_LIMIT, int(question_count)))
+        asked = max(0, int(question_count))
         return {
             "questions_asked": asked,
-            "question_limit": ASSESSMENT_QUESTION_LIMIT,
-            "remaining_questions": ASSESSMENT_QUESTION_LIMIT - asked,
             "questions_per_message_limit": QUESTIONS_PER_MESSAGE_LIMIT,
+            "unlimited_dialogue": True,
             "instruction": (
-                "Задай только 1–2 наиболее важных вопроса и дождись ответа. "
-                "Когда данных достаточно или remaining_questions=0, верни next_action=human."
+                "Общение не ограничено числом реплик. Если уточнение необходимо, "
+                "задай только 1–2 наиболее важных вопроса и дождись ответа. "
+                "Не предлагай человека автоматически из-за количества вопросов."
             ),
         }
 

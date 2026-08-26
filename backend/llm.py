@@ -178,9 +178,12 @@ class LLMService:
             "active_body_symptoms": conversation.get("_body_symptoms", []),
             "consultation_progress": conversation.get("_consultation_progress", {
                 "questions_asked": 0,
-                "question_limit": 5,
-                "remaining_questions": 5,
-                "instruction": "Если это медицинская жалоба, задавай по 1–2 вопроса за реплику.",
+                "questions_per_message_limit": 2,
+                "unlimited_dialogue": True,
+                "instruction": (
+                    "Можно продолжать диалог без общего лимита. Задавай не больше "
+                    "1–2 действительно нужных вопросов за реплику."
+                ),
             }),
             "latest_user_message": latest_user_message,
             "context": normalized_context,

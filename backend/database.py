@@ -3090,6 +3090,27 @@ def list_messages(conversation_id: str, limit: int | None = None) -> list[dict]:
     return result
 
 
+def conversation_context_usage(conversation_id: str) -> dict:
+    """Return lightweight transcript usage data for the context-limit notice."""
+    with connection() as conn:
+        row = conn.execute(
+            """SELECT COUNT(m.id) AS message_count,
+                COALESCE(SUM(LENGTH(m.content)), 0) AS content_chars,
+                COALESCE(MAX(CASE
+                    WHEN m.metadata LIKE '%\"context_limit_warning\": true%' THEN 1
+                    ELSE 0 END), 0) AS warning_shown
+            FROM messages m
+            JOIN conversations c ON c.id = m.conversation_id
+            WHERE m.conversation_id = ? AND c.chel_id = ?""",
+            (conversation_id, current_chel_id()),
+        ).fetchone()
+    return {
+        "message_count": int(row["message_count"] or 0),
+        "content_chars": int(row["content_chars"] or 0),
+        "warning_shown": bool(row["warning_shown"]),
+    }
+
+
 def list_messages_after(conversation_id: str, after_id: int = 0) -> list[dict]:
     with connection() as conn:
         rows = conn.execute(
