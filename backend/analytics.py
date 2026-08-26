@@ -176,8 +176,8 @@ def _metric2_screen_definitions() -> list[dict]:
             "kind": "registration", "description": "Telegram, MAX или анонимный вход.",
             "legacy_reach": [_metric2_spec("auth_gate_viewed")],
             "actions": [
-                {"id": "telegram", "label": "Продолжить с Telegram", "legacy": [_metric2_spec("registration_method_selected", provider="telegram")]},
-                {"id": "max", "label": "Продолжить с MAX", "legacy": [_metric2_spec("registration_method_selected", provider="max")]},
+                {"id": "telegram", "label": "Продолжить с Telegram", "target": "appearance", "legacy": [_metric2_spec("registration_method_selected", provider="telegram")]},
+                {"id": "max", "label": "Продолжить с MAX", "target": "appearance", "legacy": [_metric2_spec("registration_method_selected", provider="max")]},
                 {"id": "anonymous", "label": "Войти анонимно", "target": "anonymous_warning", "legacy": [_metric2_spec("anonymous_warning_viewed")]},
             ],
         },
@@ -197,9 +197,9 @@ def _metric2_screen_definitions() -> list[dict]:
             "kind": "appearance", "description": "Размер интерфейса перед анкетой.",
             "legacy_reach": [_metric2_spec("appearance_viewed")],
             "actions": [
-                {"id": "size_standard", "label": "Обычный", "legacy": [_metric2_spec("appearance_completed", font_size="standard")]},
-                {"id": "size_large", "label": "Крупный", "legacy": [_metric2_spec("appearance_completed", font_size="large")]},
-                {"id": "size_extra", "label": "Очень крупный", "legacy": [_metric2_spec("appearance_completed", font_size="extra")]},
+                {"id": "size_standard", "label": "Обычный", "exclusive_group": "font_size", "legacy": [_metric2_spec("appearance_completed", font_size="standard")]},
+                {"id": "size_large", "label": "Крупный", "exclusive_group": "font_size", "legacy": [_metric2_spec("appearance_completed", font_size="large")]},
+                {"id": "size_extra", "label": "Очень крупный", "exclusive_group": "font_size", "legacy": [_metric2_spec("appearance_completed", font_size="extra")]},
                 {"id": "continue", "label": "Продолжить", "target": "question_company_inn", "legacy": []},
             ],
         },
@@ -232,7 +232,7 @@ def _metric2_screen_definitions() -> list[dict]:
         if index:
             actions.append({"id": "back", "label": "Назад", "target": previous_target, "legacy": []})
         if key == "company_inn":
-            actions.append({"id": "not_medical_exam", "label": "Я не на мед-осмотр", "target_label": "Переход в сервис", "legacy": [_metric2_spec("not_medical_exam_selected")]})
+            actions.append({"id": "not_medical_exam", "label": "Я не на мед-осмотр", "target_label": "Переход в сервис", "terminal_outcome": True, "legacy": [_metric2_spec("not_medical_exam_selected")]})
         screens.append({
             "id": f"question_{key}", "title": title, "stage": f"Анкета · {index + 1}/{len(METRIC2_QUESTIONS)}",
             "kind": f"question_{kind}", "question_key": key,
@@ -306,7 +306,7 @@ def _metric2_screen_definitions() -> list[dict]:
             "legacy_reach": [_metric2_spec("completion_viewed")],
             "actions": [
                 {"id": "install", "label": "Установить приложение", "target_label": "Установка приложения", "legacy": [_metric2_spec("install_clicked", screen="exam_completion")]},
-                {"id": "later", "label": "Установлю позже", "target_label": "Переход в сервис", "legacy": [_metric2_spec("install_dismissed", screen="exam_completion")]},
+                {"id": "later", "label": "Установлю позже", "target_label": "Переход в сервис", "terminal_outcome": True, "legacy": [_metric2_spec("install_dismissed", screen="exam_completion")]},
                 {"id": "link_messenger", "label": "Привязать мессенджер", "target_label": "Привязка мессенджера", "legacy": [_metric2_spec("messenger_link_modal_viewed", source="exam_completion")]},
             ],
         },
@@ -317,7 +317,7 @@ def _metric2_screen_definitions() -> list[dict]:
             "legacy_reach": [_metric2_spec("completion_skipped_viewed")],
             "actions": [
                 {"id": "install", "label": "Установить приложение", "target_label": "Установка приложения", "legacy": [_metric2_spec("install_clicked", screen="exam_skip_completion")]},
-                {"id": "continue", "label": "Перейти в Консилиум", "target_label": "Переход в сервис", "legacy": [_metric2_spec("install_dismissed", screen="exam_skip_completion")]},
+                {"id": "continue", "label": "Перейти в Консилиум", "target_label": "Переход в сервис", "terminal_outcome": True, "legacy": [_metric2_spec("install_dismissed", screen="exam_skip_completion")]},
                 {"id": "link_messenger", "label": "Привязать мессенджер", "target_label": "Привязка мессенджера", "legacy": [_metric2_spec("messenger_link_modal_viewed", source="exam_skip_completion")]},
             ],
         },
@@ -962,13 +962,47 @@ def metric2_report(
             parent_users = screen_users.get(parent_id, set()) if parent_id else set()
             parent_count = len(parent_users)
             actions = []
+            grouped_actions: dict[str, list[dict]] = defaultdict(list)
+            for action in definition.get("actions", []):
+                if action.get("target") or action.get("terminal_outcome"):
+                    grouped_actions["final_transition"].append(action)
+                elif action.get("exclusive_group"):
+                    grouped_actions[f"choice:{action['exclusive_group']}"].append(action)
+            final_group_action: dict[tuple[str, str], str] = {}
+            for row in parsed_rows:
+                chel_id = row["chel_id"]
+                if not chel_id or chel_id not in reached:
+                    continue
+                for group_id, group_actions in grouped_actions.items():
+                    for action in group_actions:
+                        generic = _metric2_spec(
+                            "onboarding_screen_action", screen=screen_id,
+                            action=action["id"], context="onboarding",
+                        )
+                        if any(matches(row, spec) for spec in [generic, *action.get("legacy", [])]):
+                            # Rows are chronological. Only the last choice in
+                            # an exclusive group represents the final outcome.
+                            final_group_action[(group_id, chel_id)] = action["id"]
+                            break
             for action in definition.get("actions", []):
                 generic = _metric2_spec(
                     "onboarding_screen_action", screen=screen_id,
                     action=action["id"], context="onboarding",
                 )
-                action_users = users_for([generic, *action.get("legacy", [])]) & reached
                 target_id = action.get("target", "")
+                if target_id or action.get("terminal_outcome"):
+                    action_group = "final_transition"
+                elif action.get("exclusive_group"):
+                    action_group = f"choice:{action['exclusive_group']}"
+                else:
+                    action_group = ""
+                if action_group:
+                    action_users = {
+                        chel_id for (group_id, chel_id), action_id in final_group_action.items()
+                        if group_id == action_group and action_id == action["id"]
+                    }
+                else:
+                    action_users = users_for([generic, *action.get("legacy", [])]) & reached
                 actions.append({
                     "id": action["id"], "label": action["label"],
                     "users": len(action_users),
@@ -976,17 +1010,25 @@ def metric2_report(
                     "percent_of_start": round(len(action_users) / start_users * 100, 1) if start_users else 0.0,
                     "target": target_id,
                     "target_label": action.get("target_label", ""),
+                    "counting_mode": (
+                        "final_transition" if action_group == "final_transition"
+                        else "final_choice" if action_group else "interaction"
+                    ),
                 })
             incoming = []
             outgoing = []
             outgoing_user_ids: set[str] = set()
+            incomplete_transition_user_ids: set[str] = set()
             for (source_id, target_id), transition_users in edge_users.items():
+                direct_transition = is_direct_transition(source_id, target_id)
+                if not direct_transition and (source_id == screen_id or target_id == screen_id):
+                    incomplete_transition_user_ids.update(transition_users)
                 if target_id == screen_id:
                     source_count = len(screen_users.get(source_id, set()))
                     incoming.append({
                         "screen_id": source_id,
                         "title": definition_by_id[source_id]["title"],
-                        "direct": is_direct_transition(source_id, target_id),
+                        "direct": direct_transition,
                         "explanation": transition_explanation(source_id, target_id),
                         "users": len(transition_users),
                         "percent_of_screen": round(len(transition_users) / len(reached) * 100, 1) if reached else 0.0,
@@ -999,7 +1041,7 @@ def metric2_report(
                     outgoing.append({
                         "screen_id": target_id,
                         "title": definition_by_id[target_id]["title"],
-                        "direct": is_direct_transition(source_id, target_id),
+                        "direct": direct_transition,
                         "explanation": transition_explanation(source_id, target_id),
                         "users": len(transition_users),
                         "percent_of_screen": round(len(transition_users) / len(reached) * 100, 1) if reached else 0.0,
@@ -1009,7 +1051,16 @@ def metric2_report(
             incoming.sort(key=lambda item: (-item["users"], item["title"]))
             outgoing.sort(key=lambda item: (-item["users"], item["title"]))
             arrived_from_parent = reached & parent_users
-            dropoff_users = max(0, parent_count - len(arrived_from_parent))
+            not_transitioned_user_ids = parent_users - reached
+            alternate_path_user_ids: set[str] = set()
+            actual_dropoff_user_ids: set[str] = set()
+            for chel_id in not_transitioned_user_ids:
+                path = canonical_paths.get(chel_id, [])
+                if parent_id in path and path.index(parent_id) < len(path) - 1:
+                    alternate_path_user_ids.add(chel_id)
+                else:
+                    actual_dropoff_user_ids.add(chel_id)
+            dropoff_users = len(not_transitioned_user_ids)
             stopped_users = max(0, len(reached) - len(outgoing_user_ids))
             item = {
                 key: value for key, value in definition.items()
@@ -1024,6 +1075,12 @@ def metric2_report(
                 "dropoff_users": dropoff_users,
                 "dropoff_percent_of_parent": round(dropoff_users / parent_count * 100, 1) if parent_count else 0.0,
                 "dropoff_percent_of_start": round(dropoff_users / start_users * 100, 1) if start_users else 0.0,
+                "alternate_path_users": len(alternate_path_user_ids),
+                "alternate_path_percent_of_parent": round(len(alternate_path_user_ids) / parent_count * 100, 1) if parent_count else 0.0,
+                "actual_dropoff_users": len(actual_dropoff_user_ids),
+                "actual_dropoff_percent_of_parent": round(len(actual_dropoff_user_ids) / parent_count * 100, 1) if parent_count else 0.0,
+                "data_quality": "incomplete" if incomplete_transition_user_ids else "complete",
+                "incomplete_transition_users": len(incomplete_transition_user_ids),
                 "outgoing_users": len(outgoing_user_ids),
                 "outgoing_percent_of_screen": round(len(outgoing_user_ids) / len(reached) * 100, 1) if reached else 0.0,
                 "outgoing_percent_of_start": round(len(outgoing_user_ids) / start_users * 100, 1) if start_users else 0.0,

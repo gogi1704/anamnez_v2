@@ -279,6 +279,69 @@ class AnalyticsTests(unittest.TestCase):
         self.assertFalse(appearance_destinations["exam_offer"]["direct"])
         self.assertIn("не прямой переход", appearance_destinations["exam_offer"]["explanation"])
 
+    def test_metric2_counts_only_final_navigation_action_per_user_and_screen(self):
+        analytics.record_events("CHEL-METRIC-ACTION-ONE", [
+            {"event_id": "action-one-welcome", "session_id": "action-session-one", "event_name": "onboarding_screen_viewed", "properties": {"screen": "welcome", "context": "onboarding"}},
+            {"event_id": "action-one-registration", "session_id": "action-session-one", "event_name": "onboarding_screen_viewed", "properties": {"screen": "registration", "context": "onboarding"}},
+            {"event_id": "action-one-telegram", "session_id": "action-session-one", "event_name": "onboarding_screen_action", "properties": {"screen": "registration", "action": "telegram", "context": "onboarding"}},
+            {"event_id": "action-one-max", "session_id": "action-session-one", "event_name": "onboarding_screen_action", "properties": {"screen": "registration", "action": "max", "context": "onboarding"}},
+            {"event_id": "action-one-anonymous", "session_id": "action-session-one", "event_name": "onboarding_screen_action", "properties": {"screen": "registration", "action": "anonymous", "context": "onboarding"}},
+            {"event_id": "action-one-warning", "session_id": "action-session-one", "event_name": "onboarding_screen_viewed", "properties": {"screen": "anonymous_warning", "context": "onboarding"}},
+            {"event_id": "action-one-back", "session_id": "action-session-one", "event_name": "onboarding_screen_action", "properties": {"screen": "anonymous_warning", "action": "anonymous_cancel", "context": "onboarding"}},
+            {"event_id": "action-one-close", "session_id": "action-session-one", "event_name": "onboarding_screen_action", "properties": {"screen": "anonymous_warning", "action": "anonymous_close", "context": "onboarding"}},
+            {"event_id": "action-one-confirm", "session_id": "action-session-one", "event_name": "onboarding_screen_action", "properties": {"screen": "anonymous_warning", "action": "anonymous_confirm", "context": "onboarding"}},
+            {"event_id": "action-one-appearance", "session_id": "action-session-one", "event_name": "onboarding_screen_viewed", "properties": {"screen": "appearance", "context": "onboarding"}},
+            {"event_id": "action-one-size-standard", "session_id": "action-session-one", "event_name": "onboarding_screen_action", "properties": {"screen": "appearance", "action": "size_standard", "context": "onboarding"}},
+            {"event_id": "action-one-size-extra", "session_id": "action-session-one", "event_name": "onboarding_screen_action", "properties": {"screen": "appearance", "action": "size_extra", "context": "onboarding"}},
+            {"event_id": "action-one-size-continue", "session_id": "action-session-one", "event_name": "onboarding_screen_action", "properties": {"screen": "appearance", "action": "continue", "context": "onboarding"}},
+        ])
+        analytics.record_events("CHEL-METRIC-ACTION-TWO", [
+            {"event_id": "action-two-welcome", "session_id": "action-session-two", "event_name": "onboarding_screen_viewed", "properties": {"screen": "welcome", "context": "onboarding"}},
+            {"event_id": "action-two-registration", "session_id": "action-session-two", "event_name": "onboarding_screen_viewed", "properties": {"screen": "registration", "context": "onboarding"}},
+            {"event_id": "action-two-anonymous", "session_id": "action-session-two", "event_name": "onboarding_screen_action", "properties": {"screen": "registration", "action": "anonymous", "context": "onboarding"}},
+            {"event_id": "action-two-warning", "session_id": "action-session-two", "event_name": "onboarding_screen_viewed", "properties": {"screen": "anonymous_warning", "context": "onboarding"}},
+            {"event_id": "action-two-back", "session_id": "action-session-two", "event_name": "onboarding_screen_action", "properties": {"screen": "anonymous_warning", "action": "anonymous_cancel", "context": "onboarding"}},
+        ])
+        analytics.record_events("CHEL-METRIC-ACTION-THREE", [
+            {"event_id": "action-three-welcome", "session_id": "action-session-three", "event_name": "onboarding_screen_viewed", "properties": {"screen": "welcome", "context": "onboarding"}},
+            {"event_id": "action-three-registration", "session_id": "action-session-three", "event_name": "onboarding_screen_viewed", "properties": {"screen": "registration", "context": "onboarding"}},
+            {"event_id": "action-three-telegram", "session_id": "action-session-three", "event_name": "onboarding_screen_action", "properties": {"screen": "registration", "action": "telegram", "context": "onboarding"}},
+            {"event_id": "action-three-appearance", "session_id": "action-session-three", "event_name": "onboarding_screen_viewed", "properties": {"screen": "appearance", "context": "onboarding"}},
+        ])
+
+        report = analytics.metric2_report("30")
+        warning = next(item for item in report["screens"] if item["id"] == "anonymous_warning")
+        actions = {item["id"]: item for item in warning["actions"]}
+        self.assertEqual(warning["users"], 2)
+        self.assertEqual(actions["anonymous_confirm"]["users"], 1)
+        self.assertEqual(actions["anonymous_cancel"]["users"], 1)
+        self.assertEqual(actions["anonymous_close"]["users"], 0)
+        self.assertEqual(sum(item["users"] for item in warning["actions"]), 2)
+        self.assertEqual(warning["dropoff_users"], 1)
+        self.assertEqual(warning["alternate_path_users"], 1)
+        self.assertEqual(warning["actual_dropoff_users"], 0)
+        registration = next(item for item in report["screens"] if item["id"] == "registration")
+        registration_actions = {item["id"]: item for item in registration["actions"]}
+        self.assertEqual(registration_actions["anonymous"]["users"], 2)
+        self.assertEqual(registration_actions["telegram"]["users"], 1)
+        self.assertEqual(registration_actions["max"]["users"], 0)
+        appearance = next(item for item in report["screens"] if item["id"] == "appearance")
+        appearance_actions = {item["id"]: item for item in appearance["actions"]}
+        self.assertEqual(appearance_actions["size_standard"]["users"], 0)
+        self.assertEqual(appearance_actions["size_extra"]["users"], 1)
+        self.assertEqual(appearance_actions["size_extra"]["counting_mode"], "final_choice")
+        for screen in report["screens"]:
+            final_transitions = sum(
+                item["users"] for item in screen["actions"]
+                if item["counting_mode"] == "final_transition"
+            )
+            self.assertLessEqual(final_transitions, screen["users"], screen["id"])
+            self.assertEqual(
+                screen["dropoff_users"],
+                screen["alternate_path_users"] + screen["actual_dropoff_users"],
+                screen["id"],
+            )
+
     def test_metric2_reports_skipped_examinations_completion_screen(self):
         events = []
         for index, definition in enumerate(analytics._metric2_screen_definitions()):

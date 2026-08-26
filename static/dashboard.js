@@ -1103,8 +1103,11 @@ function renderMetric2(data) {
     const comparison = screen.id === 'welcome' ? 'Первый экран — база расчёта'
       : screen.branch ? `${screen.percent_of_parent}% от экрана «${escapeHtml(titleById[screen.parent_id] || 'родительский экран')}»`
       : `${screen.percent_of_parent}% от предыдущего основного экрана`;
-    const dropoff = screen.id === 'welcome' ? '' : `<div class="metric2-row-dropoff"><b>Не дошли: ${Number(screen.dropoff_users || 0).toLocaleString('ru-RU')}</b><span>${Number(screen.dropoff_percent_of_parent || 0).toLocaleString('ru-RU')}% от предыдущего · ${Number(screen.dropoff_percent_of_start || 0).toLocaleString('ru-RU')}% от первого</span></div>`;
-    stats.innerHTML = `<span class="metric2-stage">${visualBranch ? 'Ответвление · ' : ''}${escapeHtml(screen.stage || '')}</span><h3>${escapeHtml(screen.title)}</h3><div class="metric2-reach"><strong>${Number(screen.percent_of_start || 0).toLocaleString('ru-RU')}%</strong><span>от первого экрана</span></div><p><b>${Number(screen.users || 0).toLocaleString('ru-RU')}</b> пользователей · ${comparison}</p>${dropoff}<div class="metric2-reach-track"><i style="width:${Math.min(100,Number(screen.percent_of_start || 0))}%"></i></div><button type="button" data-metric2-screen="${escapeHtml(screen.id)}">Открыть экран и всю статистику →</button>`;
+    const dropoff = screen.id === 'welcome' ? '' : `<div class="metric2-row-dropoff"><b>Не перешли на этот экран: ${Number(screen.dropoff_users || 0).toLocaleString('ru-RU')} из ${Number(screen.comparison_users || 0).toLocaleString('ru-RU')}</b><span>${Number(screen.dropoff_percent_of_parent || 0).toLocaleString('ru-RU')}% от предыдущего · ${Number(screen.dropoff_percent_of_start || 0).toLocaleString('ru-RU')}% от первого</span><small>Выбрали другой путь: ${Number(screen.alternate_path_users || 0).toLocaleString('ru-RU')} · остановились на предыдущем: ${Number(screen.actual_dropoff_users || 0).toLocaleString('ru-RU')}</small></div>`;
+    const quality = screen.data_quality === 'incomplete'
+      ? `<span class="metric2-quality incomplete">Неполные данные · ${Number(screen.incomplete_transition_users || 0).toLocaleString('ru-RU')}</span>`
+      : '<span class="metric2-quality complete">Маршрут полный</span>';
+    stats.innerHTML = `<span class="metric2-stage">${visualBranch ? 'Ответвление · ' : ''}${escapeHtml(screen.stage || '')}</span>${quality}<h3>${escapeHtml(screen.title)}</h3><div class="metric2-reach"><strong>${Number(screen.percent_of_start || 0).toLocaleString('ru-RU')}%</strong><span>от первого экрана</span></div><p><b>${Number(screen.users || 0).toLocaleString('ru-RU')}</b> пользователей · ${comparison}</p>${dropoff}<div class="metric2-reach-track"><i style="width:${Math.min(100,Number(screen.percent_of_start || 0))}%"></i></div><button type="button" data-metric2-screen="${escapeHtml(screen.id)}">Открыть экран и всю статистику →</button>`;
     item.append(sequence,open,stats); root.append(item);
   }
   if (!(data.screens || []).length) root.innerHTML = '<p class="form-error">Пока нет данных по стартовым экранам</p>';
@@ -1119,6 +1122,11 @@ function openMetric2Screen(screenId) {
   const titleById = Object.fromEntries(latestMetric2Data.screens.map(item => [item.id,item.title]));
   $('#metric2ModalPreview').innerHTML = metric2PreviewMarkup(screen,true);
   $('#metric2ModalStage').textContent = screen.stage || '';
+  const quality = $('#metric2ModalQuality');
+  quality.className = `metric2-quality ${screen.data_quality === 'incomplete' ? 'incomplete' : 'complete'}`;
+  quality.textContent = screen.data_quality === 'incomplete'
+    ? `Неполные данные маршрута · ${Number(screen.incomplete_transition_users || 0).toLocaleString('ru-RU')} пользователей`
+    : 'Маршрут полный';
   $('#metric2ModalTitle').textContent = screen.title;
   $('#metric2ModalDescription').textContent = screen.description || '';
   const comparisonTitle = screen.comparison_id ? titleById[screen.comparison_id] || 'предыдущий экран' : '';
@@ -1127,13 +1135,25 @@ function openMetric2Screen(screenId) {
     <article><span>Пришли на экран</span><strong>${Number(screen.users || 0).toLocaleString('ru-RU')}</strong><small><span>${Number(screen.percent_of_start || 0).toLocaleString('ru-RU')}% от первого</span>${screen.comparison_id ? `<span>${Number(screen.percent_of_parent || 0).toLocaleString('ru-RU')}% от «${escapeHtml(comparisonTitle)}»</span>` : ''}</small></article>
     <article><span>Перешли на другой экран</span><strong>${Number(screen.outgoing_users || 0).toLocaleString('ru-RU')}</strong><small><span>${Number(screen.outgoing_percent_of_screen || 0).toLocaleString('ru-RU')}% от этого экрана</span><span>${Number(screen.outgoing_percent_of_start || 0).toLocaleString('ru-RU')}% от первого</span></small></article>
     <article class="${screen.terminal ? 'terminal' : 'dropoff'}"><span>${finishLabel}</span><strong>${Number(screen.stopped_users || 0).toLocaleString('ru-RU')}</strong><small><span>${Number(screen.stopped_percent_of_screen || 0).toLocaleString('ru-RU')}% от этого экрана</span><span>${Number(screen.stopped_percent_of_start || 0).toLocaleString('ru-RU')}% от первого</span></small></article>
-    ${screen.comparison_id ? `<article class="dropoff"><span>Не дошли с предыдущего</span><strong>${Number(screen.dropoff_users || 0).toLocaleString('ru-RU')}</strong><small><span>${Number(screen.dropoff_percent_of_parent || 0).toLocaleString('ru-RU')}% от «${escapeHtml(comparisonTitle)}»</span><span>${Number(screen.dropoff_percent_of_start || 0).toLocaleString('ru-RU')}% от первого</span></small></article>` : ''}`;
+    ${screen.comparison_id ? `<article class="dropoff"><span>Не перешли на этот экран</span><strong>${Number(screen.dropoff_users || 0).toLocaleString('ru-RU')} из ${Number(screen.comparison_users || 0).toLocaleString('ru-RU')}</strong><small><span>${Number(screen.dropoff_percent_of_parent || 0).toLocaleString('ru-RU')}% от «${escapeHtml(comparisonTitle)}»</span><span>${Number(screen.dropoff_percent_of_start || 0).toLocaleString('ru-RU')}% от первого</span><span>Другой путь: ${Number(screen.alternate_path_users || 0).toLocaleString('ru-RU')}</span><span>Остановились на предыдущем: ${Number(screen.actual_dropoff_users || 0).toLocaleString('ru-RU')}</span></small></article>` : ''}`;
   const actions = $('#metric2ModalActions'); actions.replaceChildren();
-  for (const action of screen.actions || []) {
-    const target = action.target ? titleById[action.target] : action.target_label;
-    const row = document.createElement('article'); row.className = 'metric2-action-row';
-    row.innerHTML = `<div><strong>${escapeHtml(action.label)}</strong><b>${Number(action.percent_of_screen || 0).toLocaleString('ru-RU')}%</b></div><div class="metric2-action-track"><i style="width:${Math.min(100,Number(action.percent_of_screen || 0))}%"></i></div><p>${Number(action.users || 0).toLocaleString('ru-RU')} уникальных пользователей · ${Number(action.percent_of_start || 0).toLocaleString('ru-RU')}% от первого${target ? ` · действие ведёт → ${escapeHtml(target)}` : ''}</p>`;
-    actions.append(row);
+  const actionGroups = [
+    {mode:'final_transition', title:'Итоговый переход', note:'Для каждого пользователя учитывается только последнее действие, определившее дальнейший путь.'},
+    {mode:'final_choice', title:'Итоговый выбор', note:'Если пользователь менял выбор, учитывается только последний вариант.'},
+    {mode:'interaction', title:'Дополнительные действия', note:'Один пользователь может выполнить несколько таких действий, поэтому эти строки не нужно складывать между собой.'},
+  ];
+  for (const group of actionGroups) {
+    const groupActions = (screen.actions || []).filter(action => (action.counting_mode || 'interaction') === group.mode);
+    if (!groupActions.length) continue;
+    const section = document.createElement('section'); section.className = `metric2-action-group ${group.mode}`;
+    section.innerHTML = `<h4>${group.title}</h4><p>${group.note}</p>`;
+    for (const action of groupActions) {
+      const target = action.target ? titleById[action.target] : action.target_label;
+      const row = document.createElement('article'); row.className = 'metric2-action-row';
+      row.innerHTML = `<div><strong>${escapeHtml(action.label)}</strong><b>${Number(action.percent_of_screen || 0).toLocaleString('ru-RU')}%</b></div><div class="metric2-action-track"><i style="width:${Math.min(100,Number(action.percent_of_screen || 0))}%"></i></div><p>${Number(action.users || 0).toLocaleString('ru-RU')} уникальных пользователей · ${Number(action.percent_of_start || 0).toLocaleString('ru-RU')}% от первого${target ? ` · действие ведёт → ${escapeHtml(target)}` : ''}</p>`;
+      section.append(row);
+    }
+    actions.append(section);
   }
   if (!(screen.actions || []).length) actions.innerHTML = '<p class="form-error">На этом экране нет отдельных действий</p>';
   const transitions = $('#metric2ModalTransitions'); transitions.replaceChildren();
