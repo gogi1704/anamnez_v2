@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import json
+import copy
 import re
 import sqlite3
 import threading
+import time
 import uuid
 from collections import defaultdict
 from contextlib import contextmanager
@@ -16,8 +18,17 @@ from .config import settings
 
 
 _write_lock = threading.Lock()
+_report_cache_lock = threading.Lock()
+_report_cache: dict[tuple, tuple[float, dict]] = {}
+REPORT_CACHE_SECONDS = 15
 TEST_COMPANY_INN = "123123"
 REPORT_TIMEZONE = timezone(timedelta(hours=3))
+
+
+def _invalidate_report_cache() -> None:
+    """Discard aggregates after any successful analytics write."""
+    with _report_cache_lock:
+        _report_cache.clear()
 
 
 def _statistics_excluded_chel_ids() -> set[str]:
@@ -58,7 +69,10 @@ ALLOWED_EVENTS = {
     "examinations_skip_clicked", "examinations_objection_viewed", "examinations_skip_recovered",
     "examinations_skipped", "examinations_selection_completed", "examination_selection_confirmed", "payment_viewed",
     "payment_method_selected", "payment_online_unavailable", "payment_completed",
-    "payment_unavailable_viewed",
+    "payment_created", "payment_redirected", "payment_succeeded", "payment_canceled",
+    "payment_pending", "payment_abandoned", "purchases_viewed", "payment_unavailable_viewed",
+    "payment_continued", "payment_retried", "purchase_attempt_removed",
+    "payment_return_viewed", "payment_success_viewed", "payment_result_viewed",
     "onboarding_completed", "completion_viewed", "completion_skipped_viewed", "capabilities_viewed",
     "capabilities_closed", "install_offer_viewed", "install_clicked", "install_dismissed",
     "app_installed", "app_opened", "chat_opened", "conversation_created", "message_sent",
@@ -164,6 +178,11 @@ def _metric2_spec(event: str, **properties) -> dict:
 
 
 def _metric2_screen_definitions() -> list[dict]:
+    online_payment_enabled = bool(
+        settings.online_payments_enabled
+        and settings.yookassa_shop_id.isdigit()
+        and settings.yookassa_secret_key
+    )
     screens = [
         {
             "id": "welcome", "title": "Приветствие", "stage": "Начало",
@@ -288,9 +307,36 @@ def _metric2_screen_definitions() -> list[dict]:
             "kind": "payment", "description": "Состав заказа, сумма и способ оплаты.",
             "legacy_reach": [_metric2_spec("payment_viewed")],
             "actions": [
-                {"id": "pay_online", "label": "Оплатить онлайн", "target": "payment_unavailable", "legacy": [_metric2_spec("funnel_action", action="pay_online")]},
+                {"id": "pay_online", "label": "Оплатить онлайн", "target": "payment_processing" if online_payment_enabled else "payment_unavailable", "legacy": [_metric2_spec("funnel_action", action="pay_online")]},
                 {"id": "pay_at_exam", "label": "Оплатить на медосмотре", "target": "completion", "legacy": [_metric2_spec("funnel_action", action="pay_at_exam")]},
                 {"id": "back", "label": "Вернуться к обследованиям", "target": "exam_selection", "legacy": []},
+            ],
+        },
+        {
+            "id": "payment_processing", "title": "Проверка онлайн-оплаты", "stage": "Оплата · обработка",
+            "kind": "payment_processing", "description": "Экран после возвращения со страницы ЮKassa, пока сервис проверяет окончательный статус.",
+            "parent_id": "payment", "branch": True,
+            "legacy_reach": [_metric2_spec("payment_return_viewed")],
+            "actions": [],
+        },
+        {
+            "id": "payment_success", "title": "Онлайн-оплата подтверждена", "stage": "Оплата · успешно",
+            "kind": "payment_success", "description": "Подтверждение оплаты и инструкция, где найти покупку.",
+            "parent_id": "payment_processing", "branch": True, "display_as_main": True,
+            "legacy_reach": [_metric2_spec("payment_success_viewed")],
+            "actions": [
+                {"id": "open_purchases", "label": "Открыть мои покупки", "target_label": "История покупок", "terminal_outcome": True, "legacy": []},
+                {"id": "continue", "label": "Перейти в чат", "target_label": "Переход в сервис", "terminal_outcome": True, "legacy": []},
+            ],
+        },
+        {
+            "id": "payment_result", "title": "Оплата не завершена", "stage": "Оплата · результат",
+            "kind": "payment_result", "description": "Показывается, если платёж отменён, не завершён или ещё обрабатывается.",
+            "parent_id": "payment_processing", "branch": True,
+            "legacy_reach": [_metric2_spec("payment_result_viewed")],
+            "actions": [
+                {"id": "retry", "label": "Вернуться к оплате", "target": "payment", "legacy": []},
+                {"id": "purchases", "label": "Мои покупки", "target_label": "История покупок", "terminal_outcome": True, "legacy": []},
             ],
         },
         {
@@ -390,6 +436,7 @@ def init_db() -> None:
                 is_server INTEGER NOT NULL DEFAULT 0
             );
             CREATE INDEX IF NOT EXISTS idx_analytics_events_time ON analytics_events(received_at, event_name);
+            CREATE INDEX IF NOT EXISTS idx_analytics_events_name_time_user ON analytics_events(event_name, received_at, chel_id);
             CREATE INDEX IF NOT EXISTS idx_analytics_events_user ON analytics_events(chel_id, received_at);
             CREATE INDEX IF NOT EXISTS idx_analytics_events_session ON analytics_events(session_id, received_at);
             CREATE INDEX IF NOT EXISTS idx_analytics_events_step ON analytics_events(event_name, step_key, received_at);
@@ -527,6 +574,8 @@ def record_events(chel_id: str, events: list[dict], *, user_agent: str = "", is_
                      event["operating_system"], event["browser"], event["app_mode"]),
                 )
         conn.commit()
+    if accepted:
+        _invalidate_report_cache()
     return {"accepted": accepted, "duplicates": len(prepared) - accepted}
 
 
@@ -597,7 +646,152 @@ def _filters(
     return (" WHERE " + " AND ".join(clauses)) if clauses else "", params
 
 
-def admin_report(
+def _payment_date_bounds(period: str, date_from: str = "", date_to: str = "") -> tuple[str | None, str | None]:
+    """Return UTC bounds matching the admin analytics period."""
+    date_from = str(date_from or "").strip()
+    date_to = str(date_to or "").strip()
+    try:
+        from_date = datetime.strptime(date_from, "%Y-%m-%d").replace(tzinfo=REPORT_TIMEZONE) if date_from else None
+        to_date = datetime.strptime(date_to, "%Y-%m-%d").replace(tzinfo=REPORT_TIMEZONE) if date_to else None
+    except ValueError as exc:
+        raise ValueError("Дата должна быть указана в формате ГГГГ-ММ-ДД") from exc
+    if from_date and to_date and from_date > to_date:
+        raise ValueError("Дата начала периода не может быть позже даты окончания")
+    if from_date or to_date:
+        start = from_date.astimezone(timezone.utc).isoformat() if from_date else None
+        end = (to_date + timedelta(days=1)).astimezone(timezone.utc).isoformat() if to_date else None
+        return start, end
+    return _period_start(period), None
+
+
+def _payment_statistics(
+    period: str, date_from: str = "", date_to: str = "", *,
+    eligible_users: set[str] | None = None, at_exam_users: int = 0,
+) -> dict:
+    """Aggregate payment orders without removing hidden audit records."""
+    start, end = _payment_date_bounds(period, date_from, date_to)
+    clauses = ["po.chel_id NOT IN ('chel_legacy','chel_test_default')", "TRIM(COALESCE(up.company_inn,'')) <> ?"]
+    params: list[Any] = [TEST_COMPANY_INN]
+    if start:
+        clauses.append("po.created_at >= ?")
+        params.append(start)
+    if end:
+        clauses.append("po.created_at < ?")
+        params.append(end)
+    report = {
+        "summary": {
+            "attempts": 0, "users": 0, "succeeded": 0, "successful_users": 0,
+            "conversion": 0.0, "revenue_kopecks": 0, "pending": 0,
+            "unsuccessful": 0, "at_exam_users": int(at_exam_users), "test_attempts": 0,
+        },
+        "statuses": [], "daily": [], "items": [], "recent": [],
+    }
+    main_conn = None
+    try:
+        main_conn = sqlite3.connect(settings.database_path, timeout=5)
+        main_conn.row_factory = sqlite3.Row
+        rows = [dict(row) for row in main_conn.execute(
+            """SELECT po.id,po.chel_id,po.status,po.amount_kopecks,po.items,po.paid,
+               po.test,po.created_at,po.updated_at,po.paid_at,po.canceled_at
+               FROM payment_orders po LEFT JOIN user_profile up ON up.chel_id=po.chel_id
+               WHERE """ + " AND ".join(clauses) + " ORDER BY po.created_at DESC",
+            params,
+        ).fetchall()]
+    except sqlite3.Error:
+        return report
+    finally:
+        if main_conn is not None:
+            main_conn.close()
+    if eligible_users is not None:
+        rows = [row for row in rows if str(row.get("chel_id", "")) in eligible_users]
+    users = {str(row["chel_id"]) for row in rows}
+    succeeded = [row for row in rows if row["status"] == "succeeded" and bool(row["paid"])]
+    production_succeeded = [row for row in succeeded if not bool(row["test"])]
+    successful_users = {str(row["chel_id"]) for row in succeeded}
+    pending_statuses = {"creating", "pending", "waiting_for_capture"}
+    unsuccessful_statuses = {"canceled", "abandoned", "failed"}
+    report["summary"].update({
+        "attempts": len(rows), "users": len(users), "succeeded": len(succeeded),
+        "successful_users": len(successful_users),
+        "conversion": round(len(successful_users) / len(users) * 100, 1) if users else 0.0,
+        "revenue_kopecks": sum(int(row["amount_kopecks"] or 0) for row in production_succeeded),
+        "pending": sum(row["status"] in pending_statuses for row in rows),
+        "unsuccessful": sum(row["status"] in unsuccessful_statuses for row in rows),
+        "test_attempts": sum(bool(row["test"]) for row in rows),
+    })
+    status_labels = {
+        "succeeded": "Оплачено", "pending": "Ожидает оплаты",
+        "waiting_for_capture": "Подтверждается", "creating": "Создаётся",
+        "canceled": "Отменено", "abandoned": "Не завершено", "failed": "Ошибка",
+    }
+    status_counts: dict[str, int] = defaultdict(int)
+    daily: dict[str, dict] = {}
+    item_counts: dict[str, dict] = {}
+    for row in rows:
+        status_counts[str(row["status"])] += 1
+        day = str(row["created_at"] or "")[:10]
+        aggregate = daily.setdefault(day, {"date": day, "attempts": 0, "succeeded": 0, "revenue_kopecks": 0})
+        aggregate["attempts"] += 1
+        if row in succeeded:
+            aggregate["succeeded"] += 1
+            if not bool(row["test"]):
+                aggregate["revenue_kopecks"] += int(row["amount_kopecks"] or 0)
+            try:
+                products = json.loads(row["items"] or "[]")
+            except (json.JSONDecodeError, TypeError):
+                products = []
+            for product in products if isinstance(products, list) else []:
+                item_id = str(product.get("id", "")).strip()
+                if not item_id:
+                    continue
+                item = item_counts.setdefault(item_id, {
+                    "id": item_id, "label": str(product.get("name", "")).strip() or item_id,
+                    "purchases": 0, "revenue_kopecks": 0,
+                })
+                item["purchases"] += 1
+                if not bool(row["test"]):
+                    item["revenue_kopecks"] += int(product.get("price", 0) or 0) * 100
+    report["statuses"] = [
+        {"status": key, "label": status_labels.get(key, key), "orders": value,
+         "percent": round(value / len(rows) * 100, 1) if rows else 0.0}
+        for key, value in sorted(status_counts.items(), key=lambda item: (-item[1], item[0]))
+    ]
+    report["daily"] = [daily[key] for key in sorted(daily)]
+    report["items"] = sorted(item_counts.values(), key=lambda item: (-item["purchases"], item["label"]))
+    report["recent"] = [{
+        "id": row["id"], "chel_id": row["chel_id"], "status": row["status"],
+        "amount_kopecks": row["amount_kopecks"], "test": bool(row["test"]),
+        "created_at": row["created_at"], "paid_at": row["paid_at"],
+    } for row in rows[:25]]
+    return report
+
+
+def _cached_report(cache_name: str, arguments: tuple, builder) -> dict:
+    """Cache expensive read-only aggregates for a few seconds.
+
+    The dashboard refreshes once a minute, while tab switches can otherwise
+    launch the same full SQLite aggregation several times in quick succession.
+    A deep copy prevents API handlers from mutating the cached payload.
+    """
+    cache_key = (cache_name, str(settings.analytics_database_path), *arguments)
+    now = time.monotonic()
+    with _report_cache_lock:
+        cached = _report_cache.get(cache_key)
+        if cached and cached[0] > now:
+            return copy.deepcopy(cached[1])
+        result = builder()
+        if len(_report_cache) >= 64:
+            expired = [key for key, value in _report_cache.items() if value[0] <= now]
+            for key in expired:
+                _report_cache.pop(key, None)
+            if len(_report_cache) >= 64:
+                oldest = min(_report_cache, key=lambda key: _report_cache[key][0])
+                _report_cache.pop(oldest, None)
+        _report_cache[cache_key] = (now + REPORT_CACHE_SECONDS, copy.deepcopy(result))
+        return result
+
+
+def _admin_report_uncached(
     period: str = "30", device: str = "", method: str = "", source: str = "",
     recent_page: int = 1, recent_limit: int = 25,
     date_from: str = "", date_to: str = "",
@@ -725,6 +919,24 @@ def admin_report(
         operating_systems = grouped("e.operating_system")
         browsers = grouped("e.browser")
         sources = grouped("COALESCE(NULLIF(e.source,''),s.entry_source)")
+        payment_eligible_users = None
+        if device or method or source:
+            payment_eligible_users = {
+                str(row[0]) for row in conn.execute(
+                    "SELECT DISTINCT e.chel_id" + join + where, params,
+                ).fetchall()
+            }
+        at_exam_extra = (" AND " if where else " WHERE ") + (
+            "e.event_name='payment_method_selected' "
+            "AND json_extract(e.properties,'$.method')='at_exam'"
+        )
+        at_exam_users = int(conn.execute(
+            "SELECT COUNT(DISTINCT e.chel_id)" + join + where + at_exam_extra, params,
+        ).fetchone()[0] or 0)
+        payments = _payment_statistics(
+            period, date_from, date_to,
+            eligible_users=payment_eligible_users, at_exam_users=at_exam_users,
+        )
         selection_extra = (" AND " if where else " WHERE ") + (
             "e.event_name IN ('examinations_selection_completed','examination_selection_confirmed')"
         )
@@ -799,6 +1011,7 @@ def admin_report(
         "operating_systems": operating_systems, "browsers": browsers,
         "sources": sources, "examinations": examinations,
         "examination_summary": examination_summary,
+        "payments": payments,
         "errors": errors, "recent": recent,
         "recent_pagination": {
             "page": recent_page, "limit": recent_limit, "total": recent_total,
@@ -809,15 +1022,34 @@ def admin_report(
     }
 
 
-def metric2_report(
+def admin_report(
+    period: str = "30", device: str = "", method: str = "", source: str = "",
+    recent_page: int = 1, recent_limit: int = 25,
+    date_from: str = "", date_to: str = "",
+) -> dict:
+    arguments = (
+        str(period), str(device), str(method), str(source), int(recent_page),
+        int(recent_limit), str(date_from), str(date_to),
+    )
+    return _cached_report(
+        "admin", arguments,
+        lambda: _admin_report_uncached(
+            period, device, method, source, recent_page, recent_limit,
+            date_from, date_to,
+        ),
+    )
+
+
+def _metric2_report_uncached(
     period: str = "30", device: str = "", method: str = "", source: str = "",
     date_from: str = "", date_to: str = "",
 ) -> dict:
     """Return unique-user onboarding paths without storing questionnaire answers.
 
-    A user's route contains only the first visit to every screen.  For example,
-    ``A -> B -> A -> C`` becomes ``A -> B -> C``.  This prevents refreshes,
-    back-navigation and repeated modal opens from inflating reach or transitions.
+    Screen reach counts every user once, while the route itself is loop-erased.
+    For example, ``A -> B -> C -> B -> D`` becomes ``A -> B -> D``.  This keeps
+    the fact that C was visited, but prevents a return to B from creating the
+    false incomplete edge ``C -> D``.
     """
     where, params = _filters(period, device, method, source, date_from, date_to)
     join = " FROM analytics_events e LEFT JOIN analytics_sessions s ON s.session_id=e.session_id "
@@ -870,7 +1102,7 @@ def metric2_report(
             }
 
         definition_by_id = {definition["id"]: definition for definition in definitions}
-        generic_paths: dict[str, list[tuple[tuple, str]]] = defaultdict(list)
+        generic_paths: dict[str, list[tuple[tuple, str, str]]] = defaultdict(list)
         legacy_paths: dict[str, list[tuple[tuple, str]]] = defaultdict(list)
         for row in parsed_rows:
             chel_id = row["chel_id"]
@@ -886,7 +1118,12 @@ def metric2_report(
                 and properties.get("context") == "onboarding"
                 and properties.get("screen") in definition_by_id
             ):
-                generic_paths[chel_id].append((order_key, properties["screen"]))
+                previous_screen = str(properties.get("previous_screen") or "")
+                if previous_screen not in definition_by_id:
+                    previous_screen = ""
+                generic_paths[chel_id].append(
+                    (order_key, properties["screen"], previous_screen)
+                )
                 continue
             for definition in definitions:
                 if any(matches(row, spec) for spec in definition.get("legacy_reach", [])):
@@ -894,24 +1131,48 @@ def metric2_report(
 
         # Modern tracking is authoritative for a user. Legacy reach events are
         # used only for older users who have no generic screen-view events.
+        reached_screens_by_user: dict[str, set[str]] = defaultdict(set)
         canonical_paths: dict[str, list[str]] = {}
         for chel_id in set(generic_paths) | set(legacy_paths):
-            raw_path = generic_paths.get(chel_id) or legacy_paths.get(chel_id, [])
-            seen, path = set(), []
-            for _, screen_id in sorted(raw_path, key=lambda item: item[0]):
-                if screen_id in seen:
+            modern_path = generic_paths.get(chel_id, [])
+            raw_path = modern_path or [
+                (order_key, screen_id, "")
+                for order_key, screen_id in legacy_paths.get(chel_id, [])
+            ]
+            path: list[str] = []
+            seen_reach: set[str] = set()
+            for _, screen_id, previous_screen in sorted(raw_path, key=lambda item: item[0]):
+                # ``previous_screen`` is written atomically with the target
+                # screen view.  It repairs the route when a visible return
+                # screen was not separately emitted (for example closing a
+                # modal that reveals the registration screen underneath).
+                if (
+                    previous_screen
+                    and previous_screen != screen_id
+                    and previous_screen in seen_reach
+                    and (not path or path[-1] != previous_screen)
+                ):
+                    if previous_screen in path:
+                        path = path[:path.index(previous_screen) + 1]
+                    else:
+                        path.append(previous_screen)
+                seen_reach.add(screen_id)
+                if path and path[-1] == screen_id:
                     continue
-                seen.add(screen_id)
-                path.append(screen_id)
+                if screen_id in path:
+                    path = path[:path.index(screen_id) + 1]
+                else:
+                    path.append(screen_id)
             if "welcome" not in path:
                 continue
             canonical_paths[chel_id] = path[path.index("welcome"):]
+            reached_screens_by_user[chel_id] = seen_reach
 
         start_cohort = set(canonical_paths)
         screen_users: dict[str, set[str]] = {
             definition["id"]: {
-                chel_id for chel_id, path in canonical_paths.items()
-                if definition["id"] in path
+                chel_id for chel_id in canonical_paths
+                if definition["id"] in reached_screens_by_user.get(chel_id, set())
             }
             for definition in definitions
         }
@@ -1129,6 +1390,22 @@ def metric2_report(
     }
 
 
+def metric2_report(
+    period: str = "30", device: str = "", method: str = "", source: str = "",
+    date_from: str = "", date_to: str = "",
+) -> dict:
+    arguments = (
+        str(period), str(device), str(method), str(source),
+        str(date_from), str(date_to),
+    )
+    return _cached_report(
+        "metric2", arguments,
+        lambda: _metric2_report_uncached(
+            period, device, method, source, date_from, date_to,
+        ),
+    )
+
+
 def cleanup_old_events() -> int:
     if not settings.analytics_enabled or settings.analytics_retention_days <= 0:
         return 0
@@ -1140,7 +1417,10 @@ def cleanup_old_events() -> int:
             "(SELECT DISTINCT session_id FROM analytics_events)", (cutoff,),
         )
         conn.commit()
-        return cursor.rowcount
+        removed = max(0, int(cursor.rowcount or 0))
+    if removed:
+        _invalidate_report_cache()
+    return removed
 
 
 def delete_user_data(chel_id: str) -> dict:
@@ -1165,4 +1445,6 @@ def delete_user_data(chel_id: str) -> dict:
                 "DELETE FROM analytics_sessions WHERE chel_id = ?", (chel_id,),
             ).rowcount or 0))
         conn.commit()
+    if events or sessions:
+        _invalidate_report_cache()
     return {"events": events, "sessions": sessions}

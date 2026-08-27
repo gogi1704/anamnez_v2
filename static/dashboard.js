@@ -13,6 +13,8 @@ const statusNames = {
   exams:'Обследования', payment:'Оплата', not_started:'Не начата',
   active:'Активен', waiting_human:'Ожидает человека', pending:'Ожидает',
   none:'Нет', chat:'Чат', call:'Созвон', not_selected:'Не выбран',
+  succeeded:'Оплачено', canceled:'Отменено', abandoned:'Не завершено',
+  failed:'Ошибка', creating:'Создаётся', waiting_for_capture:'Подтверждается',
 };
 const deviceNames = {
   desktop:'ПК', android:'Android', ios:'iOS', other:'Другое',
@@ -56,6 +58,8 @@ let analyticsRecentPage = 1;
 let analyticsFunnelMode = 'start';
 let latestAnalyticsData = null;
 let latestMetric2Data = null;
+const adminGetRequests = new Map();
+const panelLoadingCounts = new WeakMap();
 const expandedFunnelRows = new Set();
 const favoriteAnalytics = new Set((() => {
   try {
@@ -81,6 +85,7 @@ const favoriteDefinitions = [
   ['analytics-sources','#analyticsSources','Источники','analytics'],
   ['analytics-managers','#managerAttributionTable','Статистика по менеджерам','analytics'],
   ['analytics-examinations','#analyticsExaminations','Популярность обследований','analytics'],
+  ['analytics-payments','.payment-analytics-panel','Статистика по оплате','analytics'],
   ['analytics-questionnaire','#analyticsQuestionsChart','Статистика по анкете','analytics'],
   ['analytics-events','#analyticsRecent','Ошибки и последние события','analytics'],
   ['cost-daily','#costDailyChart','Расход по дням','costs'],
@@ -537,22 +542,66 @@ function renderPricing(items) {
 }
 
 async function loadCosts() {
-  const period = $('#costsPeriod').value;
-  const data = await adminFetch(`/api/admin/ai-costs?period=${encodeURIComponent(period)}&limit=100`);
-  renderCostSummary(data);
-  renderCostChart(data.daily || []);
-  renderCostOperations(data.by_operation || []);
-  renderCostModels(data.by_model || []);
-  renderCostRecent(data.recent || []);
-  renderPricing(data.pricing || []);
-  decorateFavoriteSources();
-  if (activeAdminView === 'favorites') renderFavorites();
-  $('#costsNotice').textContent = `${data.notice} Обновлено ${formatDate(data.generated_at)}.`;
+  return withPanelLoading('#costsAdminView', async () => {
+    const period = $('#costsPeriod').value;
+    const data = await adminFetch(`/api/admin/ai-costs?period=${encodeURIComponent(period)}&limit=100`);
+    renderCostSummary(data);
+    renderCostChart(data.daily || []);
+    renderCostOperations(data.by_operation || []);
+    renderCostModels(data.by_model || []);
+    renderCostRecent(data.recent || []);
+    renderPricing(data.pricing || []);
+    decorateFavoriteSources();
+    if (activeAdminView === 'favorites') renderFavorites();
+    $('#costsNotice').textContent = `${data.notice} Обновлено ${formatDate(data.generated_at)}.`;
+  }, 'Считаем расходы…');
 }
 
 const wait = milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds));
 
-async function adminFetch(path, token = sessionStorage.getItem(TOKEN_KEY), options = {}, retryAttempt = 0) {
+function loadingTarget(target) {
+  return typeof target === 'string' ? $(target) : target;
+}
+
+function setPanelLoading(target, loading, label = 'Загружаем данные…') {
+  const node = loadingTarget(target);
+  if (!node) return;
+  const current = panelLoadingCounts.get(node) || 0;
+  const next = Math.max(0, current + (loading ? 1 : -1));
+  panelLoadingCounts.set(node, next);
+  if (loading && !node.querySelector(':scope > .admin-panel-loader')) {
+    const loader = document.createElement('div');
+    loader.className = 'admin-panel-loader';
+    loader.setAttribute('role', 'status');
+    loader.setAttribute('aria-live', 'polite');
+    loader.innerHTML = `<span class="admin-loading-spinner" aria-hidden="true"></span><strong>${escapeHtml(label)}</strong><small>Пожалуйста, подождите</small>`;
+    node.append(loader);
+  }
+  node.classList.toggle('admin-loading', next > 0);
+  node.setAttribute('aria-busy', String(next > 0));
+  if (!next) node.querySelector(':scope > .admin-panel-loader')?.remove();
+}
+
+async function withPanelLoading(target, operation, label = 'Загружаем данные…') {
+  setPanelLoading(target, true, label);
+  try { return await operation(); }
+  finally { setPanelLoading(target, false, label); }
+}
+
+function adminFetch(path, token = sessionStorage.getItem(TOKEN_KEY), options = {}, retryAttempt = 0) {
+  const method = String(options.method || 'GET').toUpperCase();
+  if (method !== 'GET' || retryAttempt > 0) {
+    return adminFetchRequest(path, token, options, retryAttempt);
+  }
+  const requestKey = `${token || ''}:${path}`;
+  if (adminGetRequests.has(requestKey)) return adminGetRequests.get(requestKey);
+  const request = adminFetchRequest(path, token, options, retryAttempt)
+    .finally(() => adminGetRequests.delete(requestKey));
+  adminGetRequests.set(requestKey, request);
+  return request;
+}
+
+async function adminFetchRequest(path, token, options = {}, retryAttempt = 0) {
   const response = await fetch(path, {
     ...options,
     headers:{
@@ -570,7 +619,7 @@ async function adminFetch(path, token = sessionStorage.getItem(TOKEN_KEY), optio
       ? Math.min(retryAfterSeconds * 1000, 10000)
       : 1000 * (2 ** retryAttempt);
     await wait(delay);
-    return adminFetch(path, token, options, retryAttempt + 1);
+    return adminFetchRequest(path, token, options, retryAttempt + 1);
   }
   if (!response.ok) {
     const error = new Error(data.detail || `Ошибка сервера: ${response.status}`);
@@ -669,7 +718,10 @@ function escapeHtml(value) {
 }
 
 async function loadStaff() {
-  renderStaff(await adminFetch('/api/admin/managers'));
+  const panel = $('#staffList')?.closest('.panel');
+  return withPanelLoading(panel, async () => {
+    renderStaff(await adminFetch('/api/admin/managers'));
+  }, 'Загружаем менеджеров…');
 }
 
 async function deleteUserData(event) {
@@ -748,7 +800,10 @@ function renderExaminations(items) {
 }
 
 async function loadExaminations() {
-  renderExaminations(await adminFetch('/api/admin/examinations'));
+  const panel = $('#examinationList')?.closest('.panel');
+  return withPanelLoading(panel, async () => {
+    renderExaminations(await adminFetch('/api/admin/examinations'));
+  }, 'Загружаем обследования…');
 }
 
 const analyticsEventNames = {
@@ -890,6 +945,45 @@ function renderManagerAttribution(data = {}) {
   }
 }
 
+function formatRublesFromKopecks(value) {
+  return `${(Number(value || 0) / 100).toLocaleString('ru-RU', {minimumFractionDigits:0, maximumFractionDigits:2})} ₽`;
+}
+
+function renderPaymentAnalytics(payments = {}) {
+  const summary = payments.summary || {};
+  const root = $('#paymentAnalyticsSummary');
+  document.querySelectorAll('.payment-test-note').forEach(node => node.remove());
+  root.innerHTML = [
+    ['Попытки онлайн',summary.attempts || 0,'все созданные заказы'],
+    ['Успешные оплаты',summary.succeeded || 0,`${Number(summary.conversion || 0).toLocaleString('ru-RU')}% пользователей оплатили`],
+    ['Выручка',formatRublesFromKopecks(summary.revenue_kopecks),'без тестовых платежей'],
+    ['Ожидают',summary.pending || 0,'создаются или обрабатываются'],
+    ['Неуспешные',summary.unsuccessful || 0,'отменены, прерваны или с ошибкой'],
+    ['На медосмотре',summary.at_exam_users || 0,'выбрали оплату при прохождении'],
+  ].map(([label,value,note]) => `<article><span>${escapeHtml(String(label))}</span><strong>${typeof value === 'number' ? value.toLocaleString('ru-RU') : escapeHtml(String(value))}</strong><small>${escapeHtml(String(note))}</small></article>`).join('');
+  if (Number(summary.test_attempts || 0)) {
+    root.insertAdjacentHTML('afterend', `<p class="payment-test-note">Тестовых попыток за период: <b>${Number(summary.test_attempts).toLocaleString('ru-RU')}</b>. Они показаны в статусах, но исключены из выручки.</p>`);
+  }
+  renderDistribution('#paymentStatusDistribution',payments.statuses || [],'label','orders');
+  renderDistribution('#paymentItemsDistribution',payments.items || [],'label','purchases');
+  const recent = $('#paymentRecentTable');
+  recent.replaceChildren();
+  for (const item of payments.recent || []) {
+    const row = document.createElement('tr');
+    textCell(row,formatDate(item.created_at));
+    textCell(row,`${String(item.id || '').slice(-8).toUpperCase()}${item.test ? ' · тест' : ''}`);
+    textCell(row,item.chel_id || '—',item.chel_id || '');
+    statusCell(row,item.status);
+    textCell(row,formatRublesFromKopecks(item.amount_kopecks));
+    recent.append(row);
+  }
+  if (!(payments.recent || []).length) {
+    const row = document.createElement('tr');
+    const cell = document.createElement('td'); cell.colSpan = 5; cell.textContent = 'За выбранный период платежей нет';
+    row.append(cell); recent.append(row);
+  }
+}
+
 function renderAnalytics(data) {
   latestAnalyticsData = data;
   const summary = $('#analyticsSummary');
@@ -926,6 +1020,7 @@ function renderAnalytics(data) {
   renderDistribution('#analyticsSources',data.sources || [],'label','users');
   renderManagerAttribution(data.manager_attribution || {});
   renderExaminationAnalytics(data.examinations || [], data.examination_summary || {});
+  renderPaymentAnalytics(data.payments || {});
 
   const questions = $('#analyticsQuestionsChart'); questions.replaceChildren();
   if (!(data.questions || []).length) {
@@ -969,12 +1064,14 @@ function renderAnalytics(data) {
 }
 
 async function loadAnalytics() {
-  const params = new URLSearchParams({period:$('#analyticsPeriod').value,recent_page:String(analyticsRecentPage),recent_limit:'25'});
-  for (const [key,selector] of [['device','#analyticsDevice'],['method','#analyticsMethod'],['source','#analyticsSource']]) {
-    if ($(selector).value) params.set(key,$(selector).value);
-  }
-  appendDateRange(params, '#analyticsDateFrom', '#analyticsDateTo');
-  renderAnalytics(await adminFetch(`/api/admin/analytics?${params}`));
+  return withPanelLoading('#analyticsAdminView', async () => {
+    const params = new URLSearchParams({period:$('#analyticsPeriod').value,recent_page:String(analyticsRecentPage),recent_limit:'25'});
+    for (const [key,selector] of [['device','#analyticsDevice'],['method','#analyticsMethod'],['source','#analyticsSource']]) {
+      if ($(selector).value) params.set(key,$(selector).value);
+    }
+    appendDateRange(params, '#analyticsDateFrom', '#analyticsDateTo');
+    renderAnalytics(await adminFetch(`/api/admin/analytics?${params}`));
+  }, 'Считаем воронку и поведение…');
 }
 
 function appendDateRange(params, fromSelector, toSelector) {
@@ -1044,7 +1141,10 @@ function metric2PreviewMarkup(screen, large = false) {
   } else if (kind === 'payment') {
     const selected = examinations[0];
     content = `<small>ПОСЛЕДНИЙ ШАГ</small><b>Проверим заказ</b><p>Выберите, как вам будет удобнее оплатить дополнительные обследования.</p><span class="metric2-mock-test"><strong>${escapeHtml(selected?.name || 'Выбранное обследование')}</strong><em>${Number(selected?.price || 0).toLocaleString('ru-RU')} ₽</em></span><span class="metric2-mock-total">Итого <b>${Number(selected?.price || 0).toLocaleString('ru-RU')} ₽</b></span>${action('Оплатить онлайн')}${action('Оплатить на медосмотре')}${action('← Вернуться к обследованиям',true)}`;
-  } else if (kind === 'payment_unavailable') content = `<div class="metric2-mock-modal"><span class="metric2-mock-icon">⌛</span><b>Онлайн-оплата временно недоступна</b><p>Мы уже работаем над её подключением. Пока вы можете выбрать оплату на медицинском осмотре.</p>${action('Понятно')}</div>`;
+  } else if (kind === 'payment_processing') content = `<div class="metric2-mock-modal"><span class="metric2-mock-icon">⌛</span><b>Проверяем оплату</b><p>Обычно это занимает несколько секунд. Не закрывайте страницу.</p></div>`;
+  else if (kind === 'payment_success') content = `<span class="metric2-mock-icon">✓</span><small>ОПЛАТА ПОДТВЕРЖДЕНА</small><b>Всё получилось!</b><p>ЮKassa подтвердила оплату. Выбранные обследования сохранены.</p><span class="metric2-mock-info"><b>Где потом найти оплату</b><small>Откройте чат → нажмите меню ☰ справа вверху → выберите «Мои покупки». Там будут сумма, дата, состав заказа и статус «Оплачено».</small></span><p class="metric2-mock-note">Успешная покупка хранится в истории и не удаляется. Электронный чек придёт на указанную при оплате почту.</p>${action('Открыть мои покупки')}${action('Перейти в чат',true)}`;
+  else if (kind === 'payment_result') content = `<div class="metric2-mock-modal"><span class="metric2-mock-icon">!</span><b>Оплата не завершена</b><p>Попытка сохранена в разделе «Мои покупки». Можно проверить статус или повторить оплату.</p>${action('Вернуться к оплате')}${action('Мои покупки',true)}</div>`;
+  else if (kind === 'payment_unavailable') content = `<div class="metric2-mock-modal"><span class="metric2-mock-icon">⌛</span><b>Онлайн-оплата временно недоступна</b><p>Мы уже работаем над её подключением. Пока вы можете выбрать оплату на медицинском осмотре.</p>${action('Понятно')}</div>`;
   else if (kind === 'completion') content = `<span class="metric2-mock-emoji">🎉</span><small>ОБСЛЕДОВАНИЯ ВЫБРАНЫ</small><b>Отлично! Вы выбрали дополнительные обследования.</b><p>В день медицинского осмотра наша бригада сообщит вам <strong>индивидуальный номер пробирки</strong>.</p><p>Чтобы получить результаты анализов, достаточно будет ввести этот номер в соответствующее поле нашего сервиса.</p><p class="metric2-mock-note">№ Сейчас у вас этого номера еще нет — это нормально. Когда он появится, просто напишите в чат нашему менеджеру. Он подскажет, куда ввести этот номер и как получить результаты.</p><p>После этого сообщения для вас откроется чат, в котором вы сможете:</p><ul><li>узнать, как получить результаты анализов;</li><li>задать любые вопросы о медицинском осмотре;</li><li>получить консультацию по анализам, питанию и вопросам здоровья.</li></ul><p>Как только результаты будут готовы, вы сможете <strong>бесплатно получить их расшифровку</strong> у нашего специалиста.</p><p class="metric2-mock-note"><strong>📱 Также рекомендуем установить наше приложение на смартфон.</strong> Так вы не потеряете доступ к своим результатам, сможете в любой момент обратиться к онлайн-врачу и всегда будете иметь все необходимые медицинские сервисы под рукой.</p><p>💬 Не стесняйтесь писать в чат — мы всегда рады помочь!</p><span class="metric2-mock-info"><b>↗ Сохраните результаты и расшифровки</b><small>Привяжите Telegram или MAX, чтобы вернуться к анкете, выбранным обследованиям и готовым результатам с другого устройства.</small></span>${action('Привязать мессенджер')}${action('＋ Установить приложение')}${action('Установлю позже',true)}`;
   else if (kind === 'completion_skipped') content = `<span class="metric2-mock-icon">✓</span><small>АНКЕТА ЗАВЕРШЕНА</small><b>Спасибо! Ваши ответы сохранены.</b><p>Вы решили пока не выбирать дополнительные обследования. Если захотите, к ним можно будет вернуться позже через меню сервиса.</p><p><strong>В Консилиуме вы сможете:</strong></p><ul><li>задавать медицинскому помощнику вопросы о здоровье, питании и медицинском осмотре;</li><li>получать результаты анализов по номеру пробирки и просить помочь с расшифровкой;</li><li>сохранять историю обращений и важные сведения о здоровье;</li><li>при необходимости пригласить медицинского специалиста в чат.</li></ul><span class="metric2-mock-info"><b>↗ Не потеряйте доступ</b><small>Привяжите Telegram или MAX, чтобы открыть анкету, историю диалогов и результаты с другого устройства или после очистки браузера.</small></span>${action('Привязать мессенджер')}<p class="metric2-mock-note"><strong>📱 Установите приложение на устройство.</strong> Так Консилиум будет всегда под рукой, а вернуться к вопросам о здоровье станет проще.</p>${action('＋ Установить приложение')}${action('Перейти в Консилиум',true)}`;
   else content = `<small>${escapeHtml(screen.stage || '')}</small><b>${escapeHtml(screen.title)}</b><p>${escapeHtml(screen.description || '')}</p>`;
@@ -1055,7 +1155,7 @@ function metric2PreviewMarkup(screen, large = false) {
     : kind.startsWith('question_') ? 'Анкета'
     : kind === 'exam_catalog' ? 'Описание чек-апов'
     : ['exam_offer','exam_objection','exam_selection'].includes(kind) ? 'Обследования'
-    : ['payment','payment_unavailable'].includes(kind) ? 'Оплата'
+    : ['payment','payment_processing','payment_success','payment_result','payment_unavailable'].includes(kind) ? 'Оплата'
     : ['completion','completion_skipped'].includes(kind) ? 'Готово'
     : (screen.stage || '').split(' · ')[0] || 'Анкета';
   const progress = kind === 'appearance' ? 2
@@ -1064,6 +1164,9 @@ function metric2PreviewMarkup(screen, large = false) {
     : ['exam_catalog','exam_objection'].includes(kind) ? 76
     : kind === 'exam_selection' ? 80
     : kind === 'payment' ? 92
+    : kind === 'payment_processing' ? 96
+    : kind === 'payment_result' ? 96
+    : kind === 'payment_success' ? 100
     : kind === 'payment_unavailable' ? 92
     : ['completion','completion_skipped'].includes(kind) ? 100 : 0;
   const appHeader = standalone ? '' : `<div class="metric2-phone-app"><span class="metric2-phone-brand"><b>К</b><span><strong>Консилиум</strong><small>Персональный старт</small></span></span><em>${escapeHtml(stage)}</em></div><div class="metric2-phone-progress"><i style="width:${progress}%"></i></div>`;
@@ -1103,7 +1206,7 @@ function renderMetric2(data) {
     const comparison = screen.id === 'welcome' ? 'Первый экран — база расчёта'
       : screen.branch ? `${screen.percent_of_parent}% от экрана «${escapeHtml(titleById[screen.parent_id] || 'родительский экран')}»`
       : `${screen.percent_of_parent}% от предыдущего основного экрана`;
-    const dropoff = screen.id === 'welcome' ? '' : `<div class="metric2-row-dropoff"><b>Не перешли на этот экран: ${Number(screen.dropoff_users || 0).toLocaleString('ru-RU')} из ${Number(screen.comparison_users || 0).toLocaleString('ru-RU')}</b><span>${Number(screen.dropoff_percent_of_parent || 0).toLocaleString('ru-RU')}% от предыдущего · ${Number(screen.dropoff_percent_of_start || 0).toLocaleString('ru-RU')}% от первого</span><small>Выбрали другой путь: ${Number(screen.alternate_path_users || 0).toLocaleString('ru-RU')} · остановились на предыдущем: ${Number(screen.actual_dropoff_users || 0).toLocaleString('ru-RU')}</small></div>`;
+    const dropoff = screen.id === 'welcome' ? '' : `<div class="metric2-row-dropoff"><b>Не перешли на этот экран: ${Number(screen.dropoff_users || 0).toLocaleString('ru-RU')} из ${Number(screen.comparison_users || 0).toLocaleString('ru-RU')}</b><span class="metric2-dropoff-percent"><span>${Number(screen.dropoff_percent_of_parent || 0).toLocaleString('ru-RU')}% от предыдущего</span><span>${Number(screen.dropoff_percent_of_start || 0).toLocaleString('ru-RU')}% от первого</span></span><small><span>Выбрали другой путь: ${Number(screen.alternate_path_users || 0).toLocaleString('ru-RU')}</span><span>Остановились на предыдущем: ${Number(screen.actual_dropoff_users || 0).toLocaleString('ru-RU')}</span></small></div>`;
     const quality = screen.data_quality === 'incomplete'
       ? `<span class="metric2-quality incomplete">Неполные данные · ${Number(screen.incomplete_transition_users || 0).toLocaleString('ru-RU')}</span>`
       : '<span class="metric2-quality complete">Маршрут полный</span>';
@@ -1216,26 +1319,30 @@ function closeMetric2Modal() {
 }
 
 async function loadMetric2() {
-  const params = new URLSearchParams({period:$('#metric2Period').value});
-  for (const [key,selector] of [['device','#metric2Device'],['method','#metric2Method'],['source','#metric2Source']]) {
-    if ($(selector).value) params.set(key,$(selector).value);
-  }
-  appendDateRange(params, '#metric2DateFrom', '#metric2DateTo');
-  renderMetric2(await adminFetch(`/api/admin/metric2?${params}`));
+  return withPanelLoading('#metric2AdminView', async () => {
+    const params = new URLSearchParams({period:$('#metric2Period').value});
+    for (const [key,selector] of [['device','#metric2Device'],['method','#metric2Method'],['source','#metric2Source']]) {
+      if ($(selector).value) params.set(key,$(selector).value);
+    }
+    appendDateRange(params, '#metric2DateFrom', '#metric2DateTo');
+    renderMetric2(await adminFetch(`/api/admin/metric2?${params}`));
+  }, 'Строим маршруты пользователей…');
 }
 
 async function loadFavoriteSources() {
   const ids = [...favoriteAnalytics];
-  if (ids.some(id => id.startsWith('analytics-'))) await loadAnalytics();
-  if (ids.some(id => id.startsWith('cost-'))) await loadCosts();
+  const tasks = [];
+  if (ids.some(id => id.startsWith('analytics-'))) tasks.push(loadAnalytics());
+  if (ids.some(id => id.startsWith('cost-'))) tasks.push(loadCosts());
   for (const [id,key] of [
     ['dashboard-users','users'],
     ['dashboard-devices-table','devices'],
     ['dashboard-conversations','conversations'],
     ['dashboard-requests','requests'],
   ]) {
-    if (favoriteAnalytics.has(id)) await loadTable(key);
+    if (favoriteAnalytics.has(id)) tasks.push(loadTable(key));
   }
+  await withPanelLoading('#favoritesAdminView', () => Promise.all(tasks), 'Собираем избранную аналитику…');
   decorateFavoriteSources();
   renderFavorites();
 }
@@ -1267,12 +1374,22 @@ function showAdminView(view) {
   $('#managersTab').classList.toggle('active', managersVisible);
   $('#examinationsTab').classList.toggle('active', examinationsVisible);
   $('#costsTab').classList.toggle('active', costsVisible);
-  if (managersVisible) loadStaff().catch(showDashboardError);
-  if (examinationsVisible) loadExaminations().catch(showDashboardError);
-  if (costsVisible) loadCosts().catch(showDashboardError);
-  if (analyticsVisible) loadAnalytics().catch(showDashboardError);
-  if (metric2Visible) loadMetric2().catch(showDashboardError);
-  if (favoritesVisible) loadFavoriteSources().catch(showDashboardError);
+  // На экране входа токена ещё нет: запросы к защищённым таблицам в этот
+  // момент не запускаем, иначе каждый ответ 401 снова откроет форму входа.
+  if (sessionStorage.getItem(TOKEN_KEY)) {
+    loadAdminViewData(activeAdminView).catch(showDashboardError);
+  }
+}
+
+function loadAdminViewData(view = activeAdminView) {
+  if (view === 'dashboard') return loadAllTables();
+  if (view === 'favorites') return loadFavoriteSources();
+  if (view === 'managers') return loadStaff();
+  if (view === 'examinations') return loadExaminations();
+  if (view === 'costs') return loadCosts();
+  if (view === 'analytics') return loadAnalytics();
+  if (view === 'metric2') return loadMetric2();
+  return Promise.resolve();
 }
 
 async function createManager(event) {
@@ -1490,25 +1607,28 @@ async function loadTable(key, reset = false) {
     if (state.createdFrom) params.set('created_from',state.createdFrom);
     if (state.createdTo) params.set('created_to',state.createdTo);
   }
-  const data = await adminFetch(`/api/admin/table?${params}`);
-  state.total = data.total;
-  state.offset = data.offset;
-  state.sort = data.sort || state.sort;
-  state.order = data.order || state.order;
-  if (key === 'users') renderUsers(data.rows,data.total,{
-    overallTotal:data.overall_total,
-    periodTotal:data.period_total,
-    filterActive:Boolean(state.query || state.createdFrom || state.createdTo),
-  });
-  else if (key === 'devices') renderDevices(data.rows,data.total);
-  else if (key === 'conversations') renderConversations(data.rows,data.total);
-  else renderRequests(data.rows,data.total);
-  renderTablePage(state);
-  updateTableSortIndicators(state);
+  const panel = $(`#${state.prefix}Table`)?.closest('.table-panel');
+  return withPanelLoading(panel, async () => {
+    const data = await adminFetch(`/api/admin/table?${params}`);
+    state.total = data.total;
+    state.offset = data.offset;
+    state.sort = data.sort || state.sort;
+    state.order = data.order || state.order;
+    if (key === 'users') renderUsers(data.rows,data.total,{
+      overallTotal:data.overall_total,
+      periodTotal:data.period_total,
+      filterActive:Boolean(state.query || state.createdFrom || state.createdTo),
+    });
+    else if (key === 'devices') renderDevices(data.rows,data.total);
+    else if (key === 'conversations') renderConversations(data.rows,data.total);
+    else renderRequests(data.rows,data.total);
+    renderTablePage(state);
+    updateTableSortIndicators(state);
+  }, 'Загружаем таблицу…');
 }
 
 async function loadAllTables() {
-  for (const key of Object.keys(tableStates)) await loadTable(key);
+  await Promise.all(Object.keys(tableStates).map(key => loadTable(key)));
 }
 
 function bindTableControls(key) {
@@ -1602,22 +1722,30 @@ function showDashboard() {
 async function loadDashboard(token = sessionStorage.getItem(TOKEN_KEY)) {
   if (!token) return showLogin();
   if (dashboardLoading) return;
+  // Дочерние панели используют токен из sessionStorage. Сохраняем его до
+  // начала параллельных запросов; при отказе авторизации блок catch удалит его.
+  sessionStorage.setItem(TOKEN_KEY,token);
   dashboardLoading = true;
   const button = $('#refreshButton');
   button.disabled = true;
+  button.classList.add('is-loading');
   $('#dashboardError').classList.add('hidden');
+  setPanelLoading('#summaryGrid', true, 'Обновляем сводку…');
+  setPanelLoading($('.analytics-grid'), true, 'Обновляем графики…');
   try {
+    // Запускаем содержимое текущей вкладки одновременно со сводкой. Ошибку
+    // превращаем в значение сразу, чтобы отклонённый промис не оставался
+    // необработанным, пока основной запрос ещё выполняется.
+    const detailPromise = loadAdminViewData(activeAdminView).then(
+      () => null,
+      error => error,
+    );
     const data = await adminFetch('/api/admin/dashboard',token);
     sessionStorage.setItem(TOKEN_KEY,token);
     showDashboard();
     renderDashboard(data);
-    if (activeAdminView === 'dashboard') await loadAllTables();
-    else if (activeAdminView === 'favorites') await loadFavoriteSources();
-    else if (activeAdminView === 'managers') await loadStaff();
-    else if (activeAdminView === 'examinations') await loadExaminations();
-    else if (activeAdminView === 'costs') await loadCosts();
-    else if (activeAdminView === 'analytics') await loadAnalytics();
-    else if (activeAdminView === 'metric2') await loadMetric2();
+    const detailError = await detailPromise;
+    if (detailError) throw detailError;
     clearInterval(refreshTimer);
     refreshTimer = setInterval(() => loadDashboard(),60000);
   } catch (error) {
@@ -1630,6 +1758,9 @@ async function loadDashboard(token = sessionStorage.getItem(TOKEN_KEY)) {
   } finally {
     dashboardLoading = false;
     button.disabled = false;
+    button.classList.remove('is-loading');
+    setPanelLoading('#summaryGrid', false);
+    setPanelLoading($('.analytics-grid'), false);
   }
 }
 

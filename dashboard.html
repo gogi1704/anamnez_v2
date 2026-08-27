@@ -11,7 +11,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/static/dashboard.css?v=20260827-metric2-clarity-v2">
+  <link rel="stylesheet" href="/static/dashboard.css?v=20260828-payment-analytics-v1">
 </head>
 <body>
   <main class="dashboard-shell">
@@ -108,6 +108,24 @@
             <span class="table-count" id="analyticsExaminationsSummary"></span>
           </div>
           <div class="examination-popularity" id="analyticsExaminations"></div>
+        </article>
+        <article class="panel payment-analytics-panel">
+          <div class="panel-heading">
+            <div>
+              <p class="eyebrow">ЮKassa и оплата на медосмотре</p>
+              <h2>Статистика по оплате</h2>
+              <p>Учитываются все попытки, включая скрытые пользователем. Тестовые платежи отмечаются отдельно и не входят в фактическую выручку.</p>
+            </div>
+          </div>
+          <section class="payment-analytics-summary" id="paymentAnalyticsSummary"></section>
+          <div class="payment-analytics-grid">
+            <section><h3>Статусы онлайн-платежей</h3><div class="distribution-list" id="paymentStatusDistribution"></div></section>
+            <section><h3>Оплаченные обследования</h3><div class="distribution-list" id="paymentItemsDistribution"></div></section>
+          </div>
+          <div class="table-scroll payment-recent-table"><table>
+            <thead><tr><th>Дата</th><th>Заказ</th><th>chel_id</th><th>Статус</th><th>Сумма</th></tr></thead>
+            <tbody id="paymentRecentTable"></tbody>
+          </table></div>
         </article>
         <article class="panel questionnaire-analytics-panel"><div class="panel-heading"><div><p class="eyebrow">Отдельно от общей воронки</p><h2>Статистика по анкете</h2><p>В общей воронке анкета считается одним этапом. Здесь можно увидеть, на каких вопросах пользователи чаще пропускают ответ или прекращают заполнение.</p></div></div><div class="questionnaire-chart" id="analyticsQuestionsChart"></div></article>
         <article class="panel table-panel"><div class="panel-heading"><div><p class="eyebrow">Контроль качества</p><h2>Ошибки и последние события</h2></div><span class="table-count" id="analyticsErrors"></span></div><div class="table-scroll"><table><thead><tr><th>Время</th><th>Событие</th><th>chel_id</th><th>Экран</th><th>Устройство</th><th>Браузер</th></tr></thead><tbody id="analyticsRecent"></tbody></table></div><div class="table-pagination"><button id="analyticsRecentPrev" type="button">← Назад</button><span id="analyticsRecentPage">Страница 1 из 1</span><button id="analyticsRecentNext" type="button">Далее →</button></div></article>
@@ -404,6 +422,6 @@
       </div>
     </section>
   </div>
-  <script src="/static/dashboard.js?v=20260827-metric2-clarity-v2" defer></script>
+  <script src="/static/dashboard.js?v=20260828-payment-analytics-v1" defer></script>
 </body>
 </html>

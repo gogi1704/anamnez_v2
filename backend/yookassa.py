@@ -12,7 +12,7 @@ class YooKassaUnavailable(RuntimeError):
 
 
 def configured() -> bool:
-    return bool(settings.yookassa_shop_id and settings.yookassa_secret_key)
+    return bool(settings.yookassa_shop_id.isdigit() and settings.yookassa_secret_key)
 
 
 def _request(method: str, path: str, payload: dict | None = None, *, idempotence_key: str = "") -> dict:
@@ -52,8 +52,9 @@ def _request(method: str, path: str, payload: dict | None = None, *, idempotence
 
 
 def create_payment(order: dict, return_url: str, receipt_email: str = "") -> dict:
+    amount_kopecks = int(order["amount_kopecks"])
     payload = {
-        "amount": {"value": f"{int(order['amount_kopecks']) / 100:.2f}", "currency": "RUB"},
+        "amount": {"value": f"{amount_kopecks // 100}.{amount_kopecks % 100:02d}", "currency": "RUB"},
         "capture": True,
         "confirmation": {"type": "redirect", "return_url": return_url},
         "description": f"Дополнительные обследования, заказ {order['id'][-12:]}",
@@ -86,3 +87,12 @@ def get_payment(payment_id: str) -> dict:
     if not re.fullmatch(r"[A-Za-z0-9-]{8,80}", str(payment_id or "")):
         raise ValueError("Некорректный идентификатор платежа")
     return _request("GET", f"payments/{payment_id}")
+
+
+def cancel_payment(payment_id: str, idempotence_key: str) -> dict:
+    if not re.fullmatch(r"[A-Za-z0-9-]{8,80}", str(payment_id or "")):
+        raise ValueError("Некорректный идентификатор платежа")
+    return _request(
+        "POST", f"payments/{payment_id}/cancel", {},
+        idempotence_key=str(idempotence_key or "")[:64],
+    )

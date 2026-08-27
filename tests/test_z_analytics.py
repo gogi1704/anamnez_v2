@@ -1,4 +1,5 @@
 import json
+import sqlite3
 import tempfile
 import unittest
 from pathlib import Path
@@ -11,13 +12,31 @@ class AnalyticsTests(unittest.TestCase):
     def setUp(self):
         self.temp_dir = tempfile.TemporaryDirectory()
         self.original_path = settings.analytics_database_path
+        self.original_database_path = settings.database_path
         self.original_enabled = settings.analytics_enabled
         object.__setattr__(settings, "analytics_database_path", Path(self.temp_dir.name) / "analytics.db")
+        object.__setattr__(settings, "database_path", Path(self.temp_dir.name) / "main.db")
         object.__setattr__(settings, "analytics_enabled", True)
+        conn = sqlite3.connect(settings.database_path)
+        try:
+            conn.executescript("""
+                CREATE TABLE user_profile (chel_id TEXT PRIMARY KEY, company_inn TEXT NOT NULL DEFAULT '');
+                CREATE TABLE payment_orders (
+                    id TEXT PRIMARY KEY, chel_id TEXT NOT NULL, status TEXT NOT NULL,
+                    amount_kopecks INTEGER NOT NULL, items TEXT NOT NULL DEFAULT '[]',
+                    paid INTEGER NOT NULL DEFAULT 0, test INTEGER NOT NULL DEFAULT 0,
+                    created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
+                    paid_at TEXT, canceled_at TEXT
+                );
+            """)
+            conn.commit()
+        finally:
+            conn.close()
         analytics.init_db()
 
     def tearDown(self):
         object.__setattr__(settings, "analytics_database_path", self.original_path)
+        object.__setattr__(settings, "database_path", self.original_database_path)
         object.__setattr__(settings, "analytics_enabled", self.original_enabled)
         self.temp_dir.cleanup()
 
@@ -97,6 +116,37 @@ class AnalyticsTests(unittest.TestCase):
             self.assertEqual(conn.execute(
                 "SELECT registration_method FROM analytics_sessions WHERE session_id='method-session-01'"
             ).fetchone()[0], "max")
+
+    def test_admin_report_contains_verified_payment_statistics(self):
+        analytics.record_events("CHEL-PAY", [{
+            "event_id": "pay-at-exam-0001", "session_id": "pay-session-0001",
+            "event_name": "payment_method_selected", "properties": {"method": "at_exam"},
+        }])
+        conn = sqlite3.connect(settings.database_path)
+        try:
+            conn.execute("INSERT INTO user_profile (chel_id,company_inn) VALUES ('CHEL-PAY','7700000000')")
+            conn.executemany(
+                """INSERT INTO payment_orders
+                (id,chel_id,status,amount_kopecks,items,paid,test,created_at,updated_at,paid_at)
+                VALUES (?,?,?,?,?,?,?,?,?,?)""",
+                [
+                    ("ord-paid", "CHEL-PAY", "succeeded", 150000,
+                     json.dumps([{"id":"lipids","name":"Липидный профиль","price":1500}]),
+                     1, 0, "2099-01-01T10:00:00+00:00", "2099-01-01T10:01:00+00:00", "2099-01-01T10:01:00+00:00"),
+                    ("ord-failed", "CHEL-PAY", "canceled", 50000, "[]", 0, 0,
+                    "2099-01-01T10:02:00+00:00", "2099-01-01T10:03:00+00:00", None),
+                ],
+            )
+            conn.commit()
+        finally:
+            conn.close()
+        report = analytics.admin_report("all")
+        payments = report["payments"]
+        self.assertEqual(payments["summary"]["attempts"], 2)
+        self.assertEqual(payments["summary"]["succeeded"], 1)
+        self.assertEqual(payments["summary"]["revenue_kopecks"], 150000)
+        self.assertEqual(payments["summary"]["at_exam_users"], 1)
+        self.assertEqual(payments["items"][0]["label"], "Липидный профиль")
 
     def test_recent_events_are_paginated_and_page_is_clamped(self):
         events = [
@@ -278,6 +328,30 @@ class AnalyticsTests(unittest.TestCase):
         }
         self.assertFalse(appearance_destinations["exam_offer"]["direct"])
         self.assertIn("не прямой переход", appearance_destinations["exam_offer"]["explanation"])
+
+    def test_metric2_loop_erases_returns_without_losing_screen_reach(self):
+        analytics.record_events("CHEL-METRIC-LOOP", [
+            {"event_id": "loop-welcome", "session_id": "loop-session", "event_name": "onboarding_screen_viewed", "properties": {"screen": "welcome", "context": "onboarding"}},
+            {"event_id": "loop-registration", "session_id": "loop-session", "event_name": "onboarding_screen_viewed", "properties": {"screen": "registration", "previous_screen": "welcome", "context": "onboarding"}},
+            {"event_id": "loop-warning", "session_id": "loop-session", "event_name": "onboarding_screen_viewed", "properties": {"screen": "anonymous_warning", "previous_screen": "registration", "context": "onboarding"}},
+            # Closing the warning reveals registration.  The following target
+            # carries that previous screen even if an older client omitted a
+            # separate repeated registration view event.
+            {"event_id": "loop-appearance", "session_id": "loop-session", "event_name": "onboarding_screen_viewed", "properties": {"screen": "appearance", "previous_screen": "registration", "context": "onboarding"}},
+        ])
+
+        report = analytics.metric2_report("30")
+        screens = {item["id"]: item for item in report["screens"]}
+        self.assertEqual(screens["anonymous_warning"]["users"], 1)
+        warning_targets = {
+            item["screen_id"] for item in screens["anonymous_warning"]["outgoing_transitions"]
+        }
+        registration_targets = {
+            item["screen_id"] for item in screens["registration"]["outgoing_transitions"]
+        }
+        self.assertNotIn("appearance", warning_targets)
+        self.assertIn("appearance", registration_targets)
+        self.assertEqual(screens["anonymous_warning"]["data_quality"], "complete")
 
     def test_metric2_counts_only_final_navigation_action_per_user_and_screen(self):
         analytics.record_events("CHEL-METRIC-ACTION-ONE", [

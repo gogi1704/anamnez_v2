@@ -9,6 +9,7 @@ import uuid
 from contextlib import contextmanager
 from contextvars import ContextVar
 from datetime import date, datetime, timedelta, timezone
+from decimal import Decimal, InvalidOperation
 
 from .config import settings
 
@@ -1751,12 +1752,20 @@ def _public_payment_order(row) -> dict | None:
         return None
     result = dict(row)
     result["items"] = _payment_items(result.get("items", "[]"))
-    result["amount"] = f"{int(result.pop('amount_kopecks', 0)) / 100:.2f}"
+    amount_kopecks = int(result.pop("amount_kopecks", 0))
+    result["amount"] = f"{amount_kopecks // 100}.{amount_kopecks % 100:02d}"
     result["paid"] = bool(result.get("paid"))
     result["test"] = bool(result.get("test"))
+    if result.get("status") != "pending" or not str(result.get("confirmation_url", "")).startswith("https://"):
+        result["confirmation_url"] = ""
     result.pop("idempotence_key", None)
     result.pop("selection_fingerprint", None)
     result.pop("last_error", None)
+    # The browser only needs the local order id. Internal identity and provider
+    # identifiers stay server-side and are used for ownership/status checks.
+    result.pop("chel_id", None)
+    result.pop("provider_payment_id", None)
+    result.pop("hidden_at", None)
     return result
 
 
@@ -1788,7 +1797,7 @@ def create_payment_order() -> dict:
         existing = conn.execute(
             """SELECT * FROM payment_orders
             WHERE chel_id = ? AND selection_fingerprint = ?
-              AND status IN ('creating', 'pending')
+              AND status IN ('creating', 'pending', 'abandoned')
             ORDER BY created_at DESC LIMIT 1""",
             (chel_id, fingerprint),
         ).fetchone()
@@ -1850,6 +1859,66 @@ def mark_payment_creation_failed(order_id: str, error: str) -> None:
         conn.commit()
 
 
+def mark_payment_abandoned(order_id: str) -> dict:
+    """Close an unfinished local attempt after the user returns without paying.
+
+    YooKassa does not allow a regular one-stage redirect payment to be canceled
+    while it is still ``pending``. The provider webhook may therefore replace
+    this local status later if the bank actually completes the payment.
+    """
+    with _write_lock, connection() as conn:
+        row = conn.execute(
+            "SELECT * FROM payment_orders WHERE id = ? AND chel_id = ?",
+            (str(order_id or ""), current_chel_id()),
+        ).fetchone()
+        if not row:
+            raise ValueError("Заказ не найден")
+        if row["status"] == "pending" and not bool(row["paid"]):
+            conn.execute(
+                "UPDATE payment_orders SET status = 'abandoned', updated_at = ? WHERE id = ?",
+                (utc_now(), row["id"]),
+            )
+            conn.commit()
+        updated = conn.execute(
+            "SELECT * FROM payment_orders WHERE id = ?", (row["id"],),
+        ).fetchone()
+    return _public_payment_order(updated)
+
+
+def list_payment_orders(limit: int = 100) -> list[dict]:
+    """Return the current user's payment attempts without provider secrets."""
+    limit = max(1, min(int(limit or 100), 200))
+    with connection() as conn:
+        rows = conn.execute(
+            """SELECT * FROM payment_orders WHERE chel_id = ? AND hidden_at IS NULL
+            ORDER BY created_at DESC LIMIT ?""",
+            (current_chel_id(), limit),
+        ).fetchall()
+    return [_public_payment_order(row) for row in rows]
+
+
+def hide_payment_order(order_id: str) -> dict:
+    """Hide a final unsuccessful attempt while retaining the audit record."""
+    with _write_lock, connection() as conn:
+        row = conn.execute(
+            "SELECT * FROM payment_orders WHERE id = ? AND chel_id = ?",
+            (str(order_id or ""), current_chel_id()),
+        ).fetchone()
+        if not row:
+            raise ValueError("Заказ не найден")
+        if row["status"] not in {"canceled", "abandoned", "failed"} or bool(row["paid"]):
+            raise ValueError("Можно удалить только неуспешную или незавершённую попытку")
+        conn.execute(
+            "UPDATE payment_orders SET hidden_at = ?, updated_at = ? WHERE id = ?",
+            (utc_now(), utc_now(), row["id"]),
+        )
+        conn.commit()
+        updated = conn.execute(
+            "SELECT * FROM payment_orders WHERE id = ?", (row["id"],),
+        ).fetchone()
+    return _public_payment_order(updated)
+
+
 def attach_yookassa_payment(order_id: str, payment: dict) -> dict:
     provider_id = str(payment.get("id", "")).strip()
     status = str(payment.get("status", "pending")).strip()
@@ -1857,11 +1926,13 @@ def attach_yookassa_payment(order_id: str, payment: dict) -> dict:
     confirmation_url = str(confirmation.get("confirmation_url", "")).strip()
     if not provider_id or status not in {"pending", "waiting_for_capture", "succeeded", "canceled"}:
         raise ValueError("ЮKassa вернула некорректный платёж")
+    if status == "pending" and not confirmation_url.startswith("https://"):
+        raise ValueError("ЮKassa не вернула безопасную ссылку для оплаты")
     with _write_lock, connection() as conn:
         cursor = conn.execute(
             """UPDATE payment_orders SET provider_payment_id = ?, status = ?,
-                confirmation_url = ?, test = ?, updated_at = ?
-            WHERE id = ? AND status = 'creating'""",
+                confirmation_url = ?, test = ?, hidden_at = NULL, updated_at = ?
+            WHERE id = ? AND status IN ('creating', 'abandoned')""",
             (
                 provider_id, status, confirmation_url, int(bool(payment.get("test"))),
                 utc_now(), str(order_id or ""),
@@ -1889,8 +1960,11 @@ def apply_yookassa_status(order_id: str, payment: dict) -> dict:
             raise ValueError("Платёж не относится к этому заказу")
         amount = payment.get("amount") if isinstance(payment.get("amount"), dict) else {}
         try:
-            provider_kopecks = int(round(float(str(amount.get("value", "0"))) * 100))
-        except (TypeError, ValueError):
+            provider_amount = Decimal(str(amount.get("value", "0")))
+            if provider_amount.as_tuple().exponent < -2:
+                raise InvalidOperation
+            provider_kopecks = int(provider_amount * 100)
+        except (InvalidOperation, TypeError, ValueError):
             provider_kopecks = -1
         metadata = payment.get("metadata") if isinstance(payment.get("metadata"), dict) else {}
         if (
@@ -1902,12 +1976,17 @@ def apply_yookassa_status(order_id: str, payment: dict) -> dict:
         paid = status == "succeeded" and bool(payment.get("paid"))
         conn.execute(
             """UPDATE payment_orders SET status = ?, paid = ?, test = ?, updated_at = ?,
+                last_error = CASE WHEN ? = 'canceled' THEN ? ELSE last_error END,
                 paid_at = CASE WHEN ? THEN COALESCE(paid_at, ?) ELSE paid_at END,
-                canceled_at = CASE WHEN ? = 'canceled' THEN COALESCE(canceled_at, ?) ELSE canceled_at END
+                canceled_at = CASE WHEN ? = 'canceled' THEN COALESCE(canceled_at, ?) ELSE canceled_at END,
+                hidden_at = CASE WHEN ? THEN NULL ELSE hidden_at END
             WHERE id = ?""",
             (
                 status, int(paid), int(bool(payment.get("test"))), now,
-                int(paid), now, status, now, row["id"],
+                status,
+                str((payment.get("cancellation_details") or {}).get("reason", ""))[:500]
+                if isinstance(payment.get("cancellation_details"), dict) else "",
+                int(paid), now, status, now, int(paid), row["id"],
             ),
         )
         if paid:
@@ -2678,6 +2757,7 @@ def init_db() -> None:
                 updated_at TEXT NOT NULL,
                 paid_at TEXT,
                 canceled_at TEXT,
+                hidden_at TEXT,
                 FOREIGN KEY(chel_id) REFERENCES users(chel_id) ON DELETE CASCADE
             );
 
@@ -2920,7 +3000,17 @@ def init_db() -> None:
         if "font_size" not in onboarding_columns:
             conn.execute("ALTER TABLE onboarding_state ADD COLUMN font_size TEXT NOT NULL DEFAULT 'standard'")
 
+        payment_columns = {row[1] for row in conn.execute("PRAGMA table_info(payment_orders)").fetchall()}
+        if "hidden_at" not in payment_columns:
+            conn.execute("ALTER TABLE payment_orders ADD COLUMN hidden_at TEXT")
+
         conn.execute("CREATE INDEX IF NOT EXISTS idx_conversations_chel_id ON conversations(chel_id, updated_at)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_users_registered_at ON users(registered_at)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_users_last_seen_at ON users(last_seen_at)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_conversations_updated_at ON conversations(updated_at)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_device_stats_last_seen_at ON user_device_stats(last_seen_at)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_messages_created_at ON messages(created_at)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_onboarding_status ON onboarding_state(status)")
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_users_from_manager "
             "ON users(from_manager, registered_at)"
@@ -2961,6 +3051,10 @@ def init_db() -> None:
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_payment_orders_user "
             "ON payment_orders(chel_id, created_at DESC)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_payment_orders_visible "
+            "ON payment_orders(chel_id, hidden_at, created_at DESC)"
         )
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_payment_orders_provider "

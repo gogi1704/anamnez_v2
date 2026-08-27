@@ -118,6 +118,22 @@ def main() -> int:
     else:
         passed.append(f"Публичный адрес задан: {settings.public_base_url}")
 
+    if settings.online_payments_enabled:
+        if not settings.yookassa_shop_id.isdigit():
+            errors.append("YOOKASSA_SHOP_ID должен содержать числовой идентификатор магазина")
+        elif not settings.yookassa_secret_key:
+            errors.append("YOOKASSA_SECRET_KEY не задан")
+        elif production and not settings.public_base_url.startswith("https://"):
+            errors.append("Для онлайн-оплаты PUBLIC_BASE_URL должен использовать https://")
+        else:
+            passed.append("Онлайн-оплата ЮKassa включена, реквизиты магазина заданы")
+        if not 5 <= settings.yookassa_timeout_seconds <= 60:
+            errors.append("YOOKASSA_TIMEOUT_SECONDS должен быть от 5 до 60 секунд")
+        if settings.yookassa_receipts_enabled and not 1 <= settings.yookassa_vat_code <= 12:
+            errors.append("YOOKASSA_VAT_CODE должен быть от 1 до 12")
+    else:
+        warnings.append("Онлайн-оплата отключена: ONLINE_PAYMENTS_ENABLED=false")
+
     metrika_id = settings.yandex_metrika_counter_id
     if metrika_id and not (metrika_id.isdigit() and 5 <= len(metrika_id) <= 12):
         errors.append("YANDEX_METRIKA_COUNTER_ID должен содержать от 5 до 12 цифр")

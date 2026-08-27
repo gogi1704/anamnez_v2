@@ -15,6 +15,7 @@ os.environ["ANALYTICS_DATABASE_PATH"] = str(Path(_temp_dir.name) / "analytics.db
 
 from backend import analytics
 from backend import database as db  # noqa: E402
+from backend import yookassa  # noqa: E402
 from backend.ai_costs import usage_record  # noqa: E402
 from backend.config import settings  # noqa: E402
 from backend.lab_results import (  # noqa: E402
@@ -1042,7 +1043,7 @@ class OrchestratorTests(unittest.TestCase):
         rich_script = (project_root / "static" / "rich-text.js").read_text(encoding="utf-8")
         rich_styles = (project_root / "static" / "rich-text.css").read_text(encoding="utf-8")
 
-        self.assertIn('/static/rich-text.js?v=20260825-messenger-return-v1', index)
+        self.assertIn('/static/rich-text.js?v=20260828-payment-analytics-v1', index)
         self.assertIn('/static/rich-text.js?v=20260816-rich-text', manager_html)
         self.assertIn('window.ConsiliumRichText.render(value)', app_script)
         self.assertIn('window.ConsiliumRichText.render(value)', manager_script)
@@ -1430,6 +1431,9 @@ class OrchestratorTests(unittest.TestCase):
         self.assertIn('id="metric2Modal"', dashboard)
         self.assertIn('id="analyticsDateFrom" type="date"', dashboard)
         self.assertIn('id="analyticsDateTo" type="date"', dashboard)
+        self.assertIn('id="paymentAnalyticsSummary"', dashboard)
+        self.assertIn('id="paymentStatusDistribution"', dashboard)
+        self.assertIn('id="paymentRecentTable"', dashboard)
         self.assertIn('id="metric2DateFrom" type="date"', dashboard)
         self.assertIn('id="metric2DateTo" type="date"', dashboard)
         self.assertIn("/api/admin/metric2", script)
@@ -1488,6 +1492,7 @@ class OrchestratorTests(unittest.TestCase):
         self.assertIn("/api/admin/examinations", script)
         self.assertIn("/api/admin/ai-costs", script)
         self.assertIn("renderCostSummary", script)
+        self.assertIn("function renderPaymentAnalytics", script)
         self.assertIn("FAVORITES_KEY", script)
         self.assertIn("function decorateFavoriteSources()", script)
         self.assertIn("function renderFavorites()", script)
@@ -1499,8 +1504,16 @@ class OrchestratorTests(unittest.TestCase):
         self.assertIn("if (dashboardLoading) return", script)
         self.assertIn("response.status === 429 && method === 'GET'", script)
         self.assertIn("retryAttempt < 3", script)
-        self.assertIn("for (const key of Object.keys(tableStates)) await loadTable(key)", script)
-        self.assertIn("if (activeAdminView === 'dashboard') await loadAllTables()", script)
+        self.assertIn("Promise.all(Object.keys(tableStates).map(key => loadTable(key)))", script)
+        self.assertIn("loadAdminViewData(activeAdminView)", script)
+        self.assertIn("adminGetRequests", script)
+        self.assertIn("admin-panel-loader", script)
+        self.assertIn(".admin-panel-loader", styles)
+        self.assertIn("if (sessionStorage.getItem(TOKEN_KEY))", script)
+        self.assertLess(
+            script.index("sessionStorage.setItem(TOKEN_KEY,token);", script.index("async function loadDashboard")),
+            script.index("loadAdminViewData(activeAdminView)", script.index("async function loadDashboard")),
+        )
         self.assertIn("saveExamination", script)
         self.assertIn("manageExamination", script)
         self.assertIn('data-staff-action="delete"', script)
@@ -1558,6 +1571,10 @@ class OrchestratorTests(unittest.TestCase):
             {item["id"] for item in skipped_completion["actions"]},
             {"install", "continue", "link_messenger"},
         )
+        self.assertIn("payment_processing", screens)
+        self.assertIn("payment_success", screens)
+        self.assertIn("payment_result", screens)
+        self.assertIn(screens["payment"]["actions"][0]["target"], {"payment_processing", "payment_unavailable"})
 
     def test_manager_messenger_api_and_deep_link_are_present(self):
         project_root = Path(__file__).resolve().parents[1]
@@ -2222,14 +2239,14 @@ class OrchestratorTests(unittest.TestCase):
         self.assertIn("controllerchange", script)
         self.assertIn("url.pathname.startsWith('/api/')", worker)
         self.assertIn("url.pathname.startsWith('/auth/')", worker)
-        self.assertIn("consilium-shell-v72", worker)
+        self.assertIn("consilium-shell-v78", worker)
         self.assertIn("fetch(request)", worker)
         self.assertIn("/static/styles.07ffaefb4795.css", index)
         self.assertIn("/static/rich-text.2bf1f5fab764.css", index)
         self.assertTrue((project_root / "static" / "styles.07ffaefb4795.css").is_file())
         self.assertTrue((project_root / "static" / "rich-text.2bf1f5fab764.css").is_file())
-        self.assertIn("/static/app.js?v=20260826-returning-user-chat-v1", index)
-        self.assertIn("/static/metrika.js?v=20260825-messenger-return-v1", index)
+        self.assertIn("/static/app.js?v=20260828-payment-analytics-v1", index)
+        self.assertIn("/static/metrika.js?v=20260828-payment-analytics-v1", index)
         self.assertIn('id="welcomeScreen"', index)
         self.assertIn('id="welcomeNextButton"', index)
         self.assertIn("WELCOME_SEEN_KEY", script)
@@ -2242,9 +2259,28 @@ class OrchestratorTests(unittest.TestCase):
         self.assertIn("Оплатить онлайн", script)
         self.assertIn("Оплатить на медосмотре", script)
         self.assertIn("/api/payments/yookassa/create", script)
+        self.assertIn("/api/purchases", script)
+        self.assertIn("data-purchase-action=\"delete\"", script)
+        self.assertIn("data-purchase-action=\"continue\"", script)
+        self.assertIn("method:'DELETE'", script)
+        self.assertIn('id="menuPurchasesButton"', index)
+        self.assertIn('id="purchasesModal"', index)
+        self.assertIn("PAYMENT_PENDING_ORDER_KEY", script)
+        self.assertIn("/abandon", script)
         self.assertIn("if (!state.publicConfig.online_payments_enabled)", script)
+        self.assertIn("trackEvent('payment_completed'", script)
+        self.assertIn("for (let attempt = 0; attempt < 8; attempt += 1)", script)
         self.assertIn("Онлайн-оплата временно недоступна", script)
         self.assertIn("handlePaymentReturn", script)
+        self.assertIn('data-onboarding-action="close-payment-review"', script)
+        self.assertIn("source:'purchases'", script)
+        self.assertIn("pendingOrder.source || params.get('payment_source')", script)
+        self.assertIn("function renderPaymentSuccess", script)
+        self.assertIn("Где потом найти оплату", script)
+        self.assertIn("Открыть мои покупки", script)
+        prompts = (project_root / "backend" / "prompts.py").read_text(encoding="utf-8")
+        self.assertIn("«Мои покупки» находятся в меню функций справа", prompts)
+        self.assertIn("данные карты, CVC/CVV", prompts)
         self.assertIn("Когда он появится", script)
         self.assertLess(
             index.index('id="menuInstallAppButton"'),
@@ -2259,7 +2295,7 @@ class OrchestratorTests(unittest.TestCase):
         main = (project_root / "backend" / "main.py").read_text(encoding="utf-8")
         config = (project_root / "backend" / "config.py").read_text(encoding="utf-8")
 
-        self.assertIn('src="/static/metrika.js?v=20260825-messenger-return-v1"', index)
+        self.assertIn('src="/static/metrika.js?v=20260828-payment-analytics-v1"', index)
         self.assertIn('YANDEX_METRIKA_COUNTER_ID', config)
         self.assertIn('path == "/api/public-config"', main)
         self.assertIn('"metrika.js"', main)
@@ -2685,6 +2721,8 @@ class OrchestratorTests(unittest.TestCase):
             }
             attached = db.attach_yookassa_payment(order["id"], provider)
             self.assertEqual(attached["status"], "pending")
+            self.assertNotIn("chel_id", attached)
+            self.assertNotIn("provider_payment_id", attached)
             self.assertEqual(db.get_onboarding()["status"], "payment")
 
             succeeded = {**provider, "status": "succeeded", "paid": True}
@@ -2699,6 +2737,39 @@ class OrchestratorTests(unittest.TestCase):
             db.reset_current_user()
             db.ensure_user("chel_test_default")
             db.set_current_chel_id("chel_test_default")
+
+    def test_yookassa_redirect_payload_uses_server_order_and_idempotence(self):
+        order = {
+            "id": "ord_1234567890abcdef",
+            "idempotence_key": "1b80fa2e-9e58-4c2b-8726-59f42b36e645",
+            "amount_kopecks": 123400,
+            "items": [{"id": "test", "name": "Комплекс", "price": 1234}],
+        }
+        payment_settings = SimpleNamespace(
+            yookassa_receipts_enabled=False,
+            yookassa_vat_code=1,
+            yookassa_payment_mode="full_prepayment",
+        )
+        with (
+            patch.object(yookassa, "settings", payment_settings),
+            patch.object(yookassa, "_request", return_value={"id": "payment-id"}) as request,
+        ):
+            yookassa.create_payment(order, "https://example.test/payment-return")
+        method, path, payload = request.call_args.args
+        self.assertEqual((method, path), ("POST", "payments"))
+        self.assertEqual(payload["amount"], {"value": "1234.00", "currency": "RUB"})
+        self.assertTrue(payload["capture"])
+        self.assertEqual(payload["confirmation"]["type"], "redirect")
+        self.assertEqual(payload["metadata"]["order_id"], order["id"])
+        self.assertEqual(
+            request.call_args.kwargs["idempotence_key"], order["idempotence_key"],
+        )
+
+        with patch.object(yookassa, "_request", return_value={"status": "canceled"}) as cancel:
+            yookassa.cancel_payment("2f3e4567-89ab-4cde-8012-3456789abcde", "order-cancel")
+        self.assertEqual(cancel.call_args.args[:2], ("POST", "payments/2f3e4567-89ab-4cde-8012-3456789abcde/cancel"))
+        self.assertEqual(cancel.call_args.args[2], {})
+        self.assertEqual(cancel.call_args.kwargs["idempotence_key"], "order-cancel")
 
     def test_yookassa_rejects_tampered_amount(self):
         chel_id = "chel_yookassa_tamper_test"
@@ -2722,6 +2793,99 @@ class OrchestratorTests(unittest.TestCase):
                     "metadata": {"order_id": order["id"]},
                 })
             self.assertEqual(db.get_onboarding()["status"], "payment")
+        finally:
+            db.set_current_chel_id(chel_id)
+            db.reset_current_user()
+            db.ensure_user("chel_test_default")
+            db.set_current_chel_id("chel_test_default")
+
+    def test_yookassa_rejects_unsafe_redirect_and_fractional_kopecks(self):
+        chel_id = "chel_yookassa_validation_test"
+        db.ensure_user(chel_id)
+        try:
+            db.set_current_chel_id(chel_id)
+            db.save_onboarding(
+                status="payment", selected_tests=["lipids"], payment_status="pending",
+            )
+            order = db.create_payment_order()
+            provider = {
+                "id": "4f3e4567-89ab-4cde-8012-3456789abcde",
+                "status": "pending", "paid": False, "test": True,
+                "confirmation": {"confirmation_url": "http://example.test/pay"},
+            }
+            with self.assertRaisesRegex(ValueError, "безопасную ссылку"):
+                db.attach_yookassa_payment(order["id"], provider)
+
+            provider["confirmation"]["confirmation_url"] = "https://yoomoney.ru/pay/test"
+            db.attach_yookassa_payment(order["id"], provider)
+            with self.assertRaisesRegex(ValueError, "Сумма"):
+                db.apply_yookassa_status(order["id"], {
+                    **provider, "status": "succeeded", "paid": True,
+                    "amount": {"value": "1500.001", "currency": "RUB"},
+                    "metadata": {"order_id": order["id"]},
+                })
+        finally:
+            db.set_current_chel_id(chel_id)
+            db.reset_current_user()
+            db.ensure_user("chel_test_default")
+            db.set_current_chel_id("chel_test_default")
+
+    def test_abandoned_payment_is_listed_and_does_not_block_new_attempt(self):
+        chel_id = "chel_yookassa_abandoned_test"
+        db.ensure_user(chel_id)
+        try:
+            db.set_current_chel_id(chel_id)
+            db.save_onboarding(
+                status="payment", selected_tests=["lipids"], payment_status="pending",
+            )
+            first = db.create_payment_order()
+            provider = {
+                "id": "5f3e4567-89ab-4cde-8012-3456789abcde",
+                "status": "pending", "paid": False, "test": True,
+                "confirmation": {"confirmation_url": "https://yoomoney.ru/pay/test"},
+            }
+            db.attach_yookassa_payment(first["id"], provider)
+            abandoned = db.mark_payment_abandoned(first["id"])
+            self.assertEqual(abandoned["status"], "abandoned")
+            self.assertEqual(db.list_payment_orders()[0]["id"], first["id"])
+            self.assertEqual(db.list_payment_orders()[0]["status"], "abandoned")
+
+            hidden = db.hide_payment_order(first["id"])
+            self.assertEqual(hidden["status"], "abandoned")
+            self.assertEqual(db.list_payment_orders(), [])
+
+            # Reopening the same order reuses the provider idempotency key and
+            # cannot accidentally create a second charge while the first
+            # provider payment may still be pending.
+            second = db.create_payment_order()
+            self.assertEqual(second["id"], first["id"])
+
+            resumed = db.attach_yookassa_payment(second["id"], provider)
+            self.assertEqual(resumed["status"], "pending")
+            self.assertEqual(resumed["id"], first["id"])
+            self.assertIn(first["id"], [item["id"] for item in db.list_payment_orders()])
+            db.mark_payment_abandoned(first["id"])
+            db.hide_payment_order(first["id"])
+
+            # A late provider confirmation remains authoritative even after the
+            # browser-side attempt was marked as unfinished.
+            succeeded = {
+                **provider, "status": "succeeded", "paid": True,
+                "amount": {"value": first["amount"], "currency": "RUB"},
+                "metadata": {"order_id": first["id"]},
+            }
+            paid = db.apply_yookassa_status(first["id"], succeeded)
+            self.assertEqual(paid["status"], "succeeded")
+            self.assertTrue(paid["paid"])
+            self.assertIn(first["id"], [item["id"] for item in db.list_payment_orders()])
+            with self.assertRaisesRegex(ValueError, "только неуспешную"):
+                db.hide_payment_order(first["id"])
+
+            failed = db.create_payment_order()
+            self.assertNotEqual(failed["id"], first["id"])
+            db.mark_payment_creation_failed(failed["id"], "provider unavailable")
+            db.hide_payment_order(failed["id"])
+            self.assertNotIn(failed["id"], [item["id"] for item in db.list_payment_orders()])
         finally:
             db.set_current_chel_id(chel_id)
             db.reset_current_user()

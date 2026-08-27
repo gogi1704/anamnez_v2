@@ -17,7 +17,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/static/styles.07ffaefb4795.css?v=20260825-open-dialog-v1">
+  <link rel="stylesheet" href="/static/styles.07ffaefb4795.css?v=20260828-payment-analytics-v1">
   <link rel="stylesheet" href="/static/rich-text.2bf1f5fab764.css">
 </head>
 <body>
@@ -133,6 +133,7 @@
               <button id="menuProfileButton" role="menuitem"><i>♙</i><span>Мои данные<small>Анкета, номер пробирки и память</small></span></button>
               <button id="menuMessengerLinkButton" role="menuitem"><i>↗</i><span>Привязать мессенджер<small id="menuMessengerLinkStatus">Telegram или MAX</small></span></button>
               <button id="menuLabResultsButton" role="menuitem"><i>▤</i><span>Результаты анализов<small id="menuLabResultsStatus">Проверить по номеру пробирки</small></span></button>
+              <button id="menuPurchasesButton" role="menuitem"><i>₽</i><span>Мои покупки<small>Оплаты и попытки оплаты</small></span></button>
               <button id="mobileDialogsButton" role="menuitem"><i>≡</i><span>Мои диалоги<small>Открыть историю переписок</small></span></button>
               <button id="humanButton" role="menuitem"><i>♙</i><span>Позвать человека<small>Медицинский специалист</small></span></button>
               <button id="menuBodyMapButton" role="menuitem"><i>◉</i><span>Карта тела<small>Отметить область и симптом</small></span></button>
@@ -214,6 +215,20 @@
         <div><strong>Безопасный режим</strong><p>При тревожных симптомах система предложит срочную помощь.</p></div>
       </div>
     </aside>
+  </div>
+
+  <div class="modal-backdrop hidden" id="purchasesModal" role="dialog" aria-modal="true" aria-labelledby="purchasesTitle">
+    <div class="modal purchases-modal">
+      <button class="modal-close" id="purchasesClose" type="button" aria-label="Закрыть">×</button>
+      <header class="purchases-heading">
+        <div class="purchases-heading-icon" aria-hidden="true">₽</div>
+        <div><span>История заказов</span><h2 id="purchasesTitle">Мои покупки</h2></div>
+      </header>
+      <p class="purchases-lead">Проверяйте оплаты, продолжайте незавершённые заказы и находите состав каждой покупки.</p>
+      <div class="purchases-summary" id="purchasesSummary"></div>
+      <div class="purchases-list" id="purchasesList" aria-live="polite"></div>
+      <p class="purchases-security"><span aria-hidden="true">✓</span> Статус оплаты подтверждается напрямую через ЮKassa</p>
+    </div>
   </div>
 
   <div class="modal-backdrop hidden" id="fontSizeModal" role="dialog" aria-modal="true" aria-labelledby="fontSizeTitle">
@@ -523,9 +538,9 @@
     </div>
   </div>
 
-  <script src="/static/metrika.js?v=20260825-messenger-return-v1"></script>
-  <script src="/static/agents.js?v=20260825-messenger-return-v1"></script>
-  <script src="/static/rich-text.js?v=20260825-messenger-return-v1"></script>
-  <script src="/static/app.js?v=20260826-returning-user-chat-v1"></script>
+  <script src="/static/metrika.js?v=20260828-payment-analytics-v1"></script>
+  <script src="/static/agents.js?v=20260828-payment-analytics-v1"></script>
+  <script src="/static/rich-text.js?v=20260828-payment-analytics-v1"></script>
+  <script src="/static/app.js?v=20260828-payment-analytics-v1"></script>
 </body>
 </html>

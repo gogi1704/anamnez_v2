@@ -28,8 +28,11 @@ const state = {
   returnToHumanAfterContextEdit: false,
   contextEditTicketId: null,
   returnToChatAfterExaminations: false,
+  paymentReviewSource: '',
+  paymentReviewOrderId: '',
   publicConfig: {},
   messengerLinkJustCompleted: '',
+  purchases: [],
 };
 
 const $ = selector => document.querySelector(selector);
@@ -40,6 +43,7 @@ const ANONYMOUS_ACCESS_KEY = 'consilium_anonymous_access';
 const WELCOME_SEEN_KEY = 'consilium_welcome_seen';
 const INSTALL_DISMISSED_KEY = 'consilium_install_dismissed_at';
 const MESSENGER_LINK_PENDING_KEY = 'consilium_messenger_link_pending';
+const PAYMENT_PENDING_ORDER_KEY = 'consilium_pending_payment_order';
 const INSTALL_REOFFER_AFTER_MS = 7 * 24 * 60 * 60 * 1000;
 let userAudioContext = null;
 let deferredInstallPrompt = null;
@@ -537,6 +541,13 @@ function closeAnonymousWarning() {
   $('#anonymousWarning').classList.add('hidden');
 }
 
+function returnFromAnonymousWarning(action = 'anonymous_close') {
+  trackEvent('anonymous_warning_cancelled');
+  trackOnboardingAction(action, 'anonymous_warning');
+  closeAnonymousWarning();
+  trackOnboardingScreen('registration');
+}
+
 async function startApplication(options = {}) {
   $('#welcomeScreen').classList.add('hidden');
   $('#authGate').classList.add('hidden');
@@ -574,10 +585,10 @@ $('#anonymousAuthButton').addEventListener('click', () => {
   trackOnboardingScreen('anonymous_warning');
   $('#anonymousWarning').classList.remove('hidden');
 });
-$('#anonymousWarningClose').addEventListener('click', () => { trackEvent('anonymous_warning_cancelled'); trackOnboardingAction('anonymous_close', 'anonymous_warning'); currentOnboardingAnalyticsScreen = 'registration'; closeAnonymousWarning(); });
-$('#anonymousWarningCancel').addEventListener('click', () => { trackEvent('anonymous_warning_cancelled'); trackOnboardingAction('anonymous_cancel', 'anonymous_warning'); currentOnboardingAnalyticsScreen = 'registration'; closeAnonymousWarning(); });
+$('#anonymousWarningClose').addEventListener('click', () => returnFromAnonymousWarning('anonymous_close'));
+$('#anonymousWarningCancel').addEventListener('click', () => returnFromAnonymousWarning('anonymous_cancel'));
 $('#anonymousWarning').addEventListener('click', event => {
-  if (event.target === $('#anonymousWarning')) closeAnonymousWarning();
+  if (event.target === $('#anonymousWarning')) returnFromAnonymousWarning('anonymous_close');
 });
 $('#anonymousWarningConfirm').addEventListener('click', async () => {
   try {
@@ -958,8 +969,20 @@ function renderPayment() {
   const selected = selectedTestDetails();
   const total = selected.reduce((sum,test) => sum + test.price, 0);
   const emailField = state.publicConfig.online_payments_enabled && state.publicConfig.payment_receipt_email_required
-    ? `<label class="payment-email-label">Электронная почта для чека<input id="paymentReceiptEmail" type="email" autocomplete="email" maxlength="254" placeholder="name@example.ru"></label>` : '';
-  $('#onboardingContent').innerHTML = `<span class="onboarding-kicker">Последний шаг</span><h1>Проверим заказ</h1><p class="onboarding-lead">Выберите, как вам будет удобнее оплатить дополнительные обследования.</p><div class="payment-stub"><span class="demo-badge">ВЫБРАННЫЕ ОБСЛЕДОВАНИЯ</span><ul class="payment-lines">${selected.map(test => `<li><span>${test.name}</span><strong>${test.price.toLocaleString('ru')} ₽</strong></li>`).join('')}</ul><div class="payment-total"><span>Итого</span><strong>${total.toLocaleString('ru')} ₽</strong></div></div>${emailField}<div class="payment-actions"><button type="button" class="payment-online-button" data-onboarding-action="pay-online">Оплатить онлайн</button><button type="button" class="payment-at-exam-button" data-onboarding-action="pay-at-exam">Оплатить на медосмотре</button></div><button type="button" class="payment-back-button" data-onboarding-action="back-to-exams">← Вернуться к обследованиям</button>`;
+    ? `<label class="payment-email-label">Электронная почта для онлайн-чека <span>только при оплате онлайн</span><input id="paymentReceiptEmail" type="email" autocomplete="email" maxlength="254" placeholder="name@example.ru" required></label>` : '';
+  const exitAction = state.paymentReviewSource === 'purchases'
+    ? '<button type="button" class="payment-back-button" data-onboarding-action="close-payment-review">Закрыть</button>'
+    : '<button type="button" class="payment-back-button" data-onboarding-action="back-to-exams">← Вернуться к обследованиям</button>';
+  $('#onboardingContent').innerHTML = `<span class="onboarding-kicker">Последний шаг</span><h1>Проверим заказ</h1><p class="onboarding-lead">Выберите, как вам будет удобнее оплатить дополнительные обследования.</p><div class="payment-stub"><span class="demo-badge">ВЫБРАННЫЕ ОБСЛЕДОВАНИЯ</span><ul class="payment-lines">${selected.map(test => `<li><span>${test.name}</span><strong>${test.price.toLocaleString('ru')} ₽</strong></li>`).join('')}</ul><div class="payment-total"><span>Итого</span><strong>${total.toLocaleString('ru')} ₽</strong></div></div>${emailField}<div class="payment-actions"><button type="button" class="payment-online-button" data-onboarding-action="pay-online">Оплатить онлайн</button><button type="button" class="payment-at-exam-button" data-onboarding-action="pay-at-exam">Оплатить на медосмотре</button></div>${exitAction}`;
+}
+
+function setPaymentActionsBusy(busy, activeLabel = '') {
+  const controls = [...document.querySelectorAll('#onboardingContent [data-onboarding-action="pay-online"], #onboardingContent [data-onboarding-action="pay-at-exam"], #onboardingContent [data-onboarding-action="back-to-exams"], #onboardingContent [data-onboarding-action="close-payment-review"]')];
+  controls.forEach(control => { control.disabled = Boolean(busy); });
+  const online = $('#onboardingContent [data-onboarding-action="pay-online"]');
+  const atExam = $('#onboardingContent [data-onboarding-action="pay-at-exam"]');
+  if (online) online.textContent = busy && activeLabel === 'online' ? 'Открываем оплату…' : 'Оплатить онлайн';
+  if (atExam) atExam.textContent = busy && activeLabel === 'at_exam' ? 'Сохраняем…' : 'Оплатить на медосмотре';
 }
 
 async function startOnlinePayment() {
@@ -967,25 +990,42 @@ async function startOnlinePayment() {
     showOnlinePaymentUnavailable();
     return;
   }
-  const button = $('#onboardingContent [data-onboarding-action="pay-online"]');
-  const receiptEmail = $('#paymentReceiptEmail')?.value?.trim() || '';
-  button.disabled = true;
-  button.textContent = 'Открываем оплату…';
+  const receiptInput = $('#paymentReceiptEmail');
+  if (receiptInput && !receiptInput.checkValidity()) {
+    receiptInput.reportValidity();
+    return;
+  }
+  const receiptEmail = receiptInput?.value?.trim() || '';
+  setPaymentActionsBusy(true, 'online');
   try {
     const result = await api('/api/payments/yookassa/create', {
       method:'POST', body:JSON.stringify({
         receipt_email:receiptEmail,
         return_to_chat:Boolean(state.returnToChatAfterExaminations),
+        payment_source:state.paymentReviewSource || 'onboarding',
       }),
     });
     const url = result.order?.confirmation_url;
-    if (!url) throw new Error('ЮKassa не вернула ссылку для оплаты');
-    trackEvent('payment_redirected', {provider:'yookassa'});
     window.consiliumMetrikaGoal?.('payment_online');
-    window.location.assign(url);
+    if (url) {
+      trackEvent('payment_redirected', {provider:'yookassa'});
+      localStorage.setItem(PAYMENT_PENDING_ORDER_KEY, JSON.stringify({
+        id:result.order.id,
+        returnToChat:Boolean(state.returnToChatAfterExaminations),
+        source:state.paymentReviewSource || 'onboarding',
+        savedAt:Date.now(),
+      }));
+      window.location.assign(url);
+      return;
+    }
+    if (!result.order?.id) throw new Error('ЮKassa не вернула данные платежа');
+    const returnUrl = new URL(location.href);
+    returnUrl.searchParams.set('payment_return', result.order.id);
+    if (state.returnToChatAfterExaminations) returnUrl.searchParams.set('return_to_chat', '1');
+    history.replaceState({}, '', returnUrl);
+    await handlePaymentReturn();
   } catch (error) {
-    button.disabled = false;
-    button.textContent = 'Оплатить онлайн';
+    setPaymentActionsBusy(false);
     showOnboardingError(error.message);
   }
 }
@@ -1004,7 +1044,7 @@ function showOnlinePaymentUnavailable() {
       <p>Мы уже работаем над её подключением. Пока вы можете выбрать оплату на медицинском осмотре.</p>
       <button type="button" data-close-payment-unavailable>Понятно</button>
     </div>`;
-  const close = () => { trackOnboardingAction('close', 'payment_unavailable'); currentOnboardingAnalyticsScreen = 'payment'; backdrop.remove(); };
+  const close = () => { trackOnboardingAction('close', 'payment_unavailable'); backdrop.remove(); trackOnboardingScreen('payment'); };
   backdrop.addEventListener('click', event => {
     if (event.target === backdrop || event.target.closest('[data-close-payment-unavailable]')) close();
   });
@@ -1016,30 +1056,75 @@ function showOnlinePaymentUnavailable() {
 
 async function handlePaymentReturn() {
   const params = new URLSearchParams(location.search);
-  const orderId = params.get('payment_return');
-  const returnDirectlyToChat = params.get('return_to_chat') === '1';
+  let pendingOrder = {};
+  try { pendingOrder = JSON.parse(localStorage.getItem(PAYMENT_PENDING_ORDER_KEY) || '{}'); } catch {}
+  const orderId = params.get('payment_return') || pendingOrder.id;
   if (!orderId) return false;
-  history.replaceState({}, '', `${location.pathname}${location.hash || ''}`);
+  // A saved source reflects the place where the user most recently launched
+  // this redirect. It intentionally has priority over an older return_url
+  // stored inside an already-created YooKassa payment.
+  state.paymentReviewSource = pendingOrder.source || params.get('payment_source') || '';
+  state.paymentReviewOrderId = orderId;
+  state.returnToChatAfterExaminations = Boolean(
+    pendingOrder.returnToChat || params.get('return_to_chat') === '1' || state.paymentReviewSource === 'purchases'
+  );
+  const clearPaymentReturn = () => {
+    localStorage.removeItem(PAYMENT_PENDING_ORDER_KEY);
+    history.replaceState({}, '', `${location.pathname}${location.hash || ''}`);
+  };
   $('#onboarding').classList.remove('hidden');
   $('#appShell').classList.add('hidden');
   setOnboardingMeta('Проверка оплаты', 96);
+  trackEvent('payment_return_viewed', {provider:'yookassa'});
+  trackOnboardingScreen('payment_processing');
   $('#onboardingContent').innerHTML = `<div class="payment-result"><span class="payment-result-icon">⌛</span><h1>Проверяем оплату</h1><p class="onboarding-lead">Обычно это занимает несколько секунд. Не закрывайте страницу.</p></div>`;
   try {
-    const result = await api(`/api/payments/${encodeURIComponent(orderId)}`);
-    const status = result.order?.status;
+    let result;
+    for (let attempt = 0; attempt < 8; attempt += 1) {
+      result = await api(`/api/payments/${encodeURIComponent(orderId)}`);
+      const currentStatus = result.order?.status;
+      if (['succeeded','canceled','abandoned'].includes(currentStatus)) break;
+      if (attempt < 7) await new Promise(resolve => setTimeout(resolve, 1500));
+    }
+    let status = result.order?.status;
     if (status === 'succeeded' && result.order?.paid) {
+      clearPaymentReturn();
       state.onboarding = await api('/api/onboarding');
       state.profile = state.onboarding.profile;
       state.selectedTests = new Set(state.onboarding.selected_tests || []);
       trackEvent('payment_succeeded', {provider:'yookassa'});
+      trackEvent('payment_completed', {provider:'yookassa', result:'succeeded'});
       window.consiliumMetrikaGoal?.('onboarding_completed');
-      if (returnDirectlyToChat) return openMainApp({skipIntro:true}), true;
-      renderExamCompletion();
+      renderPaymentSuccess(result.order);
       return true;
     }
+    if (['pending','waiting_for_capture'].includes(status)) {
+      result = await api(`/api/payments/${encodeURIComponent(orderId)}/abandon`, {method:'POST', body:'{}'});
+      status = result.order?.status;
+      if (status === 'succeeded' && result.order?.paid) {
+        clearPaymentReturn();
+        state.onboarding = await api('/api/onboarding');
+        state.profile = state.onboarding.profile;
+        state.selectedTests = new Set(state.onboarding.selected_tests || []);
+        trackEvent('payment_succeeded', {provider:'yookassa'});
+        trackEvent('payment_completed', {provider:'yookassa', result:'succeeded'});
+        renderPaymentSuccess(result.order);
+        return true;
+      }
+    }
     const canceled = status === 'canceled';
-    trackEvent(canceled ? 'payment_canceled' : 'payment_pending', {provider:'yookassa'});
-    $('#onboardingContent').innerHTML = `<div class="payment-result"><span class="payment-result-icon ${canceled ? 'error' : ''}">${canceled ? '!' : '⌛'}</span><h1>${canceled ? 'Оплата не прошла' : 'Оплата ещё обрабатывается'}</h1><p class="onboarding-lead">${canceled ? 'Деньги не списаны. Можно попробовать оплатить ещё раз или выбрать оплату на медосмотре.' : 'ЮKassa ещё не подтвердила платёж. Подождите немного и проверьте снова.'}</p><div class="onboarding-actions"><button type="button" class="onboarding-back" data-onboarding-action="back-to-payment">Вернуться</button>${canceled ? '' : '<button type="button" class="onboarding-next" data-onboarding-action="check-payment" data-order-id="'+escapeHtml(orderId)+'">Проверить снова</button>'}</div></div>`;
+    const abandoned = status === 'abandoned';
+    if (canceled || abandoned) clearPaymentReturn();
+    trackEvent(canceled ? 'payment_canceled' : abandoned ? 'payment_abandoned' : 'payment_pending', {provider:'yookassa'});
+    trackEvent('payment_result_viewed', {provider:'yookassa', status});
+    trackOnboardingScreen('payment_result');
+    const title = canceled ? 'Оплата не прошла' : abandoned ? 'Оплата не завершена' : 'Оплата ещё обрабатывается';
+    const message = canceled
+      ? 'ЮKassa отменила платёж. Можно попробовать ещё раз или выбрать оплату на медосмотре.'
+      : abandoned
+        ? 'Вы вернулись без подтверждённой оплаты. Попытка сохранена в разделе «Мои покупки».'
+        : 'ЮKassa ещё не подтвердила платёж. Подождите немного и проверьте снова.';
+    $('#onboardingContent').innerHTML = `<div class="payment-result"><span class="payment-result-icon ${(canceled || abandoned) ? 'error' : ''}">${(canceled || abandoned) ? '!' : '⌛'}</span><h1>${title}</h1><p class="onboarding-lead">${message}</p><div class="onboarding-actions"><button type="button" class="onboarding-back" data-onboarding-action="back-to-payment">Вернуться к оплате</button><button type="button" class="onboarding-next" data-onboarding-action="open-purchases">Мои покупки</button></div></div>`;
     return true;
   } catch (error) {
     $('#onboardingContent').innerHTML = `<div class="payment-result"><span class="payment-result-icon error">!</span><h1>Не удалось проверить оплату</h1><p class="onboarding-lead">${escapeHtml(error.message)}</p><button type="button" class="onboarding-next" data-onboarding-action="check-payment" data-order-id="${escapeHtml(orderId)}">Повторить проверку</button></div>`;
@@ -1047,7 +1132,42 @@ async function handlePaymentReturn() {
   }
 }
 
+function renderPaymentSuccess(order) {
+  const orderNumber = String(order?.id || state.paymentReviewOrderId || '').slice(-8).toUpperCase();
+  trackEvent('payment_success_viewed', {provider:'yookassa'});
+  trackOnboardingScreen('payment_success');
+  setOnboardingMeta('Оплачено', 100);
+  $('#onboardingContent').innerHTML = `
+    <div class="payment-success-result">
+      <span class="payment-result-icon success" aria-hidden="true">✓</span>
+      <span class="onboarding-kicker">Оплата подтверждена</span>
+      <h1>Всё получилось!</h1>
+      <p class="onboarding-lead">ЮKassa подтвердила оплату${orderNumber ? ` заказа № ${escapeHtml(orderNumber)}` : ''}. Выбранные обследования сохранены.</p>
+      <section class="payment-find-guide">
+        <strong>Где потом найти оплату</strong>
+        <ol><li>Откройте чат Консилиума.</li><li>Нажмите кнопку меню <b>☰</b> справа вверху.</li><li>Выберите <b>«Мои покупки»</b> — там будут сумма, дата, состав заказа и статус «Оплачено».</li></ol>
+        <p>Успешная покупка хранится в истории и не удаляется. Электронный чек придёт на указанную при оплате почту.</p>
+      </section>
+      <div class="onboarding-actions payment-success-actions">
+        <button type="button" class="onboarding-next" data-onboarding-action="open-purchases-after-payment">Открыть мои покупки</button>
+        <button type="button" class="onboarding-back" data-onboarding-action="continue-after-payment">Перейти в чат</button>
+      </div>
+    </div>`;
+}
+
+async function finishPaymentSuccess(openHistory = false) {
+  const orderId = state.paymentReviewOrderId;
+  if (!state.onboarding?.intro_seen) {
+    state.onboarding = await api('/api/onboarding/intro-seen', {method:'POST', body:'{}'});
+  }
+  await openMainApp({skipIntro:true});
+  if (openHistory) await openPurchases({highlightOrderId:orderId});
+  state.paymentReviewSource = '';
+  state.paymentReviewOrderId = '';
+}
+
 async function confirmPaymentAtExam() {
+  setPaymentActionsBusy(true, 'at_exam');
   try {
     const returnDirectlyToChat = state.returnToChatAfterExaminations;
     state.onboarding = await api('/api/onboarding/payment', { method:'POST', body:JSON.stringify({method:'at_exam'}) });
@@ -1055,7 +1175,7 @@ async function confirmPaymentAtExam() {
     window.consiliumMetrikaGoal?.('onboarding_completed');
     if (returnDirectlyToChat) return openMainApp({ skipIntro:true });
     renderExamCompletion();
-  } catch (error) { showOnboardingError(error.message); }
+  } catch (error) { setPaymentActionsBusy(false); showOnboardingError(error.message); }
 }
 
 function renderExamCompletion() {
@@ -1173,6 +1293,8 @@ async function finishExamOnboarding(installApp = false) {
 
 async function loadOnboarding({ openCompletedMessengerAccount = false, initialOnboarding = null } = {}) {
   state.returnToChatAfterExaminations = false;
+  state.paymentReviewSource = '';
+  state.paymentReviewOrderId = '';
   state.onboarding = initialOnboarding || await api('/api/onboarding');
   applyFontSize(state.onboarding.font_size || 'extra');
   state.profile = state.onboarding.profile;
@@ -1227,7 +1349,7 @@ async function openMainApp({ skipIntro = false } = {}) {
   }
 }
 
-$('#onboardingContent').addEventListener('click', event => {
+$('#onboardingContent').addEventListener('click', async event => {
   const choice = event.target.closest('[data-choice]');
   if (choice) {
     const question = activeOnboardingQuestions()[state.onboardingStep];
@@ -1274,10 +1396,21 @@ $('#onboardingContent').addEventListener('click', event => {
   else if (action === 'confirm-skip-exams') { trackOnboardingAction('refuse', 'exam_objection'); trackEvent('funnel_action', {stage:'examinations_offer',action:'refuse'}); trackEvent('examinations_skipped', { screen:'examinations_skip' }); submitExamSelection(true); }
   else if (action === 'continue-payment') { trackOnboardingAction('continue', 'exam_selection'); submitExamSelection(false); }
   else if (action === 'back-to-exams') { trackOnboardingAction('back', 'payment'); renderExamSelection(); }
+  else if (action === 'close-payment-review') {
+    trackOnboardingAction('close', 'payment');
+    const orderId = state.paymentReviewOrderId;
+    await openMainApp({skipIntro:true});
+    state.paymentReviewSource = '';
+    state.paymentReviewOrderId = '';
+    await openPurchases({highlightOrderId:orderId});
+  }
   else if (action === 'pay-online') { trackOnboardingAction('pay_online', 'payment'); trackEvent('funnel_action', {stage:'examinations_options',action:'pay_online'}); startOnlinePayment(); }
   else if (action === 'pay-at-exam') { trackOnboardingAction('pay_at_exam', 'payment'); trackEvent('funnel_action', {stage:'examinations_options',action:'pay_at_exam'}); confirmPaymentAtExam(); }
   else if (action === 'back-to-payment') renderPayment();
-  else if (action === 'check-payment') { const orderId = event.target.closest('[data-order-id]')?.dataset.orderId; if (orderId) { const url = new URL(location.href); url.searchParams.set('payment_return', orderId); history.replaceState({}, '', url); handlePaymentReturn(); } }
+  else if (action === 'open-purchases') openPurchases();
+  else if (action === 'open-purchases-after-payment') await finishPaymentSuccess(true);
+  else if (action === 'continue-after-payment') await finishPaymentSuccess(false);
+  else if (action === 'check-payment') { const orderId = event.target.closest('[data-order-id]')?.dataset.orderId; if (orderId) { const url = new URL(location.href); url.searchParams.set('payment_return', orderId); if (state.returnToChatAfterExaminations) url.searchParams.set('return_to_chat', '1'); history.replaceState({}, '', url); handlePaymentReturn(); } }
   else if (action === 'edit-current-exams') { trackEvent('funnel_action', {stage:'chat_examinations',action:'edit_selection'}); renderExamSelection(); }
   else if (action === 'close-current-exams') openMainApp({ skipIntro:true });
   else if (action === 'open-app') openMainApp();
@@ -1847,6 +1980,200 @@ function openCapabilities() {
   closeFunctionMenu();
   $('#capabilitiesModal').classList.remove('hidden');
   trackEvent('capabilities_viewed', {screen:'capabilities'});
+}
+
+const purchaseStatusLabels = {
+  creating:'Создаётся', pending:'Ожидает оплаты', waiting_for_capture:'Подтверждается',
+  succeeded:'Оплачено', canceled:'Неуспешно', abandoned:'Не завершено', failed:'Ошибка',
+};
+
+const purchaseStatusDetails = {
+  creating:{icon:'…',note:'Заказ создаётся. Если это занимает долго, попробуйте повторить.'},
+  pending:{icon:'→',note:'Оплата ещё не завершена. Можно вернуться на защищённую страницу оплаты.'},
+  waiting_for_capture:{icon:'⌛',note:'ЮKassa уже обрабатывает платёж. Дополнительных действий не требуется.'},
+  succeeded:{icon:'✓',note:'Оплата подтверждена ЮKassa. Запись нельзя удалить.'},
+  canceled:{icon:'×',note:'Платёж отменён или отклонён. Деньги не списаны.'},
+  abandoned:{icon:'↩',note:'Вы вышли до подтверждения оплаты.'},
+  failed:{icon:'!',note:'Не удалось создать платёж. Можно оформить заказ повторно.'},
+};
+
+function purchaseDate(value) {
+  if (!value) return 'Дата не указана';
+  return new Intl.DateTimeFormat('ru', {
+    day:'2-digit', month:'2-digit', year:'numeric', hour:'2-digit', minute:'2-digit',
+  }).format(new Date(value));
+}
+
+function renderPurchases(items, highlightOrderId = '') {
+  const list = $('#purchasesList');
+  const paidCount = items.filter(item => item.status === 'succeeded' && item.paid).length;
+  const attentionCount = items.length - paidCount;
+  $('#purchasesSummary').innerHTML = items.length
+    ? `<span><small>Всего заказов</small><strong>${items.length}</strong></span><span><small>Оплачено</small><strong>${paidCount}</strong></span><span class="${attentionCount ? 'active' : ''}"><small>Требуют внимания</small><strong>${attentionCount}</strong></span>`
+    : '';
+  if (!items.length) {
+    list.innerHTML = '<div class="purchases-empty"><span>₽</span><strong>Покупок пока нет</strong><p>Здесь появятся ваши попытки онлайн-оплаты.</p></div>';
+    return;
+  }
+  list.innerHTML = items.map((item, index) => {
+    const rawStatus = String(item.status || 'failed');
+    const status = purchaseStatusLabels[rawStatus] ? rawStatus : 'failed';
+    const detail = purchaseStatusDetails[status];
+    const products = Array.isArray(item.items) ? item.items : [];
+    const classes = ['purchase-card', `status-${status}`];
+    if (item.id === highlightOrderId) classes.push('highlighted');
+    return `<article class="${classes.join(' ')}" data-purchase-id="${escapeHtml(item.id)}">
+      <header class="purchase-card-head">
+        <div class="purchase-status-icon" aria-hidden="true">${detail.icon}</div>
+        <div class="purchase-card-title"><small>Заказ ${items.length - index} · ${purchaseDate(item.created_at)}</small><strong>${escapeHtml(purchaseStatusLabels[status])}</strong></div>
+        <b class="purchase-card-amount">${Number(item.amount || 0).toLocaleString('ru-RU', {minimumFractionDigits:0, maximumFractionDigits:2})} ₽</b>
+      </header>
+      <p class="purchase-status-note">${escapeHtml(detail.note)}</p>
+      <div class="purchase-products"><span>Состав заказа</span><ul>${products.map(product => `<li><span>${escapeHtml(product.name || 'Обследование')}</span><b>${Number(product.price || 0).toLocaleString('ru-RU')} ₽</b></li>`).join('')}</ul></div>
+      <footer><span>№ ${escapeHtml(String(item.id || '').slice(-8).toUpperCase())}</span>${item.test ? '<em>Тестовый платёж</em>' : '<em>ЮKassa</em>'}</footer>
+      <div class="purchase-actions">
+        ${status === 'pending' && item.confirmation_url ? `<button type="button" class="purchase-primary-action" data-purchase-action="continue">Продолжить оплату</button>` : ''}
+        ${['creating','canceled','abandoned','failed'].includes(status) ? `<button type="button" class="purchase-primary-action" data-purchase-action="retry">Повторить заказ</button>` : ''}
+        ${['pending','waiting_for_capture','abandoned'].includes(status) ? `<button type="button" class="purchase-refresh-action" data-purchase-action="refresh">Проверить статус</button>` : ''}
+        ${['canceled','abandoned','failed'].includes(status) ? `<button type="button" class="purchase-delete-action" data-purchase-action="delete">Удалить из списка</button>` : ''}
+      </div>
+      <div class="purchase-delete-confirm hidden" data-purchase-confirm>
+        <div><strong>Удалить эту попытку?</strong><small>Успешные оплаты всегда сохраняются.</small></div>
+        <button type="button" data-purchase-action="cancel-delete">Оставить</button>
+        <button type="button" data-purchase-action="confirm-delete">Удалить</button>
+      </div>
+    </article>`;
+  }).join('');
+  if (highlightOrderId) requestAnimationFrame(() => list.querySelector('.highlighted')?.scrollIntoView({block:'nearest'}));
+}
+
+async function openPurchases({ highlightOrderId = '' } = {}) {
+  closeFunctionMenu();
+  $('#purchasesSummary').innerHTML = '';
+  $('#purchasesList').innerHTML = '<div class="purchases-loading"><span></span><p>Загружаем покупки…</p></div>';
+  $('#purchasesModal').classList.remove('hidden');
+  try {
+    const result = await api('/api/purchases');
+    state.purchases = result.purchases || [];
+    renderPurchases(state.purchases, highlightOrderId);
+    trackEvent('purchases_viewed', {purchase_count:state.purchases.length});
+  } catch (error) {
+    $('#purchasesList').innerHTML = `<div class="purchases-empty error"><strong>Не удалось загрузить покупки</strong><p>${escapeHtml(error.message)}</p></div>`;
+  }
+}
+
+function closePurchases() { $('#purchasesModal').classList.add('hidden'); }
+
+function purchaseById(orderId) {
+  return state.purchases.find(item => item.id === orderId);
+}
+
+function continuePurchase(item) {
+  if (!item?.confirmation_url?.startsWith('https://')) return;
+  localStorage.setItem(PAYMENT_PENDING_ORDER_KEY, JSON.stringify({
+    id:item.id, returnToChat:true, source:'purchases', savedAt:Date.now(),
+  }));
+  trackEvent('payment_continued', {provider:'yookassa'});
+  window.location.assign(item.confirmation_url);
+}
+
+async function retryPurchase(item) {
+  if (item?.status === 'abandoned') {
+    const checked = await api(`/api/payments/${encodeURIComponent(item.id)}`);
+    const refreshed = checked.order;
+    state.purchases = state.purchases.map(purchase => purchase.id === item.id ? refreshed : purchase);
+    if (['pending','waiting_for_capture','succeeded'].includes(refreshed.status)) {
+      if (refreshed.status === 'succeeded' && refreshed.paid) {
+        state.onboarding = await api('/api/onboarding');
+        state.profile = state.onboarding.profile;
+        state.selectedTests = new Set(state.onboarding.selected_tests || []);
+        trackEvent('payment_succeeded', {provider:'yookassa', source:'purchases_retry'});
+      }
+      renderPurchases(state.purchases, item.id);
+      return false;
+    }
+  }
+  const available = new Set((state.onboarding?.tests || []).map(test => test.id));
+  const selected = (item?.items || []).map(product => product.id).filter(id => available.has(id));
+  if (!selected.length) throw new Error('Эти обследования больше недоступны. Выберите актуальные варианты заново.');
+  closePurchases();
+  state.returnToChatAfterExaminations = true;
+  state.paymentReviewSource = 'purchases';
+  state.paymentReviewOrderId = item.id;
+  state.selectedTests = new Set(selected);
+  $('#appShell').classList.add('hidden');
+  $('#onboarding').classList.remove('hidden');
+  state.onboarding = await api('/api/onboarding/exams', {
+    method:'POST', body:JSON.stringify({selected_tests:selected}),
+  });
+  trackEvent('payment_retried', {provider:'yookassa', selected_count:selected.length});
+  renderPayment();
+  return true;
+}
+
+async function deletePurchaseAttempt(card, item) {
+  const confirmBox = card.querySelector('[data-purchase-confirm]');
+  confirmBox.querySelectorAll('button').forEach(button => { button.disabled = true; });
+  try {
+    await api(`/api/purchases/${encodeURIComponent(item.id)}`, {method:'DELETE'});
+    trackEvent('purchase_attempt_removed', {provider:'yookassa', status:item.status});
+    state.purchases = state.purchases.filter(purchase => purchase.id !== item.id);
+    renderPurchases(state.purchases);
+  } catch (error) {
+    confirmBox.classList.add('error');
+    confirmBox.querySelector('small').textContent = error.message;
+    confirmBox.querySelectorAll('button').forEach(button => { button.disabled = false; });
+  }
+}
+
+async function refreshPurchase(item, button) {
+  button.disabled = true;
+  const label = button.textContent;
+  button.textContent = 'Проверяем…';
+  try {
+    const result = await api(`/api/payments/${encodeURIComponent(item.id)}`);
+    const refreshed = result.order;
+    state.purchases = state.purchases.map(purchase => purchase.id === item.id ? refreshed : purchase);
+    if (refreshed.status === 'succeeded' && refreshed.paid) {
+      state.onboarding = await api('/api/onboarding');
+      state.profile = state.onboarding.profile;
+      state.selectedTests = new Set(state.onboarding.selected_tests || []);
+      trackEvent('payment_succeeded', {provider:'yookassa', source:'purchases'});
+    }
+    renderPurchases(state.purchases, item.id);
+  } catch (error) {
+    button.disabled = false;
+    button.textContent = label;
+    const confirmBox = button.closest('.purchase-card').querySelector('[data-purchase-confirm]');
+    confirmBox.classList.remove('hidden');
+    confirmBox.classList.add('error');
+    confirmBox.querySelector('strong').textContent = 'Не удалось проверить оплату';
+    confirmBox.querySelector('small').textContent = error.message;
+  }
+}
+
+async function handlePurchaseAction(event) {
+  const button = event.target.closest('[data-purchase-action]');
+  const card = button?.closest('[data-purchase-id]');
+  if (!button || !card) return;
+  const item = purchaseById(card.dataset.purchaseId);
+  if (!item) return;
+  const action = button.dataset.purchaseAction;
+  const confirmBox = card.querySelector('[data-purchase-confirm]');
+  if (action === 'continue') continuePurchase(item);
+  else if (action === 'refresh') await refreshPurchase(item, button);
+  else if (action === 'retry') {
+    button.disabled = true;
+    button.textContent = 'Готовим заказ…';
+    try {
+      const started = await retryPurchase(item);
+      if (!started) return;
+    }
+    catch (error) { button.disabled = false; button.textContent = 'Повторить заказ'; confirmBox.classList.remove('hidden'); confirmBox.classList.add('error'); confirmBox.querySelector('strong').textContent = 'Не удалось повторить заказ'; confirmBox.querySelector('small').textContent = error.message; }
+  }
+  else if (action === 'delete') { confirmBox.classList.remove('hidden'); button.closest('.purchase-actions').classList.add('hidden'); }
+  else if (action === 'cancel-delete') { confirmBox.classList.add('hidden'); confirmBox.classList.remove('error'); card.querySelector('.purchase-actions').classList.remove('hidden'); }
+  else if (action === 'confirm-delete') await deletePurchaseAttempt(card, item);
 }
 
 function openDeleteMyDataConfirmation() {
@@ -2579,7 +2906,7 @@ function closeVisibleModal() {
   const layer = layers[layers.length - 1];
   if (!layer) return false;
   switch (layer.id) {
-    case 'anonymousWarning': closeAnonymousWarning(); break;
+    case 'anonymousWarning': returnFromAnonymousWarning('anonymous_close'); break;
     case 'fontSizeModal': closeFontSizeModal(); break;
     case 'humanModal': declineHumanSpecialist(); break;
     case 'contextModal': closeContextEditor(); break;
@@ -2587,6 +2914,7 @@ function closeVisibleModal() {
     case 'deleteMyDataModal': closeDeleteMyDataConfirmation(); break;
     case 'installAppModal': closeInstallApp(); break;
     case 'messengerLinkModal': closeMessengerLinkModal(); break;
+    case 'purchasesModal': closePurchases(); break;
     case 'bodyMapModal': closeBodyMap(); break;
     case 'healthHistoryModal': closeHealthHistory(); break;
     case 'profileModal': closeProfileModal(); break;
@@ -2599,7 +2927,9 @@ function closeVisibleModal() {
 function closeTopUiLayer() {
   const paymentUnavailable = document.querySelector('.payment-unavailable-backdrop');
   if (paymentUnavailable) {
+    trackOnboardingAction('close', 'payment_unavailable');
     paymentUnavailable.remove();
+    trackOnboardingScreen('payment');
     return true;
   }
   const editable = document.activeElement?.matches(
@@ -2678,6 +3008,7 @@ $('#fontSizeOptions').addEventListener('click', event => { const option=event.ta
 $('#menuProfileButton').addEventListener('click', openProfile);
 $('#menuMessengerLinkButton').addEventListener('click', () => openMessengerLinkModal({source:'menu'}));
 $('#menuLabResultsButton').addEventListener('click', openLabResults);
+$('#menuPurchasesButton').addEventListener('click', () => openPurchases());
 $('#menuBodyMapButton').addEventListener('click', openBodyMap);
 $('#menuHealthHistoryButton').addEventListener('click', () => openHealthHistory());
 $('#menuInstallAppButton').addEventListener('click', openInstallApp);
@@ -2694,6 +3025,9 @@ $('#messengerLinkModal').addEventListener('click', event => {
   const button = event.target.closest('[data-link-provider]');
   if (button) startMessengerLink(button.dataset.linkProvider, button);
 });
+$('#purchasesClose').addEventListener('click', closePurchases);
+$('#purchasesModal').addEventListener('click', event => { if (event.target.id === 'purchasesModal') closePurchases(); });
+$('#purchasesList').addEventListener('click', handlePurchaseAction);
 $('#profileButton').addEventListener('click', openProfile);
 $('#bodyMapButton').addEventListener('click', openBodyMap);
 $('#healthHistoryButton').addEventListener('click', () => openHealthHistory());

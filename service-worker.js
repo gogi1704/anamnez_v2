@@ -1,9 +1,9 @@
-const CACHE_NAME = 'consilium-shell-v72';
-const ASSET_VERSION = '20260826-returning-user-chat-v1';
+const CACHE_NAME = 'consilium-shell-v78';
+const ASSET_VERSION = '20260828-payment-analytics-v1';
 const APP_SHELL = [
   '/',
   '/manifest.webmanifest',
-  '/static/styles.07ffaefb4795.css?v=20260825-open-dialog-v1',
+  `/static/styles.07ffaefb4795.css?v=${ASSET_VERSION}`,
   `/static/metrika.js?v=${ASSET_VERSION}`,
   '/static/rich-text.2bf1f5fab764.css',
   `/static/rich-text.js?v=${ASSET_VERSION}`,

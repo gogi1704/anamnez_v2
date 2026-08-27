@@ -280,6 +280,8 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
             return self._json(200, public_onboarding(
                 db.get_onboarding(), db.get_profile(), db.list_examinations(),
             ))
+        if path == "/api/purchases":
+            return self._json(200, {"purchases": db.list_payment_orders()})
         if path.startswith("/api/payments/"):
             order_id = path.removeprefix("/api/payments/").strip("/")
             order = db.payment_order_private(order_id)
@@ -361,6 +363,11 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                 # from YooKassa with server credentials before changing local state.
                 verified = yookassa.get_payment(provider_id)
                 updated = db.apply_yookassa_status(order["id"], verified)
+                if updated["status"] == "succeeded" and updated.get("paid"):
+                    analytics.record_server_event(
+                        order["chel_id"], "payment_completed",
+                        {"provider": "yookassa", "result": "succeeded"},
+                    )
                 return self._json(200, {"status": updated["status"]})
             except (ValueError, TypeError, json.JSONDecodeError, UnicodeDecodeError) as exc:
                 return self._json(400, {"detail": str(exc)})
@@ -603,17 +610,31 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                     raise ValueError("Сначала выберите дополнительные обследования")
                 order = db.create_payment_order()
                 private_order = db.payment_order_private(order["id"])
-                if private_order.get("provider_payment_id") and private_order.get("confirmation_url"):
-                    return self._json(200, {"order": db.public_payment_order(order["id"])})
+                if private_order.get("provider_payment_id"):
+                    # A user may return to the payment screen after the provider
+                    # link has expired or the payment has already completed. Read
+                    # the current status before reusing any saved redirect URL.
+                    verified = yookassa.get_payment(private_order["provider_payment_id"])
+                    refreshed = db.apply_yookassa_status(order["id"], verified)
+                    if refreshed["status"] != "canceled":
+                        return self._json(200, {"order": refreshed})
+                    order = db.create_payment_order()
+                    private_order = db.payment_order_private(order["id"])
                 return_to_chat = payload.get("return_to_chat") is True
+                payment_source = str(payload.get("payment_source", "onboarding")).strip()
+                if payment_source not in {"onboarding", "purchases"}:
+                    payment_source = "onboarding"
                 return_url = (
                     f"{settings.public_base_url}/?payment_return={quote(order['id'])}"
                     f"{'&return_to_chat=1' if return_to_chat else ''}"
+                    f"&payment_source={quote(payment_source)}"
                 )
                 payment = yookassa.create_payment(
                     private_order, return_url, str(payload.get("receipt_email", "")),
                 )
                 result = db.attach_yookassa_payment(order["id"], payment)
+                if result["status"] in {"succeeded", "canceled", "waiting_for_capture"}:
+                    result = db.apply_yookassa_status(order["id"], payment)
                 self._track_analytics("payment_created", {
                     "provider": "yookassa", "amount_kopecks": private_order["amount_kopecks"],
                     "selected_count": len(private_order["items"]),
@@ -626,6 +647,31 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
             except yookassa.YooKassaUnavailable as exc:
                 # Keep the same idempotence key after an uncertain network/API
                 # result. A retry cannot accidentally create a second charge.
+                return self._json(503, {"detail": str(exc)})
+        if path.startswith("/api/payments/") and path.endswith("/abandon"):
+            order_id = path.removeprefix("/api/payments/").removesuffix("/abandon").strip("/")
+            try:
+                order = db.payment_order_private(order_id)
+                if not order:
+                    return self._json(404, {"detail": "Заказ не найден"})
+                if order.get("provider_payment_id"):
+                    verified = yookassa.get_payment(order["provider_payment_id"])
+                    refreshed = db.apply_yookassa_status(order_id, verified)
+                    if refreshed["status"] == "waiting_for_capture":
+                        canceled = yookassa.cancel_payment(
+                            order["provider_payment_id"], f"{order_id}-cancel",
+                        )
+                        refreshed = db.apply_yookassa_status(order_id, canceled)
+                    elif refreshed["status"] == "pending":
+                        refreshed = db.mark_payment_abandoned(order_id)
+                else:
+                    refreshed = db.mark_payment_abandoned(order_id)
+                if refreshed["status"] == "abandoned":
+                    self._track_analytics("payment_abandoned", {"provider": "yookassa"})
+                return self._json(200, {"order": refreshed})
+            except (ValueError, TypeError, json.JSONDecodeError, UnicodeDecodeError) as exc:
+                return self._json(422, {"detail": str(exc)})
+            except yookassa.YooKassaUnavailable as exc:
                 return self._json(503, {"detail": str(exc)})
         if path == "/api/analytics/events":
             try:
@@ -1362,6 +1408,18 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                 return self._json(200, {"deleted": examination_id})
             return self._json(404, {"detail": "Обследование не найдено"})
         self._ensure_user_context()
+        if path.startswith("/api/purchases/"):
+            order_id = path.removeprefix("/api/purchases/").strip("/")
+            try:
+                hidden = db.hide_payment_order(order_id)
+                self._track_analytics("purchase_attempt_removed", {
+                    "provider": "yookassa", "status": hidden.get("status", ""),
+                })
+                return self._json(200, {"deleted": order_id})
+            except ValueError as exc:
+                message = str(exc)
+                status = 404 if message == "Заказ не найден" else 409
+                return self._json(status, {"detail": message})
         if path.startswith("/api/memories/"):
             try:
                 memory_id = int(path.removeprefix("/api/memories/"))
