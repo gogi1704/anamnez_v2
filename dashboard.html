@@ -11,7 +11,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/static/dashboard.css?v=20260828-payment-analytics-v1">
+  <link rel="stylesheet" href="/static/dashboard.css?v=20260828-manual-refresh-v1">
 </head>
 <body>
   <main class="dashboard-shell">
@@ -31,11 +31,15 @@
     </section>
 
     <div class="dashboard hidden" id="dashboard">
+      <div class="admin-top-progress hidden" id="adminTopProgress" role="progressbar" aria-label="Загрузка данных" aria-valuetext="Данные загружаются">
+        <div class="admin-top-progress-copy"><span class="admin-top-progress-dot" aria-hidden="true"></span><strong id="adminTopProgressLabel">Обновляем данные…</strong></div>
+        <div class="admin-top-progress-track" aria-hidden="true"><span></span></div>
+      </div>
       <header class="dashboard-header">
         <div>
           <p class="eyebrow">Консилиум · аналитика</p>
           <h1>Состояние проекта</h1>
-          <p id="generatedAt">Загрузка данных…</p>
+          <p id="generatedAt">Загрузка данных… · обновление только вручную</p>
         </div>
         <div class="header-actions">
           <a class="button secondary" href="/manager">Панель менеджера</a>
@@ -422,6 +426,6 @@
       </div>
     </section>
   </div>
-  <script src="/static/dashboard.js?v=20260828-payment-analytics-v1" defer></script>
+  <script src="/static/dashboard.js?v=20260828-manual-refresh-v1" defer></script>
 </body>
 </html>

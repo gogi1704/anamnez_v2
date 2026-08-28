@@ -49,8 +49,8 @@ const summaryCards = [
   ['human_pending','Ожидают человека','текущая очередь'],
 ];
 
-let refreshTimer;
 let dashboardLoading = false;
+let topProgressRequests = 0;
 let staffItems = [];
 let examinationItems = [];
 let activeAdminView = 'dashboard';
@@ -59,6 +59,7 @@ let analyticsFunnelMode = 'start';
 let latestAnalyticsData = null;
 let latestMetric2Data = null;
 const adminGetRequests = new Map();
+const loadedAdminViews = new Set();
 const panelLoadingCounts = new WeakMap();
 const expandedFunnelRows = new Set();
 const favoriteAnalytics = new Set((() => {
@@ -400,7 +401,7 @@ function renderDashboard(data) {
   renderDistribution('#deviceDistribution',data.devices || [],'device_type','users',deviceNames);
   renderDistribution('#osDistribution',data.operating_systems || [],'operating_system','users');
   renderDistribution('#browserDistribution',data.browsers || [],'browser','users');
-  $('#generatedAt').textContent = `Данные обновлены ${formatDate(data.generated_at)} · автообновление раз в минуту`;
+  $('#generatedAt').textContent = `Данные обновлены ${formatDate(data.generated_at)} · следующее обновление только по кнопке «Обновить»`;
 }
 
 function renderCostSummary(data) {
@@ -588,14 +589,30 @@ async function withPanelLoading(target, operation, label = 'Загружаем �
   finally { setPanelLoading(target, false, label); }
 }
 
+function setTopProgress(loading, label = 'Обновляем данные…') {
+  topProgressRequests = Math.max(0, topProgressRequests + (loading ? 1 : -1));
+  const progress = $('#adminTopProgress');
+  if (!progress) return;
+  if (loading && label) $('#adminTopProgressLabel').textContent = label;
+  const active = topProgressRequests > 0;
+  progress.classList.toggle('hidden', !active);
+  progress.setAttribute('aria-busy', String(active));
+}
+
+async function withTopProgress(operation, label = 'Обновляем данные…') {
+  setTopProgress(true, label);
+  try { return await operation; }
+  finally { setTopProgress(false); }
+}
+
 function adminFetch(path, token = sessionStorage.getItem(TOKEN_KEY), options = {}, retryAttempt = 0) {
   const method = String(options.method || 'GET').toUpperCase();
   if (method !== 'GET' || retryAttempt > 0) {
-    return adminFetchRequest(path, token, options, retryAttempt);
+    return withTopProgress(adminFetchRequest(path, token, options, retryAttempt));
   }
   const requestKey = `${token || ''}:${path}`;
   if (adminGetRequests.has(requestKey)) return adminGetRequests.get(requestKey);
-  const request = adminFetchRequest(path, token, options, retryAttempt)
+  const request = withTopProgress(adminFetchRequest(path, token, options, retryAttempt))
     .finally(() => adminGetRequests.delete(requestKey));
   adminGetRequests.set(requestKey, request);
   return request;
@@ -1381,15 +1398,19 @@ function showAdminView(view) {
   }
 }
 
-function loadAdminViewData(view = activeAdminView) {
-  if (view === 'dashboard') return loadAllTables();
-  if (view === 'favorites') return loadFavoriteSources();
-  if (view === 'managers') return loadStaff();
-  if (view === 'examinations') return loadExaminations();
-  if (view === 'costs') return loadCosts();
-  if (view === 'analytics') return loadAnalytics();
-  if (view === 'metric2') return loadMetric2();
-  return Promise.resolve();
+async function loadAdminViewData(view = activeAdminView, {force = false} = {}) {
+  if (!force && loadedAdminViews.has(view)) return;
+  let request;
+  if (view === 'dashboard') request = loadAllTables();
+  else if (view === 'favorites') request = loadFavoriteSources();
+  else if (view === 'managers') request = loadStaff();
+  else if (view === 'examinations') request = loadExaminations();
+  else if (view === 'costs') request = loadCosts();
+  else if (view === 'analytics') request = loadAnalytics();
+  else if (view === 'metric2') request = loadMetric2();
+  else return;
+  await request;
+  loadedAdminViews.add(view);
 }
 
 async function createManager(event) {
@@ -1705,7 +1726,9 @@ function showDashboardError(error) {
 }
 
 function showLogin(message = '') {
-  clearInterval(refreshTimer);
+  topProgressRequests = 0;
+  loadedAdminViews.clear();
+  $('#adminTopProgress')?.classList.add('hidden');
   $('#dashboard').classList.add('hidden');
   showAdminView('dashboard');
   $('#loginPanel').classList.remove('hidden');
@@ -1736,7 +1759,7 @@ async function loadDashboard(token = sessionStorage.getItem(TOKEN_KEY)) {
     // Запускаем содержимое текущей вкладки одновременно со сводкой. Ошибку
     // превращаем в значение сразу, чтобы отклонённый промис не оставался
     // необработанным, пока основной запрос ещё выполняется.
-    const detailPromise = loadAdminViewData(activeAdminView).then(
+    const detailPromise = loadAdminViewData(activeAdminView, {force:true}).then(
       () => null,
       error => error,
     );
@@ -1746,8 +1769,6 @@ async function loadDashboard(token = sessionStorage.getItem(TOKEN_KEY)) {
     renderDashboard(data);
     const detailError = await detailPromise;
     if (detailError) throw detailError;
-    clearInterval(refreshTimer);
-    refreshTimer = setInterval(() => loadDashboard(),60000);
   } catch (error) {
     if (error.status === 401) {
       sessionStorage.removeItem(TOKEN_KEY);

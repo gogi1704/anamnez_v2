@@ -8,11 +8,19 @@
 .admin-loading { position:relative!important; min-height:150px; isolation:isolate; }
 .admin-panel-loader { position:absolute; inset:0; z-index:30; display:flex; flex-direction:column; align-items:center; justify-content:center; gap:7px; min-height:140px; padding:24px; border-radius:inherit; background:rgba(248,252,250,.92); color:var(--green-dark); text-align:center; backdrop-filter:blur(3px); }
 .admin-panel-loader strong { font-size:14px; line-height:1.3; }.admin-panel-loader small { color:var(--muted); font-size:10px; }
+.admin-top-progress { position:fixed; top:12px; left:50%; z-index:120; display:grid; gap:7px; width:min(520px,calc(100vw - 24px)); padding:10px 14px 12px; border:1px solid #c9ddd3; border-radius:16px; background:rgba(255,255,255,.97); box-shadow:0 12px 34px rgba(24,72,52,.18); transform:translateX(-50%); }
+.admin-top-progress.hidden { display:none; }
+.admin-top-progress-copy { display:flex; align-items:center; gap:8px; color:var(--green-dark); font-size:12px; }
+.admin-top-progress-dot { width:8px; height:8px; flex:0 0 auto; border-radius:50%; background:var(--green); box-shadow:0 0 0 5px rgba(34,132,94,.12); }
+.admin-top-progress-track { height:5px; overflow:hidden; border-radius:999px; background:#e6efea; }
+.admin-top-progress-track span { display:block; width:38%; height:100%; border-radius:inherit; background:linear-gradient(90deg,var(--green),#77b89c); animation:adminTopProgress 1.05s ease-in-out infinite; }
+.admin-top-progress strong { overflow-wrap:anywhere; }
 .admin-loading-spinner { width:34px; height:34px; margin-bottom:3px; border:4px solid #dbeae3; border-top-color:var(--green); border-radius:50%; animation:adminLoaderSpin .75s linear infinite; }
 @keyframes adminLoaderSpin { to { transform:rotate(360deg); } }
+@keyframes adminTopProgress { from { transform:translateX(-110%); } to { transform:translateX(300%); } }
 #refreshButton.is-loading { position:relative; padding-left:37px; }
 #refreshButton.is-loading::before { content:''; position:absolute; left:14px; width:14px; height:14px; border:2px solid currentColor; border-right-color:transparent; border-radius:50%; animation:adminLoaderSpin .7s linear infinite; }
-@media (prefers-reduced-motion:reduce) { .admin-loading-spinner,#refreshButton.is-loading::before { animation-duration:1.8s; } }
+@media (prefers-reduced-motion:reduce) { .admin-loading-spinner,#refreshButton.is-loading::before,.admin-top-progress-track span { animation-duration:1.8s; } }
 * { box-sizing:border-box; min-width:0; }
 html { background:var(--bg); }
 body { margin:0; min-height:100dvh; overflow-x:hidden; color:var(--ink); background:radial-gradient(circle at 15% 5%,#e4f2eb 0,transparent 30%),var(--bg); font-family:Manrope,system-ui,sans-serif; }

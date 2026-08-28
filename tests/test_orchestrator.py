@@ -1509,10 +1509,19 @@ class OrchestratorTests(unittest.TestCase):
         self.assertIn("adminGetRequests", script)
         self.assertIn("admin-panel-loader", script)
         self.assertIn(".admin-panel-loader", styles)
+        self.assertIn('id="adminTopProgress"', dashboard)
+        self.assertIn("function setTopProgress", script)
+        self.assertIn(".admin-top-progress", styles)
+        self.assertNotIn("setInterval(() => loadDashboard(),60000)", script)
+        self.assertNotIn("автообновление раз в минуту", script)
+        self.assertIn("следующее обновление только по кнопке", script)
+        self.assertIn("const loadedAdminViews = new Set()", script)
+        self.assertIn("if (!force && loadedAdminViews.has(view)) return", script)
+        self.assertIn("loadAdminViewData(activeAdminView, {force:true})", script)
         self.assertIn("if (sessionStorage.getItem(TOKEN_KEY))", script)
         self.assertLess(
             script.index("sessionStorage.setItem(TOKEN_KEY,token);", script.index("async function loadDashboard")),
-            script.index("loadAdminViewData(activeAdminView)", script.index("async function loadDashboard")),
+            script.index("loadAdminViewData(activeAdminView, {force:true})", script.index("async function loadDashboard")),
         )
         self.assertIn("saveExamination", script)
         self.assertIn("manageExamination", script)
