@@ -155,6 +155,36 @@ def mark_current_user_registered(method: str) -> dict:
     return dict(row)
 
 
+def mark_current_user_result_entry() -> dict:
+    """Mark the dedicated laboratory-results journey without rewriting old attribution."""
+    now = utc_now()
+    chel_id = current_chel_id()
+    with _write_lock, connection() as conn:
+        conn.execute(
+            """UPDATE users SET
+                registered_at=COALESCE(registered_at, ?),
+                registration_method=COALESCE(registration_method, 'result'),
+                result_entry_at=COALESCE(result_entry_at, ?),
+                last_seen_at=?
+            WHERE chel_id=?""",
+            (now, now, now, chel_id),
+        )
+        conn.commit()
+        row = conn.execute("SELECT * FROM users WHERE chel_id = ?", (chel_id,)).fetchone()
+    if not row:
+        raise ValueError("Пользователь не найден")
+    return dict(row)
+
+
+def current_user_has_result_entry() -> bool:
+    with connection() as conn:
+        row = conn.execute(
+            "SELECT result_entry_at FROM users WHERE chel_id = ?",
+            (current_chel_id(),),
+        ).fetchone()
+    return bool(row and str(row["result_entry_at"] or "").strip())
+
+
 def classify_user_agent(user_agent: str) -> dict:
     """Turn a browser User-Agent into coarse, privacy-conscious audience fields."""
     raw = " ".join(str(user_agent or "").split())[:500]
@@ -282,6 +312,7 @@ def reset_current_user(preserve_identity: bool = False) -> None:
         conn.execute("DELETE FROM memories WHERE chel_id = ?", (chel_id,))
         conn.execute("DELETE FROM body_symptoms WHERE chel_id = ?", (chel_id,))
         conn.execute("DELETE FROM lab_interpretations WHERE chel_id = ?", (chel_id,))
+        conn.execute("DELETE FROM lab_result_subscriptions WHERE chel_id = ?", (chel_id,))
         conn.execute("DELETE FROM user_profile WHERE chel_id = ?", (chel_id,))
         conn.execute("DELETE FROM onboarding_state WHERE chel_id = ?", (chel_id,))
         conn.execute("DELETE FROM payment_orders WHERE chel_id = ?", (chel_id,))
@@ -302,7 +333,8 @@ def admin_delete_user_data(chel_id: str) -> dict:
     # the user because their dependent messages, handoffs and notifications use
     # cascading foreign keys.
     owned_tables = (
-        "conversations", "memories", "body_symptoms", "lab_interpretations",
+        "conversations", "memories", "body_symptoms", "lab_interpretations", "lab_result_subscriptions",
+        "user_result_notification_outbox",
         "user_profile", "onboarding_state", "payment_orders", "user_device_stats", "ai_usage",
         "login_tokens", "auth_intents", "user_sessions", "external_identities",
         "users",
@@ -809,6 +841,12 @@ def admin_dashboard(days: int = 14, limit: int = 100) -> dict:
                 WHERE TRIM(tube_number) <> ''
                   AND IS_STATS_USER(chel_id) = 1"""
             ),
+            "result_entry_users": scalar(
+                """SELECT COUNT(*) FROM users
+                WHERE result_entry_at IS NOT NULL
+                  AND registered_at IS NOT NULL
+                  AND IS_STATS_USER(chel_id) = 1"""
+            ),
             "conversations_total": scalar(
                 """SELECT COUNT(*) FROM conversations
                 WHERE IS_STATS_USER(chel_id) = 1"""
@@ -937,6 +975,7 @@ def admin_dashboard(days: int = 14, limit: int = 100) -> dict:
         users = [
             dict(row) for row in conn.execute(
                 f"""SELECT u.chel_id, u.registered_at AS created_at, u.last_seen_at,
+                    CASE WHEN u.result_entry_at IS NOT NULL THEN 'result' ELSE 'standard' END AS entry_flow,
                     COALESCE(o.status, 'not_started') AS onboarding_status,
                     COALESCE(GROUP_CONCAT(DISTINCT e.provider), '') AS messengers,
                     COUNT(DISTINCT c.id) AS conversations,
@@ -1130,7 +1169,7 @@ def admin_table(
         raise ValueError("Начальная дата не может быть позже конечной")
     sort_columns = {
         "users": {
-            "chel_id": "u.chel_id", "from_manager": "from_manager",
+            "chel_id": "u.chel_id", "from_manager": "from_manager", "entry_flow": "entry_flow",
             "created_at": "u.registered_at", "last_seen_at": "u.last_seen_at",
             "onboarding_status": "onboarding_status", "messengers": "messengers",
             "conversations": "conversations", "messages": "messages",
@@ -1187,8 +1226,9 @@ def admin_table(
                     OR COALESCE(o.status, 'not_started') LIKE ? ESCAPE '\\'
                     OR COALESCE(e.provider, 'нет') LIKE ? ESCAPE '\\'
                     OR COALESCE(u.from_manager, '') LIKE ? ESCAPE '\\'
+                    OR CASE WHEN u.result_entry_at IS NOT NULL THEN 'result' ELSE 'standard' END LIKE ? ESCAPE '\\'
                 )"""
-                params.extend([pattern, pattern, pattern, pattern])
+                params.extend([pattern, pattern, pattern, pattern, pattern])
             overall_total = conn.execute(
                 """SELECT COUNT(*) FROM users
                 WHERE IS_STATS_USER(chel_id) = 1
@@ -1210,6 +1250,7 @@ def admin_table(
             rows = [
                 dict(row) for row in conn.execute(
                     f"""SELECT u.chel_id, u.registered_at AS created_at, u.last_seen_at,
+                        CASE WHEN u.result_entry_at IS NOT NULL THEN 'result' ELSE 'standard' END AS entry_flow,
                         COALESCE(u.from_manager, '') AS from_manager,
                         COALESCE(o.status, 'not_started') AS onboarding_status,
                         COALESCE(GROUP_CONCAT(DISTINCT e.provider), '') AS messengers,
@@ -2552,7 +2593,8 @@ def init_db() -> None:
                 last_seen_at TEXT NOT NULL,
                 registered_at TEXT,
                 registration_method TEXT,
-                from_manager TEXT NOT NULL DEFAULT ''
+                from_manager TEXT NOT NULL DEFAULT '',
+                result_entry_at TEXT
             );
 
             CREATE TABLE IF NOT EXISTS user_device_stats (
@@ -2834,6 +2876,42 @@ def init_db() -> None:
                 FOREIGN KEY(chel_id) REFERENCES users(chel_id) ON DELETE CASCADE
             );
 
+            CREATE TABLE IF NOT EXISTS lab_result_subscriptions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                chel_id TEXT NOT NULL,
+                med_id TEXT NOT NULL,
+                providers TEXT NOT NULL DEFAULT '[]',
+                status TEXT NOT NULL DEFAULT 'pending',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                notified_at TEXT,
+                next_check_at TEXT,
+                last_checked_at TEXT,
+                UNIQUE(chel_id, med_id),
+                FOREIGN KEY(chel_id) REFERENCES users(chel_id) ON DELETE CASCADE
+            );
+
+            CREATE TABLE IF NOT EXISTS user_result_notification_outbox (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                subscription_id INTEGER NOT NULL,
+                chel_id TEXT NOT NULL,
+                provider TEXT NOT NULL,
+                recipient_id TEXT NOT NULL,
+                payload TEXT NOT NULL DEFAULT '{}',
+                status TEXT NOT NULL DEFAULT 'pending',
+                attempts INTEGER NOT NULL DEFAULT 0,
+                lease_token TEXT,
+                leased_at TEXT,
+                next_attempt_at TEXT,
+                sent_at TEXT,
+                last_error TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                UNIQUE(subscription_id, provider),
+                FOREIGN KEY(subscription_id) REFERENCES lab_result_subscriptions(id) ON DELETE CASCADE,
+                FOREIGN KEY(chel_id) REFERENCES users(chel_id) ON DELETE CASCADE
+            );
+
             CREATE TABLE IF NOT EXISTS ai_usage (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 chel_id TEXT NOT NULL DEFAULT '',
@@ -2869,6 +2947,8 @@ def init_db() -> None:
             registration_columns_added = True
         if "from_manager" not in users_columns:
             conn.execute("ALTER TABLE users ADD COLUMN from_manager TEXT NOT NULL DEFAULT ''")
+        if "result_entry_at" not in users_columns:
+            conn.execute("ALTER TABLE users ADD COLUMN result_entry_at TEXT")
         if registration_columns_added:
             # Historical installations did not record the first access choice. Preserve their
             # existing analytics; the stricter rule applies to records created after migration.
@@ -2925,6 +3005,14 @@ def init_db() -> None:
         outbox_columns = {row[1] for row in conn.execute("PRAGMA table_info(manager_notification_outbox)").fetchall()}
         if "next_attempt_at" not in outbox_columns:
             conn.execute("ALTER TABLE manager_notification_outbox ADD COLUMN next_attempt_at TEXT")
+
+        result_subscription_columns = {
+            row[1] for row in conn.execute("PRAGMA table_info(lab_result_subscriptions)").fetchall()
+        }
+        if "next_check_at" not in result_subscription_columns:
+            conn.execute("ALTER TABLE lab_result_subscriptions ADD COLUMN next_check_at TEXT")
+        if "last_checked_at" not in result_subscription_columns:
+            conn.execute("ALTER TABLE lab_result_subscriptions ADD COLUMN last_checked_at TEXT")
 
         memory_columns = {row[1] for row in conn.execute("PRAGMA table_info(memories)").fetchall()}
         if "chel_id" not in memory_columns:
@@ -3045,6 +3133,14 @@ def init_db() -> None:
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_lab_interpretations_lookup "
             "ON lab_interpretations(chel_id, med_id, scope_key, profile_fingerprint)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_lab_result_subscriptions_status "
+            "ON lab_result_subscriptions(status, next_check_at, updated_at)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_user_result_notification_delivery "
+            "ON user_result_notification_outbox(provider, status, next_attempt_at, id)"
         )
         conn.execute("CREATE INDEX IF NOT EXISTS idx_ai_usage_created_at ON ai_usage(created_at)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_ai_usage_model ON ai_usage(model, created_at)")
@@ -3641,6 +3737,244 @@ def save_lab_interpretation(
         )
         conn.commit()
     return get_lab_interpretation(med_id, scope_key, profile_hash)
+
+
+def create_lab_result_subscription(med_id: str) -> dict:
+    """Remember that the current user wants a messenger notification when results appear."""
+    med_id = str(med_id or "").strip()[:80]
+    if not med_id:
+        raise ValueError("Сначала введите номер пробирки")
+    identities = current_external_identities()
+    providers = sorted({
+        str(item.get("provider") or "") for item in identities
+        if str(item.get("provider") or "") in {"telegram", "max"}
+    })
+    if not providers:
+        raise ValueError("Для уведомления привяжите Telegram или MAX")
+    now = utc_now()
+    with _write_lock, connection() as conn:
+        conn.execute(
+            """INSERT INTO lab_result_subscriptions
+            (chel_id, med_id, providers, status, created_at, updated_at, next_check_at)
+            VALUES (?, ?, ?, 'pending', ?, ?, ?)
+            ON CONFLICT(chel_id, med_id) DO UPDATE SET
+              providers=excluded.providers, status='pending', updated_at=excluded.updated_at,
+              next_check_at=excluded.next_check_at""",
+            (current_chel_id(), med_id, json.dumps(providers), now, now, now),
+        )
+        conn.commit()
+        row = conn.execute(
+            "SELECT * FROM lab_result_subscriptions WHERE chel_id=? AND med_id=?",
+            (current_chel_id(), med_id),
+        ).fetchone()
+    result = dict(row)
+    result["providers"] = providers
+    return result
+
+
+def get_lab_result_subscription(med_id: str = "") -> dict | None:
+    med_id = str(med_id or "").strip()[:80]
+    with connection() as conn:
+        if med_id:
+            row = conn.execute(
+                """SELECT * FROM lab_result_subscriptions
+                WHERE chel_id=? AND med_id=?""",
+                (current_chel_id(), med_id),
+            ).fetchone()
+        else:
+            row = conn.execute(
+                """SELECT * FROM lab_result_subscriptions
+                WHERE chel_id=? ORDER BY updated_at DESC LIMIT 1""",
+                (current_chel_id(),),
+            ).fetchone()
+    if not row:
+        return None
+    result = dict(row)
+    try:
+        result["providers"] = json.loads(result.get("providers") or "[]")
+    except json.JSONDecodeError:
+        result["providers"] = []
+    return result
+
+
+def claim_due_lab_result_subscriptions(limit: int = 3) -> list[dict]:
+    """Reserve a small batch for checking without blocking later bot polls."""
+    limit = max(1, min(10, int(limit)))
+    now_dt = datetime.now(timezone.utc)
+    now = now_dt.isoformat()
+    next_check = (now_dt + timedelta(minutes=15)).isoformat()
+    with _write_lock, connection() as conn:
+        rows = conn.execute(
+            """SELECT id, chel_id, med_id, providers
+            FROM lab_result_subscriptions
+            WHERE status = 'pending'
+              AND (next_check_at IS NULL OR next_check_at <= ?)
+            ORDER BY COALESCE(next_check_at, created_at), id LIMIT ?""",
+            (now, limit),
+        ).fetchall()
+        if rows:
+            conn.executemany(
+                """UPDATE lab_result_subscriptions
+                SET next_check_at = ?, last_checked_at = ?, updated_at = ?
+                WHERE id = ? AND status = 'pending'""",
+                [(next_check, now, now, row["id"]) for row in rows],
+            )
+            conn.commit()
+    result = []
+    for row in rows:
+        item = dict(row)
+        try:
+            item["providers"] = json.loads(item.get("providers") or "[]")
+        except json.JSONDecodeError:
+            item["providers"] = []
+        result.append(item)
+    return result
+
+
+def complete_lab_result_subscription_check(
+    subscription_id: int, documents: list[dict], public_url: str,
+) -> int:
+    """Queue one result-ready notification per linked messenger."""
+    if not documents:
+        return 0
+    now = utc_now()
+    with _write_lock, connection() as conn:
+        subscription = conn.execute(
+            """SELECT id, chel_id, med_id, providers FROM lab_result_subscriptions
+            WHERE id = ? AND status = 'pending'""",
+            (int(subscription_id),),
+        ).fetchone()
+        if not subscription:
+            return 0
+        try:
+            providers = {
+                str(value) for value in json.loads(subscription["providers"] or "[]")
+                if str(value) in {"telegram", "max"}
+            }
+        except json.JSONDecodeError:
+            providers = set()
+        identities = conn.execute(
+            """SELECT provider, provider_user_id FROM external_identities
+            WHERE chel_id = ? AND access_status = 'active'""",
+            (subscription["chel_id"],),
+        ).fetchall()
+        service_url = str(public_url or "").rstrip("/") + "/result"
+        payload = json.dumps({
+            "title": "Результаты анализов готовы",
+            "body": (
+                f"Для пробирки {subscription['med_id']} появились результаты. "
+                f"Откройте Консилиум: {service_url}"
+            ),
+            "kind": "lab_results_ready",
+            "med_id": subscription["med_id"],
+            "action_url": service_url,
+            "action_label": "Открыть результаты",
+        }, ensure_ascii=False)
+        inserted = 0
+        for identity in identities:
+            provider = str(identity["provider"] or "")
+            recipient = str(identity["provider_user_id"] or "").strip()
+            if provider not in providers or not recipient:
+                continue
+            cursor = conn.execute(
+                """INSERT OR IGNORE INTO user_result_notification_outbox
+                (subscription_id, chel_id, provider, recipient_id, payload, status,
+                 attempts, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, 'pending', 0, ?, ?)""",
+                (
+                    subscription["id"], subscription["chel_id"], provider,
+                    recipient, payload, now, now,
+                ),
+            )
+            inserted += int(bool(cursor.rowcount))
+        conn.execute(
+            """UPDATE lab_result_subscriptions SET status = ?, updated_at = ?
+            WHERE id = ?""",
+            ("queued" if inserted else "pending", now, subscription["id"]),
+        )
+        conn.commit()
+    return inserted
+
+
+def claim_user_result_notifications(provider: str, limit: int = 20) -> list[dict]:
+    provider = str(provider or "").strip().lower()
+    if provider not in {"telegram", "max"}:
+        raise ValueError("Неизвестный мессенджер")
+    limit = max(1, min(50, int(limit)))
+    now = datetime.now(timezone.utc)
+    stale_before = (now - timedelta(minutes=2)).isoformat()
+    result = []
+    with _write_lock, connection() as conn:
+        rows = conn.execute(
+            """SELECT id, recipient_id, payload, attempts
+            FROM user_result_notification_outbox
+            WHERE provider = ? AND attempts < 100
+              AND (next_attempt_at IS NULL OR next_attempt_at <= ?)
+              AND (status = 'pending' OR (status = 'delivering' AND leased_at < ?))
+            ORDER BY id LIMIT ?""",
+            (provider, now.isoformat(), stale_before, limit),
+        ).fetchall()
+        for row in rows:
+            lease_token = secrets.token_urlsafe(18)
+            conn.execute(
+                """UPDATE user_result_notification_outbox
+                SET status = 'delivering', lease_token = ?, leased_at = ?,
+                    attempts = attempts + 1, updated_at = ? WHERE id = ?""",
+                (lease_token, now.isoformat(), now.isoformat(), row["id"]),
+            )
+            item = dict(row)
+            # Negative IDs let unchanged bot clients acknowledge the user outbox
+            # through the existing notification endpoint without ID collisions.
+            item["id"] = -int(item["id"])
+            item["event_type"] = "lab_results_ready"
+            item["conversation_id"] = ""
+            item["lease_token"] = lease_token
+            item["payload"] = json.loads(item["payload"] or "{}")
+            result.append(item)
+        conn.commit()
+    return result
+
+
+def acknowledge_user_result_notification(
+    notification_id: int, lease_token: str, success: bool, error: str = "",
+) -> bool:
+    now_dt = datetime.now(timezone.utc)
+    now = now_dt.isoformat()
+    with _write_lock, connection() as conn:
+        row = conn.execute(
+            """SELECT attempts, subscription_id FROM user_result_notification_outbox
+            WHERE id = ? AND lease_token = ? AND status = 'delivering'""",
+            (int(notification_id), str(lease_token or "")),
+        ).fetchone()
+        if not row:
+            return False
+        retry_delay = min(3600, 5 * (2 ** min(int(row["attempts"]), 10)))
+        next_attempt_at = None if success else (now_dt + timedelta(seconds=retry_delay)).isoformat()
+        cursor = conn.execute(
+            """UPDATE user_result_notification_outbox SET status = ?, sent_at = ?,
+                last_error = ?, next_attempt_at = ?, lease_token = NULL,
+                leased_at = NULL, updated_at = ?
+            WHERE id = ? AND lease_token = ? AND status = 'delivering'""",
+            (
+                "sent" if success else "pending", now if success else None,
+                str(error or "")[:500], next_attempt_at, now,
+                int(notification_id), str(lease_token or ""),
+            ),
+        )
+        if success:
+            remaining = conn.execute(
+                """SELECT COUNT(*) FROM user_result_notification_outbox
+                WHERE subscription_id = ? AND status <> 'sent'""",
+                (row["subscription_id"],),
+            ).fetchone()[0]
+            if not remaining:
+                conn.execute(
+                    """UPDATE lab_result_subscriptions
+                    SET status = 'notified', notified_at = ?, updated_at = ? WHERE id = ?""",
+                    (now, now, row["subscription_id"]),
+                )
+        conn.commit()
+    return bool(cursor.rowcount)
 
 
 def get_onboarding() -> dict:

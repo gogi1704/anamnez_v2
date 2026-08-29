@@ -41,6 +41,15 @@ class Settings:
     analytics_enabled: bool = env_bool("ANALYTICS_ENABLED", True)
     analytics_retention_days: int = int(os.getenv("ANALYTICS_RETENTION_DAYS", "90"))
     yandex_metrika_counter_id: str = os.getenv("YANDEX_METRIKA_COUNTER_ID", "").strip()
+    dadata_api_key: str = os.getenv("DADATA_API_KEY", "").strip()
+    dadata_suggestions_url: str = os.getenv(
+        "DADATA_SUGGESTIONS_URL",
+        "https://suggestions.dadata.ru/suggestions/api/4_1/rs/suggest/party",
+    ).strip()
+    dadata_timeout_seconds: int = int(os.getenv("DADATA_TIMEOUT_SECONDS", "5"))
+    dadata_suggestions_cache_seconds: int = int(
+        os.getenv("DADATA_SUGGESTIONS_CACHE_SECONDS", "600")
+    )
     online_payments_enabled: bool = env_bool("ONLINE_PAYMENTS_ENABLED", False)
     yookassa_shop_id: str = os.getenv("YOOKASSA_SHOP_ID", "").strip()
     yookassa_secret_key: str = os.getenv("YOOKASSA_SECRET_KEY", "").strip()

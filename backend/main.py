@@ -12,7 +12,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, quote, urlparse
 
-from . import analytics, database as db
+from . import analytics, company_suggestions, database as db
 from .config import BASE_DIR, settings
 from .llm import LLMNotConfigured
 from .lab_results import LabResultsUnavailable, lookup_lab_results
@@ -56,6 +56,22 @@ def _record_startup_event(message: str) -> None:
     print(message, flush=True)
 
 
+def _refresh_due_lab_result_notifications() -> None:
+    """Turn due subscriptions into the existing bot delivery stream."""
+    for subscription in db.claim_due_lab_result_subscriptions(3):
+        try:
+            result = lookup_lab_results(subscription["med_id"]).to_dict()
+            documents = result.get("documents") if result.get("status") == "found" else []
+            if documents:
+                db.complete_lab_result_subscription_check(
+                    subscription["id"], documents, settings.public_base_url,
+                )
+        except (ValueError, LabResultsUnavailable):
+            # The reservation already delays the next attempt, so an unavailable
+            # Google Sheet cannot create a tight retry loop in messenger bots.
+            continue
+
+
 def _record_server_error(prefix: str) -> None:
     details = f"\n[{db.utc_now()}] {prefix}\n{traceback.format_exc()}\n"
     try:
@@ -91,17 +107,24 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                     settings.online_payments_enabled and yookassa.configured()
                 ),
                 "payment_receipt_email_required": bool(settings.yookassa_receipts_enabled),
+                "company_suggestions_enabled": company_suggestions.configured(),
             })
         if path == "/api/bot/manager-notifications":
             if not bot_token_valid(self.headers.get("Authorization", "")):
                 return self._json(401, {"detail": "Неверные данные интеграции"})
             query = parse_qs(parsed.query)
             try:
+                provider = query.get("provider", [""])[0]
+                limit = max(1, min(50, int(query.get("limit", ["20"])[0])))
+                _refresh_due_lab_result_notifications()
+                user_notifications = db.claim_user_result_notifications(
+                    provider, min(5, limit),
+                )
+                manager_notifications = db.claim_manager_notifications(
+                    provider, max(1, limit - len(user_notifications)),
+                ) if len(user_notifications) < limit else []
                 return self._json(200, {
-                    "notifications": db.claim_manager_notifications(
-                        query.get("provider", [""])[0],
-                        int(query.get("limit", ["20"])[0]),
-                    )
+                    "notifications": user_notifications + manager_notifications,
                 })
             except (ValueError, TypeError) as exc:
                 return self._json(422, {"detail": str(exc)})
@@ -167,6 +190,7 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                         query.get("source", [""])[0],
                         query.get("date_from", [""])[0],
                         query.get("date_to", [""])[0],
+                        query.get("flow", ["standard"])[0],
                     )
                     report["examinations"] = db.list_examinations()
                     return self._json(200, report)
@@ -247,7 +271,7 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                 return self._json(200, detail)
             return self._json(404, {"detail": "Маршрут панели менеджера не найден"})
         self._ensure_user_context()
-        if path == "/":
+        if path in {"/", "/result", "/result/"}:
             db.record_device_access(self.headers.get("User-Agent", ""))
             return self._send_file(
                 BASE_DIR / "index.html",
@@ -263,6 +287,7 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                 "authenticated": bool(identities),
                 "provider": identities[0]["provider"] if identities else None,
                 "providers": [identity["provider"] for identity in identities],
+                "result_entry": db.current_user_has_result_entry(),
                 "messengers": {
                     "telegram": {"configured": bool(settings.telegram_bot_auth_url)},
                     "max": {"configured": bool(settings.max_bot_auth_url)},
@@ -397,10 +422,16 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                 payload = self._read_json()
                 if not isinstance(payload.get("success"), bool):
                     raise ValueError("success должен быть true или false")
-                acknowledged = db.acknowledge_manager_notification(
-                    notification_id, str(payload.get("lease_token", "")),
-                    payload["success"], str(payload.get("error", "")),
-                )
+                if notification_id < 0:
+                    acknowledged = db.acknowledge_user_result_notification(
+                        abs(notification_id), str(payload.get("lease_token", "")),
+                        payload["success"], str(payload.get("error", "")),
+                    )
+                else:
+                    acknowledged = db.acknowledge_manager_notification(
+                        notification_id, str(payload.get("lease_token", "")),
+                        payload["success"], str(payload.get("error", "")),
+                    )
                 if not acknowledged:
                     return self._json(409, {"detail": "Уведомление уже обработано или аренда истекла"})
                 return self._json(200, {"status": "acknowledged"})
@@ -595,6 +626,23 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                     return self._json(422, {"detail": str(exc)})
             return self._json(404, {"detail": "Маршрут панели менеджера не найден"})
         self._ensure_user_context()
+        if path == "/api/company-suggestions":
+            try:
+                payload = self._read_json(max_bytes=1_000)
+                query = str(payload.get("query", "")).strip()
+                if not query.isdigit() or not 4 <= len(query) <= 12:
+                    raise ValueError("Введите от 4 до 12 цифр ИНН")
+                return self._json(200, {
+                    "suggestions": company_suggestions.suggest_companies(
+                        query, client_key=self.client_address[0],
+                    ),
+                })
+            except company_suggestions.CompanySuggestionsRateLimited as exc:
+                return self._json(429, {"detail": str(exc)})
+            except company_suggestions.CompanySuggestionsUnavailable as exc:
+                return self._json(503, {"detail": str(exc)})
+            except (ValueError, TypeError, json.JSONDecodeError, UnicodeDecodeError) as exc:
+                return self._json(422, {"detail": str(exc)})
         if path == "/api/payments/yookassa/create":
             order = None
             try:
@@ -746,6 +794,23 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                 })
             except ValueError as exc:
                 return self._json(422, {"detail": str(exc)})
+        if path == "/api/result-entry/start":
+            try:
+                first_result_entry = not db.current_user_has_result_entry()
+                user = db.mark_current_user_result_entry()
+                self._track_analytics("result_entry_started", {
+                    "first_entry": first_result_entry,
+                })
+                if first_result_entry and user["registration_method"] == "result":
+                    self._track_analytics("registration_completed", {"method": "result"})
+                return self._json(200, {
+                    "status": "registered",
+                    "chel_id": user["chel_id"],
+                    "registration_method": user["registration_method"],
+                    "result_entry_at": user["result_entry_at"],
+                })
+            except ValueError as exc:
+                return self._json(422, {"detail": str(exc)})
         if path == "/api/memories":
             try:
                 payload = self._read_json()
@@ -758,8 +823,15 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
             except (ValueError, TypeError) as exc:
                 return self._json(422, {"detail": str(exc)})
         if path == "/api/lab-results/interpret":
-            if db.get_onboarding()["status"] != "complete":
+            if db.get_onboarding()["status"] != "complete" and not db.current_user_has_result_entry():
                 return self._json(403, {"detail": "Сначала завершите короткую анкету"})
+            missing_profile = self._interpretation_profile_missing(db.get_profile())
+            if missing_profile:
+                return self._json(422, {
+                    "code": "interpretation_profile_required",
+                    "detail": "Перед расшифровкой заполните пол, возраст, рост и вес",
+                    "missing_fields": missing_profile,
+                })
             try:
                 payload = self._read_json()
                 self._track_analytics("lab_interpretation_started", {
@@ -805,6 +877,16 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                     "status": "unavailable",
                     "detail": "Сервис результатов временно недоступен. Попробуйте позже.",
                 })
+        if path == "/api/lab-results/notification":
+            try:
+                tube_number = str(db.get_profile().get("tube_number", "")).strip()
+                subscription = db.create_lab_result_subscription(tube_number)
+                self._track_analytics("lab_results_notification_requested", {
+                    "provider": "+".join(subscription.get("providers", [])),
+                })
+                return self._json(201, {"subscription": subscription})
+            except ValueError as exc:
+                return self._json(422, {"detail": str(exc)})
         if path == "/api/body-symptoms":
             try:
                 return self._json(201, db.add_body_symptom(self._validate_body_symptom(self._read_json())))
@@ -1222,6 +1304,11 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                 "data_url": data_url, "text": str(item.get("text", ""))[:12000],
             })
         return result
+
+    @staticmethod
+    def _interpretation_profile_missing(profile: dict) -> list[str]:
+        required = ("sex", "age", "height_cm", "weight_kg")
+        return [name for name in required if profile.get(name) in (None, "")]
 
     @staticmethod
     def _validate_profile(payload: dict, required: bool = False) -> dict:

@@ -20,7 +20,7 @@ const deviceNames = {
   desktop:'ПК', android:'Android', ios:'iOS', other:'Другое',
 };
 const registrationNames = {
-  anonymous:'Анонимно', max:'MAX', telegram:'Telegram',
+  anonymous:'Анонимно', max:'MAX', telegram:'Telegram', result:'Ссылка результатов',
 };
 const operationNames = {
   routing:'Выбор специалиста', agent_response:'Ответ ИИ-агента',
@@ -43,6 +43,7 @@ const summaryCards = [
   ['messenger_users','Связаны с мессенджером','надёжная идентификация'],
   ['tracked_devices','Определено устройство','уникальные пользователи'],
   ['profiles_with_tube','С номером пробирки','могут получать результаты'],
+  ['result_entry_users','Пришли за результатами','по специальной ссылке result'],
   ['conversations_total','Диалоги','без текстов сообщений'],
   ['messages_total','Сообщения','входящие и ответы ИИ'],
   ['human_requests','Позвали человека','все обращения'],
@@ -58,6 +59,7 @@ let analyticsRecentPage = 1;
 let analyticsFunnelMode = 'start';
 let latestAnalyticsData = null;
 let latestMetric2Data = null;
+let metric2ActiveFlow = 'standard';
 const adminGetRequests = new Map();
 const loadedAdminViews = new Set();
 const panelLoadingCounts = new WeakMap();
@@ -318,11 +320,12 @@ function renderUsers(items, total = items.length, counts = {}) {
   $('#usersPeriodCount').textContent = `Новых за период: ${period.toLocaleString('ru-RU')}`;
   $('#usersCount').textContent = `Найдено: ${Number(total).toLocaleString('ru-RU')}`;
   $('#usersCount').classList.toggle('hidden',!counts.filterActive);
-  if (!items.length) emptyTable(root,8);
+  if (!items.length) emptyTable(root,9);
   for (const item of items) {
     const row = document.createElement('tr');
     textCell(row,item.chel_id,item.chel_id);
     textCell(row,item.from_manager || '—');
+    statusCell(row,item.entry_flow === 'result' ? 'За результатами' : 'Обычный путь',item.entry_flow === 'result' ? ['complete'] : []);
     textCell(row,formatDate(item.created_at));
     textCell(row,formatDate(item.last_seen_at));
     statusCell(row,item.onboarding_status,['complete']);
@@ -1164,6 +1167,14 @@ function metric2PreviewMarkup(screen, large = false) {
   else if (kind === 'payment_unavailable') content = `<div class="metric2-mock-modal"><span class="metric2-mock-icon">⌛</span><b>Онлайн-оплата временно недоступна</b><p>Мы уже работаем над её подключением. Пока вы можете выбрать оплату на медицинском осмотре.</p>${action('Понятно')}</div>`;
   else if (kind === 'completion') content = `<span class="metric2-mock-emoji">🎉</span><small>ОБСЛЕДОВАНИЯ ВЫБРАНЫ</small><b>Отлично! Вы выбрали дополнительные обследования.</b><p>В день медицинского осмотра наша бригада сообщит вам <strong>индивидуальный номер пробирки</strong>.</p><p>Чтобы получить результаты анализов, достаточно будет ввести этот номер в соответствующее поле нашего сервиса.</p><p class="metric2-mock-note">№ Сейчас у вас этого номера еще нет — это нормально. Когда он появится, просто напишите в чат нашему менеджеру. Он подскажет, куда ввести этот номер и как получить результаты.</p><p>После этого сообщения для вас откроется чат, в котором вы сможете:</p><ul><li>узнать, как получить результаты анализов;</li><li>задать любые вопросы о медицинском осмотре;</li><li>получить консультацию по анализам, питанию и вопросам здоровья.</li></ul><p>Как только результаты будут готовы, вы сможете <strong>бесплатно получить их расшифровку</strong> у нашего специалиста.</p><p class="metric2-mock-note"><strong>📱 Также рекомендуем установить наше приложение на смартфон.</strong> Так вы не потеряете доступ к своим результатам, сможете в любой момент обратиться к онлайн-врачу и всегда будете иметь все необходимые медицинские сервисы под рукой.</p><p>💬 Не стесняйтесь писать в чат — мы всегда рады помочь!</p><span class="metric2-mock-info"><b>↗ Сохраните результаты и расшифровки</b><small>Привяжите Telegram или MAX, чтобы вернуться к анкете, выбранным обследованиям и готовым результатам с другого устройства.</small></span>${action('Привязать мессенджер')}${action('＋ Установить приложение')}${action('Установлю позже',true)}`;
   else if (kind === 'completion_skipped') content = `<span class="metric2-mock-icon">✓</span><small>АНКЕТА ЗАВЕРШЕНА</small><b>Спасибо! Ваши ответы сохранены.</b><p>Вы решили пока не выбирать дополнительные обследования. Если захотите, к ним можно будет вернуться позже через меню сервиса.</p><p><strong>В Консилиуме вы сможете:</strong></p><ul><li>задавать медицинскому помощнику вопросы о здоровье, питании и медицинском осмотре;</li><li>получать результаты анализов по номеру пробирки и просить помочь с расшифровкой;</li><li>сохранять историю обращений и важные сведения о здоровье;</li><li>при необходимости пригласить медицинского специалиста в чат.</li></ul><span class="metric2-mock-info"><b>↗ Не потеряйте доступ</b><small>Привяжите Telegram или MAX, чтобы открыть анкету, историю диалогов и результаты с другого устройства или после очистки браузера.</small></span>${action('Привязать мессенджер')}<p class="metric2-mock-note"><strong>📱 Установите приложение на устройство.</strong> Так Консилиум будет всегда под рукой, а вернуться к вопросам о здоровье станет проще.</p>${action('＋ Установить приложение')}${action('Перейти в Консилиум',true)}`;
+  else if (kind === 'result_existing') content = `<span class="metric2-mock-icon">▤</span><small>РЕЗУЛЬТАТЫ АНАЛИЗОВ</small><b>Введите номер пробирки</b><p>Чат уже открыт, а поверх него показано окно получения результатов. Если номер сохранён, поиск начинается автоматически.</p><span class="metric2-mock-input">Например, LAB-2026-0042</span>${action('Сохранить и продолжить')}`;
+  else if (kind === 'result_welcome') content = `<span class="metric2-mock-icon">▤</span><small>РЕЗУЛЬТАТЫ ОБСЛЕДОВАНИЙ</small><b>Ваши анализы — в одном месте</b><p>Здесь можно получить документы по номеру пробирки, попросить помочь с расшифровкой и задать вопрос о результатах медицинскому помощнику.</p><span class="metric2-mock-info"><b>Что понадобится</b><small>Индивидуальный номер пробирки, который сообщили во время медицинского осмотра.</small></span>${action('Далее')}`;
+  else if (kind === 'result_tube') content = `<span class="metric2-mock-icon">№</span><small>ПОИСК РЕЗУЛЬТАТОВ</small><b>Введите номер пробирки</b><p>Он указан на вашей наклейке или был сообщён бригадой на медицинском осмотре.</p><span class="metric2-mock-input">Например, 123456</span>${action('Продолжить')}`;
+  else if (kind === 'result_messenger') content = `<span class="metric2-mock-icon">↗</span><small>РЕКОМЕНДУЕМ</small><b>Не потеряйте результаты</b><p>Привяжите Telegram или MAX: так профиль не потеряется после очистки браузера, а результаты, расшифровка и консультация останутся доступны на любом устройстве.</p><ul><li>доступ к документам с телефона и компьютера;</li><li>история расшифровок и консультаций;</li><li>уведомление о готовности результатов.</li></ul>${action('Привязать мессенджер')}${action('Продолжить без привязки',true)}`;
+  else if (kind === 'result_search') content = `<span class="metric2-mock-icon">⌕</span><small>ПРОВЕРЯЕМ НОМЕР</small><b>Ищем ваши результаты</b><p>Обычно это занимает несколько секунд.</p>`;
+  else if (kind === 'result_found') content = `<span class="metric2-mock-icon">✓</span><small>ГОТОВО</small><b>Результаты найдены</b><p>Документы уже доступны. В чате можно попросить Ольгу помочь с расшифровкой или пригласить медицинского специалиста.</p><span class="metric2-mock-info"><b>▤ Результаты анализов</b><small>Открыть документ →</small></span>${action('Перейти в чат и получить консультацию')}`;
+  else if (kind === 'result_not_found') content = `<span class="metric2-mock-icon">…</span><small>ПОКА НЕ ГОТОВЫ</small><b>Результаты ещё не найдены</b><p>По этому номеру документы пока не появились. Проверьте номер или запросите уведомление о готовности.</p><span class="metric2-mock-info"><b>Сообщим о готовности</b><small>Для уведомления нужен привязанный Telegram или MAX.</small></span>${action('Получить уведомление')}${action('Проверить ещё раз',true)}${action('Перейти в чат',true)}`;
+  else if (kind === 'result_notification') content = `<span class="metric2-mock-icon">✓</span><small>ЗАПРОС СОХРАНЁН</small><b>Сообщим, когда результаты появятся</b><p>Уведомление будет связано с номером пробирки и вашим профилем.</p>${action('Перейти в чат')}`;
   else content = `<small>${escapeHtml(screen.stage || '')}</small><b>${escapeHtml(screen.title)}</b><p>${escapeHtml(screen.description || '')}</p>`;
 
   const standalone = ['welcome','registration','warning'].includes(kind);
@@ -1174,6 +1185,7 @@ function metric2PreviewMarkup(screen, large = false) {
     : ['exam_offer','exam_objection','exam_selection'].includes(kind) ? 'Обследования'
     : ['payment','payment_processing','payment_success','payment_result','payment_unavailable'].includes(kind) ? 'Оплата'
     : ['completion','completion_skipped'].includes(kind) ? 'Готово'
+    : kind.startsWith('result_') ? (screen.stage || 'Результаты').replace('Результаты · ', '')
     : (screen.stage || '').split(' · ')[0] || 'Анкета';
   const progress = kind === 'appearance' ? 2
     : kind.startsWith('question_') ? 5 + Math.round((Math.max(0,questionIndex) / metric2QuestionContent.length) * 60)
@@ -1185,7 +1197,10 @@ function metric2PreviewMarkup(screen, large = false) {
     : kind === 'payment_result' ? 96
     : kind === 'payment_success' ? 100
     : kind === 'payment_unavailable' ? 92
-    : ['completion','completion_skipped'].includes(kind) ? 100 : 0;
+    : ['completion','completion_skipped'].includes(kind) ? 100
+    : kind === 'result_welcome' ? 12 : kind === 'result_tube' ? 32
+    : kind === 'result_messenger' ? 54 : kind === 'result_search' ? 72
+    : kind === 'result_not_found' ? 88 : kind.startsWith('result_') ? 100 : 0;
   const appHeader = standalone ? '' : `<div class="metric2-phone-app"><span class="metric2-phone-brand"><b>К</b><span><strong>Консилиум</strong><small>Персональный старт</small></span></span><em>${escapeHtml(stage)}</em></div><div class="metric2-phone-progress"><i style="width:${progress}%"></i></div>`;
   const safety = standalone ? '' : '<div class="metric2-phone-safety">Данные используются для персонализации ответов. Сервис не заменяет очную диагностику и экстренную помощь.</div>';
   return `<div class="metric2-phone ${kind}${large ? ' large' : ''}"><div class="metric2-phone-status"><span>11:37</span><span>● ▰</span></div>${appHeader}<div class="metric2-phone-content">${content}</div>${safety}<div class="metric2-phone-home"></div></div>`;
@@ -1199,11 +1214,22 @@ function renderMetric2(data) {
       : screen),
   };
   latestMetric2Data = data;
+  metric2ActiveFlow = data.flow === 'result' ? 'result' : 'standard';
+  const resultFlow = metric2ActiveFlow === 'result';
+  $('#metric2StandardFlow').classList.toggle('active', !resultFlow);
+  $('#metric2StandardFlow').setAttribute('aria-selected', String(!resultFlow));
+  $('#metric2ResultFlow').classList.toggle('active', resultFlow);
+  $('#metric2ResultFlow').setAttribute('aria-selected', String(resultFlow));
+  $('#metric2FlowEyebrow').textContent = resultFlow ? 'Ссылка /result' : 'Обычная ссылка';
+  $('#metric2FlowTitle').textContent = resultFlow ? 'Получение результатов анализов' : 'Анкета и выбор обследований';
+  $('#metric2FlowDescription').textContent = resultFlow
+    ? 'Отдельная воронка для пользователей, которые пришли по специальной ссылке за результатами. Обычное анкетирование сюда не входит.'
+    : 'Основная воронка новых пользователей: приветствие, регистрация, анкета, обследования и завершение. Переходы по ссылке /result сюда не входят.';
   const summary = $('#metric2Summary');
   summary.innerHTML = [
-    ['На первом экране',data.summary?.start_users || 0,'100% — база расчёта'],
+    [resultFlow ? 'Пришли по пути result' : 'На первом экране',data.summary?.start_users || 0,'100% — база этой ветки'],
     ['Уникальных переходов',data.summary?.unique_transitions || 0,'повторы и возвраты исключены'],
-    ['Дошли до завершения',data.summary?.reached_completion || 0,'уникальных пользователей'],
+    [resultFlow ? 'Получили результат пути' : 'Дошли до завершения',data.summary?.reached_completion || 0,'уникальных пользователей'],
   ].map(([label,value,note]) => `<article class="analytics-metric"><span>${label}</span><strong>${Number(value).toLocaleString('ru-RU')}</strong><small>${note}</small></article>`).join('');
   const root = $('#metric2Flow');
   root.replaceChildren();
@@ -1220,17 +1246,17 @@ function renderMetric2(data) {
     const open = document.createElement('button'); open.type = 'button'; open.className = 'metric2-screen-open'; open.dataset.metric2Screen = screen.id;
     open.innerHTML = metric2PreviewMarkup(screen);
     const stats = document.createElement('div'); stats.className = 'metric2-screen-stats';
-    const comparison = screen.id === 'welcome' ? 'Первый экран — база расчёта'
+    const comparison = screen.root ? 'Первый экран этого пути — база расчёта'
       : screen.branch ? `${screen.percent_of_parent}% от экрана «${escapeHtml(titleById[screen.parent_id] || 'родительский экран')}»`
       : `${screen.percent_of_parent}% от предыдущего основного экрана`;
-    const dropoff = screen.id === 'welcome' ? '' : `<div class="metric2-row-dropoff"><b>Не перешли на этот экран: ${Number(screen.dropoff_users || 0).toLocaleString('ru-RU')} из ${Number(screen.comparison_users || 0).toLocaleString('ru-RU')}</b><span class="metric2-dropoff-percent"><span>${Number(screen.dropoff_percent_of_parent || 0).toLocaleString('ru-RU')}% от предыдущего</span><span>${Number(screen.dropoff_percent_of_start || 0).toLocaleString('ru-RU')}% от первого</span></span><small><span>Выбрали другой путь: ${Number(screen.alternate_path_users || 0).toLocaleString('ru-RU')}</span><span>Остановились на предыдущем: ${Number(screen.actual_dropoff_users || 0).toLocaleString('ru-RU')}</span></small></div>`;
+    const dropoff = screen.root ? '' : `<div class="metric2-row-dropoff"><b>Не перешли на этот экран: ${Number(screen.dropoff_users || 0).toLocaleString('ru-RU')} из ${Number(screen.comparison_users || 0).toLocaleString('ru-RU')}</b><span class="metric2-dropoff-percent"><span>${Number(screen.dropoff_percent_of_parent || 0).toLocaleString('ru-RU')}% от предыдущего</span><span>${Number(screen.dropoff_percent_of_start || 0).toLocaleString('ru-RU')}% от первого</span></span><small><span>Выбрали другой путь: ${Number(screen.alternate_path_users || 0).toLocaleString('ru-RU')}</span><span>Остановились на предыдущем: ${Number(screen.actual_dropoff_users || 0).toLocaleString('ru-RU')}</span></small></div>`;
     const quality = screen.data_quality === 'incomplete'
       ? `<span class="metric2-quality incomplete">Неполные данные · ${Number(screen.incomplete_transition_users || 0).toLocaleString('ru-RU')}</span>`
       : '<span class="metric2-quality complete">Маршрут полный</span>';
     stats.innerHTML = `<span class="metric2-stage">${visualBranch ? 'Ответвление · ' : ''}${escapeHtml(screen.stage || '')}</span>${quality}<h3>${escapeHtml(screen.title)}</h3><div class="metric2-reach"><strong>${Number(screen.percent_of_start || 0).toLocaleString('ru-RU')}%</strong><span>от первого экрана</span></div><p><b>${Number(screen.users || 0).toLocaleString('ru-RU')}</b> пользователей · ${comparison}</p>${dropoff}<div class="metric2-reach-track"><i style="width:${Math.min(100,Number(screen.percent_of_start || 0))}%"></i></div><button type="button" data-metric2-screen="${escapeHtml(screen.id)}">Открыть экран и всю статистику →</button>`;
     item.append(sequence,open,stats); root.append(item);
   }
-  if (!(data.screens || []).length) root.innerHTML = '<p class="form-error">Пока нет данных по стартовым экранам</p>';
+  if (!(data.screens || []).length) root.innerHTML = `<p class="form-error">Пока нет данных по ветке «${resultFlow ? 'Ссылка result' : 'Обычная ссылка'}»</p>`;
   fillAnalyticsSelect('#metric2Device',data.filter_options?.devices || [],'Все устройства');
   fillAnalyticsSelect('#metric2Method',data.filter_options?.methods || [],'Все способы');
   fillAnalyticsSelect('#metric2Source',data.filter_options?.sources || [],'Все источники');
@@ -1335,15 +1361,19 @@ function closeMetric2Modal() {
   document.body.classList.remove('metric2-modal-open');
 }
 
-async function loadMetric2() {
+async function loadMetric2(flow = metric2ActiveFlow) {
+  metric2ActiveFlow = flow === 'result' ? 'result' : 'standard';
+  closeMetric2Modal();
   return withPanelLoading('#metric2AdminView', async () => {
-    const params = new URLSearchParams({period:$('#metric2Period').value});
+    const params = new URLSearchParams({period:$('#metric2Period').value,flow:metric2ActiveFlow});
     for (const [key,selector] of [['device','#metric2Device'],['method','#metric2Method'],['source','#metric2Source']]) {
       if ($(selector).value) params.set(key,$(selector).value);
     }
     appendDateRange(params, '#metric2DateFrom', '#metric2DateTo');
-    renderMetric2(await adminFetch(`/api/admin/metric2?${params}`));
-  }, 'Строим маршруты пользователей…');
+    const requestedFlow = metric2ActiveFlow;
+    const report = await adminFetch(`/api/admin/metric2?${params}`);
+    if (requestedFlow === metric2ActiveFlow) renderMetric2(report);
+  }, metric2ActiveFlow === 'result' ? 'Строим путь получения результатов…' : 'Строим обычный стартовый путь…');
 }
 
 async function loadFavoriteSources() {
@@ -1804,6 +1834,12 @@ $('#managersTab').addEventListener('click', () => showAdminView('managers'));
 $('#examinationsTab').addEventListener('click', () => showAdminView('examinations'));
 $('#costsTab').addEventListener('click', () => showAdminView('costs'));
 $('#metric2Apply').addEventListener('click', () => loadMetric2().catch(showDashboardError));
+$('#metric2StandardFlow').addEventListener('click', () => {
+  if (metric2ActiveFlow !== 'standard') loadMetric2('standard').catch(showDashboardError);
+});
+$('#metric2ResultFlow').addEventListener('click', () => {
+  if (metric2ActiveFlow !== 'result') loadMetric2('result').catch(showDashboardError);
+});
 $('#metric2Flow').addEventListener('click', event => {
   const target = event.target.closest('[data-metric2-screen]');
   if (target) openMetric2Screen(target.dataset.metric2Screen);

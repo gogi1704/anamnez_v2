@@ -1034,6 +1034,32 @@ class OrchestratorTests(unittest.TestCase):
         self.assertIn("lab-report-section", script)
         self.assertIn(".message-row.lab-interpretation", styles)
 
+    def test_lab_interpretation_requests_minimum_profile_before_ai(self):
+        project_root = Path(__file__).resolve().parents[1]
+        index = (project_root / "index.html").read_text(encoding="utf-8")
+        script = (project_root / "static" / "app.js").read_text(encoding="utf-8")
+        styles = (project_root / "static" / "styles.css").read_text(encoding="utf-8")
+
+        self.assertIn('id="interpretationProfileModal"', index)
+        self.assertIn('id="interpretationProfileSex"', index)
+        self.assertIn('id="interpretationProfileAge"', index)
+        self.assertIn('id="interpretationProfileHeight"', index)
+        self.assertIn('id="interpretationProfileWeight"', index)
+        self.assertIn("function interpretationProfileComplete", script)
+        self.assertIn("openInterpretationProfileModal();", script)
+        self.assertIn("await openLabResults();", script)
+        self.assertIn(".interpretation-profile-modal", styles)
+        self.assertEqual(
+            ConsiliumHandler._interpretation_profile_missing({
+                "sex": "female", "age": 40, "height_cm": 168, "weight_kg": 65,
+            }),
+            [],
+        )
+        self.assertEqual(
+            ConsiliumHandler._interpretation_profile_missing({"sex": "male"}),
+            ["age", "height_cm", "weight_kg"],
+        )
+
     def test_ai_markdown_uses_shared_safe_rich_text_renderer(self):
         project_root = Path(__file__).resolve().parents[1]
         index = (project_root / "index.html").read_text(encoding="utf-8")
@@ -1043,7 +1069,7 @@ class OrchestratorTests(unittest.TestCase):
         rich_script = (project_root / "static" / "rich-text.js").read_text(encoding="utf-8")
         rich_styles = (project_root / "static" / "rich-text.css").read_text(encoding="utf-8")
 
-        self.assertIn('/static/rich-text.js?v=20260828-payment-analytics-v1', index)
+        self.assertIn('/static/rich-text.js?v=20260829-interpret-profile-v1', index)
         self.assertIn('/static/rich-text.js?v=20260816-rich-text', manager_html)
         self.assertIn('window.ConsiliumRichText.render(value)', app_script)
         self.assertIn('window.ConsiliumRichText.render(value)', manager_script)
@@ -1428,6 +1454,8 @@ class OrchestratorTests(unittest.TestCase):
         self.assertIn('id="metric2Tab"', dashboard)
         self.assertIn('id="metric2AdminView"', dashboard)
         self.assertIn('id="metric2Flow"', dashboard)
+        self.assertIn('id="metric2StandardFlow"', dashboard)
+        self.assertIn('id="metric2ResultFlow"', dashboard)
         self.assertIn('id="metric2Modal"', dashboard)
         self.assertIn('id="analyticsDateFrom" type="date"', dashboard)
         self.assertIn('id="analyticsDateTo" type="date"', dashboard)
@@ -1441,11 +1469,13 @@ class OrchestratorTests(unittest.TestCase):
         self.assertIn("params.set('date_from', dateFrom)", script)
         self.assertIn("function metric2PreviewMarkup", script)
         self.assertIn("function openMetric2Screen", script)
+        self.assertIn("flow:metric2ActiveFlow", script)
         self.assertIn("row.dataset.metric2Screen = item.screen_id", script)
         self.assertIn("screenLink.dataset.metric2Screen", script)
         self.assertIn("metric2-route-note", script)
         self.assertIn("item.explanation", script)
         self.assertIn(".metric2-screen-row", styles)
+        self.assertIn(".metric2-flow-tabs", styles)
         self.assertIn(".metric2-modal-layout", styles)
         self.assertIn(".metric2-transition-row:hover", styles)
         self.assertIn('id="costSummaryGrid"', dashboard)
@@ -1583,6 +1613,10 @@ class OrchestratorTests(unittest.TestCase):
         self.assertIn("payment_processing", screens)
         self.assertIn("payment_success", screens)
         self.assertIn("payment_result", screens)
+        self.assertEqual(
+            {item["id"] for item in screens["payment_result"]["actions"]},
+            {"retry", "purchases", "back"},
+        )
         self.assertIn(screens["payment"]["actions"][0]["target"], {"payment_processing", "payment_unavailable"})
 
     def test_manager_messenger_api_and_deep_link_are_present(self):
@@ -2248,14 +2282,14 @@ class OrchestratorTests(unittest.TestCase):
         self.assertIn("controllerchange", script)
         self.assertIn("url.pathname.startsWith('/api/')", worker)
         self.assertIn("url.pathname.startsWith('/auth/')", worker)
-        self.assertIn("consilium-shell-v78", worker)
+        self.assertIn("consilium-shell-v82", worker)
         self.assertIn("fetch(request)", worker)
         self.assertIn("/static/styles.07ffaefb4795.css", index)
         self.assertIn("/static/rich-text.2bf1f5fab764.css", index)
         self.assertTrue((project_root / "static" / "styles.07ffaefb4795.css").is_file())
         self.assertTrue((project_root / "static" / "rich-text.2bf1f5fab764.css").is_file())
-        self.assertIn("/static/app.js?v=20260828-payment-analytics-v1", index)
-        self.assertIn("/static/metrika.js?v=20260828-payment-analytics-v1", index)
+        self.assertIn("/static/app.js?v=20260829-interpret-profile-v1", index)
+        self.assertIn("/static/metrika.js?v=20260829-interpret-profile-v1", index)
         self.assertIn('id="welcomeScreen"', index)
         self.assertIn('id="welcomeNextButton"', index)
         self.assertIn("WELCOME_SEEN_KEY", script)
@@ -2284,6 +2318,12 @@ class OrchestratorTests(unittest.TestCase):
         self.assertIn('data-onboarding-action="close-payment-review"', script)
         self.assertIn("source:'purchases'", script)
         self.assertIn("pendingOrder.source || params.get('payment_source')", script)
+        self.assertIn('data-onboarding-action="leave-payment-result">Назад</button>', script)
+        self.assertIn("async function restorePaymentReviewState()", script)
+        self.assertIn("async function returnToOnlinePayment()", script)
+        self.assertIn("await startOnlinePayment()", script)
+        self.assertIn("source === 'purchases'", script)
+        self.assertIn("else if (returnToChat)", script)
         self.assertIn("function renderPaymentSuccess", script)
         self.assertIn("Где потом найти оплату", script)
         self.assertIn("Открыть мои покупки", script)
@@ -2304,7 +2344,7 @@ class OrchestratorTests(unittest.TestCase):
         main = (project_root / "backend" / "main.py").read_text(encoding="utf-8")
         config = (project_root / "backend" / "config.py").read_text(encoding="utf-8")
 
-        self.assertIn('src="/static/metrika.js?v=20260828-payment-analytics-v1"', index)
+        self.assertIn('src="/static/metrika.js?v=20260829-interpret-profile-v1"', index)
         self.assertIn('YANDEX_METRIKA_COUNTER_ID', config)
         self.assertIn('path == "/api/public-config"', main)
         self.assertIn('"metrika.js"', main)
@@ -2963,6 +3003,83 @@ class OrchestratorTests(unittest.TestCase):
         self.assertEqual(validated["symptom_type"], "чувство распирания")
         with self.assertRaisesRegex(ValueError, "Опишите симптом"):
             ConsiliumHandler._validate_body_symptom({**payload, "custom_symptom": ""})
+
+    def test_result_entry_marks_user_without_questionnaire(self):
+        chel_id = "chel_result_entry_test"
+        db.ensure_user(chel_id, pending=True)
+        try:
+            db.set_current_chel_id(chel_id)
+            self.assertFalse(db.current_user_has_result_entry())
+            marked = db.mark_current_user_result_entry()
+            self.assertEqual(marked["registration_method"], "result")
+            self.assertTrue(marked["registered_at"])
+            self.assertTrue(db.current_user_has_result_entry())
+            table = db.admin_table("users", "result_entry_test", limit=10)
+            self.assertEqual(table["rows"][0]["entry_flow"], "result")
+            self.assertGreaterEqual(db.admin_dashboard()["summary"]["result_entry_users"], 1)
+        finally:
+            db.reset_current_user()
+            db.ensure_user("chel_test_default")
+            db.set_current_chel_id("chel_test_default")
+
+    def test_result_flow_has_real_screens_and_metric_definitions(self):
+        project_root = Path(__file__).resolve().parents[1]
+        app = (project_root / "static" / "app.js").read_text(encoding="utf-8")
+        dashboard = (project_root / "static" / "dashboard.js").read_text(encoding="utf-8")
+        main = (project_root / "backend" / "main.py").read_text(encoding="utf-8")
+        for screen_id in (
+            "result_existing", "result_welcome", "result_tube", "result_messenger", "result_search",
+            "result_found", "result_not_found", "result_notification",
+        ):
+            self.assertIn(screen_id, app)
+            self.assertIn(screen_id, dashboard)
+        definitions = {item["id"]: item for item in analytics._metric2_screen_definitions()}
+        self.assertTrue(definitions["result_welcome"]["root"])
+        self.assertTrue(definitions["result_existing"]["root"])
+        self.assertEqual(definitions["result_welcome"]["flow"], "result")
+        self.assertEqual(definitions["result_tube"]["parent_id"], "result_welcome")
+        self.assertEqual(definitions["result_found"]["parent_id"], "result_search")
+        self.assertIn('"/result"', main)
+        self.assertIn("/api/result-entry/start", app + main)
+        self.assertIn("/api/lab-results/notification", app + main)
+
+    def test_result_subscription_uses_existing_bot_delivery_stream(self):
+        login = db.create_messenger_login("telegram", "result-notify-user")
+        try:
+            db.set_current_chel_id(login["chel_id"])
+            db.save_profile({"tube_number": "TUBE-NOTIFY-1"})
+            subscription = db.create_lab_result_subscription("TUBE-NOTIFY-1")
+            due = db.claim_due_lab_result_subscriptions(10)
+            claimed_subscription = next(item for item in due if item["id"] == subscription["id"])
+            self.assertEqual(claimed_subscription["med_id"], "TUBE-NOTIFY-1")
+
+            queued = db.complete_lab_result_subscription_check(
+                subscription["id"], [{"url": "https://example.test/result.pdf"}],
+                "https://consilium.example.test",
+            )
+            self.assertEqual(queued, 1)
+            notifications = db.claim_user_result_notifications("telegram", 10)
+            notification = next(item for item in notifications if item["payload"].get("med_id") == "TUBE-NOTIFY-1")
+            self.assertLess(notification["id"], 0)
+            self.assertIn("Результаты анализов готовы", notification["payload"]["title"])
+            self.assertEqual(
+                notification["payload"]["action_url"],
+                "https://consilium.example.test/result",
+            )
+            self.assertEqual(notification["payload"]["action_label"], "Открыть результаты")
+            self.assertTrue(db.acknowledge_user_result_notification(
+                abs(notification["id"]), notification["lease_token"], True,
+            ))
+            with db.connection() as conn:
+                status = conn.execute(
+                    "SELECT status FROM lab_result_subscriptions WHERE id = ?",
+                    (subscription["id"],),
+                ).fetchone()[0]
+            self.assertEqual(status, "notified")
+        finally:
+            db.reset_current_user()
+            db.ensure_user("chel_test_default")
+            db.set_current_chel_id("chel_test_default")
 
 
 if __name__ == "__main__":

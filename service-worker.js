@@ -1,5 +1,5 @@
-const CACHE_NAME = 'consilium-shell-v78';
-const ASSET_VERSION = '20260828-payment-analytics-v1';
+const CACHE_NAME = 'consilium-shell-v82';
+const ASSET_VERSION = '20260829-interpret-profile-v1';
 const APP_SHELL = [
   '/',
   '/manifest.webmanifest',

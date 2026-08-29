@@ -287,6 +287,31 @@ class AnalyticsTests(unittest.TestCase):
         self.assertEqual(screens["exam_selection"]["users"], 0)
         self.assertNotIn("chat", [item["id"] for item in report["screens"]])
 
+    def test_metric2_separates_standard_and_result_link_funnels(self):
+        analytics.record_events("CHEL-STANDARD-BRANCH", [
+            {"event_id": "branch-standard-welcome", "session_id": "branch-standard-session", "event_name": "onboarding_screen_viewed", "properties": {"screen": "welcome", "context": "onboarding"}},
+            {"event_id": "branch-standard-register", "session_id": "branch-standard-session", "event_name": "onboarding_screen_viewed", "properties": {"screen": "registration", "previous_screen": "welcome", "context": "onboarding"}},
+        ])
+        analytics.record_events("CHEL-RESULT-BRANCH", [
+            {"event_id": "branch-result-welcome", "session_id": "branch-result-session", "event_name": "onboarding_screen_viewed", "properties": {"screen": "result_welcome", "context": "result"}},
+            {"event_id": "branch-result-tube", "session_id": "branch-result-session", "event_name": "onboarding_screen_viewed", "properties": {"screen": "result_tube", "previous_screen": "result_welcome", "context": "result"}},
+            {"event_id": "branch-result-found", "session_id": "branch-result-session", "event_name": "onboarding_screen_viewed", "properties": {"screen": "result_found", "previous_screen": "result_tube", "context": "result"}},
+        ])
+
+        standard = analytics.metric2_report("30", flow="standard")
+        result = analytics.metric2_report("30", flow="result")
+        self.assertEqual(standard["flow"], "standard")
+        self.assertEqual(standard["summary"]["start_users"], 1)
+        self.assertIn("welcome", {item["id"] for item in standard["screens"]})
+        self.assertNotIn("result_welcome", {item["id"] for item in standard["screens"]})
+        self.assertEqual(result["flow"], "result")
+        self.assertEqual(result["summary"]["start_users"], 1)
+        self.assertIn("result_welcome", {item["id"] for item in result["screens"]})
+        self.assertNotIn("welcome", {item["id"] for item in result["screens"]})
+        self.assertEqual(result["summary"]["reached_completion"], 1)
+        with self.assertRaisesRegex(ValueError, "ветка"):
+            analytics.metric2_report("30", flow="unknown")
+
     def test_metric2_builds_unique_paths_and_ignores_repeated_views(self):
         analytics.record_events("CHEL-METRIC-PATH-ONE", [
             {"event_id": "path-one-welcome", "session_id": "path-session-one", "event_name": "onboarding_screen_viewed", "properties": {"screen": "welcome", "context": "onboarding"}},

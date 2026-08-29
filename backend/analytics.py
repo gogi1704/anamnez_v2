@@ -80,9 +80,11 @@ ALLOWED_EVENTS = {
     "council_completed", "council_error", "human_requested", "human_channel_selected",
     "manager_joined", "human_request_closed", "lab_results_requested", "lab_results_found",
     "lab_results_not_found", "lab_interpretation_started", "lab_interpretation_completed",
-    "lab_interpretation_error", "api_error", "javascript_error", "performance_measured",
+    "lab_interpretation_error", "lab_interpretation_profile_requested",
+    "lab_interpretation_profile_completed", "lab_results_notification_requested", "result_entry_started",
+    "api_error", "javascript_error", "performance_measured",
 }
-REGISTRATION_METHODS = {"anonymous", "max", "telegram"}
+REGISTRATION_METHODS = {"anonymous", "max", "telegram", "result"}
 
 ALLOWED_PROPERTIES = {
     "question_key", "step_number", "optional", "provider", "method", "result",
@@ -187,6 +189,7 @@ def _metric2_screen_definitions() -> list[dict]:
         {
             "id": "welcome", "title": "Приветствие", "stage": "Начало",
             "kind": "welcome", "description": "Первый экран нового пользователя.",
+            "root": True,
             "legacy_reach": [_metric2_spec("welcome_viewed")],
             "actions": [{"id": "continue", "label": "Далее", "target": "registration", "legacy": [_metric2_spec("welcome_continued")]}],
         },
@@ -260,6 +263,12 @@ def _metric2_screen_definitions() -> list[dict]:
             "actions": actions,
         })
     screens.extend([
+        {
+            "id": "result_existing", "title": "Возврат за результатами", "stage": "Результаты · возврат",
+            "kind": "result_existing", "description": "Пользователь с заполненной анкетой сразу попал в чат и окно ввода номера пробирки.",
+            "root": True, "flow": "result",
+            "legacy_reach": [], "actions": [],
+        },
         {
             "id": "exam_offer", "title": "Предложение дополнительных обследований", "stage": "Обследования",
             "kind": "exam_offer", "description": "Основное предложение после завершения анкеты.",
@@ -337,6 +346,7 @@ def _metric2_screen_definitions() -> list[dict]:
             "actions": [
                 {"id": "retry", "label": "Вернуться к оплате", "target": "payment", "legacy": []},
                 {"id": "purchases", "label": "Мои покупки", "target_label": "История покупок", "terminal_outcome": True, "legacy": []},
+                {"id": "back", "label": "Назад", "target": "exam_selection", "legacy": []},
             ],
         },
         {
@@ -366,6 +376,67 @@ def _metric2_screen_definitions() -> list[dict]:
                 {"id": "continue", "label": "Перейти в Консилиум", "target_label": "Переход в сервис", "terminal_outcome": True, "legacy": [_metric2_spec("install_dismissed", screen="exam_skip_completion")]},
                 {"id": "link_messenger", "label": "Привязать мессенджер", "target_label": "Привязка мессенджера", "legacy": [_metric2_spec("messenger_link_modal_viewed", source="exam_skip_completion")]},
             ],
+        },
+    ])
+    screens.extend([
+        {
+            "id": "result_welcome", "title": "Получение результатов", "stage": "Результаты · начало",
+            "kind": "result_welcome", "description": "Посадочный экран специальной ссылки для получения результатов.",
+            "root": True, "flow": "result",
+            "legacy_reach": [],
+            "actions": [{"id": "continue", "label": "Далее", "target": "result_tube", "legacy": []}],
+        },
+        {
+            "id": "result_tube", "title": "Номер пробирки", "stage": "Результаты · идентификация",
+            "kind": "result_tube", "description": "Ввод индивидуального номера пробирки.",
+            "parent_id": "result_welcome", "flow": "result",
+            "legacy_reach": [],
+            "actions": [{"id": "continue", "label": "Продолжить", "target": "result_messenger", "legacy": []}],
+        },
+        {
+            "id": "result_messenger", "title": "Сохранение доступа", "stage": "Результаты · мессенджер",
+            "kind": "result_messenger", "description": "Рекомендация привязать Telegram или MAX перед поиском результатов.",
+            "parent_id": "result_tube", "flow": "result",
+            "legacy_reach": [],
+            "actions": [
+                {"id": "link_messenger", "label": "Привязать мессенджер", "legacy": []},
+                {"id": "continue", "label": "Найти результаты", "target": "result_search", "legacy": []},
+            ],
+        },
+        {
+            "id": "result_search", "title": "Поиск результатов", "stage": "Результаты · поиск",
+            "kind": "result_search", "description": "Поиск документов по номеру пробирки.",
+            "parent_id": "result_messenger", "flow": "result",
+            "legacy_reach": [],
+            "actions": [
+                {"id": "found", "label": "Результаты найдены", "target": "result_found", "legacy": []},
+                {"id": "not_found", "label": "Результаты пока не найдены", "target": "result_not_found", "legacy": []},
+            ],
+        },
+        {
+            "id": "result_found", "title": "Результаты готовы", "stage": "Результаты · готовы",
+            "kind": "result_found", "description": "Документы найдены и доступны пользователю.",
+            "parent_id": "result_search", "flow": "result",
+            "legacy_reach": [],
+            "actions": [{"id": "open_chat", "label": "Перейти в чат и получить консультацию", "target_label": "Чат", "terminal_outcome": True, "legacy": []}],
+        },
+        {
+            "id": "result_not_found", "title": "Результаты ещё не готовы", "stage": "Результаты · ожидание",
+            "kind": "result_not_found", "description": "Предложение получить уведомление после появления документов.",
+            "parent_id": "result_search", "flow": "result",
+            "legacy_reach": [],
+            "actions": [
+                {"id": "notify", "label": "Уведомить о готовности", "target": "result_notification", "legacy": []},
+                {"id": "retry", "label": "Проверить ещё раз", "target": "result_search", "legacy": []},
+                {"id": "open_chat", "label": "Перейти в чат", "target_label": "Чат", "terminal_outcome": True, "legacy": []},
+            ],
+        },
+        {
+            "id": "result_notification", "title": "Уведомление подключено", "stage": "Результаты · ожидание",
+            "kind": "result_notification", "description": "Запрос на уведомление сохранён для привязанного мессенджера.",
+            "parent_id": "result_not_found", "flow": "result",
+            "legacy_reach": [],
+            "actions": [{"id": "open_chat", "label": "Перейти в чат", "target_label": "Чат", "terminal_outcome": True, "legacy": []}],
         },
     ])
     return screens
@@ -910,7 +981,7 @@ def _admin_report_uncached(
                 "SELECT DISTINCT COALESCE(NULLIF(json_extract(properties,'$.method'),''),registration_method) method "
                 "FROM analytics_events WHERE IS_STATS_USER(chel_id) = 1 AND event_name='registration_completed' "
                 "AND COALESCE(NULLIF(json_extract(properties,'$.method'),''),registration_method) "
-                "IN ('anonymous','max','telegram') ORDER BY method"
+                "IN ('anonymous','max','telegram','result') ORDER BY method"
             )],
             "sources": [row[0] for row in conn.execute("SELECT DISTINCT entry_source FROM analytics_sessions WHERE IS_STATS_USER(chel_id) = 1 AND entry_source<>'' ORDER BY entry_source LIMIT 100")],
         }
@@ -1042,7 +1113,7 @@ def admin_report(
 
 def _metric2_report_uncached(
     period: str = "30", device: str = "", method: str = "", source: str = "",
-    date_from: str = "", date_to: str = "",
+    date_from: str = "", date_to: str = "", flow: str = "standard",
 ) -> dict:
     """Return unique-user onboarding paths without storing questionnaire answers.
 
@@ -1051,9 +1122,16 @@ def _metric2_report_uncached(
     the fact that C was visited, but prevents a return to B from creating the
     false incomplete edge ``C -> D``.
     """
+    flow = str(flow or "standard").strip().lower()
+    if flow not in {"standard", "result"}:
+        raise ValueError("Неизвестная ветка Метрики 2.0")
+    expected_context = "result" if flow == "result" else "onboarding"
     where, params = _filters(period, device, method, source, date_from, date_to)
     join = " FROM analytics_events e LEFT JOIN analytics_sessions s ON s.session_id=e.session_id "
-    definitions = _metric2_screen_definitions()
+    definitions = [
+        definition for definition in _metric2_screen_definitions()
+        if ("result" if definition.get("flow") == "result" else "standard") == flow
+    ]
     relevant_events = {"onboarding_screen_viewed", "onboarding_screen_action"}
     for definition in definitions:
         relevant_events.update(
@@ -1115,7 +1193,7 @@ def _metric2_report_uncached(
             properties = row["properties"]
             if (
                 row["event"] == "onboarding_screen_viewed"
-                and properties.get("context") == "onboarding"
+                and properties.get("context") == expected_context
                 and properties.get("screen") in definition_by_id
             ):
                 previous_screen = str(properties.get("previous_screen") or "")
@@ -1163,9 +1241,13 @@ def _metric2_report_uncached(
                     path = path[:path.index(screen_id) + 1]
                 else:
                     path.append(screen_id)
-            if "welcome" not in path:
+            root_screen = next(
+                (screen_id for screen_id in path if definition_by_id[screen_id].get("root")),
+                "",
+            )
+            if not root_screen:
                 continue
-            canonical_paths[chel_id] = path[path.index("welcome"):]
+            canonical_paths[chel_id] = path[path.index(root_screen):]
             reached_screens_by_user[chel_id] = seen_reach
 
         start_cohort = set(canonical_paths)
@@ -1214,12 +1296,14 @@ def _metric2_report_uncached(
                 for action in definition_by_id[source_id].get("actions", [])
             )
 
-        start_users = len(screen_users.get("welcome", set()))
+        root_ids = [definition["id"] for definition in definitions if definition.get("root")]
+        start_cohort = set().union(*(screen_users.get(screen_id, set()) for screen_id in root_ids))
+        start_users = len(start_cohort)
         result_screens, previous_main_id = [], ""
         for definition in definitions:
             screen_id = definition["id"]
             reached = screen_users[screen_id]
-            parent_id = definition.get("parent_id") or previous_main_id
+            parent_id = "" if definition.get("root") else (definition.get("parent_id") or previous_main_id)
             parent_users = screen_users.get(parent_id, set()) if parent_id else set()
             parent_count = len(parent_users)
             actions = []
@@ -1238,7 +1322,7 @@ def _metric2_report_uncached(
                     for action in group_actions:
                         generic = _metric2_spec(
                             "onboarding_screen_action", screen=screen_id,
-                            action=action["id"], context="onboarding",
+                            action=action["id"], context=definition.get("flow", "onboarding"),
                         )
                         if any(matches(row, spec) for spec in [generic, *action.get("legacy", [])]):
                             # Rows are chronological. Only the last choice in
@@ -1248,7 +1332,7 @@ def _metric2_report_uncached(
             for action in definition.get("actions", []):
                 generic = _metric2_spec(
                     "onboarding_screen_action", screen=screen_id,
-                    action=action["id"], context="onboarding",
+                    action=action["id"], context=definition.get("flow", "onboarding"),
                 )
                 target_id = action.get("target", "")
                 if target_id or action.get("terminal_outcome"):
@@ -1332,7 +1416,7 @@ def _metric2_report_uncached(
                 "percent_of_start": round(len(reached) / start_users * 100, 1) if start_users else 0.0,
                 "comparison_id": parent_id,
                 "comparison_users": parent_count,
-                "percent_of_parent": round(len(arrived_from_parent) / parent_count * 100, 1) if parent_count else (100.0 if screen_id == "welcome" and reached else 0.0),
+                "percent_of_parent": round(len(arrived_from_parent) / parent_count * 100, 1) if parent_count else (100.0 if definition.get("root") and reached else 0.0),
                 "dropoff_users": dropoff_users,
                 "dropoff_percent_of_parent": round(dropoff_users / parent_count * 100, 1) if parent_count else 0.0,
                 "dropoff_percent_of_start": round(dropoff_users / start_users * 100, 1) if start_users else 0.0,
@@ -1348,7 +1432,7 @@ def _metric2_report_uncached(
                 "stopped_users": stopped_users,
                 "stopped_percent_of_screen": round(stopped_users / len(reached) * 100, 1) if reached else 0.0,
                 "stopped_percent_of_start": round(stopped_users / start_users * 100, 1) if start_users else 0.0,
-                "terminal": screen_id in {"completion", "completion_skipped"},
+                "terminal": screen_id in {"completion", "completion_skipped", "result_existing", "result_found", "result_notification"},
                 "incoming_transitions": incoming,
                 "outgoing_transitions": outgoing,
                 "actions": actions,
@@ -1366,7 +1450,7 @@ def _metric2_report_uncached(
                 "SELECT DISTINCT COALESCE(NULLIF(json_extract(properties,'$.method'),''),registration_method) method "
                 "FROM analytics_events WHERE IS_STATS_USER(chel_id) = 1 AND event_name='registration_completed' "
                 "AND COALESCE(NULLIF(json_extract(properties,'$.method'),''),registration_method) "
-                "IN ('anonymous','max','telegram') ORDER BY method"
+                "IN ('anonymous','max','telegram','result') ORDER BY method"
             ) if row[0]],
             "sources": [row[0] for row in conn.execute(
                 "SELECT DISTINCT entry_source FROM analytics_sessions "
@@ -1375,12 +1459,16 @@ def _metric2_report_uncached(
         }
     return {
         "generated_at": _now(), "period": period, "date_from": date_from, "date_to": date_to,
+        "flow": flow,
+        "flow_label": "Получение результатов" if flow == "result" else "Обычный путь",
         "summary": {
             "start_users": start_users,
             "screens": len(result_screens),
             "reached_completion": len(
-                screen_users.get("completion", set())
-                | screen_users.get("completion_skipped", set())
+                set().union(*(
+                    screen_users.get(item["id"], set())
+                    for item in result_screens if item.get("terminal")
+                ))
             ),
             "unique_transitions": sum(len(users) for users in edge_users.values()),
         },
@@ -1392,16 +1480,16 @@ def _metric2_report_uncached(
 
 def metric2_report(
     period: str = "30", device: str = "", method: str = "", source: str = "",
-    date_from: str = "", date_to: str = "",
+    date_from: str = "", date_to: str = "", flow: str = "standard",
 ) -> dict:
     arguments = (
         str(period), str(device), str(method), str(source),
-        str(date_from), str(date_to),
+        str(date_from), str(date_to), str(flow),
     )
     return _cached_report(
         "metric2", arguments,
         lambda: _metric2_report_uncached(
-            period, device, method, source, date_from, date_to,
+            period, device, method, source, date_from, date_to, flow,
         ),
     )
 

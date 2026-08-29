@@ -17,7 +17,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/static/styles.07ffaefb4795.css?v=20260828-payment-analytics-v1">
+  <link rel="stylesheet" href="/static/styles.07ffaefb4795.css?v=20260829-interpret-profile-v1">
   <link rel="stylesheet" href="/static/rich-text.2bf1f5fab764.css">
 </head>
 <body>
@@ -484,7 +484,7 @@
       <p>Эти данные будут учитываться специалистами, когда вопрос касается вас. Если вы спрашиваете о другом человеке, укажите это в сообщении.</p>
       <div class="profile-grid">
         <label class="field-label wide">Ваш ID в сервисе<input id="profileChelId" readonly aria-readonly="true"></label>
-        <label class="field-label wide">ИНН предприятия<input id="profileCompanyInn" inputmode="numeric" maxlength="12" placeholder="10 или 12 цифр"><small>ИНН работодателя, направившего вас на медицинский осмотр.</small></label>
+        <div class="field-label wide"><label for="profileCompanyInn">ИНН предприятия</label><div class="company-inn-field"><input id="profileCompanyInn" inputmode="numeric" maxlength="12" placeholder="10 или 12 цифр"><div class="company-inn-suggestions hidden" id="profileCompanyInnSuggestions" role="listbox" aria-label="Организации по ИНН"></div></div><small>Начните вводить ИНН — после четырёх цифр появятся организации.</small></div>
         <label class="field-label wide">Как к вам обращаться<input id="profileName" maxlength="100" placeholder="Необязательно"></label>
         <label class="field-label">Возраст<input id="profileAge" type="number" min="18" max="99" step="1" placeholder="18–99 лет"></label>
         <label class="field-label">Пол для медицинского контекста<select id="profileSex"><option value="female">Женский</option><option value="male">Мужской</option></select></label>
@@ -538,9 +538,40 @@
     </div>
   </div>
 
-  <script src="/static/metrika.js?v=20260828-payment-analytics-v1"></script>
-  <script src="/static/agents.js?v=20260828-payment-analytics-v1"></script>
-  <script src="/static/rich-text.js?v=20260828-payment-analytics-v1"></script>
-  <script src="/static/app.js?v=20260828-payment-analytics-v1"></script>
+  <div class="modal-backdrop hidden" id="interpretationProfileModal" role="dialog" aria-modal="true" aria-labelledby="interpretationProfileTitle">
+    <div class="modal interpretation-profile-modal">
+      <button class="modal-close" id="interpretationProfileClose" aria-label="Закрыть">×</button>
+      <div class="modal-icon">✓</div>
+      <span class="interpretation-profile-kicker">Перед расшифровкой</span>
+      <h2 id="interpretationProfileTitle">Заполните мини-анкету</h2>
+      <p>Для корректной расшифровки результатов и бесплатной консультации специалисту нужны четыре основных показателя. Это займёт меньше минуты.</p>
+      <div class="interpretation-profile-grid">
+        <label class="field-label">Пол
+          <select id="interpretationProfileSex">
+            <option value="">Выберите вариант</option>
+            <option value="male">Мужской</option>
+            <option value="female">Женский</option>
+          </select>
+        </label>
+        <label class="field-label">Возраст
+          <input id="interpretationProfileAge" type="number" min="18" max="99" step="1" inputmode="numeric" placeholder="18–99 лет">
+        </label>
+        <label class="field-label">Рост
+          <input id="interpretationProfileHeight" type="number" min="50" max="250" step="0.1" inputmode="decimal" placeholder="Сантиметры">
+        </label>
+        <label class="field-label">Вес
+          <input id="interpretationProfileWeight" type="number" min="40" max="250" step="0.1" inputmode="decimal" placeholder="Килограммы">
+        </label>
+      </div>
+      <p class="interpretation-profile-error hidden" id="interpretationProfileError" role="alert"></p>
+      <button class="primary-button" id="saveInterpretationProfileButton" type="button">Сохранить и перейти к анализам</button>
+      <small class="interpretation-profile-note">Данные сохранятся в разделе «Мои данные» и будут учитываться только при ответах о вашем здоровье.</small>
+    </div>
+  </div>
+
+  <script src="/static/metrika.js?v=20260829-interpret-profile-v1"></script>
+  <script src="/static/agents.js?v=20260829-interpret-profile-v1"></script>
+  <script src="/static/rich-text.js?v=20260829-interpret-profile-v1"></script>
+  <script src="/static/app.js?v=20260829-interpret-profile-v1"></script>
 </body>
 </html>

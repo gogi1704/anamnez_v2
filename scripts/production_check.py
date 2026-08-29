@@ -142,6 +142,19 @@ def main() -> int:
     else:
         warnings.append("Яндекс Метрика отключена: YANDEX_METRIKA_COUNTER_ID не задан")
 
+    if settings.dadata_api_key:
+        dadata_url = urlparse(settings.dadata_suggestions_url)
+        if dadata_url.scheme != "https" or not dadata_url.netloc:
+            errors.append("DADATA_SUGGESTIONS_URL должен быть корректным HTTPS-адресом")
+        elif not 2 <= settings.dadata_timeout_seconds <= 15:
+            errors.append("DADATA_TIMEOUT_SECONDS должен быть от 2 до 15 секунд")
+        elif not 0 <= settings.dadata_suggestions_cache_seconds <= 86_400:
+            errors.append("DADATA_SUGGESTIONS_CACHE_SECONDS должен быть от 0 до 86400")
+        else:
+            passed.append("Подсказки организаций по ИНН настроены (API-ключ скрыт)")
+    else:
+        warnings.append("Подсказки организаций отключены: DADATA_API_KEY не задан")
+
     integration_secret = settings.bot_integration_secret.strip()
     if production and (
         len(integration_secret) < 32

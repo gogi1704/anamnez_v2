@@ -11,7 +11,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/static/dashboard.css?v=20260828-manual-refresh-v1">
+  <link rel="stylesheet" href="/static/dashboard.css?v=20260829-metric2-flows-v2">
 </head>
 <body>
   <main class="dashboard-shell">
@@ -138,6 +138,10 @@
       <section class="metric2-admin hidden" id="metric2AdminView">
         <article class="panel metric2-heading-panel">
           <div class="panel-heading"><div><p class="eyebrow">Путь глазами пользователя</p><h2>Метрика 2.0</h2><p>Все мобильные экраны стартового пути по порядку. Процент показывает долю уникальных пользователей, которые действительно увидели экран. Чат в эту воронку не входит.</p></div></div>
+          <div class="metric2-flow-tabs" role="tablist" aria-label="Ветка Метрики 2.0">
+            <button class="active" id="metric2StandardFlow" type="button" role="tab" aria-selected="true">Обычная ссылка</button>
+            <button id="metric2ResultFlow" type="button" role="tab" aria-selected="false">Ссылка result</button>
+          </div>
           <div class="analytics-filters metric2-filters">
             <label>Период<select id="metric2Period"><option value="today">Сегодня</option><option value="7">7 дней</option><option value="30" selected>30 дней</option><option value="90">90 дней</option><option value="all">Всё время</option></select></label>
             <label>Устройство<select id="metric2Device"><option value="">Все устройства</option></select></label>
@@ -151,7 +155,7 @@
         </article>
         <section class="metric2-summary" id="metric2Summary"></section>
         <article class="panel metric2-flow-panel">
-          <div class="panel-heading"><div><p class="eyebrow">Вертикальная карта экранов</p><h2>Прохождение стартового пути</h2><p>Нажмите на любой экран, чтобы открыть крупный макет и увидеть статистику всех кнопок и переходов.</p></div></div>
+          <div class="panel-heading"><div><p class="eyebrow" id="metric2FlowEyebrow">Обычная ссылка</p><h2 id="metric2FlowTitle">Анкета и выбор обследований</h2><p id="metric2FlowDescription">Нажмите на любой экран, чтобы открыть крупный макет и увидеть статистику всех кнопок и переходов.</p></div></div>
           <div class="metric2-flow" id="metric2Flow"></div>
         </article>
       </section>
@@ -347,11 +351,11 @@
           </div>
         </div>
         <div class="table-tools users-table-tools">
-          <label class="table-search">Поиск пользователей<input id="usersSearch" type="search" placeholder="chel_id, менеджер, статус, Telegram или MAX"></label>
+          <label class="table-search">Поиск пользователей<input id="usersSearch" type="search" placeholder="chel_id, менеджер, путь, статус, Telegram или MAX"></label>
           <button class="table-clear" id="usersClear" type="button">Сбросить фильтры</button>
         </div>
         <div class="table-scroll"><table>
-          <thead><tr><th><button class="table-sort" data-table-sort="chel_id">chel_id<i>↕</i></button></th><th><button class="table-sort" data-table-sort="from_manager">От менеджера<i>↕</i></button></th><th><button class="table-sort" data-table-sort="created_at">Первый вход<i>↕</i></button></th><th><button class="table-sort" data-table-sort="last_seen_at">Последняя активность<i>↕</i></button></th><th><button class="table-sort" data-table-sort="onboarding_status">Анкета<i>↕</i></button></th><th><button class="table-sort" data-table-sort="messengers">Мессенджеры<i>↕</i></button></th><th><button class="table-sort" data-table-sort="conversations">Диалоги<i>↕</i></button></th><th><button class="table-sort" data-table-sort="messages">Сообщения<i>↕</i></button></th></tr></thead>
+          <thead><tr><th><button class="table-sort" data-table-sort="chel_id">chel_id<i>↕</i></button></th><th><button class="table-sort" data-table-sort="from_manager">От менеджера<i>↕</i></button></th><th><button class="table-sort" data-table-sort="entry_flow">Путь<i>↕</i></button></th><th><button class="table-sort" data-table-sort="created_at">Первый вход<i>↕</i></button></th><th><button class="table-sort" data-table-sort="last_seen_at">Последняя активность<i>↕</i></button></th><th><button class="table-sort" data-table-sort="onboarding_status">Анкета<i>↕</i></button></th><th><button class="table-sort" data-table-sort="messengers">Мессенджеры<i>↕</i></button></th><th><button class="table-sort" data-table-sort="conversations">Диалоги<i>↕</i></button></th><th><button class="table-sort" data-table-sort="messages">Сообщения<i>↕</i></button></th></tr></thead>
           <tbody id="usersTable"></tbody>
         </table></div>
         <div class="table-pagination"><button id="usersPrev" type="button">← Назад</button><span id="usersPage"></span><button id="usersNext" type="button">Дальше →</button></div>
@@ -426,6 +430,6 @@
       </div>
     </section>
   </div>
-  <script src="/static/dashboard.js?v=20260828-manual-refresh-v1" defer></script>
+  <script src="/static/dashboard.js?v=20260829-metric2-flows-v2" defer></script>
 </body>
 </html>

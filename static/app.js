@@ -30,9 +30,12 @@ const state = {
   returnToChatAfterExaminations: false,
   paymentReviewSource: '',
   paymentReviewOrderId: '',
+  paymentReceiptEmail: '',
   publicConfig: {},
   messengerLinkJustCompleted: '',
   purchases: [],
+  resultFlowActive: false,
+  resultFlowDocuments: [],
 };
 
 const $ = selector => document.querySelector(selector);
@@ -44,6 +47,7 @@ const WELCOME_SEEN_KEY = 'consilium_welcome_seen';
 const INSTALL_DISMISSED_KEY = 'consilium_install_dismissed_at';
 const MESSENGER_LINK_PENDING_KEY = 'consilium_messenger_link_pending';
 const PAYMENT_PENDING_ORDER_KEY = 'consilium_pending_payment_order';
+const RESULT_FLOW_KEY = 'consilium_result_flow_v1';
 const INSTALL_REOFFER_AFTER_MS = 7 * 24 * 60 * 60 * 1000;
 let userAudioContext = null;
 let deferredInstallPrompt = null;
@@ -86,7 +90,9 @@ const analyticsSessionId = getAnalyticsSession();
 function analyticsAttribution() {
   const params = new URLSearchParams(location.search);
   return {
-    source: params.get('splitter_source') || params.get('utm_source') || params.get('source') || '',
+    source: isResultEntryUrl()
+      ? 'result'
+      : params.get('splitter_source') || params.get('utm_source') || params.get('source') || '',
     campaign: params.get('utm_campaign') || '',
     medium: params.get('utm_medium') || '',
     app_mode: isInstalledApp() ? 'standalone' : 'browser',
@@ -121,6 +127,7 @@ function trackEvent(eventName, properties = {}) {
 }
 
 function onboardingAnalyticsContext() {
+  if (state.resultFlowActive) return 'result';
   return state.returnToChatAfterExaminations ? 'chat' : 'onboarding';
 }
 
@@ -417,6 +424,250 @@ async function continueFromWelcome() {
   }
 }
 
+function isResultEntryUrl() {
+  const path = window.location.pathname.replace(/\/+$/, '') || '/';
+  const params = new URLSearchParams(window.location.search);
+  return path === '/result'
+    || params.has('result')
+    || params.get('flow') === 'result'
+    || params.get('source') === 'result';
+}
+
+function readResultFlow() {
+  try {
+    const value = JSON.parse(localStorage.getItem(RESULT_FLOW_KEY) || 'null');
+    if (!value?.stage || Date.now() - Number(value.updatedAt || 0) > 48 * 60 * 60 * 1000) {
+      localStorage.removeItem(RESULT_FLOW_KEY);
+      return null;
+    }
+    return value;
+  } catch {
+    localStorage.removeItem(RESULT_FLOW_KEY);
+    return null;
+  }
+}
+
+function writeResultFlow(stage, extra = {}) {
+  const value = {...(readResultFlow() || {}), ...extra, stage, updatedAt:Date.now()};
+  localStorage.setItem(RESULT_FLOW_KEY, JSON.stringify(value));
+  return value;
+}
+
+function clearResultFlow() {
+  state.resultFlowActive = false;
+  state.resultFlowDocuments = [];
+  localStorage.removeItem(RESULT_FLOW_KEY);
+}
+
+function trackResultScreen(screen, previousScreen = currentOnboardingAnalyticsScreen) {
+  currentOnboardingAnalyticsScreen = screen;
+  trackEvent('onboarding_screen_viewed', {screen, previous_screen:previousScreen, context:'result'});
+}
+
+function trackResultAction(action, screen = currentOnboardingAnalyticsScreen) {
+  if (!screen || !action) return;
+  trackEvent('onboarding_screen_action', {screen, action, context:'result'});
+}
+
+function showResultScreen(screen, stage, progress, content) {
+  hideEntryScreens();
+  state.resultFlowActive = true;
+  $('#onboarding').classList.remove('hidden');
+  setOnboardingMeta(stage, progress);
+  $('#onboardingContent').innerHTML = `<div class="result-flow">${content}</div>`;
+  $('#onboarding').scrollTop = 0;
+  trackResultScreen(screen);
+}
+
+function renderResultWelcome() {
+  writeResultFlow('welcome');
+  showResultScreen('result_welcome', 'Результаты', 12, `
+    <div class="result-flow-icon" aria-hidden="true">▤</div>
+    <span class="onboarding-kicker">Результаты обследований</span>
+    <h1>Ваши анализы — в одном месте</h1>
+    <p class="onboarding-lead">Здесь можно получить документы по номеру пробирки, попросить помочь с расшифровкой и задать вопрос о результатах медицинскому помощнику.</p>
+    <div class="result-flow-note"><strong>Что понадобится</strong><p>Индивидуальный номер пробирки, который сообщили во время медицинского осмотра.</p></div>
+    <div class="onboarding-actions"><button type="button" class="onboarding-next" data-result-action="begin">Далее</button></div>`);
+}
+
+function renderResultTube() {
+  const saved = state.profile?.tube_number || readResultFlow()?.tubeNumber || '';
+  writeResultFlow('tube', {tubeNumber:saved});
+  showResultScreen('result_tube', 'Номер пробирки', 32, `
+    <div class="result-flow-icon" aria-hidden="true">№</div>
+    <span class="onboarding-kicker">Поиск результатов</span>
+    <h1>Введите номер пробирки</h1>
+    <p class="onboarding-lead">Он указан на вашей наклейке или был сообщён бригадой на медицинском осмотре.</p>
+    <label class="result-tube-field"><span>Номер пробирки</span><input id="resultTubeInput" type="text" maxlength="80" autocomplete="off" value="${escapeAttr(saved)}" placeholder="Например, 123456"></label>
+    <p class="result-inline-error hidden" id="resultTubeError" role="alert"></p>
+    <div class="onboarding-actions"><button type="button" class="onboarding-next" data-result-action="save-tube">Продолжить</button></div>`);
+  requestAnimationFrame(() => $('#resultTubeInput')?.focus());
+}
+
+function renderResultMessenger() {
+  const linked = linkedMessengerProviders().size > 0;
+  if (linked) state.messengerLinkJustCompleted = '';
+  writeResultFlow('messenger');
+  showResultScreen('result_messenger', 'Сохранение доступа', 54, `
+    <div class="result-flow-icon" aria-hidden="true">↗</div>
+    <span class="onboarding-kicker">Рекомендуем</span>
+    <h1>${linked ? 'Мессенджер привязан' : 'Не потеряйте результаты'}</h1>
+    <p class="onboarding-lead">${linked
+      ? 'Ваш профиль можно будет открыть с другого устройства. Теперь найдём документы по номеру пробирки.'
+      : 'Привяжите Telegram или MAX: так профиль не потеряется после очистки браузера, а результаты, расшифровка и консультация останутся доступны на любом устройстве.'}</p>
+    <ul class="result-benefits"><li>доступ к документам с телефона и компьютера;</li><li>история расшифровок и консультаций в одном профиле;</li><li>возможность получить уведомление, когда результаты будут готовы.</li></ul>
+    <div class="result-flow-actions">
+      ${linked ? '' : '<button type="button" class="result-link-button" data-result-action="link-messenger">Привязать мессенджер</button>'}
+      <button type="button" class="onboarding-next" data-result-action="search">${linked ? 'Найти результаты' : 'Продолжить без привязки'}</button>
+    </div>`);
+}
+
+function resultDocumentsMarkup(items) {
+  const documents = normalizeLabDocuments(items);
+  return `<div class="result-document-list">${documents.map((item, index) => `
+    <a class="result-document" href="${escapeAttr(item.url)}" target="_blank" rel="noopener noreferrer">
+      <i aria-hidden="true">▤</i><span><strong>${escapeHtml(item.title || `Результаты анализов · документ ${index + 1}`)}</strong><small>Открыть документ</small></span><b aria-hidden="true">→</b>
+    </a>`).join('')}</div>`;
+}
+
+async function searchResultDocuments() {
+  writeResultFlow('search');
+  showResultScreen('result_search', 'Поиск результатов', 72, `
+    <div class="result-search-spinner" aria-hidden="true"></div>
+    <span class="onboarding-kicker">Проверяем номер</span>
+    <h1>Ищем ваши результаты</h1>
+    <p class="onboarding-lead">Обычно это занимает несколько секунд.</p>`);
+  try {
+    const result = await api('/api/lab-results', {method:'POST'});
+    if (result.status === 'found' && result.urls?.length) {
+      trackResultAction('found', 'result_search');
+      renderResultFound(result.documents || result.urls);
+    } else {
+      trackResultAction('not_found', 'result_search');
+      renderResultNotFound(result.status === 'processing');
+    }
+  } catch (error) {
+    trackResultAction('not_found', 'result_search');
+    renderResultNotFound(false, error.message);
+  }
+}
+
+function renderResultFound(items) {
+  state.resultFlowDocuments = normalizeLabDocuments(items);
+  writeResultFlow('found');
+  showResultScreen('result_found', 'Результаты готовы', 100, `
+    <div class="result-flow-icon success" aria-hidden="true">✓</div>
+    <span class="onboarding-kicker">Готово</span>
+    <h1>Результаты найдены</h1>
+    <p class="onboarding-lead">Документы уже доступны. В чате можно попросить Ольгу помочь с расшифровкой или пригласить медицинского специалиста.</p>
+    ${resultDocumentsMarkup(state.resultFlowDocuments)}
+    <div class="onboarding-actions"><button type="button" class="onboarding-next" data-result-action="open-chat">Перейти в чат и получить консультацию</button></div>`);
+}
+
+function renderResultNotFound(processing = false, errorMessage = '') {
+  writeResultFlow('not_found');
+  const text = errorMessage
+    ? `Не удалось выполнить поиск: ${escapeHtml(errorMessage)}`
+    : processing
+      ? 'Номер найден, но документы ещё обрабатываются.'
+      : 'По этому номеру документы пока не появились. Проверьте номер или запросите уведомление о готовности.';
+  showResultScreen('result_not_found', 'Ожидание результатов', 88, `
+    <div class="result-flow-icon waiting" aria-hidden="true">…</div>
+    <span class="onboarding-kicker">Пока не готовы</span>
+    <h1>Результаты ещё не найдены</h1>
+    <p class="onboarding-lead">${text}</p>
+    <div class="result-flow-note"><strong>Сообщим о готовности</strong><p>Для уведомления нужен привязанный Telegram или MAX — иначе мы не сможем связаться с вами.</p></div>
+    <div class="result-flow-actions"><button type="button" class="result-link-button" data-result-action="notify">Получить уведомление</button><button type="button" class="onboarding-next" data-result-action="retry-search">Проверить ещё раз</button><button type="button" class="result-quiet-button" data-result-action="open-chat">Перейти в чат</button></div>`);
+}
+
+function renderResultNotification() {
+  writeResultFlow('notification');
+  showResultScreen('result_notification', 'Уведомление', 100, `
+    <div class="result-flow-icon success" aria-hidden="true">✓</div>
+    <span class="onboarding-kicker">Запрос сохранён</span>
+    <h1>Сообщим, когда результаты появятся</h1>
+    <p class="onboarding-lead">Уведомление будет связано с номером пробирки и вашим профилем.</p>
+    <div class="onboarding-actions"><button type="button" class="onboarding-next" data-result-action="open-chat">Перейти в чат</button></div>`);
+}
+
+async function saveResultTube() {
+  const input = $('#resultTubeInput');
+  const tubeNumber = input?.value.trim() || '';
+  if (!tubeNumber) {
+    $('#resultTubeError').textContent = 'Введите номер пробирки';
+    $('#resultTubeError').classList.remove('hidden');
+    input?.focus();
+    return;
+  }
+  const button = $('#onboardingContent [data-result-action="save-tube"]');
+  button.disabled = true;
+  try {
+    state.profile = await api('/api/profile', {method:'POST', body:JSON.stringify(profilePayloadWithTube(tubeNumber))});
+    writeResultFlow('messenger', {tubeNumber});
+    trackResultAction('continue', 'result_tube');
+    renderResultMessenger();
+  } catch (error) {
+    $('#resultTubeError').textContent = error.message;
+    $('#resultTubeError').classList.remove('hidden');
+    button.disabled = false;
+  }
+}
+
+async function requestResultNotification() {
+  if (!linkedMessengerProviders().size) {
+    writeResultFlow('not_found', {pendingNotification:true});
+    trackResultAction('notify', 'result_not_found');
+    openMessengerLinkModal({source:'result_notification'});
+    return;
+  }
+  try {
+    state.messengerLinkJustCompleted = '';
+    await api('/api/lab-results/notification', {method:'POST', body:'{}'});
+    trackResultAction('notify', 'result_not_found');
+    renderResultNotification();
+  } catch (error) {
+    showOnboardingError(error.message);
+  }
+}
+
+async function finishResultFlow({openResults = false} = {}) {
+  trackResultAction('open_chat');
+  const documents = [...state.resultFlowDocuments];
+  clearResultFlow();
+  await openMainApp({skipIntro:true});
+  if (openResults || documents.length) await openLabResults();
+}
+
+async function enterResultFlow({explicit = false} = {}) {
+  const onboarding = await api('/api/onboarding');
+  state.onboarding = onboarding;
+  state.profile = onboarding.profile || await api('/api/profile');
+  applyFontSize(onboarding.font_size || 'extra');
+  const registration = await api('/api/result-entry/start', {method:'POST', body:'{}'});
+  state.identity = {...state.identity, result_entry:true};
+  localStorage.setItem(ANONYMOUS_ACCESS_KEY, registration.chel_id || state.identity?.chel_id || '');
+
+  if (hasCompletedQuestionnaire(onboarding)) {
+    clearResultFlow();
+    trackResultScreen('result_existing', '');
+    await openMainApp({skipIntro:true});
+    await openLabResults();
+    return;
+  }
+
+  state.resultFlowActive = true;
+  const saved = readResultFlow();
+  if (explicit || !saved) return renderResultWelcome();
+  if (saved.stage === 'tube') return renderResultTube();
+  if (saved.stage === 'messenger') return renderResultMessenger();
+  if (saved.stage === 'not_found') {
+    if (saved.pendingNotification && linkedMessengerProviders().size) return requestResultNotification();
+    return renderResultNotFound();
+  }
+  if (saved.stage === 'notification') return renderResultNotification();
+  return renderResultWelcome();
+}
+
 function hasCompletedQuestionnaire(onboarding) {
   return Boolean(
     onboarding?.profile?.updated_at
@@ -671,6 +922,91 @@ function onboardingNextLabel(question, value, isLast) {
   return isLast ? 'Завершить анкету' : 'Продолжить';
 }
 
+function companyInnControl(inputMarkup, listId) {
+  return `<div class="company-inn-field">${inputMarkup}<div class="company-inn-suggestions hidden" id="${listId}" role="listbox" aria-label="Организации по ИНН"></div></div>`;
+}
+
+function setupCompanyInnSuggestions(inputSelector, listSelector) {
+  const field = $(inputSelector);
+  const list = $(listSelector);
+  if (!field || !list || field.dataset.suggestionsReady === '1') return;
+  field.dataset.suggestionsReady = '1';
+  field.setAttribute('autocomplete', 'off');
+  field.setAttribute('aria-autocomplete', 'list');
+  field.setAttribute('aria-controls', list.id);
+  field.setAttribute('aria-expanded', 'false');
+  let timer = null;
+  let requestNumber = 0;
+  let activeIndex = -1;
+
+  const close = () => {
+    list.classList.add('hidden');
+    list.innerHTML = '';
+    field.setAttribute('aria-expanded', 'false');
+    activeIndex = -1;
+  };
+  const select = button => {
+    if (!button) return;
+    field.value = button.dataset.inn || '';
+    if (field.id === 'onboardingInput') state.onboardingAnswers.company_inn = field.value;
+    field.dispatchEvent(new Event('input', {bubbles:true}));
+    close();
+    field.focus();
+  };
+  const setActive = index => {
+    const buttons = [...list.querySelectorAll('[data-inn]')];
+    if (!buttons.length) return;
+    activeIndex = (index + buttons.length) % buttons.length;
+    buttons.forEach((button, buttonIndex) => button.classList.toggle('active', buttonIndex === activeIndex));
+    buttons[activeIndex].scrollIntoView({block:'nearest'});
+  };
+
+  field.addEventListener('input', () => {
+    const digits = field.value.replace(/\D/g, '').slice(0, 12);
+    if (field.value !== digits) field.value = digits;
+    clearTimeout(timer);
+    requestNumber += 1;
+    const currentRequest = requestNumber;
+    if (!state.publicConfig.company_suggestions_enabled || digits.length < 4) {
+      close();
+      return;
+    }
+    list.innerHTML = '<div class="company-inn-suggestion-status">Ищем организацию…</div>';
+    list.classList.remove('hidden');
+    field.setAttribute('aria-expanded', 'true');
+    timer = setTimeout(async () => {
+      try {
+        const result = await api('/api/company-suggestions', {
+          method:'POST', body:JSON.stringify({query:digits}),
+        });
+        if (currentRequest !== requestNumber || field.value !== digits) return;
+        const suggestions = Array.isArray(result.suggestions) ? result.suggestions : [];
+        list.innerHTML = suggestions.length
+          ? suggestions.map(item => `<button type="button" class="company-inn-suggestion" role="option" data-inn="${escapeAttr(item.inn)}"><strong>${escapeHtml(item.name)}</strong><small>ИНН ${escapeHtml(item.inn)}</small></button>`).join('')
+          : '<div class="company-inn-suggestion-status">Совпадений не найдено. Можно ввести ИНН вручную.</div>';
+        list.classList.remove('hidden');
+        field.setAttribute('aria-expanded', 'true');
+      } catch {
+        if (currentRequest !== requestNumber) return;
+        close();
+      }
+    }, 320);
+  });
+  field.addEventListener('keydown', event => {
+    const buttons = [...list.querySelectorAll('[data-inn]')];
+    if (event.key === 'ArrowDown' && buttons.length) {
+      event.preventDefault(); setActive(activeIndex + 1);
+    } else if (event.key === 'ArrowUp' && buttons.length) {
+      event.preventDefault(); setActive(activeIndex - 1);
+    } else if (event.key === 'Enter' && activeIndex >= 0) {
+      event.preventDefault(); select(buttons[activeIndex]);
+    } else if (event.key === 'Escape') close();
+  });
+  list.addEventListener('pointerdown', event => event.preventDefault());
+  list.addEventListener('click', event => select(event.target.closest('[data-inn]')));
+  field.addEventListener('blur', () => setTimeout(close, 150));
+}
+
 function renderQuestion() {
   const questions = activeOnboardingQuestions();
   state.onboardingStep = Math.max(0, Math.min(state.onboardingStep, questions.length - 1));
@@ -684,15 +1020,17 @@ function renderQuestion() {
   });
   trackOnboardingScreen(`question_${question.key}`);
   setOnboardingMeta('Анкета', 5 + Math.round((state.onboardingStep / questions.length) * 60));
-  const control = question.choices
+  let control = question.choices
     ? `<div class="choice-grid">${question.choices.map(([id,label]) => `<button type="button" class="choice-button ${value === id ? 'selected' : ''}" data-choice="${id}">${label}</button>`).join('')}</div>`
     : question.type === 'textarea'
       ? `<textarea class="onboarding-input onboarding-input-area" id="onboardingInput" placeholder="${escapeAttr(question.placeholder || '')}" ${question.maxlength ? `maxlength="${question.maxlength}"` : ''}>${escapeHtml(Array.isArray(value) ? value.join('\n') : value)}</textarea>`
       : `<input class="onboarding-input" id="onboardingInput" type="${question.type || 'text'}" value="${escapeAttr(value)}" placeholder="${escapeAttr(question.placeholder || '')}" ${question.inputmode ? `inputmode="${question.inputmode}"` : ''} ${question.maxlength ? `maxlength="${question.maxlength}"` : ''} ${question.min !== undefined ? `min="${question.min}"` : ''} ${question.max !== undefined ? `max="${question.max}"` : ''} ${question.step ? `step="${question.step}"` : ''}>`;
+  if (question.key === 'company_inn') control = companyInnControl(control, 'onboardingCompanyInnSuggestions');
   const notMedicalExam = question.key === 'company_inn'
     ? '<button type="button" class="not-medical-exam-button" data-onboarding-action="skip-medical-exam">Я не на мед-осмотр</button>'
     : '';
   $('#onboardingContent').innerHTML = `<span class="onboarding-kicker">Шаг ${state.onboardingStep + 1} из ${questions.length}</span><h1>${question.title}</h1><p class="onboarding-lead">${question.lead}</p>${control}<div class="onboarding-actions">${state.onboardingStep ? '<button type="button" class="onboarding-back" data-onboarding-action="back">Назад</button>' : ''}<button type="button" class="onboarding-next" data-onboarding-action="next">${onboardingNextLabel(question, value, state.onboardingStep === questions.length - 1)}</button></div>${notMedicalExam}`;
+  if (question.key === 'company_inn') setupCompanyInnSuggestions('#onboardingInput', '#onboardingCompanyInnSuggestions');
   $('#onboardingInput')?.focus();
 }
 
@@ -1013,6 +1351,7 @@ async function startOnlinePayment() {
         id:result.order.id,
         returnToChat:Boolean(state.returnToChatAfterExaminations),
         source:state.paymentReviewSource || 'onboarding',
+        receiptEmail,
         savedAt:Date.now(),
       }));
       window.location.assign(url);
@@ -1022,6 +1361,7 @@ async function startOnlinePayment() {
     const returnUrl = new URL(location.href);
     returnUrl.searchParams.set('payment_return', result.order.id);
     if (state.returnToChatAfterExaminations) returnUrl.searchParams.set('return_to_chat', '1');
+    returnUrl.searchParams.set('payment_source', state.paymentReviewSource || 'onboarding');
     history.replaceState({}, '', returnUrl);
     await handlePaymentReturn();
   } catch (error) {
@@ -1065,6 +1405,7 @@ async function handlePaymentReturn() {
   // stored inside an already-created YooKassa payment.
   state.paymentReviewSource = pendingOrder.source || params.get('payment_source') || '';
   state.paymentReviewOrderId = orderId;
+  state.paymentReceiptEmail = String(pendingOrder.receiptEmail || '').trim();
   state.returnToChatAfterExaminations = Boolean(
     pendingOrder.returnToChat || params.get('return_to_chat') === '1' || state.paymentReviewSource === 'purchases'
   );
@@ -1124,11 +1465,71 @@ async function handlePaymentReturn() {
       : abandoned
         ? 'Вы вернулись без подтверждённой оплаты. Попытка сохранена в разделе «Мои покупки».'
         : 'ЮKassa ещё не подтвердила платёж. Подождите немного и проверьте снова.';
-    $('#onboardingContent').innerHTML = `<div class="payment-result"><span class="payment-result-icon ${(canceled || abandoned) ? 'error' : ''}">${(canceled || abandoned) ? '!' : '⌛'}</span><h1>${title}</h1><p class="onboarding-lead">${message}</p><div class="onboarding-actions"><button type="button" class="onboarding-back" data-onboarding-action="back-to-payment">Вернуться к оплате</button><button type="button" class="onboarding-next" data-onboarding-action="open-purchases">Мои покупки</button></div></div>`;
+    $('#onboardingContent').innerHTML = `<div class="payment-result"><span class="payment-result-icon ${(canceled || abandoned) ? 'error' : ''}">${(canceled || abandoned) ? '!' : '⌛'}</span><h1>${title}</h1><p class="onboarding-lead">${message}</p><div class="onboarding-actions payment-result-actions"><button type="button" class="onboarding-back" data-onboarding-action="back-to-payment">Вернуться к оплате</button><button type="button" class="onboarding-next" data-onboarding-action="open-purchases">Мои покупки</button><button type="button" class="payment-result-back" data-onboarding-action="leave-payment-result">Назад</button></div></div>`;
     return true;
   } catch (error) {
     $('#onboardingContent').innerHTML = `<div class="payment-result"><span class="payment-result-icon error">!</span><h1>Не удалось проверить оплату</h1><p class="onboarding-lead">${escapeHtml(error.message)}</p><button type="button" class="onboarding-next" data-onboarding-action="check-payment" data-order-id="${escapeHtml(orderId)}">Повторить проверку</button></div>`;
     return true;
+  }
+}
+
+async function restorePaymentReviewState() {
+  state.onboarding = await api('/api/onboarding');
+  state.profile = state.onboarding.profile;
+  state.selectedTests = new Set(state.onboarding.selected_tests || []);
+  if (!state.selectedTests.size) throw new Error('В заказе не найдены выбранные обследования');
+}
+
+async function returnToOnlinePayment() {
+  const buttons = [...document.querySelectorAll('#onboardingContent [data-onboarding-action]')];
+  buttons.forEach(button => { button.disabled = true; });
+  try {
+    await restorePaymentReviewState();
+    trackOnboardingAction('retry', 'payment_result');
+    renderPayment();
+    const receiptInput = $('#paymentReceiptEmail');
+    if (receiptInput && state.paymentReceiptEmail) receiptInput.value = state.paymentReceiptEmail;
+    if (receiptInput && !receiptInput.value.trim()) {
+      receiptInput.focus();
+      showOnboardingError('Укажите электронную почту для чека, затем нажмите «Оплатить онлайн».');
+      return;
+    }
+    await startOnlinePayment();
+  } catch (error) {
+    buttons.forEach(button => { button.disabled = false; });
+    showOnboardingError(error.message);
+  }
+}
+
+async function leavePaymentResult() {
+  const source = state.paymentReviewSource;
+  const returnToChat = state.returnToChatAfterExaminations;
+  const orderId = state.paymentReviewOrderId;
+  const buttons = [...document.querySelectorAll('#onboardingContent [data-onboarding-action]')];
+  buttons.forEach(button => { button.disabled = true; });
+  try {
+    trackOnboardingAction('back', 'payment_result');
+    if (source === 'purchases') {
+      await openMainApp({skipIntro:true});
+      state.paymentReviewSource = '';
+      state.paymentReviewOrderId = '';
+      state.paymentReceiptEmail = '';
+      await openPurchases({highlightOrderId:orderId});
+    } else if (returnToChat) {
+      state.paymentReviewSource = '';
+      state.paymentReviewOrderId = '';
+      state.paymentReceiptEmail = '';
+      await openMainApp({skipIntro:true});
+    } else {
+      await restorePaymentReviewState();
+      state.paymentReviewSource = '';
+      state.paymentReviewOrderId = '';
+      state.paymentReceiptEmail = '';
+      renderExamSelection();
+    }
+  } catch (error) {
+    buttons.forEach(button => { button.disabled = false; });
+    showOnboardingError(error.message);
   }
 }
 
@@ -1164,6 +1565,7 @@ async function finishPaymentSuccess(openHistory = false) {
   if (openHistory) await openPurchases({highlightOrderId:orderId});
   state.paymentReviewSource = '';
   state.paymentReviewOrderId = '';
+  state.paymentReceiptEmail = '';
 }
 
 async function confirmPaymentAtExam() {
@@ -1295,6 +1697,7 @@ async function loadOnboarding({ openCompletedMessengerAccount = false, initialOn
   state.returnToChatAfterExaminations = false;
   state.paymentReviewSource = '';
   state.paymentReviewOrderId = '';
+  state.paymentReceiptEmail = '';
   state.onboarding = initialOnboarding || await api('/api/onboarding');
   applyFontSize(state.onboarding.font_size || 'extra');
   state.profile = state.onboarding.profile;
@@ -1350,6 +1753,25 @@ async function openMainApp({ skipIntro = false } = {}) {
 }
 
 $('#onboardingContent').addEventListener('click', async event => {
+  const resultAction = event.target.closest('[data-result-action]')?.dataset.resultAction;
+  if (resultAction) {
+    if (resultAction === 'begin') {
+      trackResultAction('continue', 'result_welcome');
+      renderResultTube();
+    }
+    else if (resultAction === 'save-tube') await saveResultTube();
+    else if (resultAction === 'link-messenger') {
+      trackResultAction('link_messenger', 'result_messenger');
+      openMessengerLinkModal({source:'result_flow'});
+    }
+    else if (resultAction === 'search' || resultAction === 'retry-search') {
+      trackResultAction(resultAction === 'search' ? 'continue' : 'retry', currentOnboardingAnalyticsScreen);
+      await searchResultDocuments();
+    }
+    else if (resultAction === 'notify') await requestResultNotification();
+    else if (resultAction === 'open-chat') await finishResultFlow({openResults:state.resultFlowDocuments.length > 0});
+    return;
+  }
   const choice = event.target.closest('[data-choice]');
   if (choice) {
     const question = activeOnboardingQuestions()[state.onboardingStep];
@@ -1406,7 +1828,8 @@ $('#onboardingContent').addEventListener('click', async event => {
   }
   else if (action === 'pay-online') { trackOnboardingAction('pay_online', 'payment'); trackEvent('funnel_action', {stage:'examinations_options',action:'pay_online'}); startOnlinePayment(); }
   else if (action === 'pay-at-exam') { trackOnboardingAction('pay_at_exam', 'payment'); trackEvent('funnel_action', {stage:'examinations_options',action:'pay_at_exam'}); confirmPaymentAtExam(); }
-  else if (action === 'back-to-payment') renderPayment();
+  else if (action === 'back-to-payment') await returnToOnlinePayment();
+  else if (action === 'leave-payment-result') await leavePaymentResult();
   else if (action === 'open-purchases') openPurchases();
   else if (action === 'open-purchases-after-payment') await finishPaymentSuccess(true);
   else if (action === 'continue-after-payment') await finishPaymentSuccess(false);
@@ -2373,6 +2796,7 @@ async function openProfile() {
   $('#profileNotes').value = profile.notes || '';
   updateProfileBmi();
   $('#profileModal').classList.remove('hidden');
+  setupCompanyInnSuggestions('#profileCompanyInn', '#profileCompanyInnSuggestions');
 }
 
 function updateProfileBmi() {
@@ -2537,6 +2961,88 @@ function renderLabResultDocuments(documents) {
   container.classList.toggle('hidden', !state.labDocuments.length);
 }
 
+function interpretationProfileComplete(profile = state.profile) {
+  return Boolean(
+    profile?.sex
+    && profile?.age !== null && profile?.age !== undefined && profile?.age !== ''
+    && profile?.height_cm !== null && profile?.height_cm !== undefined && profile?.height_cm !== ''
+    && profile?.weight_kg !== null && profile?.weight_kg !== undefined && profile?.weight_kg !== ''
+  );
+}
+
+function openInterpretationProfileModal() {
+  const profile = state.profile || {};
+  $('#interpretationProfileSex').value = profile.sex || '';
+  $('#interpretationProfileAge').value = profile.age ?? '';
+  $('#interpretationProfileHeight').value = profile.height_cm ?? '';
+  $('#interpretationProfileWeight').value = profile.weight_kg ?? '';
+  $('#interpretationProfileError').classList.add('hidden');
+  $('#interpretationProfileModal').classList.remove('hidden');
+  trackEvent('lab_interpretation_profile_requested', {
+    source:'lab_results',
+    stage:'mini_profile',
+  });
+  requestAnimationFrame(() => {
+    const firstMissing = [
+      '#interpretationProfileSex', '#interpretationProfileAge',
+      '#interpretationProfileHeight', '#interpretationProfileWeight',
+    ].map(selector => $(selector)).find(field => !field.value);
+    firstMissing?.focus();
+  });
+}
+
+function closeInterpretationProfileModal() {
+  $('#interpretationProfileModal').classList.add('hidden');
+}
+
+async function saveInterpretationProfile() {
+  const fields = [
+    $('#interpretationProfileSex'), $('#interpretationProfileAge'),
+    $('#interpretationProfileHeight'), $('#interpretationProfileWeight'),
+  ];
+  const error = $('#interpretationProfileError');
+  if (fields.some(field => !field.value)) {
+    error.textContent = 'Заполните пол, возраст, рост и вес';
+    error.classList.remove('hidden');
+    fields.find(field => !field.value)?.focus();
+    return;
+  }
+  for (const field of fields.slice(1)) {
+    if (!field.checkValidity()) {
+      field.reportValidity();
+      return;
+    }
+  }
+  const button = $('#saveInterpretationProfileButton');
+  button.disabled = true;
+  button.textContent = 'Сохраняю…';
+  try {
+    const payload = profilePayloadWithTube(state.profile?.tube_number || '');
+    payload.sex = $('#interpretationProfileSex').value;
+    payload.age = $('#interpretationProfileAge').value;
+    payload.height_cm = $('#interpretationProfileHeight').value;
+    payload.weight_kg = $('#interpretationProfileWeight').value;
+    state.profile = await api('/api/profile', {
+      method:'POST',
+      body:JSON.stringify(payload),
+    });
+    renderProfileStatus();
+    trackEvent('lab_interpretation_profile_completed', {
+      source:'lab_results',
+      stage:'mini_profile',
+    });
+    closeInterpretationProfileModal();
+    $('#taskStatus').textContent = 'Мини-анкета сохранена';
+    await openLabResults();
+  } catch (saveError) {
+    error.textContent = saveError.message;
+    error.classList.remove('hidden');
+  } finally {
+    button.disabled = false;
+    button.textContent = 'Сохранить и перейти к анализам';
+  }
+}
+
 async function fetchLabResults() {
   if (!state.profile?.tube_number?.trim()) return;
   const button = $('#fetchLabResultsButton');
@@ -2568,6 +3074,11 @@ async function fetchLabResults() {
 
 async function interpretLabResults(documentId, sourceButton) {
   if (state.processing) return;
+  if (!state.profile) await loadProfile();
+  if (!interpretationProfileComplete()) {
+    openInterpretationProfileModal();
+    return;
+  }
   state.processing = true;
   const buttons = document.querySelectorAll('[data-lab-interpret]');
   buttons.forEach(button => { button.disabled = true; });
@@ -2919,6 +3430,7 @@ function closeVisibleModal() {
     case 'healthHistoryModal': closeHealthHistory(); break;
     case 'profileModal': closeProfileModal(); break;
     case 'labResultsModal': closeLabResults(); break;
+    case 'interpretationProfileModal': closeInterpretationProfileModal(); break;
     default: layer.classList.add('hidden');
   }
   return true;
@@ -3036,6 +3548,14 @@ $('#profileModal').addEventListener('click', event => { if (event.target.id === 
 $('#saveProfileButton').addEventListener('click', saveProfile);
 $('#labResultsClose').addEventListener('click', closeLabResults);
 $('#labResultsModal').addEventListener('click', event => { if (event.target.id === 'labResultsModal') closeLabResults(); });
+$('#interpretationProfileClose').addEventListener('click', closeInterpretationProfileModal);
+$('#interpretationProfileModal').addEventListener('click', event => {
+  if (event.target.id === 'interpretationProfileModal') closeInterpretationProfileModal();
+});
+$('#saveInterpretationProfileButton').addEventListener('click', saveInterpretationProfile);
+['#interpretationProfileSex', '#interpretationProfileAge', '#interpretationProfileHeight', '#interpretationProfileWeight'].forEach(selector => {
+  $(selector).addEventListener('input', () => $('#interpretationProfileError').classList.add('hidden'));
+});
 $('#saveLabTubeButton').addEventListener('click', saveLabTube);
 $('#changeLabTubeButton').addEventListener('click', changeLabTube);
 $('#fetchLabResultsButton').addEventListener('click', fetchLabResults);
@@ -3142,10 +3662,16 @@ async function init() {
     const messengerLoginRequired = entryParams.get('auth') === 'messenger_required';
     const messengerLoginCompleted = entryParams.get('auth') === 'messenger_login';
     const forceWelcomePreview = entryParams.get('welcome') === '1';
+    const resultEntryRequested = isResultEntryUrl();
+    const pendingResultFlow = readResultFlow();
     if (messengerLoginCompleted) {
       entryParams.delete('auth');
       const cleanQuery = entryParams.toString();
       history.replaceState({}, '', `${window.location.pathname}${cleanQuery ? `?${cleanQuery}` : ''}`);
+    }
+    if ((resultEntryRequested || pendingResultFlow) && !messengerLoginRequired) {
+      await enterResultFlow({explicit:resultEntryRequested && !pendingResultFlow});
+      return;
     }
     if (identity.authenticated) {
       localStorage.removeItem(ANONYMOUS_ACCESS_KEY);
