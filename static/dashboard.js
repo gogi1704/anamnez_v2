@@ -1228,21 +1228,52 @@ function renderMetric2(data) {
   const summary = $('#metric2Summary');
   summary.innerHTML = [
     [resultFlow ? 'Пришли по пути result' : 'На первом экране',data.summary?.start_users || 0,'100% — база этой ветки'],
-    ['Уникальных переходов',data.summary?.unique_transitions || 0,'повторы и возвраты исключены'],
     [resultFlow ? 'Получили результат пути' : 'Дошли до завершения',data.summary?.reached_completion || 0,'уникальных пользователей'],
   ].map(([label,value,note]) => `<article class="analytics-metric"><span>${label}</span><strong>${Number(value).toLocaleString('ru-RU')}</strong><small>${note}</small></article>`).join('');
   const root = $('#metric2Flow');
   root.replaceChildren();
   const titleById = Object.fromEntries((data.screens || []).map(item => [item.id,item.title]));
+  const logicalGroups = resultFlow
+    ? [['result_existing','result_welcome'],['result_found','result_not_found']]
+    : [['payment_success','payment_result','payment_unavailable'],['completion','completion_skipped']];
+  const logicalGroupById = new Map();
+  logicalGroups.forEach(group => group.forEach(id => logicalGroupById.set(id, group)));
+  const desktopIds = (data.screens || []).map(screen => screen.id);
+  if (!resultFlow && desktopIds.includes('payment_processing')) {
+    desktopIds.splice(desktopIds.indexOf('payment_processing'), 1);
+    const outcomeEnd = Math.max(...['payment_success','payment_result','payment_unavailable'].map(id => desktopIds.indexOf(id)));
+    desktopIds.splice(outcomeEnd + 1, 0, 'payment_processing');
+  }
+  const desktopOrder = new Map(desktopIds.map((id,index) => [id,index + 1]));
+  const desktopLevel = new Map();
+  const completedGroups = new Set();
+  let desktopSequence = 0;
+  for (const id of desktopIds) {
+    const screen = (data.screens || []).find(item => item.id === id);
+    const group = logicalGroupById.get(id);
+    if (group) {
+      const groupKey = group.join('|');
+      if (!completedGroups.has(groupKey)) {
+        desktopSequence += 1;
+        completedGroups.add(groupKey);
+        group.forEach(groupId => desktopLevel.set(groupId, desktopSequence));
+      }
+    } else if (screen && (!screen.branch || screen.display_as_main)) {
+      desktopSequence += 1;
+      desktopLevel.set(id, desktopSequence);
+    }
+  }
   let mainSequence = 0;
   for (const screen of (data.screens || [])) {
-    const visualBranch = Boolean(screen.branch && !screen.display_as_main);
+    const logicalGroup = logicalGroupById.get(screen.id);
+    const visualBranch = Boolean(screen.branch && !screen.display_as_main && !logicalGroup);
     if (!visualBranch) mainSequence += 1;
     const item = document.createElement('article');
-    item.className = `metric2-screen-row${visualBranch ? ' branch' : ''}`;
+    item.className = `metric2-screen-row${visualBranch ? ' branch' : ''}${logicalGroup ? ` metric2-logical-level metric2-logical-level-${logicalGroup.length}` : ''}`;
+    item.style.setProperty('--metric2-desktop-order', desktopOrder.get(screen.id) || 999);
     if (screen.branch) item.dataset.parent = screen.parent_id || '';
     const sequence = document.createElement('div'); sequence.className = 'metric2-sequence';
-    sequence.innerHTML = `<span>${visualBranch ? '↳' : mainSequence}</span><i></i>`;
+    sequence.innerHTML = `<span><b class="metric2-sequence-default">${visualBranch ? '↳' : mainSequence}</b><b class="metric2-sequence-desktop">${logicalGroup ? desktopLevel.get(screen.id) : visualBranch ? '↳' : desktopLevel.get(screen.id) || mainSequence}</b></span><i></i>`;
     const open = document.createElement('button'); open.type = 'button'; open.className = 'metric2-screen-open'; open.dataset.metric2Screen = screen.id;
     open.innerHTML = metric2PreviewMarkup(screen);
     const stats = document.createElement('div'); stats.className = 'metric2-screen-stats';

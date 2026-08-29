@@ -17,7 +17,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/static/styles.07ffaefb4795.css?v=20260829-interpret-profile-v1">
+  <link rel="stylesheet" href="/static/styles.07ffaefb4795.css?v=20260829-result-notify-v1">
   <link rel="stylesheet" href="/static/rich-text.2bf1f5fab764.css">
 </head>
 <body>
@@ -533,7 +533,11 @@
           <div><strong id="labResultsStateTitle">Ищу результаты</strong><p id="labResultsStateText">Проверяю номер пробирки в базе лаборатории.</p></div>
         </div>
         <div class="lab-result-documents hidden" id="labResultDocuments"></div>
-        <button class="primary-button" id="fetchLabResultsButton" type="button">Проверить ещё раз</button>
+        <div class="lab-results-actions">
+          <button class="primary-button" id="fetchLabResultsButton" type="button">Проверить ещё раз</button>
+          <button class="secondary-button hidden" id="requestLabResultNotificationButton" type="button">Получить уведомление</button>
+        </div>
+        <p class="lab-result-notification-status hidden" id="labResultNotificationStatus" role="status"></p>
       </div>
     </div>
   </div>
@@ -542,9 +546,9 @@
     <div class="modal interpretation-profile-modal">
       <button class="modal-close" id="interpretationProfileClose" aria-label="Закрыть">×</button>
       <div class="modal-icon">✓</div>
-      <span class="interpretation-profile-kicker">Перед расшифровкой</span>
+      <span class="interpretation-profile-kicker" id="interpretationProfileKicker">Перед расшифровкой</span>
       <h2 id="interpretationProfileTitle">Заполните мини-анкету</h2>
-      <p>Для корректной расшифровки результатов и бесплатной консультации специалисту нужны четыре основных показателя. Это займёт меньше минуты.</p>
+      <p id="interpretationProfileDescription">Для корректной расшифровки результатов и бесплатной консультации специалисту нужны четыре основных показателя. Это займёт меньше минуты.</p>
       <div class="interpretation-profile-grid">
         <label class="field-label">Пол
           <select id="interpretationProfileSex">
@@ -572,6 +576,6 @@
   <script src="/static/metrika.js?v=20260829-interpret-profile-v1"></script>
   <script src="/static/agents.js?v=20260829-interpret-profile-v1"></script>
   <script src="/static/rich-text.js?v=20260829-interpret-profile-v1"></script>
-  <script src="/static/app.js?v=20260829-interpret-profile-v1"></script>
+  <script src="/static/app.js?v=20260829-chat-profile-v2"></script>
 </body>
 </html>

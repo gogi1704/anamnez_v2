@@ -36,6 +36,7 @@ const state = {
   purchases: [],
   resultFlowActive: false,
   resultFlowDocuments: [],
+  miniProfilePurpose: 'interpretation',
 };
 
 const $ = selector => document.querySelector(selector);
@@ -377,7 +378,10 @@ async function api(path, options = {}) {
   const data = await response.json().catch(() => ({}));
   if (!response.ok) {
     trackEvent('api_error', {status_code:response.status,error_code:`http_${response.status}`,reason:path.split('?')[0]});
-    throw new Error(data.detail || `Ошибка сервера: ${response.status}`);
+    const error = new Error(data.detail || `Ошибка сервера: ${response.status}`);
+    error.code = data.code || `http_${response.status}`;
+    error.details = data;
+    throw error;
   }
   return data;
 }
@@ -2361,6 +2365,12 @@ function setHumanChoiceDisabled(disabled) {
 
 async function chooseHumanSpecialistChat() {
   if (!state.conversationId || state.processing) return;
+  if (!state.profile) await loadProfile();
+  if (!interpretationProfileComplete()) {
+    closeHumanModal();
+    openInterpretationProfileModal('consultation');
+    return;
+  }
   state.processing = true;
   setHumanChoiceDisabled(true);
   try {
@@ -2381,6 +2391,11 @@ async function chooseHumanSpecialistChat() {
     await markConversationRead(state.conversationId);
     await loadConversationList();
   } catch (error) {
+    if (error.code === 'consultation_profile_required') {
+      closeHumanModal();
+      openInterpretationProfileModal('consultation');
+      return;
+    }
     addSystemError(error.message);
     setHumanChoiceDisabled(false);
   } finally {
@@ -2876,6 +2891,7 @@ function renderLabResults() {
   if (tubeNumber) $('#labSavedTube').textContent = tubeNumber;
   else $('#labTubeInput').value = '';
   $('#labResultDocuments').classList.add('hidden');
+  setLabResultNotificationAction(false);
 }
 
 async function openLabResults() {
@@ -2931,6 +2947,42 @@ function setLabResultsState(icon, title, text) {
   $('#labResultsStateText').textContent = text;
 }
 
+function setLabResultNotificationAction(visible, message = '', success = false) {
+  const button = $('#requestLabResultNotificationButton');
+  const status = $('#labResultNotificationStatus');
+  button.classList.toggle('hidden', !visible);
+  if (!button.disabled) button.textContent = 'Получить уведомление';
+  status.textContent = message;
+  status.classList.toggle('hidden', !message);
+  status.classList.toggle('success', Boolean(message && success));
+}
+
+async function requestLabResultNotification() {
+  const button = $('#requestLabResultNotificationButton');
+  const status = $('#labResultNotificationStatus');
+  if (!linkedMessengerProviders().size) {
+    status.textContent = 'Чтобы получить уведомление о готовности результатов, сначала привяжите Telegram или MAX.';
+    status.classList.remove('hidden', 'success');
+    openMessengerLinkModal({source:'lab_results_notification'});
+    return;
+  }
+  button.disabled = true;
+  button.textContent = 'Подключаю…';
+  try {
+    await api('/api/lab-results/notification', {method:'POST', body:'{}'});
+    button.textContent = 'Уведомление подключено';
+    status.textContent = 'Готово. Мы напишем в привязанный мессенджер, когда результаты появятся.';
+    status.classList.remove('hidden');
+    status.classList.add('success');
+    $('#taskStatus').textContent = 'Уведомление о результатах подключено';
+  } catch (error) {
+    button.disabled = false;
+    button.textContent = 'Получить уведомление';
+    status.textContent = error.message;
+    status.classList.remove('hidden', 'success');
+  }
+}
+
 function normalizeLabDocuments(items = []) {
   return items.map((item, index) => typeof item === 'string'
     ? { id:`legacy-${index}`, index, title:`Результаты анализов${items.length > 1 ? ` · документ ${index + 1}` : ''}`, url:item }
@@ -2970,16 +3022,25 @@ function interpretationProfileComplete(profile = state.profile) {
   );
 }
 
-function openInterpretationProfileModal() {
+function openInterpretationProfileModal(purpose = 'interpretation') {
+  state.miniProfilePurpose = purpose;
   const profile = state.profile || {};
   $('#interpretationProfileSex').value = profile.sex || '';
   $('#interpretationProfileAge').value = profile.age ?? '';
   $('#interpretationProfileHeight').value = profile.height_cm ?? '';
   $('#interpretationProfileWeight').value = profile.weight_kg ?? '';
   $('#interpretationProfileError').classList.add('hidden');
+  const consultation = purpose === 'consultation';
+  $('#interpretationProfileKicker').textContent = consultation ? 'Перед консультацией' : 'Перед расшифровкой';
+  $('#interpretationProfileDescription').textContent = consultation
+    ? 'Для бесплатной консультации медицинскому специалисту нужны пол, возраст, рост и вес. Это займёт меньше минуты.'
+    : 'Для корректной расшифровки результатов и бесплатной консультации специалисту нужны четыре основных показателя. Это займёт меньше минуты.';
+  $('#saveInterpretationProfileButton').textContent = consultation
+    ? 'Сохранить и вызвать специалиста'
+    : 'Сохранить и перейти к анализам';
   $('#interpretationProfileModal').classList.remove('hidden');
-  trackEvent('lab_interpretation_profile_requested', {
-    source:'lab_results',
+  trackEvent(consultation ? 'human_consultation_profile_requested' : 'lab_interpretation_profile_requested', {
+    source:consultation ? 'human_handoff' : 'lab_results',
     stage:'mini_profile',
   });
   requestAnimationFrame(() => {
@@ -3014,6 +3075,7 @@ async function saveInterpretationProfile() {
     }
   }
   const button = $('#saveInterpretationProfileButton');
+  const purpose = state.miniProfilePurpose;
   button.disabled = true;
   button.textContent = 'Сохраняю…';
   try {
@@ -3027,19 +3089,23 @@ async function saveInterpretationProfile() {
       body:JSON.stringify(payload),
     });
     renderProfileStatus();
-    trackEvent('lab_interpretation_profile_completed', {
-      source:'lab_results',
+    trackEvent(purpose === 'consultation' ? 'human_consultation_profile_completed' : 'lab_interpretation_profile_completed', {
+      source:purpose === 'consultation' ? 'human_handoff' : 'lab_results',
       stage:'mini_profile',
     });
     closeInterpretationProfileModal();
     $('#taskStatus').textContent = 'Мини-анкета сохранена';
-    await openLabResults();
+    state.miniProfilePurpose = 'interpretation';
+    if (purpose === 'consultation') await chooseHumanSpecialistChat();
+    else await openLabResults();
   } catch (saveError) {
     error.textContent = saveError.message;
     error.classList.remove('hidden');
   } finally {
     button.disabled = false;
-    button.textContent = 'Сохранить и перейти к анализам';
+    button.textContent = state.miniProfilePurpose === 'consultation'
+      ? 'Сохранить и вызвать специалиста'
+      : 'Сохранить и перейти к анализам';
   }
 }
 
@@ -3048,6 +3114,7 @@ async function fetchLabResults() {
   const button = $('#fetchLabResultsButton');
   button.disabled = true;
   button.textContent = 'Проверяю…';
+  setLabResultNotificationAction(false);
   renderLabResultDocuments([]);
   setLabResultsState('⌕', 'Ищу результаты', 'Проверяю номер пробирки в базе лаборатории.');
   try {
@@ -3058,9 +3125,11 @@ async function fetchLabResults() {
       $('#taskStatus').textContent = 'Результаты анализов найдены';
     } else if (result.status === 'processing') {
       setLabResultsState('…', 'Результаты обрабатываются', 'Номер найден, но ссылка на документ пока не добавлена. Попробуйте позже.');
+      setLabResultNotificationAction(true);
       $('#taskStatus').textContent = 'Результаты ещё обрабатываются';
     } else {
       setLabResultsState('!', 'Результаты пока не найдены', 'Проверьте номер пробирки или повторите поиск позже.');
+      setLabResultNotificationAction(true);
       $('#taskStatus').textContent = 'Результаты не найдены';
     }
   } catch (error) {
@@ -3559,6 +3628,7 @@ $('#saveInterpretationProfileButton').addEventListener('click', saveInterpretati
 $('#saveLabTubeButton').addEventListener('click', saveLabTube);
 $('#changeLabTubeButton').addEventListener('click', changeLabTube);
 $('#fetchLabResultsButton').addEventListener('click', fetchLabResults);
+$('#requestLabResultNotificationButton').addEventListener('click', requestLabResultNotification);
 function handleLabInterpretClick(event) {
   const button = event.target.closest('[data-lab-interpret]');
   if (button) interpretLabResults(button.dataset.labInterpret, button);

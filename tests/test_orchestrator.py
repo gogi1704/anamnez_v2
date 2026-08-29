@@ -216,7 +216,9 @@ class OrchestratorTests(unittest.TestCase):
             _track_analytics=lambda event, metadata=None: analytics_events.append((event, metadata)),
         )
 
-        with patch.object(db, "enqueue_manager_notifications") as notify:
+        complete_profile = {"sex": "female", "age": 40, "height_cm": 168, "weight_kg": 65}
+        with patch.object(db, "get_profile", return_value=complete_profile), \
+                patch.object(db, "enqueue_manager_notifications") as notify:
             status, response = ConsiliumHandler._set_human_preference(
                 handler,
                 {"conversation_id": offered.conversation_id, "channel": "chat"},
@@ -240,6 +242,26 @@ class OrchestratorTests(unittest.TestCase):
         self.assertEqual(
             [event for event, _ in analytics_events].count("human_requested"), 1,
         )
+
+    def test_specialist_confirmation_requires_minimum_profile_without_disabling_ai(self):
+        offered = ConversationOrchestrator(FakeLLM()).process(None, "Позови человека")
+        handler = SimpleNamespace(
+            _json=lambda status, payload: (status, payload),
+            _track_analytics=lambda event, metadata=None: None,
+        )
+
+        with patch.object(db, "get_profile", return_value={"sex": "male"}):
+            status, response = ConsiliumHandler._set_human_preference(
+                handler,
+                {"conversation_id": offered.conversation_id, "channel": "chat"},
+            )
+
+        self.assertEqual(status, 422)
+        self.assertEqual(response["code"], "consultation_profile_required")
+        self.assertEqual(response["missing_fields"], ["age", "height_cm", "weight_kg"])
+        saved = db.get_conversation(offered.conversation_id)
+        self.assertTrue(saved["ai_enabled"])
+        self.assertEqual(saved["human_status"], "none")
 
     def test_specialist_confirmation_endpoint_rejects_call_channel(self):
         offered = ConversationOrchestrator(FakeLLM()).process(None, "Позови человека")
@@ -1039,6 +1061,7 @@ class OrchestratorTests(unittest.TestCase):
         index = (project_root / "index.html").read_text(encoding="utf-8")
         script = (project_root / "static" / "app.js").read_text(encoding="utf-8")
         styles = (project_root / "static" / "styles.css").read_text(encoding="utf-8")
+        backend_source = (project_root / "backend" / "main.py").read_text(encoding="utf-8")
 
         self.assertIn('id="interpretationProfileModal"', index)
         self.assertIn('id="interpretationProfileSex"', index)
@@ -1046,8 +1069,10 @@ class OrchestratorTests(unittest.TestCase):
         self.assertIn('id="interpretationProfileHeight"', index)
         self.assertIn('id="interpretationProfileWeight"', index)
         self.assertIn("function interpretationProfileComplete", script)
-        self.assertIn("openInterpretationProfileModal();", script)
+        self.assertIn("openInterpretationProfileModal('consultation');", script)
         self.assertIn("await openLabResults();", script)
+        self.assertIn("await chooseHumanSpecialistChat();", script)
+        self.assertNotIn("Сначала завершите короткую анкету", backend_source)
         self.assertIn(".interpretation-profile-modal", styles)
         self.assertEqual(
             ConsiliumHandler._interpretation_profile_missing({
@@ -1056,9 +1081,33 @@ class OrchestratorTests(unittest.TestCase):
             [],
         )
         self.assertEqual(
+            ConsiliumHandler._interpretation_profile_missing({
+                "preferred_name": "Полная анкета", "company_inn": "1234567890",
+                "sex": "male", "age": 35, "height_cm": 195, "weight_kg": 109,
+                "smoking": "current", "alcohol": "weekly", "activity": "medium",
+            }),
+            [],
+        )
+        self.assertEqual(
             ConsiliumHandler._interpretation_profile_missing({"sex": "male"}),
             ["age", "height_cm", "weight_kg"],
         )
+
+    def test_regular_ai_chat_has_no_questionnaire_or_minimum_profile_gate(self):
+        project_root = Path(__file__).resolve().parents[1]
+        backend_source = (project_root / "backend" / "main.py").read_text(encoding="utf-8")
+        script = (project_root / "static" / "app.js").read_text(encoding="utf-8")
+
+        chat_route = backend_source.split('if path != "/api/chat":', 1)[1].split(
+            "    def _create_max_auth_link", 1,
+        )[0]
+        process_message = script.split("async function processMessage(text)", 1)[1].split(
+            "function addSystemError", 1,
+        )[0]
+        self.assertNotIn("get_onboarding", chat_route)
+        self.assertNotIn("_interpretation_profile_missing", chat_route)
+        self.assertNotIn("interpretationProfileComplete", process_message)
+        self.assertEqual(script.count("if (!interpretationProfileComplete())"), 2)
 
     def test_ai_markdown_uses_shared_safe_rich_text_renderer(self):
         project_root = Path(__file__).resolve().parents[1]
@@ -2282,13 +2331,13 @@ class OrchestratorTests(unittest.TestCase):
         self.assertIn("controllerchange", script)
         self.assertIn("url.pathname.startsWith('/api/')", worker)
         self.assertIn("url.pathname.startsWith('/auth/')", worker)
-        self.assertIn("consilium-shell-v82", worker)
+        self.assertIn("consilium-shell-v84", worker)
         self.assertIn("fetch(request)", worker)
         self.assertIn("/static/styles.07ffaefb4795.css", index)
         self.assertIn("/static/rich-text.2bf1f5fab764.css", index)
         self.assertTrue((project_root / "static" / "styles.07ffaefb4795.css").is_file())
         self.assertTrue((project_root / "static" / "rich-text.2bf1f5fab764.css").is_file())
-        self.assertIn("/static/app.js?v=20260829-interpret-profile-v1", index)
+        self.assertIn("/static/app.js?v=20260829-chat-profile-v2", index)
         self.assertIn("/static/metrika.js?v=20260829-interpret-profile-v1", index)
         self.assertIn('id="welcomeScreen"', index)
         self.assertIn('id="welcomeNextButton"', index)
@@ -3024,8 +3073,10 @@ class OrchestratorTests(unittest.TestCase):
 
     def test_result_flow_has_real_screens_and_metric_definitions(self):
         project_root = Path(__file__).resolve().parents[1]
+        index = (project_root / "index.html").read_text(encoding="utf-8")
         app = (project_root / "static" / "app.js").read_text(encoding="utf-8")
         dashboard = (project_root / "static" / "dashboard.js").read_text(encoding="utf-8")
+        dashboard_styles = (project_root / "static" / "dashboard.css").read_text(encoding="utf-8")
         main = (project_root / "backend" / "main.py").read_text(encoding="utf-8")
         for screen_id in (
             "result_existing", "result_welcome", "result_tube", "result_messenger", "result_search",
@@ -3042,6 +3093,16 @@ class OrchestratorTests(unittest.TestCase):
         self.assertIn('"/result"', main)
         self.assertIn("/api/result-entry/start", app + main)
         self.assertIn("/api/lab-results/notification", app + main)
+        self.assertIn('id="requestLabResultNotificationButton"', index)
+        self.assertIn("requestLabResultNotification", app)
+        self.assertIn("linkedMessengerProviders().size", app)
+        self.assertNotIn("['Уникальных переходов'", dashboard)
+        self.assertIn("['result_existing','result_welcome']", dashboard)
+        self.assertIn("['result_found','result_not_found']", dashboard)
+        self.assertIn("['payment_success','payment_result','payment_unavailable']", dashboard)
+        self.assertIn("['completion','completion_skipped']", dashboard)
+        self.assertIn("@media (min-width:1200px)", dashboard_styles)
+        self.assertIn("metric2-logical-level-3", dashboard_styles)
 
     def test_result_subscription_uses_existing_bot_delivery_stream(self):
         login = db.create_messenger_login("telegram", "result-notify-user")

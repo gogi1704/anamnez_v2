@@ -823,8 +823,6 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
             except (ValueError, TypeError) as exc:
                 return self._json(422, {"detail": str(exc)})
         if path == "/api/lab-results/interpret":
-            if db.get_onboarding()["status"] != "complete" and not db.current_user_has_result_entry():
-                return self._json(403, {"detail": "Сначала завершите короткую анкету"})
             missing_profile = self._interpretation_profile_missing(db.get_profile())
             if missing_profile:
                 return self._json(422, {
@@ -1026,8 +1024,6 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
             return self._json(200, {**result, "unread_counts": db.conversation_unread_counts()})
         if path != "/api/chat":
             return self._json(404, {"detail": "Маршрут не найден"})
-        if db.get_onboarding()["status"] != "complete":
-            return self._json(403, {"detail": "Сначала завершите короткую анкету"})
         try:
             chat_started = time.perf_counter()
             payload = self._read_json(max_bytes=17_000_000)
@@ -1235,6 +1231,13 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
         conversation = db.get_conversation(conversation_id)
         if not conversation:
             return self._json(404, {"detail": "Диалог не найден"})
+        missing_profile = ConsiliumHandler._interpretation_profile_missing(db.get_profile())
+        if missing_profile:
+            return self._json(422, {
+                "code": "consultation_profile_required",
+                "detail": "Перед консультацией заполните пол, возраст, рост и вес",
+                "missing_fields": missing_profile,
+            })
 
         confirmed, created = db.confirm_human_chat(
             conversation_id, f"H-{secrets.token_hex(3).upper()}"
