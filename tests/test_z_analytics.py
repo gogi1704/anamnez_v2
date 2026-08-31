@@ -1,6 +1,7 @@
 import json
 import sqlite3
 import tempfile
+import threading
 import unittest
 from pathlib import Path
 
@@ -53,6 +54,39 @@ class AnalyticsTests(unittest.TestCase):
         with analytics.connection() as conn:
             properties = json.loads(conn.execute("SELECT properties FROM analytics_events").fetchone()[0])
         self.assertEqual(properties, {"method": "anonymous"})
+
+    def test_report_cache_does_not_serialize_different_expensive_reports(self):
+        first_started = threading.Event()
+        second_started = threading.Event()
+        errors = []
+
+        def first_builder():
+            first_started.set()
+            if not second_started.wait(1):
+                raise AssertionError("Второй отчёт заблокирован расчётом первого")
+            return {"report": "analytics"}
+
+        def second_builder():
+            second_started.set()
+            return {"report": "metric2"}
+
+        def run(cache_name, builder):
+            try:
+                analytics._cached_report(cache_name, (self.temp_dir.name,), builder)
+            except Exception as exc:  # pragma: no cover - asserted below
+                errors.append(exc)
+
+        first = threading.Thread(target=run, args=("parallel-admin", first_builder))
+        second = threading.Thread(target=run, args=("parallel-metric2", second_builder))
+        first.start()
+        self.assertTrue(first_started.wait(1))
+        second.start()
+        first.join(2)
+        second.join(2)
+
+        self.assertFalse(first.is_alive())
+        self.assertFalse(second.is_alive())
+        self.assertEqual(errors, [])
 
     def test_delete_user_data_removes_only_target_events_and_sessions(self):
         analytics.record_events("CHEL-DELETE", [{
@@ -217,6 +251,35 @@ class AnalyticsTests(unittest.TestCase):
         self.assertEqual(examinations["exam-b"]["users"], 1)
         self.assertEqual(examinations["exam-a"]["percent_of_selectors"], 50.0)
         self.assertEqual(examinations["exam-a"]["percent_of_completed"], 33.3)
+
+    def test_examination_statistics_use_current_catalog_name_for_historical_events(self):
+        conn = sqlite3.connect(settings.database_path)
+        try:
+            conn.execute("CREATE TABLE examination_catalog (id TEXT PRIMARY KEY, name TEXT NOT NULL)")
+            conn.execute(
+                "INSERT INTO examination_catalog (id,name) VALUES (?,?)",
+                ("lipids", "«Здоровье сердца и сосудов»"),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+        analytics.record_events("CHEL-EXAM-CURRENT-NAME", [
+            {
+                "event_id": "exam-current-name-complete", "session_id": "exam-current-name-session",
+                "event_name": "examinations_selection_completed",
+                "properties": {"selection_id": "selection-current-name", "selected_count": 1},
+            },
+            {
+                "event_id": "exam-current-name-item", "session_id": "exam-current-name-session",
+                "event_name": "examination_selection_confirmed",
+                "properties": {
+                    "selection_id": "selection-current-name", "exam_id": "lipids",
+                    "exam_name": "Липидный обмен",
+                },
+            },
+        ])
+        examinations = analytics.admin_report("30")["examinations"]
+        self.assertEqual(examinations[0]["label"], "«Здоровье сердца и сосудов»")
 
     def test_funnel_stages_include_expandable_action_breakdowns(self):
         first_events = [

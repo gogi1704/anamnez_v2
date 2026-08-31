@@ -1774,7 +1774,11 @@ def acknowledge_manager_notification(
 def list_examinations() -> list[dict]:
     with connection() as conn:
         rows = conn.execute(
-            """SELECT id, name, description, includes, price, created_at, updated_at
+            """SELECT id, name, description, includes, price,
+                competitor_price, price_without_discount,
+                competitor_label, retail_price_label, discount_price_label,
+                show_competitor_price, show_retail_price, show_discount_price,
+                created_at, updated_at
             FROM examination_catalog ORDER BY created_at, name"""
         ).fetchall()
     return [dict(row) for row in rows]
@@ -1812,7 +1816,7 @@ def _public_payment_order(row) -> dict | None:
 
 def create_payment_order() -> dict:
     """Freeze the selected catalog items and server-calculated amount before payment."""
-    from .onboarding import normalize_examination_selection
+    from .onboarding import effective_examination_price, normalize_examination_selection
 
     onboarding = get_onboarding()
     selected_ids = normalize_examination_selection(onboarding.get("selected_tests") or [])
@@ -1823,7 +1827,7 @@ def create_payment_order() -> dict:
         {
             "id": item_id,
             "name": str(catalog[item_id]["name"])[:128],
-            "price": int(catalog[item_id]["price"]),
+            "price": effective_examination_price(catalog[item_id]),
         }
         for item_id in selected_ids
     ]
@@ -2064,7 +2068,11 @@ def public_payment_order(order_id: str) -> dict | None:
 
 def _validate_examination(
     name: str, description: str, includes: str, price,
-) -> tuple[str, str, str, int]:
+    competitor_price=0, price_without_discount=0,
+    competitor_label="У конкурентов", retail_price_label="Розничная цена",
+    discount_price_label="С учётом вашей скидки",
+    show_competitor_price=True, show_retail_price=True, show_discount_price=True,
+) -> tuple:
     name = " ".join(str(name or "").split())[:140]
     description = " ".join(str(description or "").split())[:1200]
     includes = " ".join(str(includes or "").split())[:1200]
@@ -2072,29 +2080,82 @@ def _validate_examination(
         raise ValueError("Название должно содержать минимум 2 символа")
     if len(description) < 5:
         raise ValueError("Добавьте понятное описание обследования")
-    try:
-        normalized_price = int(price)
-    except (ValueError, TypeError) as exc:
-        raise ValueError("Цена должна быть целым числом") from exc
-    if normalized_price < 0 or normalized_price > 10_000_000:
-        raise ValueError("Цена должна быть от 0 до 10 000 000 рублей")
-    return name, description, includes, normalized_price
+    def normalize_price(value, label: str, *, optional: bool = False) -> int:
+        if optional and value in (None, ""):
+            return 0
+        try:
+            result = int(value)
+        except (ValueError, TypeError) as exc:
+            raise ValueError(f"{label} должна быть целым числом") from exc
+        if result < 0 or result > 10_000_000:
+            raise ValueError(f"{label} должна быть от 0 до 10 000 000 рублей")
+        return result
+
+    normalized_price = normalize_price(price, "Цена с учётом скидки")
+    normalized_competitor_price = normalize_price(
+        competitor_price, "Цена конкурентов", optional=True,
+    )
+    normalized_price_without_discount = normalize_price(
+        price_without_discount, "Цена без скидки", optional=True,
+    )
+    if normalized_price_without_discount and normalized_price_without_discount <= normalized_price:
+        raise ValueError("Цена без скидки должна быть больше цены с учётом скидки")
+    def normalize_label(value, default: str) -> str:
+        return " ".join(str(value or default).split())[:80] or default
+
+    def normalize_visibility(value) -> int:
+        if value is None:
+            return 1
+        if isinstance(value, str):
+            return int(value.strip().lower() not in {"", "0", "false", "off", "no"})
+        return int(bool(value))
+
+    return (
+        name, description, includes, normalized_price,
+        normalized_competitor_price, normalized_price_without_discount,
+        normalize_label(competitor_label, "У конкурентов"),
+        normalize_label(retail_price_label, "Розничная цена"),
+        normalize_label(discount_price_label, "С учётом вашей скидки"),
+        normalize_visibility(show_competitor_price),
+        normalize_visibility(show_retail_price),
+        normalize_visibility(show_discount_price),
+    )
 
 
 def admin_create_examination(
     name: str, description: str, includes: str, price,
+    competitor_price=0, price_without_discount=0,
+    competitor_label="У конкурентов", retail_price_label="Розничная цена",
+    discount_price_label="С учётом вашей скидки",
+    show_competitor_price=True, show_retail_price=True, show_discount_price=True,
 ) -> dict:
-    name, description, includes, price = _validate_examination(
-        name, description, includes, price,
+    validated = _validate_examination(
+        name, description, includes, price, competitor_price, price_without_discount,
+        competitor_label, retail_price_label, discount_price_label,
+        show_competitor_price, show_retail_price, show_discount_price,
     )
+    (
+        name, description, includes, price, competitor_price, price_without_discount,
+        competitor_label, retail_price_label, discount_price_label,
+        show_competitor_price, show_retail_price, show_discount_price,
+    ) = validated
     examination_id = f"exam_{secrets.token_hex(8)}"
     now = utc_now()
     with _write_lock, connection() as conn:
         conn.execute(
             """INSERT INTO examination_catalog
-            (id, name, description, includes, price, created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?)""",
-            (examination_id, name, description, includes, price, now, now),
+            (id, name, description, includes, price, competitor_price, price_without_discount,
+             competitor_label, retail_price_label, discount_price_label,
+             show_competitor_price, show_retail_price, show_discount_price,
+             created_at, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                examination_id, name, description, includes, price,
+                competitor_price, price_without_discount,
+                competitor_label, retail_price_label, discount_price_label,
+                show_competitor_price, show_retail_price, show_discount_price,
+                now, now,
+            ),
         )
         conn.commit()
         row = conn.execute(
@@ -2105,17 +2166,38 @@ def admin_create_examination(
 
 def admin_update_examination(
     examination_id: str, name: str, description: str, includes: str, price,
+    competitor_price=0, price_without_discount=0,
+    competitor_label="У конкурентов", retail_price_label="Розничная цена",
+    discount_price_label="С учётом вашей скидки",
+    show_competitor_price=True, show_retail_price=True, show_discount_price=True,
 ) -> dict | None:
     examination_id = str(examination_id or "").strip()
-    name, description, includes, price = _validate_examination(
-        name, description, includes, price,
+    validated = _validate_examination(
+        name, description, includes, price, competitor_price, price_without_discount,
+        competitor_label, retail_price_label, discount_price_label,
+        show_competitor_price, show_retail_price, show_discount_price,
     )
+    (
+        name, description, includes, price, competitor_price, price_without_discount,
+        competitor_label, retail_price_label, discount_price_label,
+        show_competitor_price, show_retail_price, show_discount_price,
+    ) = validated
     with _write_lock, connection() as conn:
         cursor = conn.execute(
             """UPDATE examination_catalog
-            SET name = ?, description = ?, includes = ?, price = ?, updated_at = ?
+            SET name = ?, description = ?, includes = ?, price = ?,
+                competitor_price = ?, price_without_discount = ?,
+                competitor_label = ?, retail_price_label = ?, discount_price_label = ?,
+                show_competitor_price = ?, show_retail_price = ?, show_discount_price = ?,
+                updated_at = ?
             WHERE id = ?""",
-            (name, description, includes, price, utc_now(), examination_id),
+            (
+                name, description, includes, price, competitor_price,
+                price_without_discount,
+                competitor_label, retail_price_label, discount_price_label,
+                show_competitor_price, show_retail_price, show_discount_price,
+                utc_now(), examination_id,
+            ),
         )
         if not cursor.rowcount:
             return None
@@ -2776,8 +2858,21 @@ def init_db() -> None:
                 description TEXT NOT NULL,
                 includes TEXT NOT NULL DEFAULT '',
                 price INTEGER NOT NULL,
+                competitor_price INTEGER NOT NULL DEFAULT 0,
+                price_without_discount INTEGER NOT NULL DEFAULT 0,
+                competitor_label TEXT NOT NULL DEFAULT 'У конкурентов',
+                retail_price_label TEXT NOT NULL DEFAULT 'Розничная цена',
+                discount_price_label TEXT NOT NULL DEFAULT 'С учётом вашей скидки',
+                show_competitor_price INTEGER NOT NULL DEFAULT 1,
+                show_retail_price INTEGER NOT NULL DEFAULT 1,
+                show_discount_price INTEGER NOT NULL DEFAULT 1,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS app_migrations (
+                migration_key TEXT PRIMARY KEY,
+                applied_at TEXT NOT NULL
             );
 
             CREATE TABLE IF NOT EXISTS payment_orders (
@@ -2949,6 +3044,30 @@ def init_db() -> None:
             conn.execute("ALTER TABLE users ADD COLUMN from_manager TEXT NOT NULL DEFAULT ''")
         if "result_entry_at" not in users_columns:
             conn.execute("ALTER TABLE users ADD COLUMN result_entry_at TEXT")
+        examination_columns = {
+            row[1] for row in conn.execute("PRAGMA table_info(examination_catalog)").fetchall()
+        }
+        if "competitor_price" not in examination_columns:
+            conn.execute(
+                "ALTER TABLE examination_catalog ADD COLUMN competitor_price INTEGER NOT NULL DEFAULT 0"
+            )
+        if "price_without_discount" not in examination_columns:
+            conn.execute(
+                "ALTER TABLE examination_catalog ADD COLUMN price_without_discount INTEGER NOT NULL DEFAULT 0"
+            )
+        examination_defaults = {
+            "competitor_label": "TEXT NOT NULL DEFAULT 'У конкурентов'",
+            "retail_price_label": "TEXT NOT NULL DEFAULT 'Розничная цена'",
+            "discount_price_label": "TEXT NOT NULL DEFAULT 'С учётом вашей скидки'",
+            "show_competitor_price": "INTEGER NOT NULL DEFAULT 1",
+            "show_retail_price": "INTEGER NOT NULL DEFAULT 1",
+            "show_discount_price": "INTEGER NOT NULL DEFAULT 1",
+        }
+        for column, declaration in examination_defaults.items():
+            if column not in examination_columns:
+                conn.execute(
+                    f"ALTER TABLE examination_catalog ADD COLUMN {column} {declaration}"
+                )
         if registration_columns_added:
             # Historical installations did not record the first access choice. Preserve their
             # existing analytics; the stricter rule applies to records created after migration.
@@ -2980,6 +3099,46 @@ def init_db() -> None:
                     examination["id"], examination["name"], examination["description"],
                     examination.get("includes", ""), int(examination["price"]), now, now,
                 ),
+            )
+        catalog_migration_key = "examination_catalog_2026_08_31"
+        catalog_migrated = conn.execute(
+            "SELECT 1 FROM app_migrations WHERE migration_key = ?",
+            (catalog_migration_key,),
+        ).fetchone()
+        if not catalog_migrated:
+            # The spreadsheet dated 2026-08-31 is authoritative for the core
+            # name, benefit, composition and actual sale price. Presentation-only
+            # comparison prices and custom labels remain under administrator control.
+            for examination in TEST_CATALOG:
+                conn.execute(
+                    """UPDATE examination_catalog
+                    SET name = ?, description = ?, includes = ?, price = ?, updated_at = ?
+                    WHERE id = ?""",
+                    (
+                        examination["name"], examination["description"],
+                        examination.get("includes", ""), int(examination["price"]),
+                        now, examination["id"],
+                    ),
+                )
+            # This old standalone item was merged into «Профилактика анемии».
+            conn.execute("DELETE FROM examination_catalog WHERE id = 'ferritin'")
+            for state_row in conn.execute(
+                "SELECT chel_id, selected_tests FROM onboarding_state"
+            ).fetchall():
+                try:
+                    selected_tests = json.loads(state_row["selected_tests"] or "[]")
+                except (json.JSONDecodeError, TypeError):
+                    selected_tests = []
+                if not isinstance(selected_tests, list) or "ferritin" not in selected_tests:
+                    continue
+                selected_tests = [item for item in selected_tests if item != "ferritin"]
+                conn.execute(
+                    "UPDATE onboarding_state SET selected_tests = ?, updated_at = ? WHERE chel_id = ?",
+                    (json.dumps(selected_tests, ensure_ascii=False), now, state_row["chel_id"]),
+                )
+            conn.execute(
+                "INSERT INTO app_migrations (migration_key, applied_at) VALUES (?, ?)",
+                (catalog_migration_key, now),
             )
         columns = {row[1] for row in conn.execute("PRAGMA table_info(conversations)").fetchall()}
         if "chel_id" not in columns:

@@ -25,7 +25,7 @@ from backend.llm import LLMService  # noqa: E402
 from backend.main import ConsiliumHandler, admin_token_valid  # noqa: E402
 from backend.orchestrator import ConversationOrchestrator  # noqa: E402
 from backend.onboarding import (  # noqa: E402
-    EXAMINATION_UPGRADE_PAIRS, TEST_CATALOG, normalize_examination_selection,
+    EXAMINATION_UPGRADE_PAIRS, TEST_CATALOG, effective_examination_price, normalize_examination_selection,
     public_onboarding, recommend_test_ids,
 )
 from backend.prompts import ORCHESTRATOR_PROMPT, PROFILES  # noqa: E402
@@ -1533,6 +1533,16 @@ class OrchestratorTests(unittest.TestCase):
         self.assertIn('id="examinationName"', dashboard)
         self.assertIn('id="examinationDescription"', dashboard)
         self.assertIn('id="examinationPrice"', dashboard)
+        self.assertIn('id="examinationCompetitorPrice"', dashboard)
+        self.assertIn('id="examinationPriceWithoutDiscount"', dashboard)
+        self.assertIn('Цена с учётом скидки, ₽', dashboard)
+        self.assertIn('фактическая цена продажи и оплаты', dashboard)
+        self.assertIn('id="examinationCompetitorLabel"', dashboard)
+        self.assertIn('id="examinationRetailPriceLabel"', dashboard)
+        self.assertIn('id="examinationDiscountPriceLabel"', dashboard)
+        self.assertIn('id="showExaminationCompetitorPrice"', dashboard)
+        self.assertIn('id="showExaminationRetailPrice"', dashboard)
+        self.assertIn('id="showExaminationDiscountPrice"', dashboard)
         self.assertIn('id="examinationList"', dashboard)
         self.assertIn('id="staffList"', dashboard)
         self.assertIn('id="staffPassword" type="text" minlength="6"', dashboard)
@@ -1775,9 +1785,25 @@ class OrchestratorTests(unittest.TestCase):
             "Описание тестового комплекса для проверки каталога.",
             "Анализ A, анализ B",
             2750,
+            4300,
+            3500,
+            "Сравнить с рынком",
+            "Цена без предложения",
+            "Ваша цена",
+            False,
+            True,
+            False,
         )
         self.assertTrue(created["id"].startswith("exam_"))
         self.assertEqual(created["price"], 2750)
+        self.assertEqual(created["competitor_price"], 4300)
+        self.assertEqual(created["price_without_discount"], 3500)
+        self.assertEqual(created["competitor_label"], "Сравнить с рынком")
+        self.assertEqual(created["retail_price_label"], "Цена без предложения")
+        self.assertEqual(created["discount_price_label"], "Ваша цена")
+        self.assertEqual(created["show_competitor_price"], 0)
+        self.assertEqual(created["show_retail_price"], 1)
+        self.assertEqual(created["show_discount_price"], 0)
         self.assertTrue(any(
             item["id"] == created["id"] for item in db.list_examinations()
         ))
@@ -1788,9 +1814,25 @@ class OrchestratorTests(unittest.TestCase):
             "Новое подробное описание обследования.",
             "Анализ C",
             3100,
+            4700,
+            3900,
+            "У других лабораторий",
+            "Розничная стоимость",
+            "Персональная стоимость",
+            True,
+            False,
+            True,
         )
         self.assertEqual(updated["name"], "Обновлённый комплекс")
         self.assertEqual(updated["price"], 3100)
+        self.assertEqual(updated["competitor_price"], 4700)
+        self.assertEqual(updated["price_without_discount"], 3900)
+        self.assertEqual(updated["competitor_label"], "У других лабораторий")
+        self.assertEqual(updated["retail_price_label"], "Розничная стоимость")
+        self.assertEqual(updated["discount_price_label"], "Персональная стоимость")
+        self.assertEqual(updated["show_competitor_price"], 1)
+        self.assertEqual(updated["show_retail_price"], 0)
+        self.assertEqual(updated["show_discount_price"], 1)
         payload = public_onboarding(
             {"status": "exams", "selected_tests": []},
             {},
@@ -1805,6 +1847,10 @@ class OrchestratorTests(unittest.TestCase):
         self.assertFalse(any(
             item["id"] == created["id"] for item in db.list_examinations()
         ))
+        with self.assertRaisesRegex(ValueError, "больше цены с учётом скидки"):
+            db.admin_create_examination(
+                "Неверная скидка", "Подробное описание проверки.", "Анализ", 1000, 0, 900,
+            )
 
     def test_manager_can_pause_ai_read_context_and_reply_in_same_chat(self):
         chel_id = "chel_manager_flow_1234"
@@ -2305,6 +2351,9 @@ class OrchestratorTests(unittest.TestCase):
         dashboard_html = (project_root / "dashboard.html").read_text(encoding="utf-8")
         main_source = (project_root / "backend" / "main.py").read_text(encoding="utf-8")
         script = (project_root / "static" / "app.js").read_text(encoding="utf-8")
+        styles = (project_root / "static" / "styles.css").read_text(encoding="utf-8")
+        dashboard_script = (project_root / "static" / "dashboard.js").read_text(encoding="utf-8")
+        dashboard_styles = (project_root / "static" / "dashboard.css").read_text(encoding="utf-8")
         worker = (project_root / "service-worker.js").read_text(encoding="utf-8")
         manifest = json.loads(
             (project_root / "manifest.webmanifest").read_text(encoding="utf-8")
@@ -2331,16 +2380,25 @@ class OrchestratorTests(unittest.TestCase):
         self.assertIn("controllerchange", script)
         self.assertIn("url.pathname.startsWith('/api/')", worker)
         self.assertIn("url.pathname.startsWith('/auth/')", worker)
-        self.assertIn("consilium-shell-v84", worker)
+        self.assertIn("consilium-shell-v95", worker)
         self.assertIn("fetch(request)", worker)
         self.assertIn("/static/styles.07ffaefb4795.css", index)
         self.assertIn("/static/rich-text.2bf1f5fab764.css", index)
         self.assertTrue((project_root / "static" / "styles.07ffaefb4795.css").is_file())
         self.assertTrue((project_root / "static" / "rich-text.2bf1f5fab764.css").is_file())
-        self.assertIn("/static/app.js?v=20260829-chat-profile-v2", index)
+        self.assertIn("/static/app.js?v=20260831-checkups-v1", index)
         self.assertIn("/static/metrika.js?v=20260829-interpret-profile-v1", index)
         self.assertIn('id="welcomeScreen"', index)
         self.assertIn('id="welcomeNextButton"', index)
+        self.assertIn("Плановый медосмотр", index)
+        self.assertIn("Вам предстоит плановый медицинский осмотр", index)
+        self.assertIn("Начать анкету", index)
+        self.assertIn("Анкета займёт около 10 минут", index)
+        self.assertNotIn("<h1>Привет!", index)
+        self.assertIn("welcome-highlight", styles)
+        self.assertIn("welcome-pulse", styles)
+        self.assertIn("metric2-mock-welcome-highlight", dashboard_styles)
+        self.assertIn("Вам предстоит плановый медицинский осмотр", dashboard_script)
         self.assertIn("WELCOME_SEEN_KEY", script)
         self.assertIn("showWelcome(() => showAuthGate())", script)
         self.assertIn("entryParams.get('welcome') === '1'", script)
@@ -2750,11 +2808,60 @@ class OrchestratorTests(unittest.TestCase):
         state = db.save_onboarding(status="complete", intro_seen=True)
         self.assertTrue(state["intro_seen"])
         self.assertEqual(state["font_size"], "large")
-        self.assertEqual(len(TEST_CATALOG), 22)
+        self.assertEqual(len(TEST_CATALOG), 21)
         self.assertIn("fatigue_basic", recommend_test_ids(profile))
         self.assertIn("fatigue_extended", recommend_test_ids(profile))
         self.assertIn("weight_basic", recommend_test_ids(profile))
         self.assertIn("weight_extended", recommend_test_ids(profile))
+
+    def test_checkup_catalog_matches_2026_08_31_spreadsheet_everywhere(self):
+        expected_names_and_prices = {
+            "fatigue_basic": ("«Энергия и бодрость» — базовый", 3500),
+            "fatigue_extended": ("«Энергия и бодрость» — расширенный", 6500),
+            "weight_basic": ("«Контроль веса» — базовый", 4000),
+            "weight_extended": ("«Контроль веса» — расширенный", 6500),
+            "hair_loss": ("«Здоровые волосы и кожа»", 3000),
+            "lipids": ("«Здоровье сердца и сосудов»", 1500),
+            "liver_basic": ("«Здоровье печени и поджелудочной железы» — базовый", 2000),
+            "liver_extended": ("«Здоровье печени и поджелудочной железы» — расширенный", 2500),
+            "iron": ("«Профилактика анемии»", 1000),
+            "kidneys": ("«Здоровье почек»", 1000),
+            "protein": ("«Баланс белка»", 500),
+            "joints": ("«Здоровье суставов»", 1000),
+            "inflammation": ("«Диагностика воспаления»", 500),
+            "thyroid": ("«Здоровье щитовидной железы»", 3800),
+            "female_hormones": ("«Женское гормональное здоровье»", 3500),
+            "male_health": ("«Мужское здоровье и сила»", 2500),
+            "vitamin_d": ("«Витамин D и иммунитет»", 2500),
+            "ca125": ("«Женский онкоскрининг: яичники и шейка матки»", 1300),
+            "ca153": ("«Онкоскрининг молочной железы»", 1300),
+            "ca199": ("«Онкоскрининг ЖКТ и поджелудочной железы»", 1300),
+            "cortisol": ("«Диагностика стресса»", 1000),
+        }
+        catalog = {item["id"]: item for item in TEST_CATALOG}
+        self.assertEqual(
+            {key: (item["name"], item["price"]) for key, item in catalog.items()},
+            expected_names_and_prices,
+        )
+        self.assertNotIn("ferritin", catalog)
+        self.assertIn("Прогестерон", catalog["female_hormones"]["includes"])
+        self.assertEqual(catalog["lipids"]["includes"], "Триглицериды, ЛПВП, ЛПНП")
+        self.assertIn("аутоиммунный тиреоидит", catalog["thyroid"]["description"])
+
+        persisted = {item["id"]: item for item in db.list_examinations()}
+        self.assertNotIn("ferritin", persisted)
+        self.assertEqual(persisted["fatigue_basic"]["name"], expected_names_and_prices["fatigue_basic"][0])
+        self.assertEqual(analytics._current_examination_labels()["lipids"], expected_names_and_prices["lipids"][0])
+
+        project_root = Path(__file__).resolve().parents[1]
+        database_source = (project_root / "backend" / "database.py").read_text(encoding="utf-8")
+        app = (project_root / "static" / "app.js").read_text(encoding="utf-8")
+        dashboard = (project_root / "static" / "dashboard.js").read_text(encoding="utf-8")
+        self.assertIn("examination_catalog_2026_08_31", database_source)
+        self.assertIn("DELETE FROM examination_catalog WHERE id = 'ferritin'", database_source)
+        self.assertIn("catalog_labels.get(exam_id)", (project_root / "backend" / "analytics.py").read_text(encoding="utf-8"))
+        self.assertNotIn("ferritin:", app)
+        self.assertNotIn("ferritin:", dashboard)
 
     def test_extended_examinations_replace_matching_basic_complexes(self):
         self.assertEqual(EXAMINATION_UPGRADE_PAIRS, {
@@ -2791,6 +2898,114 @@ class OrchestratorTests(unittest.TestCase):
         self.assertIn("examList.scrollTop = scrollPosition.examList || 0", script)
         self.assertIn("onboarding.scrollTop = scrollPosition.onboarding || 0", script)
         self.assertIn(".exam-card.disabled-by-upgrade", styles)
+
+    def test_gender_examination_is_fallback_when_questionnaire_has_no_other_recommendations(self):
+        self.assertEqual(
+            recommend_test_ids({
+                "sex": "female", "fatigue": "no", "joint_pain": "no",
+                "blood_pressure": "normal", "height_cm": 168, "weight_kg": 62,
+            }),
+            ["female_hormones"],
+        )
+        self.assertEqual(
+            recommend_test_ids({
+                "sex": "male", "fatigue": "no", "joint_pain": "no",
+                "blood_pressure": "normal", "height_cm": 180, "weight_kg": 78,
+            }),
+            ["male_health"],
+        )
+        self.assertNotIn(
+            "male_health",
+            recommend_test_ids({
+                "sex": "male", "fatigue": "yes", "height_cm": 180, "weight_kg": 78,
+            }),
+        )
+
+    def test_recommended_examination_gets_discount_and_competitor_price_is_public(self):
+        catalog = [{
+            "id": "fatigue_basic", "name": "Усталость", "description": "Описание",
+            "includes": "Анализы", "price": 2900,
+            "competitor_price": 5200, "price_without_discount": 3500,
+        }]
+        recommended = public_onboarding(
+            {"selected_tests": []}, {"fatigue": "yes"}, catalog,
+        )
+        ordinary = public_onboarding(
+            {"selected_tests": []}, {"fatigue": "no"}, catalog,
+        )
+
+        self.assertEqual(recommended["tests"][0]["competitor_price"], 5200)
+        self.assertEqual(recommended["tests"][0]["effective_price"], 2900)
+        self.assertTrue(recommended["tests"][0]["discount_applied"])
+        self.assertEqual(ordinary["tests"][0]["competitor_price"], 5200)
+        self.assertEqual(ordinary["tests"][0]["effective_price"], 2900)
+        self.assertFalse(ordinary["tests"][0]["discount_applied"])
+        self.assertEqual(effective_examination_price(catalog[0]), 2900)
+
+        project_root = Path(__file__).resolve().parents[1]
+        script = (project_root / "static" / "app.js").read_text(encoding="utf-8")
+        styles = (project_root / "static" / "styles.css").read_text(encoding="utf-8")
+        self.assertIn("function sortExaminationsForUser", script)
+        self.assertIn("Number(recommended.has(right.id))", script)
+        self.assertIn("examinationEffectivePrice(left) - examinationEffectivePrice(right)", script)
+        self.assertIn("competitor_label || 'У конкурентов'", script)
+        self.assertIn("retail_price_label || 'Розничная цена'", script)
+        self.assertIn("discount_price_label || 'С учётом вашей скидки'", script)
+        self.assertIn("${competitorLabel} —", script)
+        self.assertIn("${retailLabel} —", script)
+        self.assertIn("${discountLabel} —", script)
+        self.assertIn("const retailValue = showDiscount", script)
+        self.assertIn("? `<s>${full.toLocaleString('ru')} ₽</s>`", script)
+        self.assertIn(": `<span>${full.toLocaleString('ru')} ₽</span>`", script)
+        self.assertIn("Актуально для вас", script)
+        self.assertNotIn("Подходит по анкете", script)
+        self.assertIn("<s>${full.toLocaleString('ru')} ₽</s>", script)
+        self.assertIn('class="exam-card-top"', script)
+        self.assertIn(".exam-pricing", styles)
+        self.assertIn(".exam-card-top { display:grid", styles)
+        self.assertIn("grid-template-columns:repeat(2,minmax(0,1fr))", styles)
+        self.assertIn(".exam-pricing { display:grid; justify-items:start", styles)
+        self.assertIn("border:1px solid #d7e5de", styles)
+        self.assertIn(".exam-card-top + small { margin-top:16px; }", styles)
+
+    def test_payment_always_uses_actual_price(self):
+        chel_id = "chel_discount_payment_test"
+        ordinary_chel_id = "chel_full_price_payment_test"
+        db.ensure_user(chel_id)
+        db.ensure_user(ordinary_chel_id)
+        original = next(item for item in db.list_examinations() if item["id"] == "fatigue_basic")
+        try:
+            db.admin_update_examination(
+                original["id"], original["name"], original["description"],
+                original["includes"], original["price"], 5200, original["price"] + 900,
+            )
+            db.set_current_chel_id(chel_id)
+            db.save_profile({"fatigue": "yes"})
+            db.save_onboarding(
+                status="payment", selected_tests=["fatigue_basic"], payment_status="pending",
+            )
+            order = db.create_payment_order()
+            self.assertEqual(
+                db.payment_order_private(order["id"])["amount_kopecks"],
+                original["price"] * 100,
+            )
+            db.set_current_chel_id(ordinary_chel_id)
+            db.save_profile({"fatigue": "no"})
+            db.save_onboarding(
+                status="payment", selected_tests=["fatigue_basic"], payment_status="pending",
+            )
+            ordinary_order = db.create_payment_order()
+            self.assertEqual(
+                db.payment_order_private(ordinary_order["id"])["amount_kopecks"],
+                original["price"] * 100,
+            )
+        finally:
+            db.set_current_chel_id("chel_test_default")
+            db.admin_update_examination(
+                original["id"], original["name"], original["description"],
+                original["includes"], original["price"],
+                original.get("competitor_price", 0), original.get("price_without_discount", 0),
+            )
 
     def test_yookassa_order_freezes_server_prices_and_completes_only_after_verified_success(self):
         chel_id = "chel_yookassa_payment_test"

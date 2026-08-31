@@ -735,6 +735,22 @@ def _payment_date_bounds(period: str, date_from: str = "", date_to: str = "") ->
     return _period_start(period), None
 
 
+def _current_examination_labels() -> dict[str, str]:
+    """Use current catalog names in analytics, including historical events."""
+    conn = None
+    try:
+        conn = sqlite3.connect(settings.database_path, timeout=5)
+        return {
+            str(row[0]): str(row[1])
+            for row in conn.execute("SELECT id, name FROM examination_catalog").fetchall()
+        }
+    except sqlite3.Error:
+        return {}
+    finally:
+        if conn is not None:
+            conn.close()
+
+
 def _payment_statistics(
     period: str, date_from: str = "", date_to: str = "", *,
     eligible_users: set[str] | None = None, at_exam_users: int = 0,
@@ -749,6 +765,7 @@ def _payment_statistics(
     if end:
         clauses.append("po.created_at < ?")
         params.append(end)
+    catalog_labels = _current_examination_labels()
     report = {
         "summary": {
             "attempts": 0, "users": 0, "succeeded": 0, "successful_users": 0,
@@ -815,8 +832,11 @@ def _payment_statistics(
                 item_id = str(product.get("id", "")).strip()
                 if not item_id:
                     continue
+                historical_label = str(product.get("name", "")).strip()
                 item = item_counts.setdefault(item_id, {
-                    "id": item_id, "label": str(product.get("name", "")).strip() or item_id,
+                    "id": item_id,
+                    "label": catalog_labels.get(item_id)
+                    or ("Архивный чекап (снят с продажи)" if item_id == "ferritin" else historical_label or item_id),
                     "purchases": 0, "revenue_kopecks": 0,
                 })
                 item["purchases"] += 1
@@ -840,8 +860,8 @@ def _payment_statistics(
 def _cached_report(cache_name: str, arguments: tuple, builder) -> dict:
     """Cache expensive read-only aggregates for a few seconds.
 
-    The dashboard refreshes once a minute, while tab switches can otherwise
-    launch the same full SQLite aggregation several times in quick succession.
+    A manual refresh and tab switches can otherwise launch the same full
+    SQLite aggregation several times in quick succession.
     A deep copy prevents API handlers from mutating the cached payload.
     """
     cache_key = (cache_name, str(settings.analytics_database_path), *arguments)
@@ -850,7 +870,20 @@ def _cached_report(cache_name: str, arguments: tuple, builder) -> dict:
         cached = _report_cache.get(cache_key)
         if cached and cached[0] > now:
             return copy.deepcopy(cached[1])
-        result = builder()
+
+    # Do not keep the global cache mutex while SQLite and Python build the
+    # report. Analytics and Metric 2.0 are independent reports; serialising
+    # their cache misses made the second HTTP request wait for the entire
+    # first calculation and could push it beyond the reverse-proxy timeout.
+    result = builder()
+
+    now = time.monotonic()
+    with _report_cache_lock:
+        # Another request may have populated the same key while this report
+        # was being built. Prefer the already published value in that case.
+        cached = _report_cache.get(cache_key)
+        if cached and cached[0] > now:
+            return copy.deepcopy(cached[1])
         if len(_report_cache) >= 64:
             expired = [key for key, value in _report_cache.items() if value[0] <= now]
             for key in expired:
@@ -872,16 +905,31 @@ def _admin_report_uncached(
     where, params = _filters(period, device, method, source, date_from, date_to)
     join = " FROM analytics_events e LEFT JOIN analytics_sessions s ON s.session_id=e.session_id "
     with connection() as conn:
-        def scalar(expression: str) -> int:
-            return int(conn.execute("SELECT " + expression + join + where, params).fetchone()[0] or 0)
+        totals = conn.execute(
+            "SELECT COUNT(DISTINCT e.chel_id) total_users, "
+            "COUNT(DISTINCT e.session_id) total_sessions, COUNT(*) total_events, "
+            "COUNT(DISTINCT CASE WHEN e.event_name='registration_completed' "
+            "THEN e.chel_id END) registered_users" + join + where,
+            params,
+        ).fetchone()
+        total_users = int(totals["total_users"] or 0)
+        total_sessions = int(totals["total_sessions"] or 0)
+        total_events = int(totals["total_events"] or 0)
+        registered_users = int(totals["registered_users"] or 0)
 
-        total_users = scalar("COUNT(DISTINCT e.chel_id)")
-        total_sessions = scalar("COUNT(DISTINCT e.session_id)")
-        total_events = scalar("COUNT(*)")
-        registered_extra = (" AND " if where else " WHERE ") + "e.event_name = 'registration_completed'"
-        registered_users = int(conn.execute(
-            "SELECT COUNT(DISTINCT e.chel_id)" + join + where + registered_extra, params,
-        ).fetchone()[0] or 0)
+        funnel_event_names = [event_name for event_name, _ in FUNNEL_STEPS]
+        funnel_placeholders = ",".join("?" for _ in funnel_event_names)
+        funnel_extra = (" AND " if where else " WHERE ") + (
+            f"e.event_name IN ({funnel_placeholders})"
+        )
+        funnel_counts = {
+            str(row["event_name"]): int(row["users"] or 0)
+            for row in conn.execute(
+                "SELECT e.event_name, COUNT(DISTINCT e.chel_id) users" +
+                join + where + funnel_extra + " GROUP BY e.event_name",
+                [*params, *funnel_event_names],
+            ).fetchall()
+        }
 
         def breakdown(event_name: str) -> list[dict]:
             items = []
@@ -903,10 +951,7 @@ def _admin_report_uncached(
 
         funnel, previous, first = [], None, None
         for event_name, label in FUNNEL_STEPS:
-            event_where = where + (" AND " if where else " WHERE ") + "e.event_name = ?"
-            count = int(conn.execute(
-                "SELECT COUNT(DISTINCT e.chel_id)" + join + event_where, [*params, event_name],
-            ).fetchone()[0] or 0)
+            count = funnel_counts.get(event_name, 0)
             if first is None:
                 first = count
             funnel.append({
@@ -959,7 +1004,7 @@ def _admin_report_uncached(
             "SELECT e.event_name label, COUNT(*) events, COUNT(DISTINCT e.chel_id) users" +
             join + where + error_extra + " GROUP BY e.event_name ORDER BY events DESC", params,
         ).fetchall()]
-        recent_total = scalar("COUNT(*)")
+        recent_total = total_events
         recent_pages = max(1, (recent_total + recent_limit - 1) // recent_limit)
         recent_page = min(recent_page, recent_pages)
         recent_offset = (recent_page - 1) * recent_limit
@@ -1051,13 +1096,18 @@ def _admin_report_uncached(
 
         completed_selection_users = len(latest_selections)
         users_with_selection = sum(bool(items) for items in selected_by_user.values())
+        catalog_labels = _current_examination_labels()
         examination_counts = {}
         for items in selected_by_user.values():
             for exam_id, exam_name in items.items():
                 aggregate = examination_counts.setdefault(
-                    exam_id, {"exam_id": exam_id, "label": exam_name, "users": 0},
+                    exam_id, {
+                        "exam_id": exam_id,
+                        "label": catalog_labels.get(exam_id)
+                        or ("Архивный чекап (снят с продажи)" if exam_id == "ferritin" else exam_name),
+                        "users": 0,
+                    },
                 )
-                aggregate["label"] = exam_name
                 aggregate["users"] += 1
         examinations = []
         for item in examination_counts.values():
@@ -1173,13 +1223,25 @@ def _metric2_report_uncached(
                 for key, value in spec.get("properties", {}).items()
             )
 
+        rows_by_event: dict[str, list[dict]] = defaultdict(list)
+        for row in parsed_rows:
+            rows_by_event[row["event"]].append(row)
+
         def users_for(specs: list[dict]) -> set[str]:
-            return {
-                row["chel_id"] for row in parsed_rows
-                if row["chel_id"] and any(matches(row, spec) for spec in specs)
-            }
+            users: set[str] = set()
+            for spec in specs:
+                for row in rows_by_event.get(str(spec.get("event") or ""), []):
+                    if row["chel_id"] and matches(row, spec):
+                        users.add(row["chel_id"])
+            return users
 
         definition_by_id = {definition["id"]: definition for definition in definitions}
+        legacy_reach_by_event: dict[str, list[tuple[str, dict]]] = defaultdict(list)
+        for definition in definitions:
+            for spec in definition.get("legacy_reach", []):
+                legacy_reach_by_event[str(spec.get("event") or "")].append(
+                    (definition["id"], spec)
+                )
         generic_paths: dict[str, list[tuple[tuple, str, str]]] = defaultdict(list)
         legacy_paths: dict[str, list[tuple[tuple, str]]] = defaultdict(list)
         for row in parsed_rows:
@@ -1203,9 +1265,9 @@ def _metric2_report_uncached(
                     (order_key, properties["screen"], previous_screen)
                 )
                 continue
-            for definition in definitions:
-                if any(matches(row, spec) for spec in definition.get("legacy_reach", [])):
-                    legacy_paths[chel_id].append((order_key, definition["id"]))
+            for screen_id, spec in legacy_reach_by_event.get(row["event"], []):
+                if matches(row, spec):
+                    legacy_paths[chel_id].append((order_key, screen_id))
 
         # Modern tracking is authoritative for a user. Legacy reach events are
         # used only for older users who have no generic screen-view events.
@@ -1313,22 +1375,29 @@ def _metric2_report_uncached(
                     grouped_actions["final_transition"].append(action)
                 elif action.get("exclusive_group"):
                     grouped_actions[f"choice:{action['exclusive_group']}"].append(action)
-            final_group_action: dict[tuple[str, str], str] = {}
-            for row in parsed_rows:
-                chel_id = row["chel_id"]
-                if not chel_id or chel_id not in reached:
-                    continue
-                for group_id, group_actions in grouped_actions.items():
-                    for action in group_actions:
-                        generic = _metric2_spec(
-                            "onboarding_screen_action", screen=screen_id,
-                            action=action["id"], context=definition.get("flow", "onboarding"),
-                        )
-                        if any(matches(row, spec) for spec in [generic, *action.get("legacy", [])]):
-                            # Rows are chronological. Only the last choice in
-                            # an exclusive group represents the final outcome.
-                            final_group_action[(group_id, chel_id)] = action["id"]
-                            break
+            final_group_action: dict[tuple[str, str], tuple[tuple, str]] = {}
+            for group_id, group_actions in grouped_actions.items():
+                for action in group_actions:
+                    generic = _metric2_spec(
+                        "onboarding_screen_action", screen=screen_id,
+                        action=action["id"], context=definition.get("flow", "onboarding"),
+                    )
+                    for spec in [generic, *action.get("legacy", [])]:
+                        for row in rows_by_event.get(str(spec.get("event") or ""), []):
+                            chel_id = row["chel_id"]
+                            if not chel_id or chel_id not in reached or not matches(row, spec):
+                                continue
+                            order_key = (
+                                row["client_at"] or row["received_at"],
+                                row["received_at"], row["event_order"],
+                            )
+                            current = final_group_action.get((group_id, chel_id))
+                            if current is None or order_key >= current[0]:
+                                # Only the last choice in an exclusive group
+                                # represents the user's final outcome.
+                                final_group_action[(group_id, chel_id)] = (
+                                    order_key, action["id"],
+                                )
             for action in definition.get("actions", []):
                 generic = _metric2_spec(
                     "onboarding_screen_action", screen=screen_id,
@@ -1343,7 +1412,7 @@ def _metric2_report_uncached(
                     action_group = ""
                 if action_group:
                     action_users = {
-                        chel_id for (group_id, chel_id), action_id in final_group_action.items()
+                        chel_id for (group_id, chel_id), (_, action_id) in final_group_action.items()
                         if group_id == action_group and action_id == action["id"]
                     }
                 else:

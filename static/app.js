@@ -1127,7 +1127,6 @@ const EXAMINATION_AUDIENCES = {
   male_health:'Мужчинам для оценки гормонального фона и показателей предстательной железы с учётом возраста и показаний.',
   cortisol:'При длительном стрессе и связанных с ним жалобах; показатель зависит от времени сдачи.',
   vitamin_d:'Тем, кому важно узнать уровень витамина D и обсудить необходимость коррекции.',
-  ferritin:'Для оценки запасов железа, особенно при слабости или выпадении волос.',
   ca125:'Только при наличии врачебных показаний; онкомаркер не подходит для самостоятельной диагностики.',
   ca153:'Только при наличии врачебных показаний; онкомаркер не подходит для самостоятельной диагностики.',
   ca199:'Только при наличии врачебных показаний; онкомаркер не подходит для самостоятельной диагностики.',
@@ -1151,13 +1150,63 @@ function renderExamOffer() {
     <button type="button" class="exam-edit-profile" data-onboarding-action="question-back">← Изменить ответы анкеты</button>`;
 }
 
+function examinationEffectivePrice(test) {
+  const effective = Number(test?.effective_price);
+  return Number.isFinite(effective) ? effective : Number(test?.price || 0);
+}
+
+function examinationPriceMarkup(test, recommended = false) {
+  const offer = Number(test?.price || 0);
+  const full = Number(test?.price_without_discount || 0);
+  const competitor = Number(test?.competitor_price || 0);
+  const discounted = Boolean(recommended && full > offer);
+  const visiblePrice = examinationEffectivePrice(test);
+  const competitorLabel = escapeHtml(test?.competitor_label || 'У конкурентов');
+  const retailLabel = escapeHtml(test?.retail_price_label || 'Розничная цена');
+  const discountLabel = escapeHtml(test?.discount_price_label || 'С учётом вашей скидки');
+  const showCompetitor = test?.show_competitor_price !== 0 && test?.show_competitor_price !== false;
+  const showRetail = test?.show_retail_price !== 0 && test?.show_retail_price !== false;
+  const showDiscount = test?.show_discount_price !== 0 && test?.show_discount_price !== false;
+  const rows = [];
+  if (competitor > 0 && showCompetitor) {
+    rows.push(`<small class="exam-competitor-price">${competitorLabel} — ${competitor.toLocaleString('ru')} ₽</small>`);
+  }
+  if (discounted) {
+    if (showRetail) {
+      const retailValue = showDiscount
+        ? `<s>${full.toLocaleString('ru')} ₽</s>`
+        : `<span>${full.toLocaleString('ru')} ₽</span>`;
+      rows.push(`<span class="exam-price-label">${retailLabel} —</span><span class="exam-price-value retail">${retailValue}</span>`);
+    }
+    if (showDiscount) {
+      rows.push(`<span class="exam-price-label discount">${discountLabel} —</span><span class="exam-price-value discount"><b>${offer.toLocaleString('ru')} ₽</b></span>`);
+    }
+  } else if (showRetail) {
+    rows.push(`<span class="exam-price-line"><span>${retailLabel} —</span><b>${visiblePrice.toLocaleString('ru')} ₽</b></span>`);
+  }
+  return rows.length
+    ? `<div class="exam-pricing ${discounted ? 'discounted' : ''}">${rows.join('')}</div>`
+    : '';
+}
+
+function sortExaminationsForUser(tests, recommended) {
+  return [...tests].sort((left, right) => {
+    const recommendationOrder = Number(recommended.has(right.id)) - Number(recommended.has(left.id));
+    if (recommendationOrder) return recommendationOrder;
+    const priceOrder = examinationEffectivePrice(left) - examinationEffectivePrice(right);
+    if (priceOrder) return priceOrder;
+    return String(left.name || '').localeCompare(String(right.name || ''), 'ru');
+  });
+}
+
 function renderExamCatalogInfo() {
   trackOnboardingScreen('exam_catalog');
   setOnboardingMeta('Описание чек-апов', 76);
-  const tests = state.onboarding?.tests || [];
+  const recommended = new Set(state.onboarding?.recommended_test_ids || []);
+  const tests = sortExaminationsForUser(state.onboarding?.tests || [], recommended);
   const cards = tests.map(test => `
     <article class="exam-info-card">
-      <header><strong>${escapeHtml(test.name)}</strong><b>${Number(test.price || 0).toLocaleString('ru')} ₽</b></header>
+      <header><strong>${escapeHtml(test.name)}</strong>${examinationPriceMarkup(test, recommended.has(test.id))}</header>
       <p><span>Кому подходит</span>${escapeHtml(EXAMINATION_AUDIENCES[test.id] || test.description || 'Тем, кто хочет получить больше информации о состоянии здоровья.')}</p>
       <p><span>Для чего</span>${escapeHtml(test.description || 'Для дополнительной оценки показателей здоровья.')}</p>
       <p class="exam-info-includes"><span>Что входит</span>${escapeHtml(test.includes || 'Состав уточняется')}</p>
@@ -1205,7 +1254,8 @@ function renderExamSelection(scrollPosition = null) {
   normalizeSelectedTestPairs();
   setOnboardingMeta('Обследования', 80);
   const recommended = new Set(state.onboarding.recommended_test_ids || []);
-  const cards = state.onboarding.tests.map(test => {
+  const sortedTests = sortExaminationsForUser(state.onboarding.tests, recommended);
+  const cards = sortedTests.map(test => {
     const selected = state.selectedTests.has(test.id);
     const extendedId = EXAMINATION_UPGRADE_PAIRS[test.id];
     const disabled = Boolean(extendedId && state.selectedTests.has(extendedId));
@@ -1215,9 +1265,9 @@ function renderExamSelection(scrollPosition = null) {
     const disabledNote = disabled
       ? `<small class="exam-upgrade-note">Уже входит в «${escapeHtml(extended?.name || 'Расширенный комплекс')}»</small>`
       : '';
-    return `<label class="exam-card ${selected ? 'selected' : ''} ${disabled ? 'disabled-by-upgrade' : ''}" data-test-card="${test.id}" ${disabled ? 'aria-disabled="true"' : ''}><input type="checkbox" ${selected ? 'checked' : ''} ${disabled ? 'disabled' : ''}><span class="exam-check">✓</span>${recommended.has(test.id) ? '<small class="recommended-badge">Подходит по анкете</small>' : ''}<strong>${escapeHtml(test.name)}</strong><b>${Number(test.price).toLocaleString('ru')} ₽</b><small>${escapeHtml(test.description)}</small><em>${escapeHtml(test.includes)}</em>${disabledNote}</label>`;
+    return `<label class="exam-card ${selected ? 'selected' : ''} ${disabled ? 'disabled-by-upgrade' : ''}" data-test-card="${test.id}" ${disabled ? 'aria-disabled="true"' : ''}><input type="checkbox" ${selected ? 'checked' : ''} ${disabled ? 'disabled' : ''}><span class="exam-check">✓</span>${recommended.has(test.id) ? '<small class="recommended-badge">Актуально для вас</small>' : ''}<span class="exam-card-top"><strong>${escapeHtml(test.name)}</strong>${examinationPriceMarkup(test, recommended.has(test.id))}</span><small>${escapeHtml(test.description)}</small><em>${escapeHtml(test.includes)}</em>${disabledNote}</label>`;
   }).join('');
-  const total = state.onboarding.tests.filter(test => state.selectedTests.has(test.id)).reduce((sum,test) => sum + test.price, 0);
+  const total = state.onboarding.tests.filter(test => state.selectedTests.has(test.id)).reduce((sum,test) => sum + examinationEffectivePrice(test), 0);
   $('#onboardingContent').innerHTML = `<span class="onboarding-kicker">Выбор анализов</span><h1>Выберите интересующие наборы</h1><p class="onboarding-lead">Рекомендации отмечены по ответам анкеты и не являются назначением.</p><div class="exam-list">${cards}</div><div class="exam-total"><span>Выбрано: ${state.selectedTests.size}</span><strong>${total.toLocaleString('ru')} ₽</strong></div><div class="onboarding-actions"><button type="button" class="onboarding-back" data-onboarding-action="exam-offer">Назад</button><button type="button" class="onboarding-next" data-onboarding-action="continue-payment" ${state.selectedTests.size ? '' : 'disabled'}>Далее</button></div><button type="button" class="exam-skip" data-onboarding-action="review-exam-skip">Ничего не выбирать</button>`;
   if (scrollPosition) {
     const examList = $('#onboardingContent .exam-list');
@@ -1274,7 +1324,7 @@ function selectedTestDetails() {
 function renderCurrentExamSelectionSummary() {
   setOnboardingMeta('Обследования', 100);
   const selected = selectedTestDetails();
-  const total = selected.reduce((sum,test) => sum + test.price, 0);
+  const total = selected.reduce((sum,test) => sum + examinationEffectivePrice(test), 0);
   const paymentLabels = {
     paid_online:'Оплачено онлайн',
     pay_at_exam:'Оплата на медосмотре',
@@ -1287,7 +1337,7 @@ function renderCurrentExamSelectionSummary() {
     ? `<div class="current-exams-list">${selected.map(test => `
         <article class="current-exam-item">
           <div><strong>${escapeHtml(test.name)}</strong><small>${escapeHtml(test.description || '')}</small></div>
-          <b>${Number(test.price || 0).toLocaleString('ru')} ₽</b>
+          <b>${examinationEffectivePrice(test).toLocaleString('ru')} ₽</b>
         </article>`).join('')}</div>
        <div class="current-exams-total"><span>${escapeHtml(paymentLabel)}</span><strong>Итого: ${total.toLocaleString('ru')} ₽</strong></div>`
     : '<div class="current-exams-empty"><span aria-hidden="true">◫</span><strong>Дополнительные обследования пока не выбраны</strong><p>Вы можете выбрать подходящие наборы сейчас или вернуться к этому позже.</p></div>';
@@ -1309,13 +1359,13 @@ function renderPayment() {
   trackOnboardingScreen('payment');
   setOnboardingMeta('Оплата', 92);
   const selected = selectedTestDetails();
-  const total = selected.reduce((sum,test) => sum + test.price, 0);
+  const total = selected.reduce((sum,test) => sum + examinationEffectivePrice(test), 0);
   const emailField = state.publicConfig.online_payments_enabled && state.publicConfig.payment_receipt_email_required
     ? `<label class="payment-email-label">Электронная почта для онлайн-чека <span>только при оплате онлайн</span><input id="paymentReceiptEmail" type="email" autocomplete="email" maxlength="254" placeholder="name@example.ru" required></label>` : '';
   const exitAction = state.paymentReviewSource === 'purchases'
     ? '<button type="button" class="payment-back-button" data-onboarding-action="close-payment-review">Закрыть</button>'
     : '<button type="button" class="payment-back-button" data-onboarding-action="back-to-exams">← Вернуться к обследованиям</button>';
-  $('#onboardingContent').innerHTML = `<span class="onboarding-kicker">Последний шаг</span><h1>Проверим заказ</h1><p class="onboarding-lead">Выберите, как вам будет удобнее оплатить дополнительные обследования.</p><div class="payment-stub"><span class="demo-badge">ВЫБРАННЫЕ ОБСЛЕДОВАНИЯ</span><ul class="payment-lines">${selected.map(test => `<li><span>${test.name}</span><strong>${test.price.toLocaleString('ru')} ₽</strong></li>`).join('')}</ul><div class="payment-total"><span>Итого</span><strong>${total.toLocaleString('ru')} ₽</strong></div></div>${emailField}<div class="payment-actions"><button type="button" class="payment-online-button" data-onboarding-action="pay-online">Оплатить онлайн</button><button type="button" class="payment-at-exam-button" data-onboarding-action="pay-at-exam">Оплатить на медосмотре</button></div>${exitAction}`;
+  $('#onboardingContent').innerHTML = `<span class="onboarding-kicker">Последний шаг</span><h1>Проверим заказ</h1><p class="onboarding-lead">Выберите, как вам будет удобнее оплатить дополнительные обследования.</p><div class="payment-stub"><span class="demo-badge">ВЫБРАННЫЕ ОБСЛЕДОВАНИЯ</span><ul class="payment-lines">${selected.map(test => `<li><span>${test.name}</span><strong>${examinationEffectivePrice(test).toLocaleString('ru')} ₽</strong></li>`).join('')}</ul><div class="payment-total"><span>Итого</span><strong>${total.toLocaleString('ru')} ₽</strong></div></div>${emailField}<div class="payment-actions"><button type="button" class="payment-online-button" data-onboarding-action="pay-online">Оплатить онлайн</button><button type="button" class="payment-at-exam-button" data-onboarding-action="pay-at-exam">Оплатить на медосмотре</button></div>${exitAction}`;
 }
 
 function setPaymentActionsBusy(busy, activeLabel = '') {

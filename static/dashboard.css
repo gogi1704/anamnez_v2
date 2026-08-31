@@ -132,6 +132,7 @@ button:hover,.button:hover { background:var(--green-dark); }
 .metric2-mock-test { display:grid; grid-template-columns:1fr auto; gap:5px; }.metric2-mock-test small { grid-column:1/-1; color:var(--muted); }.metric2-mock-test em { color:var(--green); font-style:normal; font-weight:800; }.metric2-mock-total { display:flex; justify-content:space-between; background:#f7faf8; }
 .metric2-mock-brand { display:flex; align-items:center; gap:7px; margin-bottom:4px; }.metric2-mock-brand > span { display:grid; place-items:center; width:28px; height:28px; border-radius:9px; color:#fff; background:var(--green); font-weight:800; }.metric2-mock-brand strong,.metric2-mock-brand small { display:block; }.metric2-mock-brand strong { font-size:9px; }.metric2-mock-brand small { color:var(--muted); font-size:6px; }.metric2-phone.large .metric2-mock-brand > span { width:42px; height:42px; border-radius:13px; }.metric2-phone.large .metric2-mock-brand strong { font-size:14px; }.metric2-phone.large .metric2-mock-brand small { font-size:9px; }
 .metric2-mock-note { padding:7px; border-radius:8px; background:#f0f6f3; }.metric2-mock-time { color:var(--muted); font-size:6px; text-align:center; }.metric2-phone.large .metric2-mock-time { font-size:9px; }
+.metric2-mock-pulse { display:block; color:#75a693; font-size:28px; line-height:.45; letter-spacing:.12em; }.metric2-phone.large .metric2-mock-pulse { font-size:42px; }.metric2-mock-welcome-highlight { display:block; padding:8px; border:1px solid #ead4a5; border-radius:9px; background:#fff8e9; color:#55472e; font-size:7px; line-height:1.45; }.metric2-phone.large .metric2-mock-welcome-highlight { padding:12px; border-radius:13px; font-size:11px; }.metric2-mock-welcome-closing { padding-left:8px; border-left:2px solid #91bbaa; color:#385b4e; font-size:7px; line-height:1.45; }.metric2-phone.large .metric2-mock-welcome-closing { padding-left:11px; font-size:11px; }
 .metric2-mock-modal { position:relative; display:flex; flex-direction:column; gap:8px; margin:auto 0; padding:12px; border:1px solid #d9e5df; border-radius:14px; background:#fff; box-shadow:0 9px 25px rgba(25,65,49,.12); }.metric2-phone.large .metric2-mock-modal { gap:12px; padding:20px; border-radius:20px; }.metric2-mock-modal > b { font-size:13px; }.metric2-phone.large .metric2-mock-modal > b { font-size:20px; }.metric2-mock-modal > p { margin:0; color:var(--muted); font-size:8px; line-height:1.45; }.metric2-phone.large .metric2-mock-modal > p { font-size:12px; }.metric2-mock-close { position:absolute; top:8px; right:9px; color:var(--muted); font-weight:800; }
 .metric2-mock-catalog-card { display:block; padding:9px; border:1px solid #d3e2da; border-radius:10px; background:#fff; }.metric2-mock-catalog-card header { display:flex; justify-content:space-between; gap:6px; padding-bottom:6px; border-bottom:1px solid #e3ebe7; font-size:8px; }.metric2-mock-catalog-card header em { color:var(--green); font-style:normal; white-space:nowrap; }.metric2-mock-catalog-card > small { display:block; margin-top:7px; color:var(--green-dark); font-size:6px; font-weight:800; }.metric2-mock-catalog-card > p { margin:2px 0 0; color:var(--muted); font-size:7px; line-height:1.35; }.metric2-phone.large .metric2-mock-catalog-card { padding:13px; border-radius:14px; }.metric2-phone.large .metric2-mock-catalog-card header { font-size:12px; }.metric2-phone.large .metric2-mock-catalog-card > small { font-size:8px; }.metric2-phone.large .metric2-mock-catalog-card > p { font-size:10px; }
 .metric2-mock-actions { display:grid; grid-template-columns:1fr 1.4fr; align-items:center; gap:6px; margin-top:auto; }
@@ -319,6 +320,14 @@ button:hover,.button:hover { background:var(--green-dark); }
 .staff-card.inactive { opacity:.68; }.staff-card.inactive .toggle-staff { color:var(--green); border-color:#c9dbd1; }
 .examination-admin { display:grid; grid-template-columns:minmax(310px,430px) minmax(0,1fr); gap:20px; }
 .examination-form { display:grid; gap:12px; }
+.examination-price-fields { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:10px; }
+.examination-price-hint { margin-top:-4px; color:var(--muted); font-size:10px; line-height:1.45; }
+.examination-label-settings { display:grid; gap:9px; padding:12px; border:1px solid var(--line); border-radius:13px; background:#f8fbf9; }
+.examination-label-settings > p { margin:0; color:var(--green); font-size:11px; font-weight:800; }
+.examination-label-setting { display:grid; grid-template-columns:100px minmax(0,1fr); align-items:end; gap:9px; }
+.examination-label-setting > label:last-child { min-width:0; }
+.examination-label-toggle { display:flex; align-items:center; gap:7px; min-height:42px; color:#50655c; font-size:10px; font-weight:700; cursor:pointer; }
+.examination-label-toggle input { width:17px; height:17px; flex:none; margin:0; accent-color:var(--green); }
 .examination-form textarea { width:100%; min-height:86px; padding:12px 14px; resize:vertical; border:1px solid #c9dbd1; border-radius:13px; outline:none; background:#fff; line-height:1.45; }
 .examination-form textarea:focus { border-color:var(--green); box-shadow:0 0 0 3px rgba(24,123,93,.12); }
 .examination-form-actions { display:flex; flex-wrap:wrap; gap:8px; }
@@ -327,7 +336,7 @@ button:hover,.button:hover { background:var(--green-dark); }
 .examination-admin-card { padding:15px; border:1px solid var(--line); border-radius:15px; background:#fbfdfc; }
 .examination-card-heading { display:flex; align-items:flex-start; justify-content:space-between; gap:12px; }
 .examination-card-heading strong { overflow-wrap:anywhere; font-size:14px; }
-.examination-card-heading b { flex:none; color:var(--green); font-size:13px; }
+.examination-admin-prices { display:grid; justify-items:end; gap:2px; flex:none; color:var(--green); font-size:11px; font-weight:700; }
 .examination-admin-card p { margin:8px 0; color:var(--muted); font-size:12px; line-height:1.5; }
 .examination-admin-card small { display:block; color:#496057; font-size:11px; line-height:1.45; overflow-wrap:anywhere; }
 .examination-card-actions { display:flex; justify-content:flex-end; gap:8px; margin-top:12px; }
@@ -412,6 +421,7 @@ tbody tr:hover { background:#f8fbf9; }
 .status.warn { color:#936813; background:#fff4d8; }
 .dashboard-error { position:sticky; bottom:12px; padding:13px 16px; border:1px solid #efcccc; border-radius:12px; background:#fff2f2; }
 @media (max-width:1100px) {
+  .examination-price-fields { grid-template-columns:1fr; }
   .summary-grid { grid-template-columns:repeat(3,minmax(0,1fr)); }
   .analytics-grid { grid-template-columns:1fr 1fr; }
   .activity-panel { grid-column:1/-1; }

@@ -508,6 +508,14 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                     payload.get("description", ""),
                     payload.get("includes", ""),
                     payload.get("price"),
+                    payload.get("competitor_price"),
+                    payload.get("price_without_discount"),
+                    payload.get("competitor_label"),
+                    payload.get("retail_price_label"),
+                    payload.get("discount_price_label"),
+                    payload.get("show_competitor_price"),
+                    payload.get("show_retail_price"),
+                    payload.get("show_discount_price"),
                 ))
             except (ValueError, TypeError, json.JSONDecodeError, UnicodeDecodeError) as exc:
                 return self._json(422, {"detail": str(exc)})
@@ -523,6 +531,14 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                     payload.get("description", ""),
                     payload.get("includes", ""),
                     payload.get("price"),
+                    payload.get("competitor_price"),
+                    payload.get("price_without_discount"),
+                    payload.get("competitor_label"),
+                    payload.get("retail_price_label"),
+                    payload.get("discount_price_label"),
+                    payload.get("show_competitor_price"),
+                    payload.get("show_retail_price"),
+                    payload.get("show_discount_price"),
                 )
                 if not item:
                     return self._json(404, {"detail": "Обследование не найдено"})
@@ -949,8 +965,14 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                     selected_tests=selected,
                     payment_status="pending" if selected else "skipped",
                 )
-                examination_items = db.list_examinations()
-                total_price = sum(int(item.get("price", 0)) for item in examination_items if item["id"] in selected)
+                priced_onboarding = public_onboarding(
+                    state, db.get_profile(), db.list_examinations(),
+                )
+                examination_items = priced_onboarding["tests"]
+                total_price = sum(
+                    int(item.get("effective_price", item.get("price", 0)))
+                    for item in examination_items if item["id"] in selected
+                )
                 selection_id = f"selection-{secrets.token_hex(12)}"
                 self._track_analytics("examinations_selection_completed", {
                     "selected_count": len(selected), "total_price": total_price,

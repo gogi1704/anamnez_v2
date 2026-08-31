@@ -11,7 +11,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/static/dashboard.css?v=20260829-metric2-levels-v1">
+  <link rel="stylesheet" href="/static/dashboard.css?v=20260831-actual-price-v1">
 </head>
 <body>
   <main class="dashboard-shell">
@@ -250,7 +250,27 @@
             <label>Название<input id="examinationName" maxlength="140" placeholder="Например, Витамины и микроэлементы" required></label>
             <label>Описание<textarea id="examinationDescription" maxlength="1200" rows="4" placeholder="Кому и для чего может быть полезен набор" required></textarea></label>
             <label>Что входит<textarea id="examinationIncludes" maxlength="1200" rows="3" placeholder="Перечислите анализы и исследования"></textarea></label>
-            <label>Цена, ₽<input id="examinationPrice" type="number" min="0" max="10000000" step="1" inputmode="numeric" placeholder="3500" required></label>
+            <div class="examination-price-fields">
+              <label>Цена конкурентов, ₽<input id="examinationCompetitorPrice" type="number" min="0" max="10000000" step="1" inputmode="numeric" placeholder="Не указана"></label>
+              <label>Цена без скидки, ₽<input id="examinationPriceWithoutDiscount" type="number" min="0" max="10000000" step="1" inputmode="numeric" placeholder="Не указана"></label>
+              <label>Цена с учётом скидки, ₽<input id="examinationPrice" type="number" min="0" max="10000000" step="1" inputmode="numeric" placeholder="3500" required></label>
+            </div>
+            <small class="examination-price-hint">Цена с учётом скидки — фактическая цена продажи и оплаты. Цена конкурентов и цена без скидки используются только для отображения. Для рекомендованного чек-апа цена без скидки будет перечёркнута, а рядом появится фактическая цена.</small>
+            <div class="examination-label-settings">
+              <p>Подписи цен на карточке</p>
+              <div class="examination-label-setting">
+                <label class="examination-label-toggle"><input id="showExaminationCompetitorPrice" type="checkbox" checked><span>Показывать</span></label>
+                <label>Подпись цены конкурентов<input id="examinationCompetitorLabel" maxlength="80" value="У конкурентов"></label>
+              </div>
+              <div class="examination-label-setting">
+                <label class="examination-label-toggle"><input id="showExaminationRetailPrice" type="checkbox" checked><span>Показывать</span></label>
+                <label>Подпись розничной цены<input id="examinationRetailPriceLabel" maxlength="80" value="Розничная цена"></label>
+              </div>
+              <div class="examination-label-setting">
+                <label class="examination-label-toggle"><input id="showExaminationDiscountPrice" type="checkbox" checked><span>Показывать</span></label>
+                <label>Подпись цены со скидкой<input id="examinationDiscountPriceLabel" maxlength="80" value="С учётом вашей скидки"></label>
+              </div>
+            </div>
             <div class="examination-form-actions">
               <button type="button" class="button secondary hidden" id="cancelExaminationEdit">Отменить редактирование</button>
               <button type="submit" id="saveExaminationButton">Добавить обследование</button>
@@ -430,6 +450,6 @@
       </div>
     </section>
   </div>
-  <script src="/static/dashboard.js?v=20260829-metric2-levels-v1" defer></script>
+  <script src="/static/dashboard.js?v=20260831-actual-price-v1" defer></script>
 </body>
 </html>

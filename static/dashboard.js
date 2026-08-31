@@ -801,6 +801,31 @@ function resetExaminationForm() {
   $('#cancelExaminationEdit').classList.add('hidden');
 }
 
+function adminExaminationPrices(item) {
+  const parts = [];
+  if (Number(item.competitor_price || 0) > 0) {
+    parts.push(`У конкурентов: ${Number(item.competitor_price).toLocaleString('ru-RU')} ₽`);
+  }
+  if (Number(item.price_without_discount || 0) > 0) {
+    parts.push(`Без скидки: ${Number(item.price_without_discount).toLocaleString('ru-RU')} ₽`);
+  }
+  parts.push(`С учётом скидки (фактическая): ${Number(item.price || 0).toLocaleString('ru-RU')} ₽`);
+  return parts.map(part => `<span>${escapeHtml(part)}</span>`).join('');
+}
+
+function examinationPriceSettingEnabled(item, key) {
+  return item[key] !== 0 && item[key] !== false;
+}
+
+function adminExaminationLabels(item) {
+  const settings = [
+    [item.competitor_label || 'У конкурентов', examinationPriceSettingEnabled(item, 'show_competitor_price')],
+    [item.retail_price_label || 'Розничная цена', examinationPriceSettingEnabled(item, 'show_retail_price')],
+    [item.discount_price_label || 'С учётом вашей скидки', examinationPriceSettingEnabled(item, 'show_discount_price')],
+  ];
+  return settings.map(([label, visible]) => `${label}${visible ? '' : ' (скрыто)'}`).join(' · ');
+}
+
 function renderExaminations(items) {
   examinationItems = items;
   $('#examinationsCount').textContent = `${items.length} позиций`;
@@ -808,10 +833,11 @@ function renderExaminations(items) {
     <article class="examination-admin-card" data-examination-id="${escapeHtml(item.id)}">
       <div class="examination-card-heading">
         <strong>${escapeHtml(item.name)}</strong>
-        <b>${Number(item.price || 0).toLocaleString('ru-RU')} ₽</b>
+        <div class="examination-admin-prices">${adminExaminationPrices(item)}</div>
       </div>
       <p>${escapeHtml(item.description)}</p>
       <small><b>Состав:</b> ${escapeHtml(item.includes || 'Не указан')}</small>
+      <small><b>Подписи цен:</b> ${escapeHtml(adminExaminationLabels(item))}</small>
       <div class="examination-card-actions">
         <button type="button" class="edit-examination" data-examination-action="edit">Изменить</button>
         <button type="button" class="delete-examination" data-examination-action="delete">Удалить</button>
@@ -1126,7 +1152,7 @@ const metric2QuestionContent = [
 ];
 
 const metric2ExamAudiences = {
-  fatigue_basic:'Тем, кого беспокоят слабость, сонливость или снижение работоспособности.',fatigue_extended:'Тем, у кого усталость сохраняется длительно или сочетается с другими жалобами.',weight_basic:'Тем, кто хочет разобраться в возможных обменных причинах набора веса.',weight_extended:'Тем, кому нужна более широкая оценка гормональных и обменных факторов веса.',hair_loss:'При заметном выпадении волос, ломкости и подозрении на дефициты.',lipids:'Для оценки сердечно-сосудистого риска, особенно при повышенном давлении или лишнем весе.',liver_basic:'Для базовой проверки показателей печени и поджелудочной железы.',liver_extended:'При необходимости более широкой оценки печени, поджелудочной и желчевыводящих путей.',iron:'При утомляемости, слабости, бледности или подозрении на дефицит железа.',kidneys:'Для базовой оценки функции почек и азотистого обмена.',protein:'Для оценки белкового обмена, питания и синтетической функции печени.',joints:'При боли, скованности или отёчности суставов.',inflammation:'Когда важно дополнительно оценить наличие воспалительной реакции.',thyroid:'При изменениях веса, утомляемости, сердцебиении или других возможных признаках нарушения функции щитовидной железы.',female_hormones:'Женщинам при наличии показаний к оценке гормонального фона; сроки сдачи важно обсудить с врачом.',male_health:'Мужчинам для оценки гормонального фона и показателей предстательной железы с учётом возраста и показаний.',cortisol:'При длительном стрессе и связанных с ним жалобах; показатель зависит от времени сдачи.',vitamin_d:'Тем, кому важно узнать уровень витамина D и обсудить необходимость коррекции.',ferritin:'Для оценки запасов железа, особенно при слабости или выпадении волос.',ca125:'Только при наличии врачебных показаний; онкомаркер не подходит для самостоятельной диагностики.',ca153:'Только при наличии врачебных показаний; онкомаркер не подходит для самостоятельной диагностики.',ca199:'Только при наличии врачебных показаний; онкомаркер не подходит для самостоятельной диагностики.',
+  fatigue_basic:'Тем, кого беспокоят слабость, сонливость или снижение работоспособности.',fatigue_extended:'Тем, у кого усталость сохраняется длительно или сочетается с другими жалобами.',weight_basic:'Тем, кто хочет разобраться в возможных обменных причинах набора веса.',weight_extended:'Тем, кому нужна более широкая оценка гормональных и обменных факторов веса.',hair_loss:'При заметном выпадении волос, ломкости и подозрении на дефициты.',lipids:'Для оценки сердечно-сосудистого риска, особенно при повышенном давлении или лишнем весе.',liver_basic:'Для базовой проверки показателей печени и поджелудочной железы.',liver_extended:'При необходимости более широкой оценки печени, поджелудочной и желчевыводящих путей.',iron:'При утомляемости, слабости, бледности или подозрении на дефицит железа.',kidneys:'Для базовой оценки функции почек и азотистого обмена.',protein:'Для оценки белкового обмена, питания и синтетической функции печени.',joints:'При боли, скованности или отёчности суставов.',inflammation:'Когда важно дополнительно оценить наличие воспалительной реакции.',thyroid:'При изменениях веса, утомляемости, сердцебиении или других возможных признаках нарушения функции щитовидной железы.',female_hormones:'Женщинам при наличии показаний к оценке гормонального фона; сроки сдачи важно обсудить с врачом.',male_health:'Мужчинам для оценки гормонального фона и показателей предстательной железы с учётом возраста и показаний.',cortisol:'При длительном стрессе и связанных с ним жалобах; показатель зависит от времени сдачи.',vitamin_d:'Тем, кому важно узнать уровень витамина D и обсудить необходимость коррекции.',ca125:'Только при наличии врачебных показаний; онкомаркер не подходит для самостоятельной диагностики.',ca153:'Только при наличии врачебных показаний; онкомаркер не подходит для самостоятельной диагностики.',ca199:'Только при наличии врачебных показаний; онкомаркер не подходит для самостоятельной диагностики.',
 };
 
 function metric2PreviewMarkup(screen, large = false) {
@@ -1135,7 +1161,7 @@ function metric2PreviewMarkup(screen, large = false) {
   const messengerAction = (icon,label) => `<span class="metric2-mock-button metric2-mock-messenger"><i>${escapeHtml(icon)}</i><span><b>${escapeHtml(label)}</b><small>Подтверждение через бота</small></span></span>`;
   const examinations = latestMetric2Data?.examinations || [];
   let content = '';
-  if (kind === 'welcome') content = `<div class="metric2-mock-brand"><span>К</span><div><strong>Консилиум</strong><small>Забота о здоровье начинается здесь</small></div></div><span class="metric2-mock-emoji">👋</span><b>Привет!</b><p>Совсем скоро вам предстоит плановый медицинский осмотр. Мы рады, что вы проходите его вместе с нами.</p><p>Для начала просим вас ответить на несколько простых вопросов — это займет всего пару минут и поможет сделать обследование более полезным для вас.</p><p>После анкеты вы сможете ознакомиться с дополнительными обследованиями. Иногда именно они помогают обнаружить проблемы, которые никак себя не проявляют. Как любит говорить наш главный врач:</p><blockquote>«Здоровых людей не бывает — бывают недообследованные».</blockquote><p>И это еще не всё! В конце вас ждет небольшой сюрприз — мы покажем новый сервис, который сейчас разрабатываем специально для того, чтобы заботиться о своем здоровье было проще, удобнее и выгоднее.</p>${action('Далее →')}<span class="metric2-mock-time">◷ Анкета займёт около 2 минут</span>`;
+  if (kind === 'welcome') content = `<div class="metric2-mock-brand"><span>К</span><div><strong>Консилиум</strong><small>Забота о здоровье начинается здесь</small></div></div><small>● ПЛАНОВЫЙ МЕДОСМОТР</small><b>Вам предстоит плановый медицинский осмотр</b><p>Анкетирование — обязательный этап медосмотра. Оно займёт не более 10 минут и поможет точнее оценить ваше состояние.</p><p>После этого вы сможете выбрать дополнительные обследования — они помогают обнаружить то, что обычно остаётся незамеченным.</p><span class="metric2-mock-pulse">⌁</span><span class="metric2-mock-welcome-highlight">☆ &nbsp; Все, кто пройдёт анкету до конца, получат <b>бесплатный доступ к новому сервису</b> — медицинскому ИИ-помощнику.</span><em class="metric2-mock-welcome-closing">Пройдите осмотр осознанно, с полной картиной своего здоровья — и без лишних переживаний.</em>${action('Начать анкету →')}<span class="metric2-mock-time">Анкета займёт около 10 минут</span>`;
   else if (kind === 'registration') content = `<div class="metric2-mock-brand"><span>К</span><div><strong>Консилиум</strong><small>Ваше личное пространство здоровья</small></div></div><small>БЕЗ ПАРОЛЯ</small><b>Войдите через удобный мессенджер</b><p>Так анкета, история диалогов и результаты останутся доступны на другом устройстве и после очистки браузера.</p>${messengerAction('➤','Продолжить с Telegram')}${messengerAction('М','Продолжить с MAX')}<span class="metric2-mock-link">Войти анонимно</span><p class="metric2-mock-note">Консилиум не получает пароль от мессенджера. Сохраняется только его технический ID для восстановления доступа.</p>`;
   else if (kind === 'warning') content = `<div class="metric2-mock-modal"><span class="metric2-mock-close">×</span><span class="metric2-mock-icon">!</span><b>Продолжить без мессенджера?</b><p>Данные будут связаны только с этим браузером.</p><ul><li>после очистки cookies доступ может потеряться;</li><li>на другом телефоне или компьютере история не откроется;</li><li>восстановить анонимный профиль служба поддержки не сможет.</li></ul><p class="metric2-mock-note">Мессенджер можно будет привязать позже без повторного заполнения анкеты.</p><div class="metric2-mock-actions">${action('Назад',true)}${action('Понимаю, продолжить')}</div></div>`;
   else if (kind === 'appearance') content = `<small>ПЕРЕД НАЧАЛОМ</small><b>Какой размер текста вам удобен?</b><p>Вы увидите изменение сразу. Позже размер можно поменять через меню функций.</p><span class="metric2-mock-choice"><b>Аа &nbsp; Обычный</b><small>Чуть крупнее базового интерфейса</small></span><span class="metric2-mock-choice"><b>Аа &nbsp; Крупный</b><small>Комфортно для большинства экранов</small></span><span class="metric2-mock-choice selected"><b>Аа &nbsp; Очень крупный</b><small>Максимальная читаемость</small></span>${action('Продолжить')}`;
@@ -1588,6 +1614,14 @@ async function saveExamination(event) {
     description:$('#examinationDescription').value.trim(),
     includes:$('#examinationIncludes').value.trim(),
     price:$('#examinationPrice').value,
+    competitor_price:$('#examinationCompetitorPrice').value,
+    price_without_discount:$('#examinationPriceWithoutDiscount').value,
+    competitor_label:$('#examinationCompetitorLabel').value.trim(),
+    retail_price_label:$('#examinationRetailPriceLabel').value.trim(),
+    discount_price_label:$('#examinationDiscountPriceLabel').value.trim(),
+    show_competitor_price:$('#showExaminationCompetitorPrice').checked,
+    show_retail_price:$('#showExaminationRetailPrice').checked,
+    show_discount_price:$('#showExaminationDiscountPrice').checked,
   };
   try {
     await adminFetch(
@@ -1623,6 +1657,14 @@ async function manageExamination(event) {
     $('#examinationDescription').value = item.description;
     $('#examinationIncludes').value = item.includes || '';
     $('#examinationPrice').value = item.price;
+    $('#examinationCompetitorPrice').value = Number(item.competitor_price || 0) || '';
+    $('#examinationPriceWithoutDiscount').value = Number(item.price_without_discount || 0) || '';
+    $('#examinationCompetitorLabel').value = item.competitor_label || 'У конкурентов';
+    $('#examinationRetailPriceLabel').value = item.retail_price_label || 'Розничная цена';
+    $('#examinationDiscountPriceLabel').value = item.discount_price_label || 'С учётом вашей скидки';
+    $('#showExaminationCompetitorPrice').checked = examinationPriceSettingEnabled(item, 'show_competitor_price');
+    $('#showExaminationRetailPrice').checked = examinationPriceSettingEnabled(item, 'show_retail_price');
+    $('#showExaminationDiscountPrice').checked = examinationPriceSettingEnabled(item, 'show_discount_price');
     $('#examinationFormTitle').textContent = 'Изменить обследование';
     $('#saveExaminationButton').textContent = 'Сохранить изменения';
     $('#cancelExaminationEdit').classList.remove('hidden');
