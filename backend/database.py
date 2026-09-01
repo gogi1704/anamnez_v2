@@ -1894,6 +1894,21 @@ def payment_order_by_provider_id(provider_payment_id: str) -> dict | None:
     return result
 
 
+def payment_customer_profile(chel_id: str) -> dict:
+    """Return the bounded profile fields used in an internal payment notification."""
+    with connection() as conn:
+        row = conn.execute(
+            "SELECT preferred_name, company_inn FROM user_profile WHERE chel_id = ?",
+            (str(chel_id or ""),),
+        ).fetchone()
+    if not row:
+        return {"preferred_name": "", "company_inn": ""}
+    return {
+        "preferred_name": str(row["preferred_name"] or "")[:100],
+        "company_inn": str(row["company_inn"] or "")[:12],
+    }
+
+
 def mark_payment_creation_failed(order_id: str, error: str) -> None:
     with _write_lock, connection() as conn:
         conn.execute(

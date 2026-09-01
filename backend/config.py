@@ -62,6 +62,11 @@ class Settings:
     yookassa_payment_mode: str = os.getenv(
         "YOOKASSA_PAYMENT_MODE", "full_prepayment",
     ).strip()
+    bitrix_connector_url: str = os.getenv("BITRIX_CONNECTOR_URL", "").strip().rstrip("/")
+    bitrix_payment_secret: str = os.getenv("BITRIX_PAYMENT_SECRET", "").strip()
+    bitrix_connector_timeout_seconds: float = float(
+        os.getenv("BITRIX_CONNECTOR_TIMEOUT_SECONDS", "5")
+    )
     log_path: Path = Path(os.getenv("LOG_PATH", BASE_DIR / "server-error.log"))
     # The structured conversation summary and questionnaire are passed separately,
     # so the model only needs a bounded recent transcript.  Limiting both message
@@ -73,6 +78,9 @@ class Settings:
     auto_open_browser: bool = env_bool("AUTO_OPEN_BROWSER", True)
     cookie_secure: bool = env_bool("COOKIE_SECURE", False)
     public_base_url: str = os.getenv("PUBLIC_BASE_URL", "http://127.0.0.1:8000").rstrip("/")
+    splitter_event_url: str = os.getenv("SPLITTER_EVENT_URL", "").strip()
+    splitter_event_secret: str = os.getenv("SPLITTER_EVENT_SECRET", "").strip()
+    splitter_event_timeout_seconds: float = float(os.getenv("SPLITTER_EVENT_TIMEOUT_SECONDS", "2"))
     bot_integration_secret: str = os.getenv("BOT_INTEGRATION_SECRET", "")
     auth_link_ttl_seconds: int = int(os.getenv("AUTH_LINK_TTL_SECONDS", "604800"))
     auth_intent_ttl_seconds: int = int(os.getenv("AUTH_INTENT_TTL_SECONDS", "604800"))

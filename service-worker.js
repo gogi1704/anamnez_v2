@@ -1,5 +1,5 @@
-const CACHE_NAME = 'consilium-shell-v95';
-const ASSET_VERSION = '20260831-checkups-v1';
+const CACHE_NAME = 'consilium-shell-v96';
+const ASSET_VERSION = '20260901-splitter-funnel-v1';
 const APP_SHELL = [
   '/',
   '/manifest.webmanifest',

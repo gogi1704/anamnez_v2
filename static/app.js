@@ -66,6 +66,7 @@ let currentOnboardingAnalyticsScreen = '';
 const ANALYTICS_QUEUE_KEY = 'consilium_analytics_queue_v1';
 const ANALYTICS_SESSION_KEY = 'consilium_analytics_session_v1';
 const ANALYTICS_SESSION_TTL = 30 * 60 * 1000;
+const SPLITTER_STAGE_QUEUE_KEY = 'consilium_splitter_stage_queue_v1';
 
 function analyticsUuid() {
   return crypto.randomUUID?.() || `evt-${Date.now()}-${Math.random().toString(16).slice(2)}`;
@@ -99,6 +100,57 @@ function analyticsAttribution() {
     app_mode: isInstalledApp() ? 'standalone' : 'browser',
     page_version: '20260805',
   };
+}
+
+function currentSplitterTracking() {
+  const params = new URLSearchParams(location.search);
+  const attemptId = params.get('splitter_attempt') || '';
+  const visitorId = params.get('splitter_id') || '';
+  const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+  return uuidPattern.test(attemptId) && uuidPattern.test(visitorId) ? {attemptId,visitorId} : null;
+}
+
+function readSplitterStageQueue() {
+  try {
+    const queue = JSON.parse(localStorage.getItem(SPLITTER_STAGE_QUEUE_KEY) || '[]');
+    return Array.isArray(queue) ? queue.slice(-30) : [];
+  } catch { return []; }
+}
+
+function writeSplitterStageQueue(queue) {
+  try { localStorage.setItem(SPLITTER_STAGE_QUEUE_KEY, JSON.stringify(queue.slice(-30))); } catch {}
+}
+
+function queueSplitterStage(event) {
+  const tracking = currentSplitterTracking();
+  if (!tracking || !['javascript_started','welcome_shown'].includes(event)) return;
+  const queue = readSplitterStageQueue();
+  const key = `${tracking.attemptId}:${event}`;
+  if (!queue.some(item => item.key === key)) queue.push({key,...tracking,event});
+  writeSplitterStageQueue(queue);
+  flushSplitterStages();
+}
+
+async function flushSplitterStages({beacon = false} = {}) {
+  const queue = readSplitterStageQueue();
+  if (!queue.length) return;
+  if (beacon && navigator.sendBeacon) {
+    for (const item of queue) {
+      navigator.sendBeacon('/api/splitter/event', new Blob([JSON.stringify(item)], {type:'application/json'}));
+    }
+    return;
+  }
+  for (const item of queue) {
+    try {
+      const response = await fetch('/api/splitter/event', {
+        method:'POST', keepalive:true,
+        headers:{'Content-Type':'application/json'},
+        body:JSON.stringify(item),
+      });
+      if (!response.ok) break;
+      writeSplitterStageQueue(readSplitterStageQueue().filter(queued => queued.key !== item.key));
+    } catch { break; }
+  }
 }
 
 function readAnalyticsQueue() {
@@ -196,8 +248,15 @@ async function flushAnalytics({ beacon = false } = {}) {
   finally { analyticsSending = false; }
 }
 
-window.addEventListener('pagehide', () => flushAnalytics({beacon:true}));
-window.addEventListener('online', () => flushAnalytics());
+window.addEventListener('pagehide', () => {
+  flushAnalytics({beacon:true});
+  flushSplitterStages({beacon:true});
+});
+window.addEventListener('online', () => {
+  flushAnalytics();
+  flushSplitterStages();
+});
+queueSplitterStage('javascript_started');
 
 function isIosDevice() {
   return /iphone|ipad|ipod/i.test(navigator.userAgent)
@@ -405,6 +464,7 @@ function showWelcome(nextAction) {
   hideEntryScreens();
   $('#welcomeScreen').classList.remove('hidden');
   $('#welcomeScreen').scrollTop = 0;
+  requestAnimationFrame(() => queueSplitterStage('welcome_shown'));
   trackEvent('welcome_viewed', {screen:'welcome'});
   trackOnboardingScreen('welcome');
 }

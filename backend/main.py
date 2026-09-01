@@ -12,11 +12,11 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, quote, urlparse
 
-from . import analytics, company_suggestions, database as db
+from . import analytics, company_suggestions, database as db, splitter_tracking
 from .config import BASE_DIR, settings
 from .llm import LLMNotConfigured
 from .lab_results import LabResultsUnavailable, lookup_lab_results
-from . import yookassa
+from . import bitrix_payments, yookassa
 from .orchestrator import orchestrator
 from .onboarding import normalize_examination_selection, public_onboarding
 from .prompts import public_agents
@@ -270,6 +270,11 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                     return self._json(404, {"detail": "Диалог не найден"})
                 return self._json(200, detail)
             return self._json(404, {"detail": "Маршрут панели менеджера не найден"})
+        if path in {"/", "/result", "/result/"}:
+            splitter_tracking.notify_async(
+                splitter_tracking.tracking_from_query(parse_qs(parsed.query)),
+                splitter_tracking.SERVER_STAGE,
+            )
         self._ensure_user_context()
         if path in {"/", "/result", "/result/"}:
             db.record_device_access(self.headers.get("User-Agent", ""))
@@ -371,6 +376,19 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         path = urlparse(self.path).path
+        if path == "/api/splitter/event":
+            try:
+                payload = self._read_json(max_bytes=4_000)
+                tracking = splitter_tracking.tracking_from_payload(payload)
+                event = str(payload.get("event", ""))
+                if not tracking or event not in splitter_tracking.CLIENT_STAGES:
+                    raise ValueError("Некорректное событие доставки")
+                result = splitter_tracking.notify(tracking, event)
+                if result == "failed":
+                    return self._json(503, {"status": "retry"})
+                return self._json(202, {"status": result})
+            except (ValueError, TypeError, json.JSONDecodeError, UnicodeDecodeError) as exc:
+                return self._json(422, {"detail": str(exc)})
         if path == "/api/payments/yookassa/webhook":
             try:
                 payload = self._read_json(max_bytes=128_000)
@@ -393,10 +411,17 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                         order["chel_id"], "payment_completed",
                         {"provider": "yookassa", "result": "succeeded"},
                     )
+                    bitrix_payments.notify_verified_payment(
+                        order, verified, db.payment_customer_profile(order["chel_id"]),
+                    )
                 return self._json(200, {"status": updated["status"]})
             except (ValueError, TypeError, json.JSONDecodeError, UnicodeDecodeError) as exc:
                 return self._json(400, {"detail": str(exc)})
             except yookassa.YooKassaUnavailable as exc:
+                return self._json(503, {"detail": str(exc)})
+            except bitrix_payments.BitrixConnectorUnavailable as exc:
+                # YooKassa will retry the webhook. The connector deduplicates by
+                # local order ID if an earlier attempt was already accepted.
                 return self._json(503, {"detail": str(exc)})
         if path == "/api/bot/manager-bind":
             if not bot_token_valid(self.headers.get("Authorization", "")):

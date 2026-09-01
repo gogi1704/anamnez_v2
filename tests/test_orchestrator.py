@@ -14,6 +14,7 @@ os.environ["DATABASE_PATH"] = str(Path(_temp_dir.name) / "test.db")
 os.environ["ANALYTICS_DATABASE_PATH"] = str(Path(_temp_dir.name) / "analytics.db")
 
 from backend import analytics
+from backend import bitrix_payments  # noqa: E402
 from backend import database as db  # noqa: E402
 from backend import yookassa  # noqa: E402
 from backend.ai_costs import usage_record  # noqa: E402
@@ -2380,13 +2381,13 @@ class OrchestratorTests(unittest.TestCase):
         self.assertIn("controllerchange", script)
         self.assertIn("url.pathname.startsWith('/api/')", worker)
         self.assertIn("url.pathname.startsWith('/auth/')", worker)
-        self.assertIn("consilium-shell-v95", worker)
+        self.assertIn("consilium-shell-v96", worker)
         self.assertIn("fetch(request)", worker)
         self.assertIn("/static/styles.07ffaefb4795.css", index)
         self.assertIn("/static/rich-text.2bf1f5fab764.css", index)
         self.assertTrue((project_root / "static" / "styles.07ffaefb4795.css").is_file())
         self.assertTrue((project_root / "static" / "rich-text.2bf1f5fab764.css").is_file())
-        self.assertIn("/static/app.js?v=20260831-checkups-v1", index)
+        self.assertIn("/static/app.js?v=20260901-splitter-funnel-v1", index)
         self.assertIn("/static/metrika.js?v=20260829-interpret-profile-v1", index)
         self.assertIn('id="welcomeScreen"', index)
         self.assertIn('id="welcomeNextButton"', index)
@@ -3083,6 +3084,29 @@ class OrchestratorTests(unittest.TestCase):
         self.assertEqual(cancel.call_args.args[:2], ("POST", "payments/2f3e4567-89ab-4cde-8012-3456789abcde/cancel"))
         self.assertEqual(cancel.call_args.args[2], {})
         self.assertEqual(cancel.call_args.kwargs["idempotence_key"], "order-cancel")
+
+    def test_bitrix_payment_payload_contains_order_profile_and_provider_data(self):
+        order = {
+            "id": "ord_123", "amount_kopecks": 1500000, "currency": "RUB",
+            "items": [{"id": "checkup", "name": "Чекап", "price": 15000}],
+        }
+        payment = {
+            "id": "2f3e4567-89ab-4cde-8012-3456789abcde",
+            "status": "succeeded", "paid": True, "test": False,
+            "captured_at": "2026-09-01T12:00:00Z",
+        }
+        with patch.object(bitrix_payments, "_organization_name", return_value="ООО Пример"):
+            payload = bitrix_payments.build_payload(
+                order, payment,
+                {"preferred_name": "Иван Иванов", "company_inn": "7701234567"},
+            )
+        self.assertEqual(payload["order_id"], "ord_123")
+        self.assertEqual(payload["provider_payment_id"], payment["id"])
+        self.assertEqual(payload["client_name"], "Иван Иванов")
+        self.assertEqual(payload["organization_name"], "ООО Пример")
+        self.assertEqual(payload["items"], [
+            {"name": "Чекап", "amount_kopecks": 1500000},
+        ])
 
     def test_yookassa_rejects_tampered_amount(self):
         chel_id = "chel_yookassa_tamper_test"

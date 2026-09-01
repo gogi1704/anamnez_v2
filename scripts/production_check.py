@@ -134,6 +134,19 @@ def main() -> int:
     else:
         warnings.append("Онлайн-оплата отключена: ONLINE_PAYMENTS_ENABLED=false")
 
+    if settings.bitrix_connector_url or settings.bitrix_payment_secret:
+        bitrix_url = urlparse(settings.bitrix_connector_url)
+        if bitrix_url.scheme not in {"http", "https"} or not bitrix_url.netloc:
+            errors.append("BITRIX_CONNECTOR_URL должен быть корректным HTTP(S)-адресом")
+        elif len(settings.bitrix_payment_secret) < 32:
+            errors.append("BITRIX_PAYMENT_SECRET должен быть случайной строкой длиной не менее 32 символов")
+        elif not 1 <= settings.bitrix_connector_timeout_seconds <= 30:
+            errors.append("BITRIX_CONNECTOR_TIMEOUT_SECONDS должен быть от 1 до 30 секунд")
+        else:
+            passed.append("Уведомления об оплате в Bitrix Connector настроены")
+    else:
+        warnings.append("Уведомления об оплате в Битрикс отключены")
+
     metrika_id = settings.yandex_metrika_counter_id
     if metrika_id and not (metrika_id.isdigit() and 5 <= len(metrika_id) <= 12):
         errors.append("YANDEX_METRIKA_COUNTER_ID должен содержать от 5 до 12 цифр")
