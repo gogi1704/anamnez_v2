@@ -366,6 +366,10 @@ def sync_now(today: date | None = None) -> dict:
             if parsed:
                 parsed_rows.append(parsed)
     db.replace_enterprise_examination_schedule(parsed_rows, fetched_sheet_ids)
+    # Persist even a still-valid pair from the environment. Previously the
+    # cache appeared only after the first token refresh, so a successful first
+    # sync could leave nothing to copy to another host.
+    _save_tokens(*_tokens())
     return {
         "status": "ok", "rows": len(parsed_rows), "sheets": len(fetched_sheet_ids),
         "date_from": start.isoformat(), "date_to": end.isoformat(),

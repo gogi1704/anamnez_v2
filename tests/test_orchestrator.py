@@ -3198,9 +3198,12 @@ class OrchestratorTests(unittest.TestCase):
         with (
             patch.object(examination_schedule, "settings", schedule_settings),
             patch.object(examination_schedule, "_request", side_effect=response),
+            patch.object(examination_schedule, "_tokens", return_value=("access", "refresh")),
+            patch.object(examination_schedule, "_save_tokens") as save_tokens,
         ):
             result = examination_schedule.sync_now(date(2026, 9, 2))
         self.assertEqual(result["rows"], 1)
+        save_tokens.assert_called_once_with("access", "refresh")
         stored = db.find_upcoming_enterprise_examination(
             "7701112233", reference_date=date(2026, 9, 2),
         )
