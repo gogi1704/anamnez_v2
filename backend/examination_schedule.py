@@ -32,10 +32,10 @@ _MONTHS_RU = {
 
 
 def configured() -> bool:
-    return bool(
-        settings.examination_schedule_enabled
-        and settings.examination_schedule_access_token
-    )
+    if not settings.examination_schedule_enabled:
+        return False
+    access_token, _ = _tokens()
+    return bool(access_token)
 
 
 def _add_months(value: date, months: int) -> date:
