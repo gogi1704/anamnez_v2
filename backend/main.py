@@ -12,7 +12,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, quote, urlparse
 
-from . import analytics, company_suggestions, database as db, splitter_tracking
+from . import analytics, company_suggestions, database as db, examination_schedule, splitter_tracking
 from .config import BASE_DIR, settings
 from .llm import LLMNotConfigured
 from .lab_results import LabResultsUnavailable, lookup_lab_results
@@ -1747,6 +1747,7 @@ def serve() -> None:
     analytics.init_db()
     analytics.cleanup_old_events()
     _record_startup_event("База данных готова")
+    schedule_stop = examination_schedule.start_background_sync(_record_startup_event)
     server = ConsiliumHTTPServer((settings.host, settings.port), ConsiliumHandler)
     _record_startup_event(f"Порт {settings.port} открыт")
     browser_host = "127.0.0.1" if settings.host in {"0.0.0.0", "::", ""} else settings.host
@@ -1764,5 +1765,6 @@ def serve() -> None:
     except KeyboardInterrupt:
         pass
     finally:
+        schedule_stop.set()
         _record_startup_event("Остановка сервера")
         server.server_close()

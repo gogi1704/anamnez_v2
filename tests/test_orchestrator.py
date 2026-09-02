@@ -3,7 +3,7 @@ import os
 import re
 import tempfile
 import unittest
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -16,6 +16,7 @@ os.environ["ANALYTICS_DATABASE_PATH"] = str(Path(_temp_dir.name) / "analytics.db
 from backend import analytics
 from backend import bitrix_payments  # noqa: E402
 from backend import database as db  # noqa: E402
+from backend import examination_schedule  # noqa: E402
 from backend import yookassa  # noqa: E402
 from backend.ai_costs import usage_record  # noqa: E402
 from backend.config import settings  # noqa: E402
@@ -3095,7 +3096,13 @@ class OrchestratorTests(unittest.TestCase):
             "status": "succeeded", "paid": True, "test": False,
             "captured_at": "2026-09-01T12:00:00Z",
         }
-        with patch.object(bitrix_payments, "_organization_name", return_value="ООО Пример"):
+        with (
+            patch.object(bitrix_payments, "_organization_name", return_value="ООО Пример"),
+            patch.object(db, "find_upcoming_enterprise_examination", return_value={
+                "organization_name": "ООО Пример", "brigade": "Бригада 7",
+                "examination_date": "2026-09-15",
+            }),
+        ):
             payload = bitrix_payments.build_payload(
                 order, payment,
                 {"preferred_name": "Иван Иванов", "company_inn": "7701234567"},
@@ -3104,9 +3111,103 @@ class OrchestratorTests(unittest.TestCase):
         self.assertEqual(payload["provider_payment_id"], payment["id"])
         self.assertEqual(payload["client_name"], "Иван Иванов")
         self.assertEqual(payload["organization_name"], "ООО Пример")
+        self.assertEqual(payload["brigade"], "Бригада 7")
+        self.assertEqual(payload["examination_date"], "2026-09-15")
         self.assertEqual(payload["items"], [
             {"name": "Чекап", "amount_kopecks": 1500000},
         ])
+
+    def test_examination_schedule_parses_api_row_and_filters_date_window(self):
+        self.assertEqual(
+            examination_schedule._sheet_month({"title": "Сентябрь 2026"}),
+            (2026, 9),
+        )
+        row = {
+            "id": "row-17",
+            "brigade_id": 7,
+            "date": "15.09.2026",
+            "organization_name": "ООО Пример",
+            "inn": "7701234567",
+            "updated_at": "2026-09-01T10:00:00Z",
+        }
+        parsed = examination_schedule._parse_row(
+            row, "sheet-9", {"7": "Бригада 7"},
+            date(2026, 9, 2), date(2026, 11, 2),
+        )
+        self.assertEqual(parsed["source_row_id"], "row-17")
+        self.assertEqual(parsed["examination_date"], "2026-09-15")
+        self.assertEqual(parsed["brigade"], "Бригада 7")
+        self.assertIsNone(examination_schedule._parse_row(
+            dict(row, date="01.09.2026"), "sheet-9", {"7": "Бригада 7"},
+            date(2026, 9, 2), date(2026, 11, 2),
+        ))
+
+    def test_upcoming_examination_uses_nearest_date_and_combines_brigades(self):
+        db.replace_enterprise_examination_schedule([
+            {
+                "source_sheet_id": "schedule-test", "source_row_id": "1",
+                "inn": "7709876543", "organization_name": "ООО График",
+                "examination_date": "2026-09-18", "brigade": "Бригада 2",
+                "status": "active", "source_updated_at": "",
+            },
+            {
+                "source_sheet_id": "schedule-test", "source_row_id": "2",
+                "inn": "7709876543", "organization_name": "ООО График",
+                "examination_date": "2026-09-18", "brigade": "Бригада 1",
+                "status": "active", "source_updated_at": "",
+            },
+            {
+                "source_sheet_id": "schedule-test", "source_row_id": "3",
+                "inn": "7709876543", "organization_name": "ООО График",
+                "examination_date": "2026-10-01", "brigade": "Бригада 9",
+                "status": "active", "source_updated_at": "",
+            },
+        ], ["schedule-test"])
+        result = db.find_upcoming_enterprise_examination(
+            "7709876543", reference_date=date(2026, 9, 2),
+        )
+        self.assertEqual(result["examination_date"], "2026-09-18")
+        self.assertEqual(result["brigade"], "Бригада 1, Бригада 2")
+
+    def test_schedule_sync_reads_api_and_upserts_only_requested_window(self):
+        schedule_settings = SimpleNamespace(
+            examination_schedule_enabled=True,
+            examination_schedule_access_token="access",
+            examination_schedule_horizon_months=2,
+            examination_schedule_max_sheets=10,
+        )
+
+        def response(path):
+            if path == "v1/sheets":
+                return {"data": [{"id": "sync-sheet"}]}
+            if path == "v1/dictionaries/brigades":
+                return {"data": [{"id": 4, "name": "Бригада 4"}]}
+            if path == "v1/sheets/sync-sheet/rows":
+                return {"data": [
+                    {
+                        "id": "inside", "brigade_id": 4, "date": "20.09.2026",
+                        "organization": "ООО Синхронизация", "inn": "7701112233",
+                    },
+                    {
+                        "id": "outside", "brigade_id": 4, "date": "20.12.2026",
+                        "organization": "ООО Позднее", "inn": "7701112244",
+                    },
+                ]}
+            raise AssertionError(path)
+
+        with (
+            patch.object(examination_schedule, "settings", schedule_settings),
+            patch.object(examination_schedule, "_request", side_effect=response),
+        ):
+            result = examination_schedule.sync_now(date(2026, 9, 2))
+        self.assertEqual(result["rows"], 1)
+        stored = db.find_upcoming_enterprise_examination(
+            "7701112233", reference_date=date(2026, 9, 2),
+        )
+        self.assertEqual(stored["brigade"], "Бригада 4")
+        self.assertIsNone(db.find_upcoming_enterprise_examination(
+            "7701112244", reference_date=date(2026, 9, 2),
+        ))
 
     def test_yookassa_rejects_tampered_amount(self):
         chel_id = "chel_yookassa_tamper_test"

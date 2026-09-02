@@ -67,6 +67,38 @@ class Settings:
     bitrix_connector_timeout_seconds: float = float(
         os.getenv("BITRIX_CONNECTOR_TIMEOUT_SECONDS", "5")
     )
+    examination_schedule_enabled: bool = env_bool("EXAMINATION_SCHEDULE_ENABLED", False)
+    examination_schedule_api_url: str = os.getenv(
+        "EXAMINATION_SCHEDULE_API_URL", "https://api.chelovekgrafik.ru/api",
+    ).strip().rstrip("/")
+    examination_schedule_access_token: str = os.getenv(
+        "EXAMINATION_SCHEDULE_ACCESS_TOKEN", "",
+    ).strip()
+    examination_schedule_refresh_token: str = os.getenv(
+        "EXAMINATION_SCHEDULE_REFRESH_TOKEN", "",
+    ).strip()
+    examination_schedule_token_cache_path: Path = Path(os.getenv(
+        "EXAMINATION_SCHEDULE_TOKEN_CACHE_PATH",
+        BASE_DIR / "data" / "examination-schedule-auth.json",
+    ))
+    examination_schedule_timeout_seconds: float = float(
+        os.getenv("EXAMINATION_SCHEDULE_TIMEOUT_SECONDS", "20")
+    )
+    examination_schedule_sync_interval_seconds: int = int(
+        os.getenv("EXAMINATION_SCHEDULE_SYNC_INTERVAL_SECONDS", "86400")
+    )
+    examination_schedule_initial_delay_seconds: int = int(
+        os.getenv("EXAMINATION_SCHEDULE_INITIAL_DELAY_SECONDS", "5")
+    )
+    examination_schedule_horizon_months: int = int(
+        os.getenv("EXAMINATION_SCHEDULE_HORIZON_MONTHS", "2")
+    )
+    examination_schedule_max_sheets: int = int(
+        os.getenv("EXAMINATION_SCHEDULE_MAX_SHEETS", "120")
+    )
+    examination_schedule_max_response_bytes: int = int(
+        os.getenv("EXAMINATION_SCHEDULE_MAX_RESPONSE_BYTES", "5000000")
+    )
     log_path: Path = Path(os.getenv("LOG_PATH", BASE_DIR / "server-error.log"))
     # The structured conversation summary and questionnaire are passed separately,
     # so the model only needs a bounded recent transcript.  Limiting both message

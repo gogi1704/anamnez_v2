@@ -2913,6 +2913,19 @@ def init_db() -> None:
                 FOREIGN KEY(chel_id) REFERENCES users(chel_id) ON DELETE CASCADE
             );
 
+            CREATE TABLE IF NOT EXISTS enterprise_examination_schedule (
+                source_sheet_id TEXT NOT NULL,
+                source_row_id TEXT NOT NULL,
+                inn TEXT NOT NULL,
+                organization_name TEXT NOT NULL,
+                examination_date TEXT NOT NULL,
+                brigade TEXT NOT NULL,
+                status TEXT NOT NULL DEFAULT 'active',
+                source_updated_at TEXT NOT NULL DEFAULT '',
+                synced_at TEXT NOT NULL,
+                PRIMARY KEY(source_sheet_id, source_row_id)
+            );
+
             CREATE TABLE IF NOT EXISTS external_identities (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 provider TEXT NOT NULL,
@@ -3330,6 +3343,10 @@ def init_db() -> None:
             "CREATE INDEX IF NOT EXISTS idx_payment_orders_provider "
             "ON payment_orders(provider_payment_id, status)"
         )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_enterprise_schedule_inn_date "
+            "ON enterprise_examination_schedule(inn, status, examination_date)"
+        )
 
         # Preserve tickets created by earlier versions without rewriting messages.
         conversations = conn.execute("SELECT id, status, human_status, human_ticket_id FROM conversations").fetchall()
@@ -3354,6 +3371,90 @@ def init_db() -> None:
                     (ticket_id, conversation["id"]),
                 )
         conn.commit()
+
+
+def replace_enterprise_examination_schedule(
+    rows: list[dict], fetched_sheet_ids: list[str],
+) -> None:
+    """Upsert one complete API snapshot and deactivate rows no longer returned."""
+    now = utc_now()
+    with _write_lock, connection() as conn:
+        for item in rows:
+            conn.execute(
+                """INSERT INTO enterprise_examination_schedule
+                (source_sheet_id, source_row_id, inn, organization_name,
+                 examination_date, brigade, status, source_updated_at, synced_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(source_sheet_id, source_row_id) DO UPDATE SET
+                    inn=excluded.inn,
+                    organization_name=excluded.organization_name,
+                    examination_date=excluded.examination_date,
+                    brigade=excluded.brigade,
+                    status=excluded.status,
+                    source_updated_at=excluded.source_updated_at,
+                    synced_at=excluded.synced_at""",
+                (
+                    item["source_sheet_id"], item["source_row_id"], item["inn"],
+                    item["organization_name"], item["examination_date"], item["brigade"],
+                    item.get("status", "active"), item.get("source_updated_at", ""), now,
+                ),
+            )
+        for sheet_id in {str(value) for value in fetched_sheet_ids if str(value)}:
+            active_ids = {
+                str(item["source_row_id"]) for item in rows
+                if str(item["source_sheet_id"]) == sheet_id
+            }
+            if active_ids:
+                placeholders = ",".join("?" for _ in active_ids)
+                conn.execute(
+                    f"""UPDATE enterprise_examination_schedule
+                    SET status='inactive', synced_at=?
+                    WHERE source_sheet_id=? AND source_row_id NOT IN ({placeholders})""",
+                    (now, sheet_id, *sorted(active_ids)),
+                )
+            else:
+                conn.execute(
+                    """UPDATE enterprise_examination_schedule
+                    SET status='inactive', synced_at=? WHERE source_sheet_id=?""",
+                    (now, sheet_id),
+                )
+        conn.commit()
+
+
+def find_upcoming_enterprise_examination(
+    company_inn: str, reference_date: date | None = None,
+) -> dict | None:
+    """Return the nearest active examination, combining same-day brigades."""
+    inn = re.sub(r"\D", "", str(company_inn or ""))
+    if len(inn) not in {10, 12}:
+        return None
+    start = (reference_date or date.today()).isoformat()
+    with connection() as conn:
+        nearest = conn.execute(
+            """SELECT examination_date FROM enterprise_examination_schedule
+            WHERE inn=? AND status='active' AND examination_date>=?
+            ORDER BY examination_date, source_sheet_id, source_row_id LIMIT 1""",
+            (inn, start),
+        ).fetchone()
+        if not nearest:
+            return None
+        records = conn.execute(
+            """SELECT organization_name, examination_date, brigade
+            FROM enterprise_examination_schedule
+            WHERE inn=? AND status='active' AND examination_date=?
+            ORDER BY brigade, source_sheet_id, source_row_id""",
+            (inn, nearest["examination_date"]),
+        ).fetchall()
+    brigades = list(dict.fromkeys(str(row["brigade"]) for row in records if row["brigade"]))
+    organizations = list(dict.fromkeys(
+        str(row["organization_name"]) for row in records if row["organization_name"]
+    ))
+    return {
+        "inn": inn,
+        "organization_name": organizations[0] if organizations else "",
+        "examination_date": str(nearest["examination_date"]),
+        "brigade": ", ".join(brigades),
+    }
 
 
 def create_conversation(title: str = "Новый диалог") -> dict:

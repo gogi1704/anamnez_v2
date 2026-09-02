@@ -5,6 +5,7 @@ from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 from . import company_suggestions
+from . import database as db
 from .config import settings
 
 
@@ -38,6 +39,8 @@ def build_payload(order: dict, payment: dict, profile: dict) -> dict:
         payment.get("payment_method")
         if isinstance(payment.get("payment_method"), dict) else {}
     )
+    company_inn = str(profile.get("company_inn") or "")[:12]
+    schedule = db.find_upcoming_enterprise_examination(company_inn) or {}
     return {
         "order_id": str(order["id"]),
         "provider_payment_id": str(payment["id"]),
@@ -45,8 +48,12 @@ def build_payload(order: dict, payment: dict, profile: dict) -> dict:
         "amount_kopecks": int(order["amount_kopecks"]),
         "currency": str(order.get("currency") or "RUB"),
         "client_name": str(profile.get("preferred_name") or "")[:100],
-        "company_inn": str(profile.get("company_inn") or "")[:12],
-        "organization_name": _organization_name(str(profile.get("company_inn") or "")),
+        "company_inn": company_inn,
+        "organization_name": str(
+            schedule.get("organization_name") or _organization_name(company_inn)
+        )[:300],
+        "brigade": str(schedule.get("brigade") or "")[:200],
+        "examination_date": str(schedule.get("examination_date") or "")[:10],
         "paid_at": str(payment.get("captured_at") or payment.get("created_at") or "")[:80],
         "provider_created_at": str(payment.get("created_at") or "")[:80],
         "provider_description": str(payment.get("description") or "")[:300],
