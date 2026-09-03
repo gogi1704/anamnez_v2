@@ -12,7 +12,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, quote, urlparse
 
-from . import analytics, company_suggestions, database as db, examination_schedule, splitter_tracking
+from . import analytics, company_suggestions, database as db, examination_schedule, funnel_monitor, splitter_tracking
 from .config import BASE_DIR, settings
 from .llm import LLMNotConfigured
 from .lab_results import LabResultsUnavailable, lookup_lab_results
@@ -175,9 +175,23 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                     "public, max-age=31536000, immutable" if immutable else "no-store"
                 ),
             )
-        if path in {"/api/admin/dashboard", "/api/admin/table", "/api/admin/ai-costs", "/api/admin/analytics", "/api/admin/metric2"}:
+        if path in {
+            "/api/admin/dashboard", "/api/admin/table", "/api/admin/ai-costs",
+            "/api/admin/analytics", "/api/admin/metric2",
+            "/api/admin/funnel-monitor", "/api/admin/funnel-monitor/preview",
+        }:
             if not self._admin_authorized():
                 return
+            if path == "/api/admin/funnel-monitor":
+                return self._json(200, {
+                    "settings": db.admin_funnel_monitor_settings(),
+                    "integration_configured": funnel_monitor.configured(),
+                })
+            if path == "/api/admin/funnel-monitor/preview":
+                try:
+                    return self._json(200, funnel_monitor.build_report())
+                except (ValueError, TypeError) as exc:
+                    return self._json(422, {"detail": str(exc)})
             if path == "/api/admin/dashboard":
                 return self._json(200, db.admin_dashboard())
             query = parse_qs(parsed.query)
@@ -376,6 +390,34 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         path = urlparse(self.path).path
+        if path == "/api/admin/funnel-monitor/settings":
+            if not self._admin_authorized():
+                return
+            try:
+                payload = self._read_json(max_bytes=32_000)
+                return self._json(200, {
+                    "settings": db.admin_update_funnel_monitor_settings(payload),
+                    "integration_configured": funnel_monitor.configured(),
+                })
+            except (ValueError, TypeError, json.JSONDecodeError, UnicodeDecodeError) as exc:
+                return self._json(422, {"detail": str(exc)})
+        if path == "/api/admin/funnel-monitor/test":
+            if not self._admin_authorized():
+                return
+            try:
+                payload = self._read_json(max_bytes=4_000)
+                analysis = str(payload.get("analysis") or "all")
+                result = funnel_monitor.send_report(test=True, analysis=analysis)
+                return self._json(202, {
+                    "status": result["connector"].get("status", "queued"),
+                    "report_id": result["payload"]["report_id"],
+                    "analysis": result["payload"]["analysis"],
+                    "analysis_label": result["payload"]["analysis_label"],
+                })
+            except (ValueError, TypeError, json.JSONDecodeError, UnicodeDecodeError) as exc:
+                return self._json(422, {"detail": str(exc)})
+            except funnel_monitor.FunnelMonitorUnavailable as exc:
+                return self._json(503, {"detail": str(exc)})
         if path == "/api/splitter/event":
             try:
                 payload = self._read_json(max_bytes=4_000)
@@ -1748,6 +1790,7 @@ def serve() -> None:
     analytics.cleanup_old_events()
     _record_startup_event("База данных готова")
     schedule_stop = examination_schedule.start_background_sync(_record_startup_event)
+    funnel_monitor_stop = funnel_monitor.start_background_monitor(_record_startup_event)
     server = ConsiliumHTTPServer((settings.host, settings.port), ConsiliumHandler)
     _record_startup_event(f"Порт {settings.port} открыт")
     browser_host = "127.0.0.1" if settings.host in {"0.0.0.0", "::", ""} else settings.host
@@ -1766,5 +1809,6 @@ def serve() -> None:
         pass
     finally:
         schedule_stop.set()
+        funnel_monitor_stop.set()
         _record_startup_event("Остановка сервера")
         server.server_close()

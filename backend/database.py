@@ -64,6 +64,116 @@ def current_chel_id() -> str:
     return _current_chel_id.get()
 
 
+FUNNEL_MONITOR_DEFAULTS = {
+    "enabled": False,
+    "dialog_id": "",
+    "send_time": "09:00",
+    "timezone": "Europe/Moscow",
+    "period_days": 1,
+    "include_standard": True,
+    "include_result": True,
+    "include_payments": True,
+    "include_errors": True,
+    "minimum_users": 20,
+    "alert_threshold_pp": 10.0,
+}
+
+
+def admin_funnel_monitor_settings() -> dict:
+    """Return the singleton daily funnel-monitor configuration."""
+    with connection() as conn:
+        row = conn.execute(
+            "SELECT * FROM funnel_monitor_settings WHERE id = 1"
+        ).fetchone()
+    item = dict(row) if row else {}
+    result = {**FUNNEL_MONITOR_DEFAULTS, **item}
+    for key in ("enabled", "include_standard", "include_result", "include_payments", "include_errors"):
+        result[key] = bool(result.get(key))
+    return result
+
+
+def admin_update_funnel_monitor_settings(payload: dict) -> dict:
+    """Validate and persist the singleton funnel-monitor configuration."""
+    if not isinstance(payload, dict):
+        raise ValueError("Ожидается объект настроек")
+    current = admin_funnel_monitor_settings()
+    boolean_fields = (
+        "enabled", "include_standard", "include_result",
+        "include_payments", "include_errors",
+    )
+    for key in boolean_fields:
+        if key in payload:
+            if not isinstance(payload[key], bool):
+                raise ValueError(f"{key} должен быть true или false")
+            current[key] = payload[key]
+    dialog_id = str(payload.get("dialog_id", current["dialog_id"])).strip()
+    if len(dialog_id) > 100 or (dialog_id and not re.fullmatch(r"(?:chat|sg)?\d+", dialog_id)):
+        raise ValueError("Укажите ID пользователя, chat123 или sg123")
+    send_time = str(payload.get("send_time", current["send_time"])).strip()
+    if not re.fullmatch(r"(?:[01]\d|2[0-3]):[0-5]\d", send_time):
+        raise ValueError("Время отправки должно быть в формате ЧЧ:ММ")
+    timezone_name = str(payload.get("timezone", current["timezone"])).strip()
+    if timezone_name not in {"Europe/Moscow", "UTC"}:
+        raise ValueError("Поддерживаются часовые пояса Europe/Moscow и UTC")
+    try:
+        period_days = int(payload.get("period_days", current["period_days"]))
+        minimum_users = int(payload.get("minimum_users", current["minimum_users"]))
+        alert_threshold_pp = float(payload.get("alert_threshold_pp", current["alert_threshold_pp"]))
+    except (TypeError, ValueError):
+        raise ValueError("Проверьте числовые параметры мониторинга") from None
+    if period_days not in {1, 7, 30}:
+        raise ValueError("Период отчёта должен составлять 1, 7 или 30 дней")
+    if not 1 <= minimum_users <= 1_000_000:
+        raise ValueError("Минимальная выборка должна быть от 1 до 1 000 000")
+    if not 0.1 <= alert_threshold_pp <= 100:
+        raise ValueError("Порог отклонения должен быть от 0,1 до 100 п.п.")
+    if current["enabled"] and not dialog_id:
+        raise ValueError("Для включения мониторинга укажите чат Bitrix24")
+    now = utc_now()
+    with _write_lock, connection() as conn:
+        conn.execute(
+            """INSERT INTO funnel_monitor_settings
+               (id,enabled,dialog_id,send_time,timezone,period_days,
+                include_standard,include_result,include_payments,include_errors,
+                minimum_users,alert_threshold_pp,updated_at)
+               VALUES (1,?,?,?,?,?,?,?,?,?,?,?,?)
+               ON CONFLICT(id) DO UPDATE SET
+                enabled=excluded.enabled,dialog_id=excluded.dialog_id,
+                send_time=excluded.send_time,timezone=excluded.timezone,
+                period_days=excluded.period_days,
+                include_standard=excluded.include_standard,
+                include_result=excluded.include_result,
+                include_payments=excluded.include_payments,
+                include_errors=excluded.include_errors,
+                minimum_users=excluded.minimum_users,
+                alert_threshold_pp=excluded.alert_threshold_pp,
+                updated_at=excluded.updated_at""",
+            (
+                int(current["enabled"]), dialog_id, send_time, timezone_name,
+                period_days, int(current["include_standard"]),
+                int(current["include_result"]), int(current["include_payments"]),
+                int(current["include_errors"]), minimum_users,
+                alert_threshold_pp, now,
+            ),
+        )
+        conn.commit()
+    return admin_funnel_monitor_settings()
+
+
+def record_funnel_monitor_delivery(*, status: str, error: str = "", sent_date: str = "") -> None:
+    now = utc_now()
+    with _write_lock, connection() as conn:
+        conn.execute(
+            """UPDATE funnel_monitor_settings SET
+               last_status=?,last_error=?,last_attempt_at=?,
+               last_sent_at=CASE WHEN ?='sent' THEN ? ELSE last_sent_at END,
+               last_sent_date=CASE WHEN ?='sent' THEN ? ELSE last_sent_date END
+               WHERE id=1""",
+            (status[:30], str(error)[:500], now, status, now, status, sent_date),
+        )
+        conn.commit()
+
+
 def normalize_from_manager(value: str | None) -> str:
     """Return a safe attribution label suitable for permanent user storage."""
     normalized = str(value or "").strip()[:80]
@@ -2889,6 +2999,30 @@ def init_db() -> None:
                 migration_key TEXT PRIMARY KEY,
                 applied_at TEXT NOT NULL
             );
+
+            CREATE TABLE IF NOT EXISTS funnel_monitor_settings (
+                id INTEGER PRIMARY KEY CHECK(id = 1),
+                enabled INTEGER NOT NULL DEFAULT 0,
+                dialog_id TEXT NOT NULL DEFAULT '',
+                send_time TEXT NOT NULL DEFAULT '09:00',
+                timezone TEXT NOT NULL DEFAULT 'Europe/Moscow',
+                period_days INTEGER NOT NULL DEFAULT 1,
+                include_standard INTEGER NOT NULL DEFAULT 1,
+                include_result INTEGER NOT NULL DEFAULT 1,
+                include_payments INTEGER NOT NULL DEFAULT 1,
+                include_errors INTEGER NOT NULL DEFAULT 1,
+                minimum_users INTEGER NOT NULL DEFAULT 20,
+                alert_threshold_pp REAL NOT NULL DEFAULT 10,
+                last_sent_date TEXT NOT NULL DEFAULT '',
+                last_sent_at TEXT NOT NULL DEFAULT '',
+                last_attempt_at TEXT NOT NULL DEFAULT '',
+                last_status TEXT NOT NULL DEFAULT '',
+                last_error TEXT NOT NULL DEFAULT '',
+                updated_at TEXT NOT NULL
+            );
+
+            INSERT OR IGNORE INTO funnel_monitor_settings (id,updated_at)
+            VALUES (1,CURRENT_TIMESTAMP);
 
             CREATE TABLE IF NOT EXISTS payment_orders (
                 id TEXT PRIMARY KEY,

@@ -64,9 +64,11 @@ class Settings:
     ).strip()
     bitrix_connector_url: str = os.getenv("BITRIX_CONNECTOR_URL", "").strip().rstrip("/")
     bitrix_payment_secret: str = os.getenv("BITRIX_PAYMENT_SECRET", "").strip()
+    bitrix_metrics_secret: str = os.getenv("BITRIX_METRICS_SECRET", "").strip()
     bitrix_connector_timeout_seconds: float = float(
         os.getenv("BITRIX_CONNECTOR_TIMEOUT_SECONDS", "5")
     )
+    funnel_monitor_poll_seconds: int = int(os.getenv("FUNNEL_MONITOR_POLL_SECONDS", "30"))
     examination_schedule_enabled: bool = env_bool("EXAMINATION_SCHEDULE_ENABLED", False)
     examination_schedule_api_url: str = os.getenv(
         "EXAMINATION_SCHEDULE_API_URL", "https://api.chelovekgrafik.ru/api",

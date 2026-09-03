@@ -11,7 +11,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/static/dashboard.css?v=20260831-actual-price-v1">
+  <link rel="stylesheet" href="/static/dashboard.css?v=20260903-funnel-monitor-v2">
 </head>
 <body>
   <main class="dashboard-shell">
@@ -54,6 +54,7 @@
         <button class="active" id="dashboardTab" type="button">Дашборд</button>
         <button id="analyticsTab" type="button">Воронка и поведение</button>
         <button id="metric2Tab" type="button">Метрика 2.0</button>
+        <button id="monitorTab" type="button">Мониторинг в Bitrix24</button>
         <button id="managersTab" type="button">Управление менеджерами</button>
         <button id="examinationsTab" type="button">Дополнительные обследования</button>
         <button id="costsTab" type="button">Расходы</button>
@@ -158,6 +159,34 @@
           <div class="panel-heading"><div><p class="eyebrow" id="metric2FlowEyebrow">Обычная ссылка</p><h2 id="metric2FlowTitle">Анкета и выбор обследований</h2><p id="metric2FlowDescription">Нажмите на любой экран, чтобы открыть крупный макет и увидеть статистику всех кнопок и переходов.</p></div></div>
           <div class="metric2-flow" id="metric2Flow"></div>
         </article>
+      </section>
+
+      <section class="monitor-admin hidden" id="monitorAdminView">
+        <article class="panel monitor-heading-panel">
+          <div class="panel-heading"><div><p class="eyebrow">Ежедневный контроль</p><h2>Мониторинг воронки в Bitrix24</h2><p>Консилиум передаёт в выбранный чат только обезличенные агрегаты, сравнивает завершённый период с предыдущим и формирует задание для Bitrix AI.</p></div><span class="monitor-integration-state" id="monitorIntegrationState">Проверяем интеграцию…</span></div>
+        </article>
+        <div class="monitor-layout">
+          <form class="panel monitor-form" id="monitorForm">
+            <div class="monitor-switch-row"><div><h3>Автоматическая отправка</h3><p>Один отчёт в сутки после завершения выбранного периода.</p></div><label class="monitor-toggle"><input id="monitorEnabled" type="checkbox"><span>Включено</span></label></div>
+            <div class="monitor-fields">
+              <label>Чат с BitrixGPT или проект Bitrix24<input id="monitorDialogId" type="text" maxlength="100" placeholder="chat123 или sg123"><small>Для автоматического разбора укажите ID отдельного чата с BitrixGPT внутри проекта. Главный чат проекта тоже поддерживается, но в нём AI может потребовать вызов через @.</small></label>
+              <label>Время отправки<input id="monitorSendTime" type="time" required></label>
+              <label>Часовой пояс<select id="monitorTimezone"><option value="Europe/Moscow">Москва</option><option value="UTC">UTC</option></select></label>
+              <label>Период отчёта<select id="monitorPeriodDays"><option value="1">Предыдущий день</option><option value="7">Предыдущие 7 дней</option><option value="30">Предыдущие 30 дней</option></select></label>
+              <label>Минимальная выборка<input id="monitorMinimumUsers" type="number" min="1" max="1000000" required><small>Ниже этого значения выводы помечаются предварительными.</small></label>
+              <label>Порог тревоги, п.п.<input id="monitorAlertThreshold" type="number" min="0.1" max="100" step="0.1" required><small>Падение конверсии относительно предыдущего периода.</small></label>
+            </div>
+            <fieldset class="monitor-sections"><legend>Состав отчёта</legend><label><input id="monitorStandard" type="checkbox"> Обычная воронка</label><label><input id="monitorResult" type="checkbox"> Путь /result</label><label><input id="monitorPayments" type="checkbox"> Оплаты</label><label><input id="monitorErrors" type="checkbox"> Технические ошибки</label></fieldset>
+            <div class="monitor-actions"><button type="submit">Сохранить настройки</button><button class="secondary" id="monitorPreviewButton" type="button">Сформировать предпросмотр</button></div>
+            <div class="monitor-manual-send"><div><h3>Запустить анализ сейчас</h3><p>Выберите нужный отчёт. Он сразу будет поставлен в очередь выбранного чата Bitrix24, расписание при этом не изменится.</p></div><div class="monitor-analysis-buttons"><button class="secondary" type="button" data-monitor-analysis="all">Полный отчёт</button><button class="secondary" type="button" data-monitor-analysis="standard">Обычная воронка</button><button class="secondary" type="button" data-monitor-analysis="result">Путь /result</button><button class="secondary" type="button" data-monitor-analysis="payments">Оплаты</button><button class="secondary" type="button" data-monitor-analysis="errors">Технические ошибки</button></div></div>
+            <p class="form-status hidden" id="monitorFormStatus" role="status"></p>
+          </form>
+          <aside class="panel monitor-status-panel">
+            <p class="eyebrow">Состояние доставки</p><h3 id="monitorLastStatus">Отчёты ещё не отправлялись</h3><dl id="monitorStatusDetails"></dl>
+            <div class="monitor-privacy"><strong>Что не передаётся</strong><p>ФИО, chel_id, телефоны, ответы анкеты, сообщения, медицинские данные и номера пробирок.</p></div>
+          </aside>
+        </div>
+        <article class="panel monitor-preview-panel hidden" id="monitorPreviewPanel"><div class="panel-heading"><div><p class="eyebrow">Проверка до отправки</p><h2>Предпросмотр агрегатов</h2><p>Это техническое представление того, что будет передано Connector. Пользовательские данные в нём отсутствуют.</p></div></div><pre id="monitorPreview"></pre></article>
       </section>
 
       <section class="costs-admin hidden" id="costsAdminView">
@@ -450,6 +479,6 @@
       </div>
     </section>
   </div>
-  <script src="/static/dashboard.js?v=20260831-actual-price-v1" defer></script>
+  <script src="/static/dashboard.js?v=20260903-funnel-monitor-v2" defer></script>
 </body>
 </html>

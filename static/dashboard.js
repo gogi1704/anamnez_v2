@@ -1451,11 +1451,105 @@ async function loadFavoriteSources() {
   renderFavorites();
 }
 
+function showMonitorStatus(message, error = false) {
+  const status = $('#monitorFormStatus');
+  status.textContent = message;
+  status.classList.toggle('error', error);
+  status.classList.toggle('hidden', !message);
+}
+
+function monitorPayload() {
+  return {
+    enabled:$('#monitorEnabled').checked,
+    dialog_id:$('#monitorDialogId').value.trim(),
+    send_time:$('#monitorSendTime').value,
+    timezone:$('#monitorTimezone').value,
+    period_days:Number($('#monitorPeriodDays').value),
+    minimum_users:Number($('#monitorMinimumUsers').value),
+    alert_threshold_pp:Number($('#monitorAlertThreshold').value),
+    include_standard:$('#monitorStandard').checked,
+    include_result:$('#monitorResult').checked,
+    include_payments:$('#monitorPayments').checked,
+    include_errors:$('#monitorErrors').checked,
+  };
+}
+
+function renderFunnelMonitor(data) {
+  const item = data.settings || {};
+  $('#monitorEnabled').checked = Boolean(item.enabled);
+  $('#monitorDialogId').value = item.dialog_id || '';
+  $('#monitorSendTime').value = item.send_time || '09:00';
+  $('#monitorTimezone').value = item.timezone || 'Europe/Moscow';
+  $('#monitorPeriodDays').value = String(item.period_days || 1);
+  $('#monitorMinimumUsers').value = String(item.minimum_users || 20);
+  $('#monitorAlertThreshold').value = String(item.alert_threshold_pp || 10);
+  $('#monitorStandard').checked = Boolean(item.include_standard);
+  $('#monitorResult').checked = Boolean(item.include_result);
+  $('#monitorPayments').checked = Boolean(item.include_payments);
+  $('#monitorErrors').checked = Boolean(item.include_errors);
+  const integration = $('#monitorIntegrationState');
+  integration.textContent = data.integration_configured ? 'Connector настроен' : 'Нужны секреты интеграции';
+  integration.classList.toggle('ready',Boolean(data.integration_configured));
+  const statusLabels = {sent:'Последний отчёт передан',failed:'Последняя отправка завершилась ошибкой'};
+  $('#monitorLastStatus').textContent = statusLabels[item.last_status] || 'Отчёты ещё не отправлялись';
+  $('#monitorStatusDetails').innerHTML = [
+    ['Последняя отправка',formatDate(item.last_sent_at)],
+    ['Последняя попытка',formatDate(item.last_attempt_at)],
+    ['Дата отчёта',item.last_sent_date || '—'],
+    ['Ошибка',item.last_error || '—'],
+  ].map(([label,value]) => `<div><dt>${escapeHtml(label)}</dt><dd>${escapeHtml(value)}</dd></div>`).join('');
+}
+
+async function loadFunnelMonitor() {
+  const data = await adminFetch('/api/admin/funnel-monitor');
+  renderFunnelMonitor(data);
+}
+
+async function saveFunnelMonitor(event = null, {silent = false} = {}) {
+  event?.preventDefault();
+  showMonitorStatus('');
+  try {
+    const data = await adminFetch('/api/admin/funnel-monitor/settings',undefined,{
+      method:'POST',body:JSON.stringify(monitorPayload()),
+    });
+    renderFunnelMonitor(data);
+    if (!silent) showMonitorStatus('Настройки мониторинга сохранены.');
+    loadedAdminViews.add('monitor');
+    return data;
+  } catch (error) {
+    showMonitorStatus(error.message,true);
+    throw error;
+  }
+}
+
+async function previewFunnelMonitor() {
+  await saveFunnelMonitor(null,{silent:true});
+  const report = await adminFetch('/api/admin/funnel-monitor/preview');
+  $('#monitorPreview').textContent = JSON.stringify(report,null,2);
+  $('#monitorPreviewPanel').classList.remove('hidden');
+  showMonitorStatus('Предпросмотр сформирован. Данные ещё не отправлены.');
+}
+
+async function testFunnelMonitor(analysis = 'all', button = null) {
+  const previousText = button?.textContent;
+  if (button) { button.disabled = true; button.textContent = 'Отправляем…'; }
+  try {
+    await saveFunnelMonitor(null,{silent:true});
+    const result = await adminFetch('/api/admin/funnel-monitor/test',undefined,{
+      method:'POST',body:JSON.stringify({analysis}),
+    });
+    showMonitorStatus(`${result.analysis_label} — отчёт поставлен в очередь Bitrix24.`);
+  } finally {
+    if (button) { button.disabled = false; button.textContent = previousText; }
+  }
+}
+
 function showAdminView(view) {
-  activeAdminView = ['favorites','analytics','metric2','managers','examinations','costs'].includes(view) ? view : 'dashboard';
+  activeAdminView = ['favorites','analytics','metric2','monitor','managers','examinations','costs'].includes(view) ? view : 'dashboard';
   const favoritesVisible = activeAdminView === 'favorites';
   const analyticsVisible = activeAdminView === 'analytics';
   const metric2Visible = activeAdminView === 'metric2';
+  const monitorVisible = activeAdminView === 'monitor';
   const managersVisible = activeAdminView === 'managers';
   const examinationsVisible = activeAdminView === 'examinations';
   const costsVisible = activeAdminView === 'costs';
@@ -1464,10 +1558,12 @@ function showAdminView(view) {
   $('#dashboard').classList.toggle('show-costs', costsVisible);
   $('#dashboard').classList.toggle('show-analytics', analyticsVisible);
   $('#dashboard').classList.toggle('show-metric2', metric2Visible);
+  $('#dashboard').classList.toggle('show-monitor', monitorVisible);
   $('#dashboard').classList.toggle('show-favorites', favoritesVisible);
   $('#favoritesAdminView').classList.toggle('hidden', !favoritesVisible);
   $('#analyticsAdminView').classList.toggle('hidden', !analyticsVisible);
   $('#metric2AdminView').classList.toggle('hidden', !metric2Visible);
+  $('#monitorAdminView').classList.toggle('hidden', !monitorVisible);
   $('#managerAdminView').classList.toggle('hidden', !managersVisible);
   $('#examinationAdminView').classList.toggle('hidden', !examinationsVisible);
   $('#costsAdminView').classList.toggle('hidden', !costsVisible);
@@ -1475,6 +1571,7 @@ function showAdminView(view) {
   $('#favoritesTab').classList.toggle('active', favoritesVisible);
   $('#analyticsTab').classList.toggle('active', analyticsVisible);
   $('#metric2Tab').classList.toggle('active', metric2Visible);
+  $('#monitorTab').classList.toggle('active', monitorVisible);
   $('#managersTab').classList.toggle('active', managersVisible);
   $('#examinationsTab').classList.toggle('active', examinationsVisible);
   $('#costsTab').classList.toggle('active', costsVisible);
@@ -1495,6 +1592,7 @@ async function loadAdminViewData(view = activeAdminView, {force = false} = {}) {
   else if (view === 'costs') request = loadCosts();
   else if (view === 'analytics') request = loadAnalytics();
   else if (view === 'metric2') request = loadMetric2();
+  else if (view === 'monitor') request = loadFunnelMonitor();
   else return;
   await request;
   loadedAdminViews.add(view);
@@ -1903,9 +2001,15 @@ $('#dashboardTab').addEventListener('click', () => showAdminView('dashboard'));
 $('#favoritesTab').addEventListener('click', () => showAdminView('favorites'));
 $('#analyticsTab').addEventListener('click', () => showAdminView('analytics'));
 $('#metric2Tab').addEventListener('click', () => showAdminView('metric2'));
+$('#monitorTab').addEventListener('click', () => showAdminView('monitor'));
 $('#managersTab').addEventListener('click', () => showAdminView('managers'));
 $('#examinationsTab').addEventListener('click', () => showAdminView('examinations'));
 $('#costsTab').addEventListener('click', () => showAdminView('costs'));
+$('#monitorForm').addEventListener('submit', event => saveFunnelMonitor(event).catch(() => {}));
+$('#monitorPreviewButton').addEventListener('click', () => previewFunnelMonitor().catch(error => showMonitorStatus(error.message,true)));
+document.querySelectorAll('[data-monitor-analysis]').forEach(button => button.addEventListener('click', () => {
+  testFunnelMonitor(button.dataset.monitorAnalysis,button).catch(error => showMonitorStatus(error.message,true));
+}));
 $('#metric2Apply').addEventListener('click', () => loadMetric2().catch(showDashboardError));
 $('#metric2StandardFlow').addEventListener('click', () => {
   if (metric2ActiveFlow !== 'standard') loadMetric2('standard').catch(showDashboardError);
