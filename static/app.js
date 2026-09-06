@@ -34,9 +34,12 @@ const state = {
   publicConfig: {},
   messengerLinkJustCompleted: '',
   purchases: [],
+  consultations: [],
+  paymentReviewConversationId: '',
   resultFlowActive: false,
   resultFlowDocuments: [],
   miniProfilePurpose: 'interpretation',
+  pendingLabAction: null,
 };
 
 const $ = selector => document.querySelector(selector);
@@ -47,6 +50,7 @@ const ANONYMOUS_ACCESS_KEY = 'consilium_anonymous_access';
 const WELCOME_SEEN_KEY = 'consilium_welcome_seen';
 const INSTALL_DISMISSED_KEY = 'consilium_install_dismissed_at';
 const MESSENGER_LINK_PENDING_KEY = 'consilium_messenger_link_pending';
+const SPECIALIST_ANALYSIS_PENDING_KEY = 'consilium_specialist_analysis_pending';
 const PAYMENT_PENDING_ORDER_KEY = 'consilium_pending_payment_order';
 const RESULT_FLOW_KEY = 'consilium_result_flow_v1';
 const INSTALL_REOFFER_AFTER_MS = 7 * 24 * 60 * 60 * 1000;
@@ -445,6 +449,35 @@ async function api(path, options = {}) {
   return data;
 }
 
+let userProgressOperations = 0;
+let userProgressTimer = null;
+
+function beginUserProgress(message = 'Загружаем данные…') {
+  userProgressOperations += 1;
+  const text = $('#userTopProgressText');
+  if (text) text.textContent = message;
+  if (userProgressTimer) clearTimeout(userProgressTimer);
+  userProgressTimer = setTimeout(() => {
+    const progress = $('#userTopProgress');
+    if (progress && userProgressOperations > 0) {
+      progress.classList.remove('hidden');
+      progress.setAttribute('aria-busy', 'true');
+    }
+  }, 450);
+}
+
+function endUserProgress() {
+  userProgressOperations = Math.max(0, userProgressOperations - 1);
+  if (userProgressOperations) return;
+  if (userProgressTimer) clearTimeout(userProgressTimer);
+  userProgressTimer = null;
+  const progress = $('#userTopProgress');
+  if (progress) {
+    progress.classList.add('hidden');
+    progress.setAttribute('aria-busy', 'false');
+  }
+}
+
 function setAuthStatus(message = '', error = false) {
   const status = $('#authStatus');
   status.textContent = message;
@@ -785,7 +818,22 @@ function updateMessengerLinkMenu() {
 }
 
 function closeMessengerLinkModal() {
+  if ($('#messengerLinkModal').dataset.source === 'lab_specialist') {
+    sessionStorage.removeItem(SPECIALIST_ANALYSIS_PENDING_KEY);
+  }
   $('#messengerLinkModal').classList.add('hidden');
+}
+
+function continueFromMessengerLinkModal() {
+  const source = $('#messengerLinkModal').dataset.source || 'menu';
+  if (source !== 'lab_specialist') {
+    closeMessengerLinkModal();
+    return;
+  }
+  const pending = state.pendingLabAction || {type:'specialist', documentId:'all'};
+  sessionStorage.removeItem(SPECIALIST_ANALYSIS_PENDING_KEY);
+  $('#messengerLinkModal').classList.add('hidden');
+  requestSpecialistAnalysis(pending.documentId, null, {messengerOfferShown:true});
 }
 
 function renderMessengerLinkOptions() {
@@ -815,10 +863,15 @@ function openMessengerLinkModal({ source = 'menu', justLinked = '' } = {}) {
   success.classList.remove('error');
   success.classList.toggle('hidden', !justLinked);
   success.textContent = justLinked ? `Готово — ${messengerName(justLinked)} привязан к вашему профилю.` : '';
-  $('#messengerLinkDescription').textContent = linkedMessengerProviders().size
-    ? 'Добавьте ещё один способ входа или проверьте уже подключённые мессенджеры.'
-    : 'Сохраните доступ к анкете, выбранным обследованиям, результатам и расшифровкам на любом устройстве.';
-  $('#messengerLinkLater').textContent = justLinked ? 'Готово' : 'Не сейчас';
+  const specialist = source === 'lab_specialist';
+  $('#messengerLinkDescription').textContent = specialist
+    ? 'Привяжите Telegram или MAX, чтобы не потерять доступ к диалогу и увидеть ответ врача на любом устройстве.'
+    : linkedMessengerProviders().size
+      ? 'Добавьте ещё один способ входа или проверьте уже подключённые мессенджеры.'
+      : 'Сохраните доступ к анкете, выбранным обследованиям, результатам и расшифровкам на любом устройстве.';
+  $('#messengerLinkLater').textContent = specialist
+    ? 'Продолжить без привязки'
+    : justLinked ? 'Готово' : 'Не сейчас';
   $('#messengerLinkModal').dataset.source = source;
   $('#messengerLinkModal').classList.remove('hidden');
   trackEvent('messenger_link_modal_viewed', {source, linked_count:linkedMessengerProviders().size});
@@ -1519,6 +1572,7 @@ async function handlePaymentReturn() {
   // stored inside an already-created YooKassa payment.
   state.paymentReviewSource = pendingOrder.source || params.get('payment_source') || '';
   state.paymentReviewOrderId = orderId;
+  state.paymentReviewConversationId = String(pendingOrder.conversationId || '');
   state.paymentReceiptEmail = String(pendingOrder.receiptEmail || '').trim();
   state.returnToChatAfterExaminations = Boolean(
     pendingOrder.returnToChat || params.get('return_to_chat') === '1' || state.paymentReviewSource === 'purchases'
@@ -1544,6 +1598,12 @@ async function handlePaymentReturn() {
     let status = result.order?.status;
     if (status === 'succeeded' && result.order?.paid) {
       clearPaymentReturn();
+      if (result.order.order_type === 'consultation' || state.paymentReviewSource === 'consultation') {
+        state.paymentReviewConversationId = result.order.conversation_id || state.paymentReviewConversationId;
+        trackEvent('consultation_payment_succeeded', {provider:'yookassa'});
+        renderConsultationPaymentSuccess(result.order);
+        return true;
+      }
       state.onboarding = await api('/api/onboarding');
       state.profile = state.onboarding.profile;
       state.selectedTests = new Set(state.onboarding.selected_tests || []);
@@ -1558,6 +1618,12 @@ async function handlePaymentReturn() {
       status = result.order?.status;
       if (status === 'succeeded' && result.order?.paid) {
         clearPaymentReturn();
+        if (result.order.order_type === 'consultation' || state.paymentReviewSource === 'consultation') {
+          state.paymentReviewConversationId = result.order.conversation_id || state.paymentReviewConversationId;
+          trackEvent('consultation_payment_succeeded', {provider:'yookassa'});
+          renderConsultationPaymentSuccess(result.order);
+          return true;
+        }
         state.onboarding = await api('/api/onboarding');
         state.profile = state.onboarding.profile;
         state.selectedTests = new Set(state.onboarding.selected_tests || []);
@@ -1574,12 +1640,13 @@ async function handlePaymentReturn() {
     trackEvent('payment_result_viewed', {provider:'yookassa', status});
     trackOnboardingScreen('payment_result');
     const title = canceled ? 'Оплата не прошла' : abandoned ? 'Оплата не завершена' : 'Оплата ещё обрабатывается';
+    const consultationPayment = state.paymentReviewSource === 'consultation' || result.order?.order_type === 'consultation';
     const message = canceled
-      ? 'ЮKassa отменила платёж. Можно попробовать ещё раз или выбрать оплату на медосмотре.'
+      ? (consultationPayment ? 'ЮKassa отменила платёж. Можно попробовать оплатить консультацию ещё раз.' : 'ЮKassa отменила платёж. Можно попробовать ещё раз или выбрать оплату на медосмотре.')
       : abandoned
         ? 'Вы вернулись без подтверждённой оплаты. Попытка сохранена в разделе «Мои покупки».'
         : 'ЮKassa ещё не подтвердила платёж. Подождите немного и проверьте снова.';
-    $('#onboardingContent').innerHTML = `<div class="payment-result"><span class="payment-result-icon ${(canceled || abandoned) ? 'error' : ''}">${(canceled || abandoned) ? '!' : '⌛'}</span><h1>${title}</h1><p class="onboarding-lead">${message}</p><div class="onboarding-actions payment-result-actions"><button type="button" class="onboarding-back" data-onboarding-action="back-to-payment">Вернуться к оплате</button><button type="button" class="onboarding-next" data-onboarding-action="open-purchases">Мои покупки</button><button type="button" class="payment-result-back" data-onboarding-action="leave-payment-result">Назад</button></div></div>`;
+    $('#onboardingContent').innerHTML = `<div class="payment-result"><span class="payment-result-icon ${(canceled || abandoned) ? 'error' : ''}">${(canceled || abandoned) ? '!' : '⌛'}</span><h1>${title}</h1><p class="onboarding-lead">${message}</p><div class="onboarding-actions payment-result-actions"><button type="button" class="onboarding-back" data-onboarding-action="${consultationPayment ? 'back-to-consultation-payment' : 'back-to-payment'}">Вернуться к оплате</button><button type="button" class="onboarding-next" data-onboarding-action="open-purchases">Мои покупки</button><button type="button" class="payment-result-back" data-onboarding-action="leave-payment-result">Назад</button></div></div>`;
     return true;
   } catch (error) {
     $('#onboardingContent').innerHTML = `<div class="payment-result"><span class="payment-result-icon error">!</span><h1>Не удалось проверить оплату</h1><p class="onboarding-lead">${escapeHtml(error.message)}</p><button type="button" class="onboarding-next" data-onboarding-action="check-payment" data-order-id="${escapeHtml(orderId)}">Повторить проверку</button></div>`;
@@ -1623,7 +1690,14 @@ async function leavePaymentResult() {
   buttons.forEach(button => { button.disabled = true; });
   try {
     trackOnboardingAction('back', 'payment_result');
-    if (source === 'purchases') {
+    if (source === 'consultation') {
+      await openMainApp({skipIntro:true});
+      state.paymentReviewSource = '';
+      state.paymentReviewOrderId = '';
+      state.paymentReviewConversationId = '';
+      state.paymentReceiptEmail = '';
+      await openConsultations();
+    } else if (source === 'purchases') {
       await openMainApp({skipIntro:true});
       state.paymentReviewSource = '';
       state.paymentReviewOrderId = '';
@@ -1647,6 +1721,17 @@ async function leavePaymentResult() {
   }
 }
 
+async function returnToConsultationPayment() {
+  renderConsultationPayment();
+  const receiptInput = $('#consultationReceiptEmail');
+  if (receiptInput && !receiptInput.value.trim()) {
+    receiptInput.focus();
+    showOnboardingError('Укажите электронную почту для чека, затем нажмите «Оплатить 1 000 ₽».');
+    return;
+  }
+  await startConsultationPayment();
+}
+
 function renderPaymentSuccess(order) {
   const orderNumber = String(order?.id || state.paymentReviewOrderId || '').slice(-8).toUpperCase();
   trackEvent('payment_success_viewed', {provider:'yookassa'});
@@ -1668,6 +1753,93 @@ function renderPaymentSuccess(order) {
         <button type="button" class="onboarding-back" data-onboarding-action="continue-after-payment">Перейти в чат</button>
       </div>
     </div>`;
+}
+
+function renderConsultationPayment() {
+  closeConsultations();
+  $('#appShell').classList.add('hidden');
+  $('#onboarding').classList.remove('hidden');
+  setOnboardingMeta('Консультация', 92);
+  const emailField = state.publicConfig.online_payments_enabled && state.publicConfig.payment_receipt_email_required
+    ? `<label class="payment-email-label">Электронная почта для онлайн-чека <span>обязательное поле</span><input id="consultationReceiptEmail" type="email" autocomplete="email" maxlength="254" placeholder="name@example.ru" required value="${escapeAttr(state.paymentReceiptEmail)}"></label>` : '';
+  $('#onboardingContent').innerHTML = `
+    <span class="onboarding-kicker">Консультация врача</span>
+    <h1>Оплата консультации</h1>
+    <p class="onboarding-lead">После подтверждения оплаты врач напишет в ваш чат и согласует удобные дату и время.</p>
+    <section class="consultation-payment-card"><header><strong>Консультация врача</strong><b>1 000 ₽</b></header><p>Общение продолжится в Консилиуме. История и статус оплаты сохранятся в разделе «Мои покупки».</p></section>
+    ${emailField}
+    <div class="onboarding-actions"><button type="button" class="onboarding-back" data-onboarding-action="cancel-consultation-payment">Назад</button><button type="button" class="onboarding-next" data-onboarding-action="pay-consultation">Оплатить 1 000 ₽</button></div>`;
+}
+
+async function startConsultationPayment() {
+  const receiptInput = $('#consultationReceiptEmail');
+  if (receiptInput && !receiptInput.checkValidity()) {
+    receiptInput.reportValidity();
+    return;
+  }
+  state.paymentReceiptEmail = receiptInput?.value?.trim() || '';
+  const buttons = [...document.querySelectorAll('#onboardingContent button')];
+  buttons.forEach(button => { button.disabled = true; });
+  beginUserProgress('Открываем безопасную оплату…');
+  try {
+    const result = await api('/api/payments/yookassa/create-consultation', {
+      method:'POST',
+      body:JSON.stringify({
+        conversation_id:state.paymentReviewConversationId || state.conversationId,
+        receipt_email:state.paymentReceiptEmail,
+      }),
+    });
+    const order = result.order || {};
+    state.paymentReviewOrderId = order.id || '';
+    state.paymentReviewConversationId = order.conversation_id || state.conversationId || '';
+    state.paymentReviewSource = 'consultation';
+    localStorage.setItem(PAYMENT_PENDING_ORDER_KEY, JSON.stringify({
+      id:order.id, returnToChat:true, source:'consultation',
+      conversationId:state.paymentReviewConversationId,
+      receiptEmail:state.paymentReceiptEmail, savedAt:Date.now(),
+    }));
+    trackEvent('consultation_payment_created', {provider:'yookassa', amount_kopecks:100000});
+    if (order.confirmation_url?.startsWith('https://')) {
+      window.location.assign(order.confirmation_url);
+      return;
+    }
+    const returnUrl = new URL(location.href);
+    returnUrl.searchParams.set('payment_return', order.id);
+    returnUrl.searchParams.set('return_to_chat', '1');
+    returnUrl.searchParams.set('payment_source', 'consultation');
+    history.replaceState({}, '', returnUrl);
+    await handlePaymentReturn();
+  } catch (error) {
+    buttons.forEach(button => { button.disabled = false; });
+    showOnboardingError(error.message);
+  } finally {
+    endUserProgress();
+  }
+}
+
+function renderConsultationPaymentSuccess(order) {
+  state.paymentReviewConversationId = order?.conversation_id || state.paymentReviewConversationId;
+  setOnboardingMeta('Оплачено', 100);
+  $('#onboardingContent').innerHTML = `
+    <div class="payment-success-result">
+      <span class="payment-result-icon success" aria-hidden="true">✓</span>
+      <span class="onboarding-kicker">Консультация оплачена</span>
+      <h1>Врач скоро напишет вам</h1>
+      <p class="onboarding-lead">Оплата 1 000 ₽ подтверждена. Врач напишет в этот чат, и вы согласуете удобные дату и время консультации.</p>
+      <section class="payment-find-guide"><strong>Где найти консультацию</strong><p>Запись об оплате находится в «Моих покупках», а приобретённые консультации — в разделе «Консультации».</p></section>
+      <div class="onboarding-actions"><button type="button" class="onboarding-next" data-onboarding-action="open-paid-consultation-chat">Открыть чат с врачом</button><button type="button" class="onboarding-back" data-onboarding-action="open-consultations-after-payment">Мои консультации</button></div>
+    </div>`;
+}
+
+async function finishConsultationPayment(openList = false) {
+  const conversationId = state.paymentReviewConversationId;
+  await openMainApp({skipIntro:true});
+  if (conversationId) await openConversation(conversationId);
+  if (openList) await openConsultations();
+  state.paymentReviewSource = '';
+  state.paymentReviewOrderId = '';
+  state.paymentReviewConversationId = '';
+  state.paymentReceiptEmail = '';
 }
 
 async function finishPaymentSuccess(openHistory = false) {
@@ -1943,6 +2115,17 @@ $('#onboardingContent').addEventListener('click', async event => {
   else if (action === 'pay-online') { trackOnboardingAction('pay_online', 'payment'); trackEvent('funnel_action', {stage:'examinations_options',action:'pay_online'}); startOnlinePayment(); }
   else if (action === 'pay-at-exam') { trackOnboardingAction('pay_at_exam', 'payment'); trackEvent('funnel_action', {stage:'examinations_options',action:'pay_at_exam'}); confirmPaymentAtExam(); }
   else if (action === 'back-to-payment') await returnToOnlinePayment();
+  else if (action === 'back-to-consultation-payment') await returnToConsultationPayment();
+  else if (action === 'pay-consultation') await startConsultationPayment();
+  else if (action === 'cancel-consultation-payment') {
+    state.paymentReviewSource = '';
+    state.paymentReviewOrderId = '';
+    state.paymentReviewConversationId = '';
+    await openMainApp({skipIntro:true});
+    await openConsultations();
+  }
+  else if (action === 'open-paid-consultation-chat') await finishConsultationPayment(false);
+  else if (action === 'open-consultations-after-payment') await finishConsultationPayment(true);
   else if (action === 'leave-payment-result') await leavePaymentResult();
   else if (action === 'open-purchases') openPurchases();
   else if (action === 'open-purchases-after-payment') await finishPaymentSuccess(true);
@@ -2062,6 +2245,7 @@ function addMessage(sender, text, agentId = state.active, urgent = false, create
   }
   const agent = AGENTS[agentId] || AGENTS.manager;
   const humanManager = sender === 'agent' && metadata.sender_type === 'human_manager';
+  const humanRole = metadata.staff_role === 'doctor' ? 'Врач-специалист' : 'Менеджер';
   const wrapper = document.createElement('div');
   const labInterpretation = sender === 'agent' && metadata.action === 'lab_interpretation';
   wrapper.className = `message-row ${sender}${urgent ? ' urgent' : ''}${humanManager ? ' human-manager' : ''}${labInterpretation ? ' lab-interpretation' : ''}`;
@@ -2072,13 +2256,16 @@ function addMessage(sender, text, agentId = state.active, urgent = false, create
   const cached = metadata.action === 'lab_interpretation' && metadata.interpretation_cached
     ? '<b class="special-label">Сохранённая расшифровка</b>' : '';
   const labDocuments = sender === 'agent'
-    ? labDocumentsMarkup(metadata.lab_result_documents || [], 'message') : '';
+    ? labDocumentsMarkup(
+        metadata.lab_result_documents || [], 'message',
+        metadata.action !== 'specialist_analysis_request',
+      ) : '';
   const assistantContent = labInterpretation
     ? labInterpretationMarkup(text, metadata)
     : formatAssistantText(text);
   wrapper.innerHTML = sender === 'user'
     ? `<div class="bubble user-bubble">${attachmentBadges}<p>${escapeHtml(text)}</p><span>${time}</span></div>`
-    : `<div class="message-avatar">${humanManager ? 'Ч' : agent.initials}</div><div><div class="message-author"><strong>${humanManager ? escapeHtml(metadata.manager_name || 'Менеджер') : agent.name}</strong><span>${humanManager ? 'Менеджер' : agent.role}</span>${cached}</div><div class="bubble agent-bubble">${assistantContent}${labDocuments}<span>${time}</span></div></div>`;
+    : `<div class="message-avatar">${humanManager ? (metadata.staff_role === 'doctor' ? 'В' : 'Ч') : agent.initials}</div><div><div class="message-author"><strong>${humanManager ? escapeHtml(metadata.manager_name || humanRole) : agent.name}</strong><span>${humanManager ? humanRole : agent.role}</span>${cached}</div><div class="bubble agent-bubble">${assistantContent}${labDocuments}<span>${time}</span></div></div>`;
   messages.appendChild(wrapper);
   scrollChatToBottom();
   return wrapper;
@@ -2113,7 +2300,7 @@ function updateChatMode(aiEnabled = true, humanStatus = 'none', humanTicketId = 
     ? 'ИИ снова отвечает в этом диалоге'
     : state.humanStatus === 'connected' ? 'С вами общается медицинский специалист' : 'Ожидаем ответа медицинского специалиста';
   $('#chatModeText').textContent = state.aiEnabled
-    ? `Менеджер включил ИИ${humanTicketId ? ` · обращение ${humanTicketId}` : ''}.`
+    ? `Специалист включил ИИ${humanTicketId ? ` · обращение ${humanTicketId}` : ''}.`
     : 'ИИ в этом диалоге приостановлен. Новые сообщения получит медицинский специалист.';
   $('#chatModeDetailsText').textContent = state.aiEnabled
     ? ''
@@ -2167,6 +2354,7 @@ function showHandoff(fromId, toId) {
 async function processMessage(text) {
   if (state.processing) return;
   state.processing = true;
+  beginUserProgress('Готовим ответ…');
   $('#taskStatus').textContent = 'Ольга изучает вопрос';
   $('#suggestions').classList.add('hidden');
   const outgoingAttachments = [...state.attachments];
@@ -2226,6 +2414,7 @@ async function processMessage(text) {
     $('#taskStatus').textContent = 'Ошибка подключения';
   } finally {
     state.processing = false;
+    endUserProgress();
     focusChatInput();
   }
 }
@@ -2323,7 +2512,8 @@ function conversationSummary(item) {
     }
   } catch {}
   if (item.human_status === 'pending') return 'Ожидает ответа медицинского специалиста';
-  if (item.human_status === 'connected') return 'Менеджер подключён';
+  if (item.human_status === 'connected') return item.human_recipient_role === 'doctor'
+    ? 'Врач-специалист подключён' : 'Менеджер подключён';
   return 'История разговора сохранена';
 }
 
@@ -2384,6 +2574,7 @@ async function syncConversationUpdates() {
 
 async function openConversation(id) {
   if (state.processing) return;
+  beginUserProgress('Открываем диалог…');
   try {
     const data = await api(`/api/conversations/${id}`);
     state.conversationId = id;
@@ -2426,6 +2617,8 @@ async function openConversation(id) {
     } else {
       addSystemError(error.message);
     }
+  } finally {
+    endUserProgress();
   }
 }
 
@@ -2568,12 +2761,13 @@ function renderPurchases(items, highlightOrderId = '') {
     const status = purchaseStatusLabels[rawStatus] ? rawStatus : 'failed';
     const detail = purchaseStatusDetails[status];
     const products = Array.isArray(item.items) ? item.items : [];
+    const orderLabel = item.order_type === 'consultation' ? 'Консультация' : 'Заказ';
     const classes = ['purchase-card', `status-${status}`];
     if (item.id === highlightOrderId) classes.push('highlighted');
     return `<article class="${classes.join(' ')}" data-purchase-id="${escapeHtml(item.id)}">
       <header class="purchase-card-head">
         <div class="purchase-status-icon" aria-hidden="true">${detail.icon}</div>
-        <div class="purchase-card-title"><small>Заказ ${items.length - index} · ${purchaseDate(item.created_at)}</small><strong>${escapeHtml(purchaseStatusLabels[status])}</strong></div>
+        <div class="purchase-card-title"><small>${orderLabel} ${items.length - index} · ${purchaseDate(item.created_at)}</small><strong>${escapeHtml(purchaseStatusLabels[status])}</strong></div>
         <b class="purchase-card-amount">${Number(item.amount || 0).toLocaleString('ru-RU', {minimumFractionDigits:0, maximumFractionDigits:2})} ₽</b>
       </header>
       <p class="purchase-status-note">${escapeHtml(detail.note)}</p>
@@ -2612,6 +2806,46 @@ async function openPurchases({ highlightOrderId = '' } = {}) {
 
 function closePurchases() { $('#purchasesModal').classList.add('hidden'); }
 
+function renderConsultations(items) {
+  const root = $('#consultationsList');
+  if (!items.length) {
+    root.innerHTML = '<div class="consultations-empty"><strong>Приобретённых консультаций пока нет</strong><span>После оплаты здесь появятся дата, сумма и переход в чат с врачом.</span></div>';
+    return;
+  }
+  root.innerHTML = items.map((item, index) => `
+    <article class="consultation-card">
+      <i aria-hidden="true">✓</i>
+      <div><strong>Консультация врача № ${items.length - index}</strong><small>${purchaseDate(item.paid_at || item.created_at)}</small></div>
+      <b>${Number(item.amount || 1000).toLocaleString('ru-RU', {maximumFractionDigits:2})} ₽</b>
+    </article>`).join('');
+}
+
+async function openConsultations() {
+  closeFunctionMenu();
+  $('#consultationsList').innerHTML = '<div class="purchases-loading"><span></span><p>Загружаем консультации…</p></div>';
+  $('#consultationsModal').classList.remove('hidden');
+  beginUserProgress('Загружаем консультации…');
+  try {
+    const result = await api('/api/consultations');
+    state.consultations = result.consultations || [];
+    renderConsultations(state.consultations);
+    trackEvent('consultations_viewed', {consultation_count:state.consultations.length});
+  } catch (error) {
+    $('#consultationsList').innerHTML = `<div class="consultations-empty"><strong>Не удалось загрузить консультации</strong><span>${escapeHtml(error.message)}</span></div>`;
+  } finally {
+    endUserProgress();
+  }
+}
+
+function closeConsultations() { $('#consultationsModal').classList.add('hidden'); }
+
+function beginConsultationPurchase() {
+  state.paymentReviewSource = 'consultation';
+  state.paymentReviewOrderId = '';
+  state.paymentReviewConversationId = state.conversationId || '';
+  renderConsultationPayment();
+}
+
 function purchaseById(orderId) {
   return state.purchases.find(item => item.id === orderId);
 }
@@ -2619,7 +2853,9 @@ function purchaseById(orderId) {
 function continuePurchase(item) {
   if (!item?.confirmation_url?.startsWith('https://')) return;
   localStorage.setItem(PAYMENT_PENDING_ORDER_KEY, JSON.stringify({
-    id:item.id, returnToChat:true, source:'purchases', savedAt:Date.now(),
+    id:item.id, returnToChat:true,
+    source:item.order_type === 'consultation' ? 'consultation' : 'purchases',
+    conversationId:item.conversation_id || '', savedAt:Date.now(),
   }));
   trackEvent('payment_continued', {provider:'yookassa'});
   window.location.assign(item.confirmation_url);
@@ -2631,7 +2867,7 @@ async function retryPurchase(item) {
     const refreshed = checked.order;
     state.purchases = state.purchases.map(purchase => purchase.id === item.id ? refreshed : purchase);
     if (['pending','waiting_for_capture','succeeded'].includes(refreshed.status)) {
-      if (refreshed.status === 'succeeded' && refreshed.paid) {
+      if (refreshed.status === 'succeeded' && refreshed.paid && refreshed.order_type !== 'consultation') {
         state.onboarding = await api('/api/onboarding');
         state.profile = state.onboarding.profile;
         state.selectedTests = new Set(state.onboarding.selected_tests || []);
@@ -2640,6 +2876,14 @@ async function retryPurchase(item) {
       renderPurchases(state.purchases, item.id);
       return false;
     }
+  }
+  if (item?.order_type === 'consultation') {
+    closePurchases();
+    state.paymentReviewSource = 'consultation';
+    state.paymentReviewOrderId = item.id;
+    state.paymentReviewConversationId = item.conversation_id || state.conversationId || '';
+    renderConsultationPayment();
+    return true;
   }
   const available = new Set((state.onboarding?.tests || []).map(test => test.id));
   const selected = (item?.items || []).map(product => product.id).filter(id => available.has(id));
@@ -3100,7 +3344,7 @@ function normalizeLabDocuments(items = []) {
   ).filter(item => item?.url && item?.id);
 }
 
-function labDocumentsMarkup(items, placement = 'modal') {
+function labDocumentsMarkup(items, placement = 'modal', interactive = true) {
   const documents = normalizeLabDocuments(items);
   if (!documents.length) return '';
   const cards = documents.map((document, index) => `
@@ -3108,12 +3352,18 @@ function labDocumentsMarkup(items, placement = 'modal') {
       <a href="${escapeAttr(document.url)}" target="_blank" rel="noopener noreferrer">
         <i>▤</i><span><strong>${escapeHtml(document.title || `Документ ${index + 1}`)}</strong><small>Открыть оригинал</small></span>
       </a>
-      <button type="button" data-lab-interpret="${escapeAttr(document.id)}">Расшифровать</button>
+      ${interactive ? `<div class="lab-document-actions">
+        <button type="button" data-lab-interpret="${escapeAttr(document.id)}">ИИ-расшифровка</button>
+        <button type="button" data-lab-specialist="${escapeAttr(document.id)}">Анализ специалистом</button>
+      </div>` : ''}
     </article>`).join('');
-  const allButton = documents.length > 1
-    ? '<button class="lab-interpret-all" type="button" data-lab-interpret="all">Расшифровать все вместе</button>'
+  const allButton = interactive && documents.length > 1
+    ? '<div class="lab-all-actions"><button class="lab-interpret-all" type="button" data-lab-interpret="all">ИИ: все документы</button><button class="lab-specialist-all" type="button" data-lab-specialist="all">Специалист: все документы</button></div>'
     : '';
-  return `<div class="lab-document-list" data-placement="${placement}">${cards}${allButton}<small class="lab-ai-note">ИИ сопоставит показатели с вашей анкетой. Это не заменяет заключение врача.</small></div>`;
+  const note = interactive
+    ? 'ИИ даст ответ сразу. Бесплатный анализ специалистом поступит в этот чат после проверки врачом.'
+    : 'Эти документы переданы врачу вместе с запросом.';
+  return `<div class="lab-document-list" data-placement="${placement}">${cards}${allButton}<small class="lab-ai-note">${note}</small></div>`;
 }
 
 function renderLabResultDocuments(documents) {
@@ -3141,15 +3391,17 @@ function openInterpretationProfileModal(purpose = 'interpretation') {
   $('#interpretationProfileWeight').value = profile.weight_kg ?? '';
   $('#interpretationProfileError').classList.add('hidden');
   const consultation = purpose === 'consultation';
-  $('#interpretationProfileKicker').textContent = consultation ? 'Перед консультацией' : 'Перед расшифровкой';
-  $('#interpretationProfileDescription').textContent = consultation
+  const specialist = purpose === 'specialist_analysis';
+  $('#interpretationProfileKicker').textContent = consultation || specialist ? 'Перед консультацией' : 'Перед расшифровкой';
+  $('#interpretationProfileDescription').textContent = consultation || specialist
     ? 'Для бесплатной консультации медицинскому специалисту нужны пол, возраст, рост и вес. Это займёт меньше минуты.'
     : 'Для корректной расшифровки результатов и бесплатной консультации специалисту нужны четыре основных показателя. Это займёт меньше минуты.';
   $('#saveInterpretationProfileButton').textContent = consultation
     ? 'Сохранить и вызвать специалиста'
+    : specialist ? 'Сохранить и передать специалисту'
     : 'Сохранить и перейти к анализам';
   $('#interpretationProfileModal').classList.remove('hidden');
-  trackEvent(consultation ? 'human_consultation_profile_requested' : 'lab_interpretation_profile_requested', {
+  trackEvent(specialist ? 'lab_specialist_profile_requested' : consultation ? 'human_consultation_profile_requested' : 'lab_interpretation_profile_requested', {
     source:consultation ? 'human_handoff' : 'lab_results',
     stage:'mini_profile',
   });
@@ -3199,7 +3451,7 @@ async function saveInterpretationProfile() {
       body:JSON.stringify(payload),
     });
     renderProfileStatus();
-    trackEvent(purpose === 'consultation' ? 'human_consultation_profile_completed' : 'lab_interpretation_profile_completed', {
+    trackEvent(purpose === 'specialist_analysis' ? 'lab_specialist_profile_completed' : purpose === 'consultation' ? 'human_consultation_profile_completed' : 'lab_interpretation_profile_completed', {
       source:purpose === 'consultation' ? 'human_handoff' : 'lab_results',
       stage:'mini_profile',
     });
@@ -3207,7 +3459,11 @@ async function saveInterpretationProfile() {
     $('#taskStatus').textContent = 'Мини-анкета сохранена';
     state.miniProfilePurpose = 'interpretation';
     if (purpose === 'consultation') await chooseHumanSpecialistChat();
-    else await openLabResults();
+    else if (purpose === 'specialist_analysis') {
+      await requestSpecialistAnalysis(state.pendingLabAction?.documentId || 'all');
+    } else if (state.pendingLabAction?.type === 'ai') {
+      await interpretLabResults(state.pendingLabAction.documentId || 'all');
+    } else await openLabResults();
   } catch (saveError) {
     error.textContent = saveError.message;
     error.classList.remove('hidden');
@@ -3223,6 +3479,7 @@ async function fetchLabResults() {
   if (!state.profile?.tube_number?.trim()) return;
   const button = $('#fetchLabResultsButton');
   button.disabled = true;
+  beginUserProgress('Ищем результаты анализов…');
   button.textContent = 'Проверяю…';
   setLabResultNotificationAction(false);
   renderLabResultDocuments([]);
@@ -3230,7 +3487,7 @@ async function fetchLabResults() {
   try {
     const result = await api('/api/lab-results', { method:'POST' });
     if (result.status === 'found' && result.urls?.length) {
-      setLabResultsState('✓', 'Результаты готовы', 'Откройте оригинал или попросите ИИ расшифровать один документ либо весь набор.');
+      setLabResultsState('✓', 'Результаты готовы', 'Откройте оригинал или выберите расшифровку с помощью ИИ либо бесплатный анализ специалистом.');
       renderLabResultDocuments(result.documents || result.urls);
       $('#taskStatus').textContent = 'Результаты анализов найдены';
     } else if (result.status === 'processing') {
@@ -3246,6 +3503,7 @@ async function fetchLabResults() {
     setLabResultsState('!', 'Не удалось выполнить поиск', error.message);
     $('#taskStatus').textContent = 'Ошибка получения результатов';
   } finally {
+    endUserProgress();
     button.disabled = false;
     button.textContent = 'Проверить ещё раз';
   }
@@ -3255,10 +3513,12 @@ async function interpretLabResults(documentId, sourceButton) {
   if (state.processing) return;
   if (!state.profile) await loadProfile();
   if (!interpretationProfileComplete()) {
-    openInterpretationProfileModal();
+    state.pendingLabAction = {type:'ai', documentId};
+    openInterpretationProfileModal('interpretation');
     return;
   }
   state.processing = true;
+  beginUserProgress('ИИ расшифровывает результаты…');
   const buttons = document.querySelectorAll('[data-lab-interpret]');
   buttons.forEach(button => { button.disabled = true; });
   const originalText = sourceButton?.textContent;
@@ -3301,11 +3561,71 @@ async function interpretLabResults(documentId, sourceButton) {
       ? 'Показана сохранённая расшифровка'
       : 'Расшифровка готова';
     await loadConversationList();
+    state.pendingLabAction = null;
   } catch (error) {
     addSystemError(error.message);
     $('#taskStatus').textContent = 'Не удалось расшифровать результаты';
   } finally {
     state.processing = false;
+    endUserProgress();
+    buttons.forEach(button => { button.disabled = false; });
+    if (sourceButton && originalText) sourceButton.textContent = originalText;
+    focusChatInput();
+  }
+}
+
+async function requestSpecialistAnalysis(documentId = 'all', sourceButton = null, options = {}) {
+  if (state.processing) return;
+  if (!state.profile) await loadProfile();
+  state.pendingLabAction = {type:'specialist', documentId};
+  if (!interpretationProfileComplete()) {
+    openInterpretationProfileModal('specialist_analysis');
+    return;
+  }
+  if (!linkedMessengerProviders().size && !options.messengerOfferShown) {
+    sessionStorage.setItem(SPECIALIST_ANALYSIS_PENDING_KEY, documentId);
+    openMessengerLinkModal({source:'lab_specialist'});
+    return;
+  }
+  state.processing = true;
+  beginUserProgress('Передаём результаты врачу…');
+  const buttons = document.querySelectorAll('[data-lab-interpret],[data-lab-specialist]');
+  buttons.forEach(button => { button.disabled = true; });
+  const originalText = sourceButton?.textContent;
+  if (sourceButton) sourceButton.textContent = 'Передаю…';
+  $('#taskStatus').textContent = 'Передаю результаты врачу-специалисту';
+  try {
+    const result = await api('/api/lab-results/specialist-analysis', {
+      method:'POST',
+      body:JSON.stringify({conversation_id:state.conversationId, document_id:documentId}),
+    });
+    state.conversationId = result.conversation_id;
+    localStorage.setItem('consilium_conversation_id', state.conversationId);
+    closeLabResults();
+    addMessage('user', result.user_message.content, state.active, false,
+      result.user_message.created_at,
+      {...(result.user_message.metadata || {}), _message_id:result.user_message.id});
+    setActiveAgent('manager');
+    addMessage('agent', result.assistant_message.content, 'manager', false,
+      result.assistant_message.created_at,
+      {...(result.assistant_message.metadata || {}), _message_id:result.assistant_message.id});
+    updateChatMode(false, result.human_status, result.ticket_id);
+    $('#taskStatus').textContent = 'Результаты переданы врачу-специалисту';
+    input.placeholder = 'Напишите врачу-специалисту...';
+    sessionStorage.removeItem(SPECIALIST_ANALYSIS_PENDING_KEY);
+    state.pendingLabAction = null;
+    await markConversationRead(state.conversationId);
+    await loadConversationList();
+  } catch (error) {
+    if (error.code === 'specialist_profile_required') {
+      openInterpretationProfileModal('specialist_analysis');
+      return;
+    }
+    addSystemError(error.message);
+    $('#taskStatus').textContent = 'Не удалось передать результаты специалисту';
+  } finally {
+    state.processing = false;
+    endUserProgress();
     buttons.forEach(button => { button.disabled = false; });
     if (sourceButton && originalText) sourceButton.textContent = originalText;
     focusChatInput();
@@ -3605,6 +3925,7 @@ function closeVisibleModal() {
     case 'installAppModal': closeInstallApp(); break;
     case 'messengerLinkModal': closeMessengerLinkModal(); break;
     case 'purchasesModal': closePurchases(); break;
+    case 'consultationsModal': closeConsultations(); break;
     case 'bodyMapModal': closeBodyMap(); break;
     case 'healthHistoryModal': closeHealthHistory(); break;
     case 'profileModal': closeProfileModal(); break;
@@ -3700,6 +4021,7 @@ $('#menuProfileButton').addEventListener('click', openProfile);
 $('#menuMessengerLinkButton').addEventListener('click', () => openMessengerLinkModal({source:'menu'}));
 $('#menuLabResultsButton').addEventListener('click', openLabResults);
 $('#menuPurchasesButton').addEventListener('click', () => openPurchases());
+$('#menuConsultationsButton').addEventListener('click', openConsultations);
 $('#menuBodyMapButton').addEventListener('click', openBodyMap);
 $('#menuHealthHistoryButton').addEventListener('click', () => openHealthHistory());
 $('#menuInstallAppButton').addEventListener('click', openInstallApp);
@@ -3710,7 +4032,7 @@ $('#installAppModal').addEventListener('click', event => {
   if (event.target.id === 'installAppModal') closeInstallApp({ dismissed:true });
 });
 $('#messengerLinkClose').addEventListener('click', closeMessengerLinkModal);
-$('#messengerLinkLater').addEventListener('click', closeMessengerLinkModal);
+$('#messengerLinkLater').addEventListener('click', continueFromMessengerLinkModal);
 $('#messengerLinkModal').addEventListener('click', event => {
   if (event.target.id === 'messengerLinkModal') closeMessengerLinkModal();
   const button = event.target.closest('[data-link-provider]');
@@ -3719,6 +4041,9 @@ $('#messengerLinkModal').addEventListener('click', event => {
 $('#purchasesClose').addEventListener('click', closePurchases);
 $('#purchasesModal').addEventListener('click', event => { if (event.target.id === 'purchasesModal') closePurchases(); });
 $('#purchasesList').addEventListener('click', handlePurchaseAction);
+$('#consultationsClose').addEventListener('click', closeConsultations);
+$('#consultationsModal').addEventListener('click', event => { if (event.target.id === 'consultationsModal') closeConsultations(); });
+$('#consultationPayButton').addEventListener('click', beginConsultationPurchase);
 $('#profileButton').addEventListener('click', openProfile);
 $('#bodyMapButton').addEventListener('click', openBodyMap);
 $('#healthHistoryButton').addEventListener('click', () => openHealthHistory());
@@ -3742,6 +4067,8 @@ $('#requestLabResultNotificationButton').addEventListener('click', requestLabRes
 function handleLabInterpretClick(event) {
   const button = event.target.closest('[data-lab-interpret]');
   if (button) interpretLabResults(button.dataset.labInterpret, button);
+  const specialistButton = event.target.closest('[data-lab-specialist]');
+  if (specialistButton) requestSpecialistAnalysis(specialistButton.dataset.labSpecialist, specialistButton);
 }
 $('#labResultDocuments').addEventListener('click', handleLabInterpretClick);
 messages.addEventListener('click', handleLabInterpretClick);
@@ -3827,9 +4154,17 @@ async function initMainApp() {
   await loadConversationList();
   if (state.conversationId) await openConversation(state.conversationId);
   else newConversation();
+  const pendingSpecialistDocument = sessionStorage.getItem(SPECIALIST_ANALYSIS_PENDING_KEY);
+  if (pendingSpecialistDocument && linkedMessengerProviders().size) {
+    sessionStorage.removeItem(SPECIALIST_ANALYSIS_PENDING_KEY);
+    await requestSpecialistAnalysis(
+      pendingSpecialistDocument, null, {messengerOfferShown:true},
+    );
+  }
 }
 
 async function init() {
+  beginUserProgress('Открываем Консилиум…');
   trackEvent('landing_viewed', {screen:'entry'});
   trackEvent('app_opened', {app_mode:isInstalledApp() ? 'standalone' : 'browser'});
   try {
@@ -3872,6 +4207,8 @@ async function init() {
   catch (error) {
     showAuthGate();
     setAuthStatus(`Не удалось загрузить сервис: ${error.message}`, true);
+  } finally {
+    endUserProgress();
   }
 }
 window.addEventListener('error', () => trackEvent('javascript_error', {error_code:'window_error',screen:'browser'}));

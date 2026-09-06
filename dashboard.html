@@ -11,7 +11,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/static/dashboard.css?v=20260903-funnel-monitor-v2">
+  <link rel="stylesheet" href="/static/dashboard.css?v=20260906-consultations-v1">
 </head>
 <body>
   <main class="dashboard-shell">
@@ -55,7 +55,7 @@
         <button id="analyticsTab" type="button">Воронка и поведение</button>
         <button id="metric2Tab" type="button">Метрика 2.0</button>
         <button id="monitorTab" type="button">Мониторинг в Bitrix24</button>
-        <button id="managersTab" type="button">Управление менеджерами</button>
+        <button id="managersTab" type="button">Менеджеры и врачи</button>
         <button id="examinationsTab" type="button">Дополнительные обследования</button>
         <button id="costsTab" type="button">Расходы</button>
       </nav>
@@ -123,9 +123,14 @@
             </div>
           </div>
           <section class="payment-analytics-summary" id="paymentAnalyticsSummary"></section>
+          <section class="consultation-payment-analytics">
+            <div><p class="eyebrow">Отдельная услуга</p><h3>Оплата консультаций</h3></div>
+            <div class="payment-analytics-summary" id="consultationPaymentSummary"></div>
+          </section>
           <div class="payment-analytics-grid">
             <section><h3>Статусы онлайн-платежей</h3><div class="distribution-list" id="paymentStatusDistribution"></div></section>
-            <section><h3>Оплаченные обследования</h3><div class="distribution-list" id="paymentItemsDistribution"></div></section>
+            <section><h3>Типы заказов</h3><div class="distribution-list" id="paymentTypesDistribution"></div></section>
+            <section><h3>Оплаченные товары и услуги</h3><div class="distribution-list" id="paymentItemsDistribution"></div></section>
           </div>
           <div class="table-scroll payment-recent-table"><table>
             <thead><tr><th>Дата</th><th>Заказ</th><th>chel_id</th><th>Статус</th><th>Сумма</th></tr></thead>
@@ -247,24 +252,25 @@
 
       <section class="manager-admin hidden" id="managerAdminView">
         <article class="panel manager-create-panel">
-          <div class="panel-heading"><div><p class="eyebrow">Новая учётная запись</p><h2>Добавить менеджера</h2></div></div>
+          <div class="panel-heading"><div><p class="eyebrow">Новая учётная запись</p><h2>Добавить сотрудника</h2></div></div>
           <form id="managerCreateForm" class="manager-create-form">
-            <label>Имя менеджера<input id="staffDisplayName" maxlength="80" autocomplete="off" placeholder="Ольга Иванова" required></label>
+            <label>Имя сотрудника<input id="staffDisplayName" maxlength="80" autocomplete="off" placeholder="Ольга Иванова" required></label>
+            <label>Роль<select id="staffRole"><option value="manager">Менеджер</option><option value="doctor">Врач-специалист по расшифровке</option></select></label>
             <label>Логин<input id="staffLogin" maxlength="64" autocomplete="off" placeholder="olga.ivanova" required></label>
             <label>Пароль<input id="staffPassword" type="text" minlength="6" maxlength="256" autocomplete="off" spellcheck="false" placeholder="Не короче 6 символов" required></label>
             <label>Telegram ID <small>(необязательно)</small><input id="staffTelegramId" inputmode="numeric" maxlength="30" autocomplete="off" placeholder="Например, 123456789"></label>
             <label>MAX ID <small>(необязательно)</small><input id="staffMaxId" inputmode="numeric" maxlength="30" autocomplete="off" placeholder="Например, 987654321"></label>
             <div class="manager-notification-options">
-              <strong>Уведомлять менеджера</strong>
-              <label><input id="staffNotifyRequests" type="checkbox" checked> О новых обращениях</label>
-              <label><input id="staffNotifyMessages" type="checkbox" checked> О сообщениях, когда ИИ выключен</label>
+              <strong>Уведомлять сотрудника</strong>
+              <label><input id="staffNotifyRequests" type="checkbox" checked> <span id="staffNotifyRequestsLabel">О новых обращениях</span></label>
+              <label><input id="staffNotifyMessages" type="checkbox" checked> <span id="staffNotifyMessagesLabel">О сообщениях, когда ИИ выключен</span></label>
             </div>
-            <button type="submit">Создать менеджера</button>
+            <button type="submit">Создать сотрудника</button>
           </form>
           <p class="manager-form-status hidden" id="managerFormStatus" role="status"></p>
         </article>
         <article class="panel table-panel">
-          <div class="panel-heading"><div><p class="eyebrow">Доступ к /manager</p><h2>Менеджеры</h2></div><span class="table-count" id="staffCount"></span></div>
+          <div class="panel-heading"><div><p class="eyebrow">Доступ к /manager</p><h2>Менеджеры и врачи</h2></div><span class="table-count" id="staffCount"></span></div>
           <div class="staff-list" id="staffList"></div>
         </article>
       </section>
@@ -479,6 +485,6 @@
       </div>
     </section>
   </div>
-  <script src="/static/dashboard.js?v=20260903-funnel-monitor-v2" defer></script>
+  <script src="/static/dashboard.js?v=20260906-consultations-v1" defer></script>
 </body>
 </html>

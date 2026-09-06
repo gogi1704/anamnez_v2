@@ -17,10 +17,14 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/static/styles.07ffaefb4795.css?v=20260831-checkups-v1">
+  <link rel="stylesheet" href="/static/styles.css?v=20260906-consultations-v1">
   <link rel="stylesheet" href="/static/rich-text.2bf1f5fab764.css">
 </head>
 <body>
+  <div class="user-top-progress hidden" id="userTopProgress" role="status" aria-live="polite" aria-busy="false">
+    <div class="user-top-progress-copy"><span class="user-top-progress-spinner" aria-hidden="true"></span><strong id="userTopProgressText">Загружаем данные…</strong></div>
+    <div class="user-top-progress-track" aria-hidden="true"><i></i></div>
+  </div>
   <main class="welcome-screen hidden" id="welcomeScreen" aria-live="polite">
     <section class="welcome-card">
       <div class="welcome-brand" aria-label="Консилиум">
@@ -112,6 +116,7 @@
 
       <div class="history-section">
         <div class="team-heading"><span>Диалоги</span><span class="count" id="mobileConversationCount">0</span></div>
+        <button class="sidebar-new-chat" id="newChatButton" type="button"><span aria-hidden="true">＋</span> Новый диалог</button>
         <div class="conversation-list" id="conversationList"></div>
       </div>
     </aside>
@@ -133,16 +138,16 @@
             <button class="header-action-button" id="functionMenuButton" aria-label="Открыть меню функций" aria-expanded="false" title="Функции"><span>☰</span></button>
             <div class="function-menu hidden" id="functionMenu" role="menu">
               <strong>Функции</strong>
-              <button id="newChatButton" role="menuitem"><i>＋</i><span>Новый диалог<small>Начать с чистого контекста</small></span></button>
-              <button id="menuProfileButton" role="menuitem"><i>♙</i><span>Мои данные<small>Анкета, номер пробирки и память</small></span></button>
-              <button id="menuMessengerLinkButton" role="menuitem"><i>↗</i><span>Привязать мессенджер<small id="menuMessengerLinkStatus">Telegram или MAX</small></span></button>
-              <button id="menuLabResultsButton" role="menuitem"><i>▤</i><span>Результаты анализов<small id="menuLabResultsStatus">Проверить по номеру пробирки</small></span></button>
-              <button id="menuPurchasesButton" role="menuitem"><i>₽</i><span>Мои покупки<small>Оплаты и попытки оплаты</small></span></button>
               <button id="mobileDialogsButton" role="menuitem"><i>≡</i><span>Мои диалоги<small>Открыть историю переписок</small></span></button>
+              <button id="menuLabResultsButton" role="menuitem"><i>▤</i><span>Результаты анализов<small id="menuLabResultsStatus">Проверить по номеру пробирки</small></span></button>
+              <button id="menuProfileButton" role="menuitem"><i>♙</i><span>Мои данные<small>Анкета, номер пробирки и память</small></span></button>
+              <button id="menuPurchasesButton" role="menuitem"><i>₽</i><span>Мои покупки<small>Оплаты и попытки оплаты</small></span></button>
+              <button id="menuConsultationsButton" role="menuitem"><i>✚</i><span>Консультации<small>Приобретённые консультации с врачом</small></span></button>
               <button id="humanButton" role="menuitem"><i>♙</i><span>Позвать человека<small>Медицинский специалист</small></span></button>
               <button id="menuBodyMapButton" role="menuitem"><i>◉</i><span>Карта тела<small>Отметить область и симптом</small></span></button>
               <button id="menuHealthHistoryButton" role="menuitem"><i>⌁</i><span>История здоровья<small>События и динамика по датам</small></span></button>
               <div class="function-menu-separator" role="separator"></div>
+              <button id="menuMessengerLinkButton" role="menuitem"><i>↗</i><span>Привязать мессенджер<small id="menuMessengerLinkStatus">Telegram или MAX</small></span></button>
               <button id="menuInstallAppButton" role="menuitem"><i>⇩</i><span>Установить приложение<small id="menuInstallAppStatus">Открывать как приложение</small></span></button>
               <button id="menuFontSizeButton" role="menuitem"><i>А</i><span>Размер текста<small id="menuFontSizeStatus">Обычный</small></span></button>
             </div>
@@ -232,6 +237,20 @@
       <div class="purchases-summary" id="purchasesSummary"></div>
       <div class="purchases-list" id="purchasesList" aria-live="polite"></div>
       <p class="purchases-security"><span aria-hidden="true">✓</span> Статус оплаты подтверждается напрямую через ЮKassa</p>
+    </div>
+  </div>
+
+  <div class="modal-backdrop hidden" id="consultationsModal" role="dialog" aria-modal="true" aria-labelledby="consultationsTitle">
+    <div class="modal consultations-modal">
+      <button class="modal-close" id="consultationsClose" type="button" aria-label="Закрыть">×</button>
+      <header class="consultations-heading">
+        <div class="consultations-heading-icon" aria-hidden="true">✚</div>
+        <div><span>Помощь врача</span><h2 id="consultationsTitle">Консультации</h2></div>
+      </header>
+      <p class="consultations-lead">После оплаты врач напишет в выбранный диалог и согласует с вами удобные дату и время.</p>
+      <div class="consultations-list" id="consultationsList" aria-live="polite"></div>
+      <button class="consultation-pay-button" id="consultationPayButton" type="button">Оплатить консультацию · 1 000 ₽</button>
+      <p class="consultations-security"><span aria-hidden="true">✓</span> Оплата и статус подтверждаются напрямую через ЮKassa</p>
     </div>
   </div>
 
@@ -580,6 +599,6 @@
   <script src="/static/metrika.js?v=20260829-interpret-profile-v1"></script>
   <script src="/static/agents.js?v=20260829-interpret-profile-v1"></script>
   <script src="/static/rich-text.js?v=20260829-interpret-profile-v1"></script>
-  <script src="/static/app.js?v=20260901-splitter-funnel-v1"></script>
+  <script src="/static/app.js?v=20260906-consultations-v1"></script>
 </body>
 </html>

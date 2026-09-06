@@ -296,6 +296,8 @@ button:hover,.button:hover { background:var(--green-dark); }
 .pricing-card span { margin-top:5px; color:var(--muted); font-size:11px; line-height:1.45; }
 .manager-admin { display:grid; grid-template-columns:minmax(300px,420px) minmax(0,1fr); gap:20px; }
 .manager-create-form { display:grid; gap:12px; margin-top:18px; }
+.manager-create-form select { width:100%; height:50px; padding:0 14px; border:1px solid #c9dbd1; border-radius:13px; outline:none; color:var(--ink); background:#fff; font:inherit; }
+.manager-create-form select:focus { border-color:var(--green); box-shadow:0 0 0 3px rgba(24,123,93,.12); }
 .manager-notification-options { display:grid; gap:8px; padding:12px; border:1px solid var(--line); border-radius:12px; background:#f7fbf9; }
 .manager-notification-options strong { font-size:13px; }
 .manager-notification-options label { display:flex; align-items:center; gap:8px; font-size:12px; }
@@ -566,3 +568,5 @@ tbody tr:hover { background:#f8fbf9; }
   .header-actions { grid-template-columns:1fr; }
   .header-actions .button:first-child { grid-column:auto; }
 }
+.consultation-payment-analytics { margin:18px 0; padding:18px; border:1px solid #cfe1d8; border-radius:16px; background:#f5faf7; }
+.consultation-payment-analytics h3 { margin:4px 0 14px; }

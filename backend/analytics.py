@@ -9,7 +9,7 @@ import sqlite3
 import threading
 import time
 import uuid
-from collections import defaultdict
+from collections import Counter, defaultdict
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from typing import Any
@@ -73,6 +73,8 @@ ALLOWED_EVENTS = {
     "payment_pending", "payment_abandoned", "purchases_viewed", "payment_unavailable_viewed",
     "payment_continued", "payment_retried", "purchase_attempt_removed",
     "payment_return_viewed", "payment_success_viewed", "payment_result_viewed",
+    "consultations_viewed", "consultation_payment_created",
+    "consultation_payment_succeeded", "consultation_payment_completed",
     "onboarding_completed", "completion_viewed", "completion_skipped_viewed", "capabilities_viewed",
     "capabilities_closed", "install_offer_viewed", "install_clicked", "install_dismissed",
     "app_installed", "app_opened", "chat_opened", "conversation_created", "message_sent",
@@ -771,15 +773,22 @@ def _payment_statistics(
             "attempts": 0, "users": 0, "succeeded": 0, "successful_users": 0,
             "conversion": 0.0, "revenue_kopecks": 0, "pending": 0,
             "unsuccessful": 0, "at_exam_users": int(at_exam_users), "test_attempts": 0,
+            "consultation_attempts": 0, "consultations_succeeded": 0,
+            "consultation_revenue_kopecks": 0,
         },
-        "statuses": [], "daily": [], "items": [], "recent": [],
+        "statuses": [], "types": [], "daily": [], "items": [], "recent": [],
     }
     main_conn = None
     try:
         main_conn = sqlite3.connect(settings.database_path, timeout=5)
         main_conn.row_factory = sqlite3.Row
+        payment_columns = {
+            str(row[1]) for row in main_conn.execute("PRAGMA table_info(payment_orders)").fetchall()
+        }
+        order_type_sql = "po.order_type" if "order_type" in payment_columns else "'examinations' AS order_type"
         rows = [dict(row) for row in main_conn.execute(
             """SELECT po.id,po.chel_id,po.status,po.amount_kopecks,po.items,po.paid,
+               """ + order_type_sql + """,
                po.test,po.created_at,po.updated_at,po.paid_at,po.canceled_at
                FROM payment_orders po LEFT JOIN user_profile up ON up.chel_id=po.chel_id
                WHERE """ + " AND ".join(clauses) + " ORDER BY po.created_at DESC",
@@ -795,6 +804,11 @@ def _payment_statistics(
     users = {str(row["chel_id"]) for row in rows}
     succeeded = [row for row in rows if row["status"] == "succeeded" and bool(row["paid"])]
     production_succeeded = [row for row in succeeded if not bool(row["test"])]
+    consultation_rows = [row for row in rows if row.get("order_type") == "consultation"]
+    consultation_succeeded = [
+        row for row in consultation_rows
+        if row["status"] == "succeeded" and bool(row["paid"])
+    ]
     successful_users = {str(row["chel_id"]) for row in succeeded}
     pending_statuses = {"creating", "pending", "waiting_for_capture"}
     unsuccessful_statuses = {"canceled", "abandoned", "failed"}
@@ -806,6 +820,12 @@ def _payment_statistics(
         "pending": sum(row["status"] in pending_statuses for row in rows),
         "unsuccessful": sum(row["status"] in unsuccessful_statuses for row in rows),
         "test_attempts": sum(bool(row["test"]) for row in rows),
+        "consultation_attempts": len(consultation_rows),
+        "consultations_succeeded": len(consultation_succeeded),
+        "consultation_revenue_kopecks": sum(
+            int(row["amount_kopecks"] or 0)
+            for row in consultation_succeeded if not bool(row["test"])
+        ),
     })
     status_labels = {
         "succeeded": "Оплачено", "pending": "Ожидает оплаты",
@@ -847,11 +867,19 @@ def _payment_statistics(
          "percent": round(value / len(rows) * 100, 1) if rows else 0.0}
         for key, value in sorted(status_counts.items(), key=lambda item: (-item[1], item[0]))
     ]
+    type_labels = {"examinations": "Дополнительные обследования", "consultation": "Консультации врача"}
+    type_counts = Counter(str(row.get("order_type") or "examinations") for row in rows)
+    report["types"] = [
+        {"type": key, "label": type_labels.get(key, key), "orders": value,
+         "percent": round(value / len(rows) * 100, 1) if rows else 0.0}
+        for key, value in sorted(type_counts.items(), key=lambda item: (-item[1], item[0]))
+    ]
     report["daily"] = [daily[key] for key in sorted(daily)]
     report["items"] = sorted(item_counts.values(), key=lambda item: (-item["purchases"], item["label"]))
     report["recent"] = [{
         "id": row["id"], "chel_id": row["chel_id"], "status": row["status"],
         "amount_kopecks": row["amount_kopecks"], "test": bool(row["test"]),
+        "order_type": str(row.get("order_type") or "examinations"),
         "created_at": row["created_at"], "paid_at": row["paid_at"],
     } for row in rows[:25]]
     return report

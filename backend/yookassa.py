@@ -57,7 +57,11 @@ def create_payment(order: dict, return_url: str, receipt_email: str = "") -> dic
         "amount": {"value": f"{amount_kopecks // 100}.{amount_kopecks % 100:02d}", "currency": "RUB"},
         "capture": True,
         "confirmation": {"type": "redirect", "return_url": return_url},
-        "description": f"Дополнительные обследования, заказ {order['id'][-12:]}",
+        "description": (
+            f"Консультация врача, заказ {order['id'][-12:]}"
+            if order.get("order_type") == "consultation"
+            else f"Дополнительные обследования, заказ {order['id'][-12:]}"
+        ),
         "metadata": {"order_id": order["id"]},
     }
     if settings.yookassa_receipts_enabled:

@@ -163,6 +163,8 @@ function enterWorkspace(manager) {
   $('#managerApp').classList.remove('hidden');
   $('#managerDisplayName').textContent = manager.display_name;
   $('#managerAvatar').textContent = initials(manager.display_name);
+  document.querySelector('.manager-identity small').textContent = manager.role === 'doctor'
+    ? 'врач-специалист на связи' : 'менеджер на связи';
   loadQueue().then(openLinkedConversation).catch(error => toast(error.message, true));
   pollManagerNotifications();
   clearInterval(state.queueTimer);
@@ -200,6 +202,7 @@ function queueLabel(item) {
   if (item.human_status === 'closed') return '<b>Закрыто</b>';
   if (!item.ai_enabled) return '<b class="ai-off">ИИ выключен</b>';
   if (item.human_channel === 'call') return '<b>Созвон</b>';
+  if (item.human_channel === 'paid_consultation') return '<b>Оплаченная консультация</b>';
   if (item.human_channel === 'chat') return '<b>Чат</b>';
   return '<b>Формат не выбран</b>';
 }
@@ -337,20 +340,21 @@ function renderHeader() {
   $('#profileName').textContent = name;
   $('#chatAvatar').textContent = initials(name);
   $('#chatTicket').textContent = conversation.human_ticket_id
-    ? `${conversation.human_ticket_id} · ${conversation.human_status === 'closed' ? 'закрыто' : conversation.human_channel === 'call' ? 'созвон' : conversation.human_channel === 'chat' ? 'чат' : 'формат не выбран'}`
+    ? `${conversation.human_ticket_id} · ${conversation.human_status === 'closed' ? 'закрыто' : conversation.human_channel === 'paid_consultation' ? 'оплаченная консультация' : conversation.human_channel === 'call' ? 'созвон' : conversation.human_channel === 'chat' ? 'чат' : 'формат не выбран'}`
     : `Диалог ${conversation.id.slice(0, 8)}`;
   $('#aiEnabled').checked = Boolean(conversation.ai_enabled);
   $('#aiSwitchTitle').textContent = conversation.ai_enabled ? 'ИИ отвечает' : 'ИИ приостановлен';
+  const humanLabel = state.manager?.role === 'doctor' ? 'врач' : 'менеджер';
   $('#aiSwitchHint').textContent = conversation.ai_enabled
     ? 'Следующие сообщения сможет обрабатывать ИИ'
-    : 'Новые сообщения ожидают менеджера';
+    : `Новые сообщения ожидает ${humanLabel}`;
   const notice = $('#managerModeNotice');
   notice.classList.toggle('ai-off', !conversation.ai_enabled);
   $('#managerModeText').textContent = conversation.ai_enabled
-    ? 'ИИ включён и отвечает с учётом истории этого диалога. Менеджер также может писать пользователю.'
+    ? `ИИ включён и отвечает с учётом истории этого диалога. ${humanLabel === 'врач' ? 'Врач' : 'Менеджер'} также может писать пользователю.`
     : conversation.human_status === 'connected'
-      ? 'ИИ приостановлен. Пользователь общается с менеджером; на новые сообщения ИИ не отвечает.'
-      : 'ИИ автоматически приостановлен после обращения. Новые сообщения ждут ответа менеджера.';
+      ? `ИИ приостановлен. Пользователь общается с ${humanLabel === 'врач' ? 'врачом' : 'менеджером'}; на новые сообщения ИИ не отвечает.`
+      : `ИИ автоматически приостановлен после обращения. Новые сообщения ждут ответа ${humanLabel === 'врач' ? 'врача' : 'менеджера'}.`;
   const closeButton = $('#closeRequestButton');
   const closable = conversation.human_status !== 'closed'
     && (Boolean(conversation.human_ticket_id) || !conversation.ai_enabled);
@@ -376,7 +380,7 @@ function renderMessages() {
     const isUser = message.role === 'user';
     const isHuman = metadata.sender_type === 'human_manager';
     const author = isUser ? 'Пользователь' : isHuman
-      ? (metadata.manager_name || 'Менеджер')
+      ? (metadata.manager_name || (metadata.staff_role === 'doctor' ? 'Врач-специалист' : 'Менеджер'))
       : `${agentName(message.agent_id)} · ИИ`;
     const docs = messageDocuments(metadata);
     const content = isUser
@@ -499,7 +503,12 @@ async function sendReply(event) {
 
 async function closeRequest() {
   if (!state.selectedId || state.busy) return;
-  if (!window.confirm('Закрыть обращение? ИИ снова будет отвечать пользователю, а обращение переместится из открытой очереди.')) return;
+  const doctor = state.manager?.role === 'doctor';
+  const paidConsultation = state.detail?.conversation?.human_channel === 'paid_consultation';
+  const confirmation = doctor
+    ? `Завершить текущую ${paidConsultation ? 'консультацию' : 'расшифровку'}? Диалог уйдёт из очереди врача, уведомления по нему прекратятся, а ИИ снова будет отвечать пользователю.`
+    : 'Закрыть обращение? ИИ снова будет отвечать пользователю, а обращение переместится из открытой очереди.';
+  if (!window.confirm(confirmation)) return;
   state.busy = true;
   $('#closeRequestButton').disabled = true;
   try {
@@ -507,7 +516,9 @@ async function closeRequest() {
       method:'POST',
       body:'{}',
     });
-    toast('Обращение закрыто. ИИ снова доступен пользователю.');
+    toast(doctor
+      ? `${paidConsultation ? 'Консультация' : 'Расшифровка'} завершена. Уведомления отключены, ИИ снова доступен пользователю.`
+      : 'Обращение закрыто. ИИ снова доступен пользователю.');
     state.selectedId = null;
     state.detail = null;
     $('#chatWorkspace').classList.add('hidden');

@@ -664,12 +664,17 @@ function renderStaff(items) {
     const telegramLinked = Boolean(item.telegram_id);
     const maxLinked = Boolean(item.max_id);
     const userIds = Array.isArray(item.user_chel_ids) ? item.user_chel_ids : [];
+    const roleLabel = item.role === 'doctor' ? 'Врач-специалист' : 'Менеджер';
+    const requestTitle = item.role === 'doctor' ? 'Расшифровки и консультации' : 'Новые обращения';
+    const requestHint = item.role === 'doctor' ? 'Новые расшифровки анализов и оплаченные консультации' : 'Сигнал при каждом новом обращении';
+    const messageTitle = item.role === 'doctor' ? 'Сообщения в активных расшифровках' : 'Сообщения без ИИ';
+    const messageHint = item.role === 'doctor' ? 'Только из чатов, переданных этому врачу' : 'Сигнал, когда пользователь ждёт человека';
     const userIdBlock = userIds.length
       ? userIds.map(chelId => `
           <div class="staff-user-id-row">
             <code title="${escapeHtml(chelId)}">${escapeHtml(chelId)}</code>
           </div>`).join('')
-      : '<small>Не найден. Он появится здесь, если менеджер зарегистрируется в приложении через привязанный Telegram или MAX.</small>';
+      : '<small>Не найден. Он появится здесь, если сотрудник зарегистрируется в приложении через привязанный Telegram или MAX.</small>';
     return `
     <article class="staff-card ${item.is_active ? '' : 'inactive'}" data-staff-id="${item.id}">
       <header class="staff-card-header">
@@ -677,7 +682,7 @@ function renderStaff(items) {
           <span class="staff-avatar" aria-hidden="true">${initial}</span>
           <div>
             <strong>${escapeHtml(item.display_name)}</strong>
-            <small>Логин: ${escapeHtml(item.login)} · ID менеджера: ${item.id}</small>
+            <small>${roleLabel} · Логин: ${escapeHtml(item.login)} · ID сотрудника: ${item.id}</small>
           </div>
         </div>
         <span class="staff-access-status ${item.is_active ? 'active' : 'disabled'}">${item.is_active ? 'Доступ активен' : 'Доступ отключён'}</span>
@@ -706,11 +711,11 @@ function renderStaff(items) {
         <section class="staff-info-section" aria-label="Уведомления">
           <h3>Уведомления</h3>
           <div class="staff-setting-row">
-            <div><strong>Новые обращения</strong><small>Сигнал при каждом новом обращении</small></div>
+            <div><strong>${requestTitle}</strong><small>${requestHint}</small></div>
             <button class="staff-switch ${item.notify_new_requests ? 'is-on' : ''}" data-staff-action="requests" aria-pressed="${item.notify_new_requests}" type="button">${item.notify_new_requests ? 'Включены' : 'Выключены'}</button>
           </div>
           <div class="staff-setting-row">
-            <div><strong>Сообщения без ИИ</strong><small>Сигнал, когда пользователь ждёт человека</small></div>
+            <div><strong>${messageTitle}</strong><small>${messageHint}</small></div>
             <button class="staff-switch ${item.notify_new_messages ? 'is-on' : ''}" data-staff-action="messages" aria-pressed="${item.notify_new_messages}" type="button">${item.notify_new_messages ? 'Включены' : 'Выключены'}</button>
           </div>
           <p class="staff-last-login">Последний вход: <strong>${escapeHtml(formatDate(item.last_login_at))}</strong></p>
@@ -720,6 +725,7 @@ function renderStaff(items) {
       <footer class="staff-card-actions">
         <div class="staff-main-actions">
           <button class="reset-password" data-staff-action="name" type="button">Изменить имя</button>
+          <button class="reset-password" data-staff-action="role" type="button">Изменить роль</button>
           <button class="reset-password" data-staff-action="password" type="button">Новый пароль</button>
         </div>
         <div class="staff-danger-actions">
@@ -728,7 +734,19 @@ function renderStaff(items) {
         </div>
       </footer>
     </article>`;
-  }).join('') : '<p class="form-error">Менеджеры ещё не созданы</p>';
+  }).join('') : '<p class="form-error">Сотрудники ещё не созданы</p>';
+}
+
+function updateStaffNotificationLabels() {
+  const doctor = $('#staffRole')?.value === 'doctor';
+  const requests = $('#staffNotifyRequestsLabel');
+  const messages = $('#staffNotifyMessagesLabel');
+  if (requests) requests.textContent = doctor
+    ? 'О расшифровках и оплаченных консультациях'
+    : 'О новых обращениях';
+  if (messages) messages.textContent = doctor
+    ? 'О сообщениях в активных расшифровках'
+    : 'О сообщениях, когда ИИ выключен';
 }
 
 function escapeHtml(value) {
@@ -741,7 +759,7 @@ async function loadStaff() {
   const panel = $('#staffList')?.closest('.panel');
   return withPanelLoading(panel, async () => {
     renderStaff(await adminFetch('/api/admin/managers'));
-  }, 'Загружаем менеджеров…');
+  }, 'Загружаем сотрудников…');
 }
 
 async function deleteUserData(event) {
@@ -1010,14 +1028,21 @@ function renderPaymentAnalytics(payments = {}) {
   if (Number(summary.test_attempts || 0)) {
     root.insertAdjacentHTML('afterend', `<p class="payment-test-note">Тестовых попыток за период: <b>${Number(summary.test_attempts).toLocaleString('ru-RU')}</b>. Они показаны в статусах, но исключены из выручки.</p>`);
   }
+  $('#consultationPaymentSummary').innerHTML = [
+    ['Попытки',summary.consultation_attempts || 0,'созданные оплаты консультаций'],
+    ['Оплачено',summary.consultations_succeeded || 0,'подтверждено ЮKassa'],
+    ['Выручка',formatRublesFromKopecks(summary.consultation_revenue_kopecks),'без тестовых платежей'],
+  ].map(([label,value,note]) => `<article><span>${escapeHtml(String(label))}</span><strong>${typeof value === 'number' ? value.toLocaleString('ru-RU') : escapeHtml(String(value))}</strong><small>${escapeHtml(String(note))}</small></article>`).join('');
   renderDistribution('#paymentStatusDistribution',payments.statuses || [],'label','orders');
+  renderDistribution('#paymentTypesDistribution',payments.types || [],'label','orders');
   renderDistribution('#paymentItemsDistribution',payments.items || [],'label','purchases');
   const recent = $('#paymentRecentTable');
   recent.replaceChildren();
   for (const item of payments.recent || []) {
     const row = document.createElement('tr');
     textCell(row,formatDate(item.created_at));
-    textCell(row,`${String(item.id || '').slice(-8).toUpperCase()}${item.test ? ' · тест' : ''}`);
+    const orderType = item.order_type === 'consultation' ? 'консультация' : 'обследования';
+    textCell(row,`${String(item.id || '').slice(-8).toUpperCase()} · ${orderType}${item.test ? ' · тест' : ''}`);
     textCell(row,item.chel_id || '—',item.chel_id || '');
     statusCell(row,item.status);
     textCell(row,formatRublesFromKopecks(item.amount_kopecks));
@@ -1613,12 +1638,14 @@ async function createManager(event) {
         password:$('#staffPassword').value,
         telegram_id:$('#staffTelegramId').value.trim(),
         max_id:$('#staffMaxId').value.trim(),
+        role:$('#staffRole').value,
         notify_new_requests:$('#staffNotifyRequests').checked,
         notify_new_messages:$('#staffNotifyMessages').checked,
       }),
     });
     form.reset();
-    showManagerStatus('Менеджер создан. Теперь он может войти на странице /manager.');
+    updateStaffNotificationLabels();
+    showManagerStatus('Сотрудник создан. Теперь он может войти на странице /manager.');
     await loadStaff();
   } catch (error) {
     showManagerStatus(error.message, true);
@@ -1642,7 +1669,7 @@ async function updateManager(event) {
       const result = await adminFetch(`/api/admin/managers/${manager.id}/messenger-link`, undefined, {
         method:'POST', body:JSON.stringify({provider}),
       });
-      window.prompt(`Отправьте эту одноразовую ссылку менеджеру ${manager.display_name}. Она действует 7 дней:`, result.bot_url);
+      window.prompt(`Отправьте эту одноразовую ссылку сотруднику ${manager.display_name}. Она действует 7 дней:`, result.bot_url);
       showManagerStatus(`Ссылка для привязки ${provider === 'telegram' ? 'Telegram' : 'MAX'} создана.`);
     } catch (error) {
       showManagerStatus(error.message, true);
@@ -1662,9 +1689,13 @@ async function updateManager(event) {
   } else if (action === 'messages') {
     payload.notify_new_messages = !manager.notify_new_messages;
   } else if (action === 'name') {
-    const displayName = window.prompt('Новое имя менеджера', manager.display_name);
+    const displayName = window.prompt('Новое имя сотрудника', manager.display_name);
     if (displayName === null) return;
     payload.display_name = displayName.trim();
+  } else if (action === 'role') {
+    const role = window.prompt('Роль: manager — менеджер, doctor — врач-специалист', manager.role || 'manager');
+    if (role === null) return;
+    payload.role = role.trim().toLowerCase();
   } else if (action === 'password') {
     const password = window.prompt('Новый пароль (не короче 6 символов)');
     if (password === null) return;
@@ -1674,7 +1705,7 @@ async function updateManager(event) {
     payload.is_active = !manager.is_active;
   } else if (action === 'delete') {
     if (!window.confirm(
-      `Удалить менеджера ${manager.display_name} (${manager.login}) навсегда? ` +
+      `Удалить сотрудника ${manager.display_name} (${manager.login}) навсегда? ` +
       'Его активные сеансы будут завершены. История ответов в диалогах сохранится.'
     )) return;
   }
@@ -1683,15 +1714,15 @@ async function updateManager(event) {
   try {
     if (action === 'delete') {
       await adminFetch(`/api/admin/managers/${manager.id}`, undefined, {method:'DELETE'});
-      showManagerStatus('Менеджер удалён. История его ответов в пользовательских диалогах сохранена.');
+      showManagerStatus('Сотрудник удалён. История его ответов в пользовательских диалогах сохранена.');
     } else {
       await adminFetch(`/api/admin/managers/${manager.id}`, undefined, {
         method:'POST',
         body:JSON.stringify(payload),
       });
       showManagerStatus(action === 'password'
-        ? 'Пароль изменён. Все прежние сеансы менеджера завершены.'
-        : 'Данные менеджера обновлены.');
+        ? 'Пароль изменён. Все прежние сеансы сотрудника завершены.'
+        : 'Данные сотрудника обновлены.');
     }
     await loadStaff();
   } catch (error) {
@@ -2052,6 +2083,8 @@ document.addEventListener('click', event => {
   });
 });
 $('#managerCreateForm').addEventListener('submit', createManager);
+$('#staffRole').addEventListener('change', updateStaffNotificationLabels);
+updateStaffNotificationLabels();
 $('#userDataCleanupForm').addEventListener('submit', deleteUserData);
 $('#staffList').addEventListener('click', updateManager);
 $('#examinationForm').addEventListener('submit', saveExamination);

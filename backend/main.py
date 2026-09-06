@@ -33,6 +33,24 @@ SERVER_ERROR_LOG = settings.log_path
 MANAGER_SESSION_COOKIE = "consilium_manager_session"
 
 
+def _fulfill_consultation_payment(order: dict | None) -> dict | None:
+    if not order or order.get("order_type") != "consultation":
+        return None
+    fulfillment = db.fulfill_paid_consultation(order["id"])
+    if fulfillment and fulfillment.get("created"):
+        db.enqueue_manager_notifications(
+            "new_request", fulfillment["conversation_id"],
+            message_id=int(fulfillment.get("message_id") or 0),
+            recipient_role="doctor",
+        )
+        analytics.record_server_event(
+            db.payment_order_private(order["id"], require_owner=False)["chel_id"],
+            "consultation_payment_completed",
+            {"provider": "yookassa", "result": "succeeded"},
+        )
+    return fulfillment
+
+
 def admin_token_valid(authorization: str, expected: str | None = None) -> bool:
     expected = settings.admin_dashboard_token if expected is None else expected
     authorization = str(authorization or "")
@@ -274,12 +292,15 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                         query.get("queue", ["open"])[0],
                         int(query.get("limit", ["100"])[0]),
                         query.get("include_related", ["0"])[0] == "1",
+                        manager.get("role", "manager"),
                     ))
                 except (ValueError, TypeError) as exc:
                     return self._json(422, {"detail": str(exc)})
             conversation_id = path.removeprefix("/api/manager/conversations/").strip("/")
             if conversation_id and "/" not in conversation_id:
-                detail = db.manager_conversation_detail(conversation_id)
+                detail = db.manager_conversation_detail(
+                    conversation_id, manager.get("role", "manager"),
+                )
                 if not detail:
                     return self._json(404, {"detail": "Диалог не найден"})
                 return self._json(200, detail)
@@ -326,6 +347,8 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
             ))
         if path == "/api/purchases":
             return self._json(200, {"purchases": db.list_payment_orders()})
+        if path == "/api/consultations":
+            return self._json(200, {"consultations": db.list_paid_consultations()})
         if path.startswith("/api/payments/"):
             order_id = path.removeprefix("/api/payments/").strip("/")
             order = db.payment_order_private(order_id)
@@ -335,6 +358,8 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                 if order.get("provider_payment_id") and order.get("status") not in {"succeeded", "canceled"}:
                     verified = yookassa.get_payment(order["provider_payment_id"])
                     order = db.apply_yookassa_status(order_id, verified)
+                    if order.get("status") == "succeeded" and order.get("paid"):
+                        _fulfill_consultation_payment(order)
                 else:
                     order = db.public_payment_order(order_id)
                 return self._json(200, {"order": order})
@@ -449,6 +474,7 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                 verified = yookassa.get_payment(provider_id)
                 updated = db.apply_yookassa_status(order["id"], verified)
                 if updated["status"] == "succeeded" and updated.get("paid"):
+                    _fulfill_consultation_payment(updated)
                     analytics.record_server_event(
                         order["chel_id"], "payment_completed",
                         {"provider": "yookassa", "result": "succeeded"},
@@ -537,6 +563,7 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                     str(payload.get("password", "")),
                     telegram_id=payload.get("telegram_id", ""),
                     max_id=payload.get("max_id", ""),
+                    role=payload.get("role", "manager"),
                     notify_new_requests=payload.get("notify_new_requests", True),
                     notify_new_messages=payload.get("notify_new_messages", True),
                 ))
@@ -649,6 +676,7 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                     display_name=payload.get("display_name"),
                     password=payload.get("password"),
                     is_active=payload.get("is_active"),
+                    role=payload.get("role"),
                     telegram_id=payload.get("telegram_id"),
                     max_id=payload.get("max_id"),
                     notify_new_requests=payload.get("notify_new_requests"),
@@ -671,7 +699,7 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
             if suffix.endswith("/close"):
                 conversation_id = suffix.removesuffix("/close").strip("/")
                 conversation = db.manager_close_conversation(
-                    conversation_id, manager["display_name"],
+                    conversation_id, manager["display_name"], manager.get("role", "manager"),
                 )
                 if not conversation:
                     return self._json(404, {"detail": "Диалог не найден"})
@@ -684,10 +712,13 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                         conversation_id,
                         str(payload.get("message", "")),
                         manager["display_name"],
+                        manager.get("role", "manager"),
                     )
                     return self._json(201, {
                         "message": message,
-                        "conversation": db.manager_conversation_detail(conversation_id)["conversation"],
+                        "conversation": db.manager_conversation_detail(
+                            conversation_id, manager.get("role", "manager"),
+                        )["conversation"],
                     })
                 except (ValueError, TypeError, json.JSONDecodeError, UnicodeDecodeError) as exc:
                     return self._json(422, {"detail": str(exc)})
@@ -701,6 +732,7 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                         conversation_id,
                         payload["enabled"],
                         manager["display_name"],
+                        manager.get("role", "manager"),
                     )
                     if not conversation:
                         return self._json(404, {"detail": "Диалог не найден"})
@@ -778,6 +810,57 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
             except yookassa.YooKassaUnavailable as exc:
                 # Keep the same idempotence key after an uncertain network/API
                 # result. A retry cannot accidentally create a second charge.
+                return self._json(503, {"detail": str(exc)})
+        if path == "/api/payments/yookassa/create-consultation":
+            order = None
+            try:
+                payload = self._read_json()
+                if not settings.online_payments_enabled:
+                    raise yookassa.YooKassaUnavailable("Онлайн-оплата временно недоступна")
+                if not yookassa.configured():
+                    raise yookassa.YooKassaUnavailable("Онлайн-оплата пока не настроена")
+                conversation_id = str(payload.get("conversation_id") or "").strip()
+                conversation = db.get_conversation(conversation_id) if conversation_id else None
+                if (
+                    conversation
+                    and conversation.get("human_recipient_role") == "doctor"
+                    and conversation.get("human_status") in {"pending", "connected"}
+                ):
+                    conversation = None
+                if not conversation:
+                    conversation = db.create_conversation("Консультация врача")
+                order = db.create_consultation_payment_order(conversation["id"])
+                private_order = db.payment_order_private(order["id"])
+                if private_order.get("provider_payment_id"):
+                    verified = yookassa.get_payment(private_order["provider_payment_id"])
+                    refreshed = db.apply_yookassa_status(order["id"], verified)
+                    if refreshed["status"] != "canceled":
+                        if refreshed["status"] == "succeeded" and refreshed.get("paid"):
+                            _fulfill_consultation_payment(refreshed)
+                        return self._json(200, {"order": refreshed})
+                    order = db.create_consultation_payment_order(conversation["id"])
+                    private_order = db.payment_order_private(order["id"])
+                return_url = (
+                    f"{settings.public_base_url}/?payment_return={quote(order['id'])}"
+                    "&return_to_chat=1&payment_source=consultation"
+                )
+                payment = yookassa.create_payment(
+                    private_order, return_url, str(payload.get("receipt_email", "")),
+                )
+                result = db.attach_yookassa_payment(order["id"], payment)
+                if result["status"] in {"succeeded", "canceled", "waiting_for_capture"}:
+                    result = db.apply_yookassa_status(order["id"], payment)
+                if result["status"] == "succeeded" and result.get("paid"):
+                    _fulfill_consultation_payment(result)
+                self._track_analytics("consultation_payment_created", {
+                    "provider": "yookassa", "amount_kopecks": 100000,
+                })
+                return self._json(201, {"order": result})
+            except (ValueError, TypeError, json.JSONDecodeError, UnicodeDecodeError) as exc:
+                if order:
+                    db.mark_payment_creation_failed(order["id"], str(exc))
+                return self._json(422, {"detail": str(exc)})
+            except yookassa.YooKassaUnavailable as exc:
                 return self._json(503, {"detail": str(exc)})
         if path.startswith("/api/payments/") and path.endswith("/abandon"):
             order_id = path.removeprefix("/api/payments/").removesuffix("/abandon").strip("/")
@@ -935,6 +1018,87 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                 return self._json(502, {
                     "detail": f"Не удалось расшифровать результаты: {exc}",
                 })
+        if path == "/api/lab-results/specialist-analysis":
+            missing_profile = self._interpretation_profile_missing(db.get_profile())
+            if missing_profile:
+                return self._json(422, {
+                    "code": "specialist_profile_required",
+                    "detail": "Перед анализом специалистом заполните пол, возраст, рост и вес",
+                    "missing_fields": missing_profile,
+                })
+            try:
+                payload = self._read_json()
+                tube_number = str(db.get_profile().get("tube_number", "")).strip()
+                if not tube_number:
+                    raise ValueError("Сначала введите номер пробирки")
+                lab_result = lookup_lab_results(tube_number).to_dict()
+                documents = list(lab_result.get("documents") or [])
+                if lab_result.get("status") != "found" or not documents:
+                    raise ValueError("Результаты ещё не готовы. Повторите поиск позже")
+                document_id = str(payload.get("document_id") or "all").strip()
+                if document_id != "all":
+                    documents = [
+                        document for document in documents
+                        if str(document.get("id") or "") == document_id
+                    ]
+                    if not documents:
+                        raise ValueError("Выбранный документ результатов не найден")
+                conversation_id = str(payload.get("conversation_id") or "").strip()
+                conversation = db.get_conversation(conversation_id) if conversation_id else None
+                if not conversation:
+                    conversation = db.create_conversation("Расшифровка результатов")
+                    conversation_id = conversation["id"]
+                confirmed, created = db.confirm_human_chat(
+                    conversation_id,
+                    f"D-{secrets.token_hex(3).upper()}",
+                    recipient_role="doctor",
+                )
+                if not confirmed:
+                    return self._json(404, {"detail": "Диалог не найден"})
+                ticket_id = confirmed["human_ticket_id"]
+                user_message = db.add_message(
+                    conversation_id, "user", "Прошу специалиста расшифровать результаты чек-апа.",
+                    metadata={"action": "specialist_analysis_requested"},
+                )
+                text = (
+                    "Результаты переданы врачу-специалисту на бесплатную расшифровку. "
+                    "ИИ в этом диалоге выключен: все новые сообщения здесь получит специалист. "
+                    "Чтобы снова общаться с ИИ, создайте новый диалог — нажмите «Новый диалог» "
+                    "в списке чатов, а на телефоне сначала откройте меню ☰."
+                )
+                message = db.add_message(
+                    conversation_id, "assistant", text, "manager",
+                    {
+                        "action": "specialist_analysis_request",
+                        "human_channel": "chat",
+                        "human_ticket_id": ticket_id,
+                        "recipient_role": "doctor",
+                        "lab_result_documents": documents,
+                    },
+                )
+                if created:
+                    db.enqueue_manager_notifications(
+                        "new_request", conversation_id, message_id=message["id"],
+                        recipient_role="doctor",
+                    )
+                self._track_analytics("lab_specialist_analysis_requested", {
+                    "document_count": len(documents), "new_request": created,
+                })
+                return self._json(200, {
+                    "conversation_id": conversation_id,
+                    "ticket_id": ticket_id,
+                    "human_status": "pending",
+                    "ai_enabled": False,
+                    "user_message": user_message,
+                    "assistant_message": message,
+                    "documents": documents,
+                })
+            except LabResultsUnavailable:
+                return self._json(503, {
+                    "detail": "Сервис результатов временно недоступен. Попробуйте позже.",
+                })
+            except ValueError as exc:
+                return self._json(422, {"detail": str(exc)})
         if path == "/api/lab-results":
             self._track_analytics("lab_results_requested")
             tube_number = str(db.get_profile().get("tube_number", "")).strip()

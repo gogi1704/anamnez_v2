@@ -45,6 +45,7 @@ def build_payload(order: dict, payment: dict, profile: dict) -> dict:
         "order_id": str(order["id"]),
         "provider_payment_id": str(payment["id"]),
         "status": "succeeded",
+        "order_type": str(order.get("order_type") or "examinations")[:40],
         "amount_kopecks": int(order["amount_kopecks"]),
         "currency": str(order.get("currency") or "RUB"),
         "client_name": str(profile.get("preferred_name") or "")[:100],

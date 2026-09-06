@@ -1518,10 +1518,17 @@ def _staff_messenger_id(value, label: str) -> str:
     return value
 
 
+def _staff_role(value: str) -> str:
+    role = str(value or "manager").strip().lower()
+    if role not in {"manager", "doctor"}:
+        raise ValueError("Выберите роль: менеджер или врач-специалист")
+    return role
+
+
 def admin_list_staff() -> list[dict]:
     with connection() as conn:
         rows = conn.execute(
-            """SELECT id, display_name, login, is_active, telegram_id, max_id,
+            """SELECT id, display_name, login, role, is_active, telegram_id, max_id,
             notify_new_requests, notify_new_messages, created_at, updated_at,
             last_login_at FROM staff_users ORDER BY is_active DESC, display_name"""
         ).fetchall()
@@ -1551,26 +1558,28 @@ def admin_list_staff() -> list[dict]:
 
 def admin_create_staff(
     display_name: str, login: str, password: str, *, telegram_id="", max_id="",
+    role: str = "manager",
     notify_new_requests: bool = True, notify_new_messages: bool = True,
 ) -> dict:
     display_name = " ".join(str(display_name or "").split())[:80]
     if len(display_name) < 2:
-        raise ValueError("Укажите имя менеджера")
+        raise ValueError("Укажите имя сотрудника")
     login = _staff_login(login)
     encoded = _password_hash(password)
     telegram_id = _staff_messenger_id(telegram_id, "Telegram ID")
     max_id = _staff_messenger_id(max_id, "MAX ID")
+    role = _staff_role(role)
     now = utc_now()
     try:
         with _write_lock, connection() as conn:
             cursor = conn.execute(
                 """INSERT INTO staff_users
-                (display_name, login, password_hash, is_active, telegram_id,
+                (display_name, login, password_hash, role, is_active, telegram_id,
                  telegram_chat_id, max_id, max_chat_id, notify_new_requests,
                  notify_new_messages, created_at, updated_at)
-                VALUES (?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
-                    display_name, login, encoded, telegram_id, telegram_id,
+                    display_name, login, encoded, role, telegram_id, telegram_id,
                     max_id, max_id, int(bool(notify_new_requests)),
                     int(bool(notify_new_messages)), now, now,
                 ),
@@ -1580,16 +1589,17 @@ def admin_create_staff(
     except sqlite3.IntegrityError as exc:
         details = str(exc).lower()
         if "telegram_id" in details:
-            raise ValueError("Этот Telegram ID уже привязан к другому менеджеру") from exc
+            raise ValueError("Этот Telegram ID уже привязан к другому сотруднику") from exc
         if "max_id" in details:
-            raise ValueError("Этот MAX ID уже привязан к другому менеджеру") from exc
-        raise ValueError("Менеджер с таким логином уже существует") from exc
+            raise ValueError("Этот MAX ID уже привязан к другому сотруднику") from exc
+        raise ValueError("Сотрудник с таким логином уже существует") from exc
     return next(item for item in admin_list_staff() if item["id"] == staff_id)
 
 
 def admin_update_staff(
     staff_id: int, *, display_name: str | None = None,
     password: str | None = None, is_active: bool | None = None,
+    role: str | None = None,
     telegram_id: str | None = None, max_id: str | None = None,
     notify_new_requests: bool | None = None,
     notify_new_messages: bool | None = None,
@@ -1599,7 +1609,7 @@ def admin_update_staff(
     if display_name is not None:
         name = " ".join(str(display_name).split())[:80]
         if len(name) < 2:
-            raise ValueError("Укажите имя менеджера")
+            raise ValueError("Укажите имя сотрудника")
         updates.append("display_name = ?")
         params.append(name)
     if password is not None and str(password):
@@ -1608,6 +1618,9 @@ def admin_update_staff(
     if is_active is not None:
         updates.append("is_active = ?")
         params.append(int(bool(is_active)))
+    if role is not None:
+        updates.append("role = ?")
+        params.append(_staff_role(role))
     for column, value, label in (
         ("telegram_id", telegram_id, "Telegram ID"),
         ("max_id", max_id, "MAX ID"),
@@ -1637,7 +1650,7 @@ def admin_update_staff(
                 f"SELECT 1 FROM staff_users WHERE {column} = ? AND id <> ?",
                 (normalized, int(staff_id)),
             ).fetchone():
-                raise ValueError(f"Этот {label} уже привязан к другому менеджеру")
+                raise ValueError(f"Этот {label} уже привязан к другому сотруднику")
         if telegram_id is not None:
             conn.execute(
                 "DELETE FROM manager_notification_outbox WHERE staff_user_id = ? AND provider = 'telegram' AND status <> 'sent'",
@@ -1646,6 +1659,23 @@ def admin_update_staff(
         if max_id is not None:
             conn.execute(
                 "DELETE FROM manager_notification_outbox WHERE staff_user_id = ? AND provider = 'max' AND status <> 'sent'",
+                (int(staff_id),),
+            )
+        if role is not None:
+            conn.execute(
+                "DELETE FROM manager_notification_outbox WHERE staff_user_id = ? AND status <> 'sent'",
+                (int(staff_id),),
+            )
+        if notify_new_requests is False:
+            conn.execute(
+                """UPDATE manager_notification_outbox SET status = 'cancelled'
+                WHERE staff_user_id = ? AND event_type = 'new_request' AND status <> 'sent'""",
+                (int(staff_id),),
+            )
+        if notify_new_messages is False:
+            conn.execute(
+                """UPDATE manager_notification_outbox SET status = 'cancelled'
+                WHERE staff_user_id = ? AND event_type = 'new_message' AND status <> 'sent'""",
                 (int(staff_id),),
             )
         cursor = conn.execute(
@@ -1685,7 +1715,7 @@ def create_staff_messenger_token(staff_id: int, provider: str) -> dict:
             (int(staff_id),),
         ).fetchone()
         if not staff:
-            raise ValueError("Активный менеджер не найден")
+            raise ValueError("Активный сотрудник не найден")
         conn.execute(
             "DELETE FROM staff_messenger_tokens WHERE staff_user_id = ? AND provider = ? AND used_at IS NULL",
             (int(staff_id), provider),
@@ -1728,7 +1758,7 @@ def bind_staff_messenger(
         if datetime.fromisoformat(row["expires_at"]) < now:
             raise ValueError("Срок действия ссылки привязки истёк")
         if not row["is_active"]:
-            raise ValueError("Учётная запись менеджера отключена")
+            raise ValueError("Учётная запись сотрудника отключена")
         id_column = "telegram_id" if provider == "telegram" else "max_id"
         chat_column = "telegram_chat_id" if provider == "telegram" else "max_chat_id"
         duplicate = conn.execute(
@@ -1736,7 +1766,7 @@ def bind_staff_messenger(
             (provider_user_id, row["staff_user_id"]),
         ).fetchone()
         if duplicate:
-            raise ValueError("Этот аккаунт мессенджера уже привязан к другому менеджеру")
+            raise ValueError("Этот аккаунт мессенджера уже привязан к другому сотруднику")
         conn.execute(
             f"UPDATE staff_users SET {id_column} = ?, {chat_column} = ?, updated_at = ? WHERE id = ?",
             (provider_user_id, chat_id, now.isoformat(), row["staff_user_id"]),
@@ -1758,7 +1788,7 @@ def bind_staff_messenger(
 
 def enqueue_manager_notifications(
     event_type: str, conversation_id: str, *, message_id: int = 0,
-    message_text: str = "",
+    message_text: str = "", recipient_role: str | None = None,
 ) -> int:
     if event_type not in {"new_request", "new_message"}:
         raise ValueError("Неизвестный тип уведомления")
@@ -1766,6 +1796,7 @@ def enqueue_manager_notifications(
     with _write_lock, connection() as conn:
         conversation = conn.execute(
             """SELECT c.id, c.chel_id, c.human_ticket_id, c.human_channel,
+                COALESCE(c.human_recipient_role, 'manager') AS human_recipient_role,
                 COALESCE(p.preferred_name, '') AS preferred_name
             FROM conversations c LEFT JOIN user_profile p ON p.chel_id = c.chel_id
             WHERE c.id = ?""",
@@ -1773,28 +1804,48 @@ def enqueue_manager_notifications(
         ).fetchone()
         if not conversation:
             return 0
+        recipient_role = _staff_role(recipient_role or conversation["human_recipient_role"])
         manager_url = f"{settings.public_base_url}/manager?conversation={conversation_id}"
         name = conversation["preferred_name"] or f"Пользователь {conversation['chel_id'][-6:]}"
         if event_type == "new_request":
-            title = "Новое обращение в Консилиуме"
-            body = (
-                f"{name} просит подключить человека. "
-                f"Обращение {conversation['human_ticket_id'] or conversation_id[:8]}."
-            )
+            if recipient_role == "doctor":
+                if conversation["human_channel"] == "paid_consultation":
+                    title = "Оплачена консультация врача"
+                    body = (
+                        f"{name} оплатил консультацию. Откройте чат, чтобы "
+                        "согласовать дату и время."
+                    )
+                else:
+                    title = "Новая расшифровка чек-апа"
+                    body = (
+                        f"{name} просит врача расшифровать результаты. "
+                        f"Обращение {conversation['human_ticket_id'] or conversation_id[:8]}."
+                    )
+            else:
+                title = "Новое обращение в Консилиуме"
+                body = (
+                    f"{name} просит подключить человека. "
+                    f"Обращение {conversation['human_ticket_id'] or conversation_id[:8]}."
+                )
             preference = "notify_new_requests"
         else:
             title = "Новое сообщение пользователя"
-            body = f"{name} отправил новое сообщение. Откройте защищённую панель менеджера."
+            destination = "врача" if recipient_role == "doctor" else "менеджера"
+            body = f"{name} отправил новое сообщение. Откройте защищённую панель {destination}."
             preference = "notify_new_messages"
         recipients = conn.execute(
             f"""SELECT id, telegram_chat_id, max_chat_id FROM staff_users
-            WHERE is_active = 1 AND {preference} = 1"""
+            WHERE is_active = 1 AND role = ? AND {preference} = 1""",
+            (recipient_role,),
         ).fetchall()
         inserted = 0
         payload = json.dumps({
             "title": title, "body": body, "manager_url": manager_url,
+            "action_url": manager_url,
+            "action_label": "Открыть чат пользователя" if recipient_role == "doctor" else "Открыть диалог",
             "conversation_id": conversation_id,
             "ticket_id": conversation["human_ticket_id"] or "",
+            "recipient_role": recipient_role,
         }, ensure_ascii=False)
         for staff in recipients:
             for provider, recipient in (
@@ -1828,12 +1879,24 @@ def claim_manager_notifications(provider: str, limit: int = 20) -> list[dict]:
     with _write_lock, connection() as conn:
         rows = conn.execute(
             """SELECT id, recipient_id, event_type, conversation_id, payload, attempts
-            FROM manager_notification_outbox
+            FROM manager_notification_outbox AS outbox
             WHERE provider = ? AND attempts < 100
               AND (next_attempt_at IS NULL OR next_attempt_at <= ?)
               AND (
                 status = 'pending' OR (status = 'delivering' AND leased_at < ?)
-            ) ORDER BY id LIMIT ?""",
+              )
+              AND EXISTS (
+                SELECT 1 FROM staff_users AS staff
+                JOIN conversations AS conversation ON conversation.id = outbox.conversation_id
+                WHERE staff.id = outbox.staff_user_id AND staff.is_active = 1
+                  AND staff.role = COALESCE(conversation.human_recipient_role, 'manager')
+                  AND COALESCE(conversation.human_status, 'closed') <> 'closed'
+                  AND (
+                    (outbox.event_type = 'new_request' AND staff.notify_new_requests = 1)
+                    OR (outbox.event_type = 'new_message' AND staff.notify_new_messages = 1)
+                  )
+              )
+            ORDER BY id LIMIT ?""",
             (provider, now.isoformat(), stale_before, limit),
         ).fetchall()
         for row in rows:
@@ -1911,6 +1974,8 @@ def _public_payment_order(row) -> dict | None:
     result["amount"] = f"{amount_kopecks // 100}.{amount_kopecks % 100:02d}"
     result["paid"] = bool(result.get("paid"))
     result["test"] = bool(result.get("test"))
+    result["order_type"] = str(result.get("order_type") or "examinations")
+    result["conversation_id"] = str(result.pop("target_conversation_id", "") or "")
     if result.get("status") != "pending" or not str(result.get("confirmation_url", "")).startswith("https://"):
         result["confirmation_url"] = ""
     result.pop("idempotence_key", None)
@@ -1921,6 +1986,7 @@ def _public_payment_order(row) -> dict | None:
     result.pop("chel_id", None)
     result.pop("provider_payment_id", None)
     result.pop("hidden_at", None)
+    result.pop("fulfillment_at", None)
     return result
 
 
@@ -1972,6 +2038,57 @@ def create_payment_order() -> dict:
         conn.commit()
         row = conn.execute("SELECT * FROM payment_orders WHERE id = ?", (order_id,)).fetchone()
     return _public_payment_order(row)
+
+
+def create_consultation_payment_order(conversation_id: str) -> dict:
+    """Create a fixed-price doctor consultation order for the current user."""
+    conversation = get_conversation(conversation_id)
+    if not conversation:
+        raise ValueError("Диалог для консультации не найден")
+    chel_id = current_chel_id()
+    items = [{"id": "doctor_consultation", "name": "Консультация врача", "price": 1000}]
+    canonical = json.dumps(items, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    fingerprint = hashlib.sha256(
+        f"consultation:{conversation_id}:{canonical}".encode("utf-8")
+    ).hexdigest()
+    now = utc_now()
+    with _write_lock, connection() as conn:
+        existing = conn.execute(
+            """SELECT * FROM payment_orders
+            WHERE chel_id = ? AND order_type = 'consultation'
+              AND selection_fingerprint = ?
+              AND status IN ('creating', 'pending', 'abandoned')
+            ORDER BY created_at DESC LIMIT 1""",
+            (chel_id, fingerprint),
+        ).fetchone()
+        if existing:
+            return _public_payment_order(existing)
+        order_id = f"ord_{uuid.uuid4().hex}"
+        conn.execute(
+            """INSERT INTO payment_orders
+            (id, chel_id, idempotence_key, selection_fingerprint, order_type,
+             target_conversation_id, status, amount_kopecks, items, created_at, updated_at)
+            VALUES (?, ?, ?, ?, 'consultation', ?, 'creating', 100000, ?, ?, ?)""",
+            (
+                order_id, chel_id, str(uuid.uuid4()), fingerprint,
+                conversation_id, canonical, now, now,
+            ),
+        )
+        conn.commit()
+        row = conn.execute("SELECT * FROM payment_orders WHERE id = ?", (order_id,)).fetchone()
+    return _public_payment_order(row)
+
+
+def list_paid_consultations(limit: int = 100) -> list[dict]:
+    with connection() as conn:
+        rows = conn.execute(
+            """SELECT * FROM payment_orders
+            WHERE chel_id = ? AND order_type = 'consultation'
+              AND status = 'succeeded' AND paid = 1
+            ORDER BY paid_at DESC, created_at DESC LIMIT ?""",
+            (current_chel_id(), max(1, min(200, int(limit)))),
+        ).fetchall()
+    return [_public_payment_order(row) for row in rows]
 
 
 def payment_order_private(order_id: str, *, require_owner: bool = True) -> dict | None:
@@ -2159,7 +2276,7 @@ def apply_yookassa_status(order_id: str, payment: dict) -> dict:
                 int(paid), now, status, now, int(paid), row["id"],
             ),
         )
-        if paid:
+        if paid and str(row["order_type"] or "examinations") == "examinations":
             item_ids = [str(item.get("id", "")) for item in _payment_items(row["items"])]
             onboarding = conn.execute(
                 "SELECT intro_seen, font_size FROM onboarding_state WHERE chel_id = ?",
@@ -2181,6 +2298,97 @@ def apply_yookassa_status(order_id: str, payment: dict) -> dict:
         conn.commit()
         updated = conn.execute("SELECT * FROM payment_orders WHERE id = ?", (row["id"],)).fetchone()
     return _public_payment_order(updated)
+
+
+def fulfill_paid_consultation(order_id: str) -> dict | None:
+    """Open the paid consultation chat exactly once after provider confirmation."""
+    now = utc_now()
+    with _write_lock, connection() as conn:
+        order = conn.execute(
+            """SELECT * FROM payment_orders WHERE id = ?
+            AND order_type = 'consultation' AND status = 'succeeded' AND paid = 1""",
+            (str(order_id or ""),),
+        ).fetchone()
+        if not order:
+            return None
+        conversation_id = str(order["target_conversation_id"] or "")
+        conversation = conn.execute(
+            "SELECT * FROM conversations WHERE id = ? AND chel_id = ?",
+            (conversation_id, order["chel_id"]),
+        ).fetchone()
+        if not conversation:
+            conversation_id = str(uuid.uuid4())
+            conn.execute(
+                """INSERT INTO conversations
+                (id, chel_id, title, created_at, updated_at)
+                VALUES (?, ?, 'Консультация врача', ?, ?)""",
+                (conversation_id, order["chel_id"], now, now),
+            )
+            conn.execute(
+                """INSERT INTO conversation_reads
+                (conversation_id, last_read_message_id, read_at) VALUES (?, 0, ?)""",
+                (conversation_id, now),
+            )
+            conn.execute(
+                "UPDATE payment_orders SET target_conversation_id = ? WHERE id = ?",
+                (conversation_id, order["id"]),
+            )
+        if order["fulfillment_at"]:
+            return {
+                "created": False, "conversation_id": conversation_id,
+                "message_id": 0,
+            }
+        ticket_id = f"C-{secrets.token_hex(3).upper()}"
+        conn.execute(
+            """UPDATE conversations SET active_agent = 'manager', status = 'waiting_human',
+            human_status = 'pending', human_ticket_id = ?, human_channel = 'paid_consultation',
+            human_phone = NULL, human_recipient_role = 'doctor', ai_enabled = 0,
+            updated_at = ? WHERE id = ? AND chel_id = ?""",
+            (ticket_id, now, conversation_id, order["chel_id"]),
+        )
+        user_cursor = conn.execute(
+            """INSERT INTO messages
+            (conversation_id, role, agent_id, content, metadata, created_at)
+            VALUES (?, 'user', NULL, ?, ?, ?)""",
+            (
+                conversation_id,
+                f"Оплачена консультация врача — 1 000 ₽. Заказ № {str(order['id'])[-8:].upper()}.",
+                json.dumps({
+                    "action": "paid_consultation_purchased",
+                    "payment_order_id": order["id"],
+                    "amount_kopecks": int(order["amount_kopecks"]),
+                }, ensure_ascii=False),
+                now,
+            ),
+        )
+        message_cursor = conn.execute(
+            """INSERT INTO messages
+            (conversation_id, role, agent_id, content, metadata, created_at)
+            VALUES (?, 'assistant', 'manager', ?, ?, ?)""",
+            (
+                conversation_id,
+                "Оплата консультации подтверждена. Скоро врач напишет вам в этот чат, "
+                "и вы вместе согласуете удобные дату и время. До завершения консультации "
+                "ИИ в этом диалоге выключен, поэтому все новые сообщения увидит врач.",
+                json.dumps({
+                    "action": "paid_consultation_confirmed",
+                    "payment_order_id": order["id"],
+                    "human_ticket_id": ticket_id,
+                    "recipient_role": "doctor",
+                }, ensure_ascii=False),
+                now,
+            ),
+        )
+        conn.execute(
+            "UPDATE payment_orders SET fulfillment_at = ?, updated_at = ? WHERE id = ?",
+            (now, now, order["id"]),
+        )
+        conn.commit()
+    return {
+        "created": True, "conversation_id": conversation_id,
+        "ticket_id": ticket_id, "user_message_id": user_cursor.lastrowid,
+        "message_id": message_cursor.lastrowid,
+    }
 
 
 def public_payment_order(order_id: str) -> dict | None:
@@ -2373,7 +2581,10 @@ def authenticate_staff(login: str, password: str) -> dict | None:
         conn.commit()
     return {
         "token": token, "expires_at": expires_at.isoformat(),
-        "user": {"id": row["id"], "display_name": row["display_name"], "login": row["login"]},
+        "user": {
+            "id": row["id"], "display_name": row["display_name"],
+            "login": row["login"], "role": row["role"],
+        },
     }
 
 
@@ -2384,7 +2595,7 @@ def get_staff_session(token: str) -> dict | None:
     with _write_lock, connection() as conn:
         row = conn.execute(
             """SELECT s.token_hash, s.expires_at, s.revoked_at, u.id, u.display_name,
-            u.login, u.is_active FROM staff_sessions s
+            u.login, u.role, u.is_active FROM staff_sessions s
             JOIN staff_users u ON u.id = s.staff_user_id WHERE s.token_hash = ?""",
             (_token_hash(token),),
         ).fetchone()
@@ -2398,7 +2609,10 @@ def get_staff_session(token: str) -> dict | None:
             (now.isoformat(), row["token_hash"]),
         )
         conn.commit()
-    return {"id": row["id"], "display_name": row["display_name"], "login": row["login"]}
+    return {
+        "id": row["id"], "display_name": row["display_name"],
+        "login": row["login"], "role": row["role"],
+    }
 
 
 def revoke_staff_session(token: str) -> None:
@@ -2414,7 +2628,7 @@ def revoke_staff_session(token: str) -> None:
 
 def manager_list_conversations(
     query: str = "", queue: str = "open", limit: int = 100,
-    include_related: bool = False,
+    include_related: bool = False, staff_role: str = "manager",
 ) -> list[dict]:
     """Return the human-support queue. This deliberately contains sensitive data."""
     query = " ".join(str(query or "").split())[:120]
@@ -2425,8 +2639,10 @@ def manager_list_conversations(
     search_value = query.casefold()
     conversation_alias = "c0" if include_related else "c"
     profile_alias = "p0" if include_related else "p"
+    staff_role = _staff_role(staff_role)
     where = [f"{conversation_alias}.chel_id NOT IN ('chel_legacy', 'chel_test_default')"]
-    params: list = []
+    where.append(f"COALESCE({conversation_alias}.human_recipient_role, 'manager') = ?")
+    params: list = [staff_role]
     if queue == "open":
         where.append(
             f"({conversation_alias}.human_ticket_id IS NOT NULL "
@@ -2460,6 +2676,7 @@ def manager_list_conversations(
                 )
                 SELECT c.id, c.chel_id, c.title, c.active_agent, c.status,
                 c.ai_enabled, c.human_status, c.human_ticket_id,
+                COALESCE(c.human_recipient_role, 'manager') AS human_recipient_role,
                 COALESCE(c.human_channel, '') AS human_channel,
                 c.human_phone, c.created_at, c.updated_at,
                 COALESCE(p.preferred_name, '') AS preferred_name,
@@ -2475,15 +2692,17 @@ def manager_list_conversations(
                 FROM conversations c
                 JOIN matched_users matched ON matched.chel_id = c.chel_id
                 LEFT JOIN user_profile p ON p.chel_id = c.chel_id
+                WHERE COALESCE(c.human_recipient_role, 'manager') = ?
                 ORDER BY matched.matched_updated DESC,
                          CASE WHEN c.ai_enabled = 0 THEN 0 ELSE 1 END,
                          c.updated_at DESC""",
-                tuple(params + [limit]),
+                tuple(params + [limit, staff_role]),
             ).fetchall()
         else:
             rows = conn.execute(
                 f"""SELECT c.id, c.chel_id, c.title, c.active_agent, c.status,
                     c.ai_enabled, c.human_status, c.human_ticket_id,
+                    COALESCE(c.human_recipient_role, 'manager') AS human_recipient_role,
                     COALESCE(c.human_channel, '') AS human_channel,
                     c.human_phone, c.created_at, c.updated_at,
                     COALESCE(p.preferred_name, '') AS preferred_name,
@@ -2512,7 +2731,9 @@ def manager_list_conversations(
     return result
 
 
-def manager_conversation_detail(conversation_id: str) -> dict | None:
+def manager_conversation_detail(
+    conversation_id: str, staff_role: str | None = None,
+) -> dict | None:
     """Return a complete manager view for one conversation and its owner."""
     with connection() as conn:
         conversation_row = conn.execute(
@@ -2521,6 +2742,8 @@ def manager_conversation_detail(conversation_id: str) -> dict | None:
         if not conversation_row:
             return None
         conversation = dict(conversation_row)
+        if staff_role is not None and conversation.get("human_recipient_role", "manager") != _staff_role(staff_role):
+            return None
         conversation["ai_enabled"] = bool(conversation.get("ai_enabled", 1))
         chel_id = conversation["chel_id"]
         messages = [
@@ -2626,20 +2849,25 @@ def _manager_profile_from_value(chel_id: str) -> dict:
 
 def manager_add_reply(
     conversation_id: str, content: str, manager_name: str,
+    staff_role: str = "manager",
 ) -> dict:
     content = str(content or "").strip()
     manager_name = " ".join(str(manager_name or "").split())[:80] or "Менеджер"
     if not content or len(content) > 12_000:
         raise ValueError("Ответ должен содержать от 1 до 12000 символов")
     now = utc_now()
+    staff_role = _staff_role(staff_role)
     metadata = {
         "sender_type": "human_manager",
         "manager_name": manager_name,
+        "staff_role": staff_role,
         "action": "manager_reply",
     }
     with _write_lock, connection() as conn:
         conversation = conn.execute(
-            "SELECT id FROM conversations WHERE id = ?", (conversation_id,),
+            """SELECT id FROM conversations WHERE id = ?
+            AND COALESCE(human_recipient_role, 'manager') = ?""",
+            (conversation_id, staff_role),
         ).fetchone()
         if not conversation:
             raise ValueError("Диалог не найден")
@@ -2669,8 +2897,10 @@ def manager_add_reply(
 
 def manager_set_ai_enabled(
     conversation_id: str, enabled: bool, manager_name: str,
+    staff_role: str = "manager",
 ) -> dict | None:
     manager_name = " ".join(str(manager_name or "").split())[:80] or "Менеджер"
+    staff_role = _staff_role(staff_role)
     now = utc_now()
     with _write_lock, connection() as conn:
         cursor = conn.execute(
@@ -2679,8 +2909,9 @@ def manager_set_ai_enabled(
                 WHEN human_ticket_id IS NOT NULL THEN 'pending'
                 ELSE human_status END,
                 status = CASE WHEN ? = 0 THEN 'waiting_human' ELSE 'active' END,
-                updated_at = ? WHERE id = ?""",
-            (int(bool(enabled)), int(bool(enabled)), int(bool(enabled)), now, conversation_id),
+                updated_at = ? WHERE id = ?
+                AND COALESCE(human_recipient_role, 'manager') = ?""",
+            (int(bool(enabled)), int(bool(enabled)), int(bool(enabled)), now, conversation_id, staff_role),
         )
         if not cursor.rowcount:
             return None
@@ -2703,22 +2934,28 @@ def manager_set_ai_enabled(
 
 
 def manager_close_conversation(
-    conversation_id: str, manager_name: str,
+    conversation_id: str, manager_name: str, staff_role: str = "manager",
 ) -> dict | None:
     manager_name = " ".join(str(manager_name or "").split())[:80] or "Менеджер"
+    staff_role = _staff_role(staff_role)
     now = utc_now()
     with _write_lock, connection() as conn:
         previous = conn.execute(
             """SELECT human_status, human_ticket_id, human_channel, ai_enabled
-            FROM conversations WHERE id = ?""",
-            (conversation_id,),
+            FROM conversations WHERE id = ?
+            AND COALESCE(human_recipient_role, 'manager') = ?""",
+            (conversation_id, staff_role),
         ).fetchone()
         if not previous:
             return None
         conn.execute(
-            """UPDATE conversations SET ai_enabled = 1, human_status = 'closed',
-            status = 'active', updated_at = ? WHERE id = ?""",
-            (now, conversation_id),
+            """UPDATE conversations SET ai_enabled = ?, human_status = 'closed',
+            status = ?, updated_at = ? WHERE id = ?""",
+            (
+                1,
+                "active",
+                now, conversation_id,
+            ),
         )
         conn.execute(
             """INSERT INTO manager_actions
@@ -2734,6 +2971,13 @@ def manager_close_conversation(
                 }, ensure_ascii=False),
                 now,
             ),
+        )
+        conn.execute(
+            """UPDATE manager_notification_outbox SET status = 'cancelled',
+            lease_token = NULL, leased_at = NULL, next_attempt_at = NULL
+            WHERE conversation_id = ? AND status <> 'sent'
+              AND staff_user_id IN (SELECT id FROM staff_users WHERE role = ?)""",
+            (conversation_id, staff_role),
         )
         conn.commit()
         row = conn.execute(
@@ -2761,6 +3005,15 @@ def add_user_message_waiting_for_manager(
         conversation_id, "user", content,
         metadata={"attachments": attachment_meta, "awaiting_manager": True},
     )
+    if conversation.get("human_status") == "closed":
+        with _write_lock, connection() as conn:
+            conn.execute(
+                """UPDATE conversations SET human_status = 'pending',
+                status = 'waiting_human', updated_at = ?
+                WHERE id = ? AND chel_id = ? AND ai_enabled = 0""",
+                (utc_now(), conversation_id, current_chel_id()),
+            )
+            conn.commit()
     updated = get_conversation(conversation_id)
     return message, updated
 
@@ -2830,6 +3083,7 @@ def init_db() -> None:
                 human_ticket_id TEXT,
                 human_channel TEXT,
                 human_phone TEXT,
+                human_recipient_role TEXT NOT NULL DEFAULT 'manager',
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL
             );
@@ -2877,6 +3131,7 @@ def init_db() -> None:
                 display_name TEXT NOT NULL,
                 login TEXT NOT NULL UNIQUE,
                 password_hash TEXT NOT NULL,
+                role TEXT NOT NULL DEFAULT 'manager',
                 is_active INTEGER NOT NULL DEFAULT 1,
                 telegram_id TEXT NOT NULL DEFAULT '',
                 telegram_chat_id TEXT NOT NULL DEFAULT '',
@@ -3031,6 +3286,8 @@ def init_db() -> None:
                 provider_payment_id TEXT UNIQUE,
                 idempotence_key TEXT NOT NULL UNIQUE,
                 selection_fingerprint TEXT NOT NULL,
+                order_type TEXT NOT NULL DEFAULT 'examinations',
+                target_conversation_id TEXT NOT NULL DEFAULT '',
                 status TEXT NOT NULL DEFAULT 'creating',
                 amount_kopecks INTEGER NOT NULL,
                 currency TEXT NOT NULL DEFAULT 'RUB',
@@ -3044,6 +3301,7 @@ def init_db() -> None:
                 paid_at TEXT,
                 canceled_at TEXT,
                 hidden_at TEXT,
+                fulfillment_at TEXT,
                 FOREIGN KEY(chel_id) REFERENCES users(chel_id) ON DELETE CASCADE
             );
 
@@ -3315,6 +3573,8 @@ def init_db() -> None:
             conn.execute("ALTER TABLE conversations ADD COLUMN human_phone TEXT")
         if "ai_enabled" not in columns:
             conn.execute("ALTER TABLE conversations ADD COLUMN ai_enabled INTEGER NOT NULL DEFAULT 1")
+        if "human_recipient_role" not in columns:
+            conn.execute("ALTER TABLE conversations ADD COLUMN human_recipient_role TEXT NOT NULL DEFAULT 'manager'")
 
         staff_columns = {row[1] for row in conn.execute("PRAGMA table_info(staff_users)").fetchall()}
         for name in ("telegram_id", "telegram_chat_id", "max_id", "max_chat_id"):
@@ -3323,6 +3583,8 @@ def init_db() -> None:
         for name in ("notify_new_requests", "notify_new_messages"):
             if name not in staff_columns:
                 conn.execute(f"ALTER TABLE staff_users ADD COLUMN {name} INTEGER NOT NULL DEFAULT 1")
+        if "role" not in staff_columns:
+            conn.execute("ALTER TABLE staff_users ADD COLUMN role TEXT NOT NULL DEFAULT 'manager'")
         outbox_columns = {row[1] for row in conn.execute("PRAGMA table_info(manager_notification_outbox)").fetchall()}
         if "next_attempt_at" not in outbox_columns:
             conn.execute("ALTER TABLE manager_notification_outbox ADD COLUMN next_attempt_at TEXT")
@@ -3412,11 +3674,24 @@ def init_db() -> None:
         payment_columns = {row[1] for row in conn.execute("PRAGMA table_info(payment_orders)").fetchall()}
         if "hidden_at" not in payment_columns:
             conn.execute("ALTER TABLE payment_orders ADD COLUMN hidden_at TEXT")
+        if "order_type" not in payment_columns:
+            conn.execute("ALTER TABLE payment_orders ADD COLUMN order_type TEXT NOT NULL DEFAULT 'examinations'")
+        if "target_conversation_id" not in payment_columns:
+            conn.execute("ALTER TABLE payment_orders ADD COLUMN target_conversation_id TEXT NOT NULL DEFAULT ''")
+        if "fulfillment_at" not in payment_columns:
+            conn.execute("ALTER TABLE payment_orders ADD COLUMN fulfillment_at TEXT")
 
         conn.execute("CREATE INDEX IF NOT EXISTS idx_conversations_chel_id ON conversations(chel_id, updated_at)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_users_registered_at ON users(registered_at)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_users_last_seen_at ON users(last_seen_at)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_conversations_updated_at ON conversations(updated_at)")
+        conn.execute(
+            """CREATE INDEX IF NOT EXISTS idx_conversations_staff_queue
+            ON conversations(human_recipient_role, human_status, ai_enabled, updated_at)"""
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_staff_role_active ON staff_users(role, is_active)"
+        )
         conn.execute("CREATE INDEX IF NOT EXISTS idx_device_stats_last_seen_at ON user_device_stats(last_seen_at)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_messages_created_at ON messages(created_at)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_onboarding_status ON onboarding_state(status)")
@@ -3476,6 +3751,10 @@ def init_db() -> None:
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_payment_orders_provider "
             "ON payment_orders(provider_payment_id, status)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_payment_orders_type_user "
+            "ON payment_orders(order_type, chel_id, paid_at DESC)"
         )
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_enterprise_schedule_inn_date "
@@ -3767,9 +4046,12 @@ def update_conversation(
         conn.commit()
 
 
-def confirm_human_chat(conversation_id: str, proposed_ticket_id: str) -> tuple[dict | None, bool]:
+def confirm_human_chat(
+    conversation_id: str, proposed_ticket_id: str, *, recipient_role: str = "manager",
+) -> tuple[dict | None, bool]:
     """Atomically creates or reuses a confirmed specialist chat request."""
     owner = current_chel_id()
+    recipient_role = _staff_role(recipient_role)
     now = utc_now()
     with _write_lock, connection() as conn:
         row = conn.execute(
@@ -3782,6 +4064,7 @@ def confirm_human_chat(conversation_id: str, proposed_ticket_id: str) -> tuple[d
         already_requested = bool(
             current.get("human_ticket_id")
             and current.get("human_status") in {"pending", "connected"}
+            and current.get("human_recipient_role", "manager") == recipient_role
         )
         ticket_id = (
             current["human_ticket_id"] if already_requested else proposed_ticket_id
@@ -3790,9 +4073,9 @@ def confirm_human_chat(conversation_id: str, proposed_ticket_id: str) -> tuple[d
             """UPDATE conversations
             SET active_agent = 'manager', status = 'waiting_human',
                 human_status = 'pending', human_ticket_id = ?, human_channel = 'chat',
-                human_phone = NULL, ai_enabled = 0, updated_at = ?
+                human_phone = NULL, human_recipient_role = ?, ai_enabled = 0, updated_at = ?
             WHERE id = ? AND chel_id = ?""",
-            (ticket_id, now, conversation_id, owner),
+            (ticket_id, recipient_role, now, conversation_id, owner),
         )
         conn.commit()
         saved = conn.execute(

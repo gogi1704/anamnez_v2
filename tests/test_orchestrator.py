@@ -1,6 +1,7 @@
 import json
 import os
 import re
+import secrets
 import tempfile
 import unittest
 from datetime import date, datetime, timedelta, timezone
@@ -1051,7 +1052,10 @@ class OrchestratorTests(unittest.TestCase):
         self.assertIn("расшифровать по одному или все вместе", index)
         self.assertIn('data-lab-interpret="${escapeAttr(document.id)}"', script)
         self.assertIn('data-lab-interpret="all"', script)
+        self.assertIn('data-lab-specialist="${escapeAttr(document.id)}"', script)
+        self.assertIn('data-lab-specialist="all"', script)
         self.assertIn("/api/lab-results/interpret", script)
+        self.assertIn("/api/lab-results/specialist-analysis", script)
         self.assertIn(".lab-document-card", styles)
         self.assertIn(".lab-interpret-all", styles)
         self.assertIn("function labInterpretationMarkup", script)
@@ -1109,7 +1113,7 @@ class OrchestratorTests(unittest.TestCase):
         self.assertNotIn("get_onboarding", chat_route)
         self.assertNotIn("_interpretation_profile_missing", chat_route)
         self.assertNotIn("interpretationProfileComplete", process_message)
-        self.assertEqual(script.count("if (!interpretationProfileComplete())"), 2)
+        self.assertEqual(script.count("if (!interpretationProfileComplete())"), 3)
 
     def test_ai_markdown_uses_shared_safe_rich_text_renderer(self):
         project_root = Path(__file__).resolve().parents[1]
@@ -1550,7 +1554,11 @@ class OrchestratorTests(unittest.TestCase):
         self.assertIn('id="staffPassword" type="text" minlength="6"', dashboard)
         self.assertIn('id="staffTelegramId"', dashboard)
         self.assertIn('id="staffMaxId"', dashboard)
+        self.assertIn('id="staffRole"', dashboard)
         self.assertIn('id="staffNotifyRequests"', dashboard)
+        self.assertIn('id="staffNotifyMessages"', dashboard)
+        self.assertIn('О расшифровках и оплаченных консультациях', script)
+        self.assertIn('О сообщениях в активных расшифровках', script)
         self.assertIn('id="userDataCleanupForm"', dashboard)
         self.assertIn('id="userDataCleanupId"', dashboard)
 
@@ -1559,7 +1567,8 @@ class OrchestratorTests(unittest.TestCase):
         self.assertNotIn("/api/admin/my-user-id", script)
         self.assertIn("X-Consilium-Action':'delete-user-data'", script)
         self.assertNotIn('data-staff-action="cleanup-user"', script)
-        self.assertIn("ID менеджера:", script)
+        self.assertIn("ID сотрудника:", script)
+        self.assertIn('data-staff-action="role"', script)
         self.assertIn('data-staff-action="telegram-link"', script)
         self.assertIn('data-staff-action="max-link"', script)
         self.assertIn('class="staff-card-content"', script)
@@ -1720,6 +1729,77 @@ class OrchestratorTests(unittest.TestCase):
         self.assertFalse(any(
             item["id"] == created["id"] for item in db.admin_list_staff()
         ))
+
+    def test_doctor_role_receives_only_specialist_analysis_queue_and_notification(self):
+        suffix = str(int(datetime.now(timezone.utc).timestamp() * 1_000_000))
+        manager = db.admin_create_staff(
+            "Менеджер очереди", f"manager.{suffix}", "123456",
+            telegram_id=f"71{suffix[-8:]}", role="manager",
+        )
+        doctor = db.admin_create_staff(
+            "Врач расшифровки", f"doctor.{suffix}", "123456",
+            telegram_id=f"72{suffix[-8:]}", role="doctor",
+        )
+        chel_id = f"chel_doctor_{suffix}"
+        db.ensure_user(chel_id)
+        db.set_current_chel_id(chel_id)
+        try:
+            conversation = db.create_conversation("Анализ специалистом")
+            confirmed, created = db.confirm_human_chat(
+                conversation["id"], "D-TEST01", recipient_role="doctor",
+            )
+            self.assertTrue(created)
+            self.assertEqual(confirmed["human_recipient_role"], "doctor")
+            self.assertNotIn(
+                conversation["id"],
+                [item["id"] for item in db.manager_list_conversations(
+                    "", "open", staff_role="manager",
+                )],
+            )
+            self.assertEqual(
+                db.manager_list_conversations("", "open", staff_role="doctor")[0]["id"],
+                conversation["id"],
+            )
+            self.assertIsNone(db.manager_conversation_detail(
+                conversation["id"], "manager",
+            ))
+            self.assertIsNotNone(db.manager_conversation_detail(
+                conversation["id"], "doctor",
+            ))
+            self.assertEqual(db.enqueue_manager_notifications(
+                "new_request", conversation["id"], recipient_role="doctor",
+            ), 1)
+            notifications = db.claim_manager_notifications("telegram")
+            matching = [item for item in notifications if item["conversation_id"] == conversation["id"]]
+            self.assertEqual(len(matching), 1)
+            self.assertEqual(matching[0]["recipient_id"], doctor["telegram_id"])
+            self.assertEqual(matching[0]["payload"]["recipient_role"], "doctor")
+            self.assertIn("manager?conversation=", matching[0]["payload"]["manager_url"])
+            with self.assertRaises(ValueError):
+                db.manager_add_reply(
+                    conversation["id"], "Ответ чужой роли", "Менеджер", "manager",
+                )
+            reply = db.manager_add_reply(
+                conversation["id"], "Расшифровка готова", "Доктор", "doctor",
+            )
+            self.assertEqual(reply["metadata"]["staff_role"], "doctor")
+            closed = db.manager_close_conversation(
+                conversation["id"], "Доктор", "doctor",
+            )
+            self.assertEqual(closed["human_status"], "closed")
+            self.assertTrue(closed["ai_enabled"])
+            remaining = db.claim_manager_notifications("telegram")
+            self.assertFalse(any(
+                item["conversation_id"] == conversation["id"] for item in remaining
+            ))
+            with self.assertRaises(ValueError):
+                db.add_user_message_waiting_for_manager(
+                    conversation["id"], "У меня появился дополнительный вопрос",
+                )
+        finally:
+            db.set_current_chel_id("chel_test_default")
+            db.admin_delete_staff(manager["id"])
+            db.admin_delete_staff(doctor["id"])
 
     def test_manager_messenger_binding_and_notification_outbox(self):
         manager = db.admin_create_staff(
@@ -1992,6 +2072,9 @@ class OrchestratorTests(unittest.TestCase):
         self.assertIn("previous && !item.ai_enabled", manager_script)
         self.assertIn("sender_type === 'human_manager'", manager_script)
         self.assertIn('id="chatModeBanner"', index)
+        self.assertIn('id="userTopProgress"', index)
+        self.assertIn("beginUserProgress('Готовим ответ…')", app)
+        self.assertIn("beginUserProgress('Ищем результаты анализов…')", app)
         self.assertIn('id="chatModeNewDialog"', index)
         self.assertIn('id="chatModeToggle"', index)
         self.assertIn('aria-controls="chatModeDetails"', index)
@@ -2230,24 +2313,29 @@ class OrchestratorTests(unittest.TestCase):
                 conn.execute("DELETE FROM users WHERE chel_id = ?", (other_id,))
                 conn.commit()
 
-    def test_function_menu_has_requested_order_and_only_two_items_after_separator(self):
+    def test_function_menu_has_requested_order_and_account_items_after_separator(self):
         project_root = Path(__file__).resolve().parents[1]
         index = (project_root / "index.html").read_text(encoding="utf-8")
         script = (project_root / "static" / "app.js").read_text(encoding="utf-8")
         ordered_ids = (
-            'id="newChatButton"',
-            'id="menuProfileButton"',
-            'id="menuLabResultsButton"',
             'id="mobileDialogsButton"',
+            'id="menuLabResultsButton"',
+            'id="menuProfileButton"',
+            'id="menuPurchasesButton"',
+            'id="menuConsultationsButton"',
             'id="humanButton"',
+            'id="menuBodyMapButton"',
+            'id="menuHealthHistoryButton"',
         )
         positions = [index.index(item) for item in ordered_ids]
         self.assertEqual(positions, sorted(positions))
         separator = index.index('class="function-menu-separator"')
+        messenger = index.index('id="menuMessengerLinkButton"')
         install = index.index('id="menuInstallAppButton"')
         font_size = index.index('id="menuFontSizeButton"')
         menu_end = index.index('</div>', font_size)
-        self.assertLess(separator, install)
+        self.assertLess(separator, messenger)
+        self.assertLess(messenger, install)
         self.assertLess(install, font_size)
         self.assertNotIn('<button', index[font_size:menu_end])
         self.assertIn("Установить приложение", index)
@@ -2382,13 +2470,13 @@ class OrchestratorTests(unittest.TestCase):
         self.assertIn("controllerchange", script)
         self.assertIn("url.pathname.startsWith('/api/')", worker)
         self.assertIn("url.pathname.startsWith('/auth/')", worker)
-        self.assertIn("consilium-shell-v96", worker)
+        self.assertIn("consilium-shell-v99", worker)
         self.assertIn("fetch(request)", worker)
-        self.assertIn("/static/styles.07ffaefb4795.css", index)
+        self.assertIn("/static/styles.css?v=20260906-consultations-v1", index)
         self.assertIn("/static/rich-text.2bf1f5fab764.css", index)
         self.assertTrue((project_root / "static" / "styles.07ffaefb4795.css").is_file())
         self.assertTrue((project_root / "static" / "rich-text.2bf1f5fab764.css").is_file())
-        self.assertIn("/static/app.js?v=20260901-splitter-funnel-v1", index)
+        self.assertIn("/static/app.js?v=20260906-consultations-v1", index)
         self.assertIn("/static/metrika.js?v=20260829-interpret-profile-v1", index)
         self.assertIn('id="welcomeScreen"', index)
         self.assertIn('id="welcomeNextButton"', index)
@@ -2416,6 +2504,12 @@ class OrchestratorTests(unittest.TestCase):
         self.assertIn("data-purchase-action=\"continue\"", script)
         self.assertIn("method:'DELETE'", script)
         self.assertIn('id="menuPurchasesButton"', index)
+        self.assertIn('id="menuConsultationsButton"', index)
+        self.assertIn('id="consultationsModal"', index)
+        self.assertIn('Оплатить консультацию · 1 000 ₽', index)
+        self.assertIn("/api/payments/yookassa/create-consultation", script)
+        self.assertIn("/api/consultations", script)
+        self.assertIn("renderConsultationPaymentSuccess", script)
         self.assertIn('id="purchasesModal"', index)
         self.assertIn("PAYMENT_PENDING_ORDER_KEY", script)
         self.assertIn("/abandon", script)
@@ -3052,6 +3146,63 @@ class OrchestratorTests(unittest.TestCase):
             db.reset_current_user()
             db.ensure_user("chel_test_default")
             db.set_current_chel_id("chel_test_default")
+
+    def test_paid_consultation_is_fulfilled_once_and_routed_to_doctor(self):
+        chel_id = "chel_paid_consultation_test"
+        suffix = secrets.token_hex(3)
+        db.ensure_user(chel_id)
+        doctor = db.admin_create_staff(
+            "Врач консультаций", f"consult.{suffix}", "123456",
+            role="doctor", telegram_id=f"91{int.from_bytes(secrets.token_bytes(4), 'big')}",
+            notify_new_requests=True, notify_new_messages=True,
+        )
+        try:
+            db.set_current_chel_id(chel_id)
+            conversation = db.create_conversation("Консультация врача")
+            onboarding_before = db.get_onboarding()["status"]
+            order = db.create_consultation_payment_order(conversation["id"])
+            private = db.payment_order_private(order["id"])
+            self.assertEqual(private["order_type"], "consultation")
+            self.assertEqual(private["amount_kopecks"], 100000)
+            provider = {
+                "id": "7f3e4567-89ab-4cde-8012-3456789abcde",
+                "status": "pending", "paid": False, "test": True,
+                "amount": {"value": "1000.00", "currency": "RUB"},
+                "metadata": {"order_id": order["id"]},
+                "confirmation": {"confirmation_url": "https://yoomoney.ru/pay/consultation"},
+            }
+            db.attach_yookassa_payment(order["id"], provider)
+            paid = db.apply_yookassa_status(
+                order["id"], {**provider, "status": "succeeded", "paid": True},
+            )
+            self.assertEqual(db.get_onboarding()["status"], onboarding_before)
+            first = db.fulfill_paid_consultation(paid["id"])
+            second = db.fulfill_paid_consultation(paid["id"])
+            self.assertTrue(first["created"])
+            self.assertFalse(second["created"])
+            saved = db.get_conversation(conversation["id"])
+            self.assertFalse(bool(saved["ai_enabled"]))
+            self.assertEqual(saved["human_recipient_role"], "doctor")
+            self.assertEqual(saved["human_channel"], "paid_consultation")
+            messages = db.list_messages(conversation["id"])
+            self.assertEqual(sum(
+                item.get("metadata", {}).get("action") == "paid_consultation_confirmed"
+                for item in messages
+            ), 1)
+            self.assertEqual(len(db.list_paid_consultations()), 1)
+            self.assertEqual(db.enqueue_manager_notifications(
+                "new_request", conversation["id"],
+                message_id=first["message_id"], recipient_role="doctor",
+            ), 1)
+            notices = db.claim_manager_notifications("telegram")
+            notice = next(item for item in notices if item["conversation_id"] == conversation["id"])
+            self.assertIn("Оплачена консультация", notice["payload"]["title"])
+        finally:
+            db.set_current_chel_id(chel_id)
+            db.reset_current_user()
+            db.ensure_user("chel_test_default")
+            db.set_current_chel_id("chel_test_default")
+            db.admin_delete_staff(doctor["id"])
 
     def test_yookassa_redirect_payload_uses_server_order_and_idempotence(self):
         order = {
