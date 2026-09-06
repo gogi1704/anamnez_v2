@@ -1,8 +1,10 @@
-const CACHE_NAME = 'consilium-shell-v99';
+const CACHE_NAME = 'consilium-shell-v100';
 const ASSET_VERSION = '20260906-consultations-v1';
 const APP_SHELL = [
   '/',
   '/manifest.webmanifest',
+  '/manager-manifest.webmanifest',
+  '/manager',
   `/static/styles.css?v=${ASSET_VERSION}`,
   `/static/metrika.js?v=${ASSET_VERSION}`,
   '/static/rich-text.2bf1f5fab764.css',
@@ -47,21 +49,26 @@ self.addEventListener('fetch', event => {
   }
 
   if (request.mode === 'navigate') {
+    const shellPath = url.pathname === '/manager' ? '/manager' : '/';
     event.respondWith(
       fetch(request)
         .then(response => {
           if (response.ok) {
             const copy = response.clone();
-            caches.open(CACHE_NAME).then(cache => cache.put('/', copy));
+            caches.open(CACHE_NAME).then(cache => cache.put(shellPath, copy));
           }
           return response;
         })
-        .catch(() => caches.match('/'))
+        .catch(() => caches.match(shellPath))
     );
     return;
   }
 
-  if (url.pathname.startsWith('/static/') || url.pathname === '/manifest.webmanifest') {
+  if (
+    url.pathname.startsWith('/static/')
+    || url.pathname === '/manifest.webmanifest'
+    || url.pathname === '/manager-manifest.webmanifest'
+  ) {
     event.respondWith(
       fetch(request)
         .then(response => {

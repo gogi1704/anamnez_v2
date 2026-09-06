@@ -19,12 +19,14 @@ button { cursor:pointer; }
 .login-card input { width:100%; padding:13px 14px; border:1px solid var(--line); border-radius:12px; outline:none; }
 .login-card input:focus { border-color:#81ad9a; box-shadow:0 0 0 3px #e4f2eb; }
 .login-card > button { width:100%; margin-top:8px; padding:13px; border:0; border-radius:12px; background:var(--green); color:white; font-weight:700; }
+.login-card > .manager-install-login { border:1px solid #b9d4c7; background:white; color:var(--green-dark); }
 .login-card small { display:block; margin-top:18px; color:var(--muted); font-size:11px; line-height:1.5; }
 .form-error { color:var(--danger)!important; font-size:12px; }
 .manager-app { display:grid; grid-template-columns:330px minmax(420px,1fr) 370px; width:100%; height:100dvh; padding:14px; gap:1px; }
 .queue-panel,.manager-chat,.user-panel { min-width:0; min-height:0; border:1px solid var(--line); background:white; }
 .queue-panel { display:flex; flex-direction:column; border-radius:22px 0 0 22px; overflow:hidden; }
 .queue-header { display:flex; align-items:center; justify-content:space-between; padding:20px 18px 14px; }
+.queue-header-actions { display:flex; align-items:center; gap:7px; }
 .brand { display:flex; align-items:center; gap:10px; }
 .brand > span { display:grid; place-items:center; width:38px; height:38px; border-radius:12px; background:var(--green); color:white; font-weight:700; }
 .brand strong,.brand small { display:block; }.brand small { margin-top:2px; color:var(--muted); font-size:10px; }

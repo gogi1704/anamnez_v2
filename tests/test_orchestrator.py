@@ -2041,10 +2041,64 @@ class OrchestratorTests(unittest.TestCase):
             db.ensure_user("chel_test_default")
             db.set_current_chel_id("chel_test_default")
 
+    def test_manager_unread_messages_are_cleared_per_staff_when_chat_is_opened(self):
+        chel_id = "chel_manager_unread_1234"
+        first = db.admin_create_staff(
+            "Менеджер чтения один", "manager.read.one", "123456",
+        )
+        second = db.admin_create_staff(
+            "Менеджер чтения два", "manager.read.two", "123456",
+        )
+        db.ensure_user(chel_id)
+        try:
+            db.set_current_chel_id(chel_id)
+            conversation = db.create_conversation("Проверка чтения менеджером")
+            first_message = db.add_message(
+                conversation["id"], "user", "Первое новое сообщение",
+            )
+
+            first_queue = db.manager_list_conversations(
+                conversation["id"], "all", staff_id=first["id"],
+            )
+            second_queue = db.manager_list_conversations(
+                conversation["id"], "all", staff_id=second["id"],
+            )
+            self.assertEqual(first_queue[0]["unread_user_messages"], 1)
+            self.assertEqual(second_queue[0]["unread_user_messages"], 1)
+
+            marked = db.manager_mark_conversation_read(
+                conversation["id"], first["id"], "manager", first_message["id"],
+            )
+            self.assertEqual(marked["last_read_message_id"], first_message["id"])
+            self.assertEqual(db.manager_list_conversations(
+                conversation["id"], "all", staff_id=first["id"],
+            )[0]["unread_user_messages"], 0)
+            self.assertEqual(db.manager_list_conversations(
+                conversation["id"], "all", staff_id=second["id"],
+            )[0]["unread_user_messages"], 1)
+
+            db.add_message(conversation["id"], "assistant", "Служебный ответ")
+            db.add_message(conversation["id"], "user", "Следующее новое сообщение")
+            self.assertEqual(db.manager_list_conversations(
+                conversation["id"], "all", staff_id=first["id"],
+            )[0]["unread_user_messages"], 1)
+            self.assertIsNone(db.manager_mark_conversation_read(
+                conversation["id"], first["id"], "doctor", None,
+            ))
+        finally:
+            db.admin_delete_staff(first["id"])
+            db.admin_delete_staff(second["id"])
+            db.reset_current_user()
+            db.ensure_user("chel_test_default")
+            db.set_current_chel_id("chel_test_default")
+
     def test_manager_panel_and_user_mode_indicator_exist(self):
         project_root = Path(__file__).resolve().parents[1]
         manager = (project_root / "manager.html").read_text(encoding="utf-8")
         manager_script = (project_root / "static" / "manager.js").read_text(encoding="utf-8")
+        manager_manifest = json.loads(
+            (project_root / "manager-manifest.webmanifest").read_text(encoding="utf-8")
+        )
         app = (project_root / "static" / "app.js").read_text(encoding="utf-8")
         styles = (project_root / "static" / "styles.css").read_text(encoding="utf-8")
         index = (project_root / "index.html").read_text(encoding="utf-8")
@@ -2060,6 +2114,14 @@ class OrchestratorTests(unittest.TestCase):
         self.assertIn("/api/manager/me", manager_script)
         self.assertNotIn("ADMIN_DASHBOARD_TOKEN", manager_script)
         self.assertIn("/api/manager/conversations/", manager_script)
+        self.assertIn("/read", manager_script)
+        self.assertIn("unread_user_messages", manager_script)
+        self.assertEqual(manager_manifest["id"], "/manager")
+        self.assertEqual(manager_manifest["start_url"], "/manager")
+        self.assertEqual(manager_manifest["scope"], "/manager")
+        self.assertIn('rel="manifest" href="/manager-manifest.webmanifest"', manager)
+        self.assertIn("beforeinstallprompt", manager_script)
+        self.assertIn("navigator.serviceWorker.register('/service-worker.js')", manager_script)
         self.assertIn("include_related:'1'", manager_script)
         self.assertIn("data-person-id", manager_script)
         self.assertIn("data-person-toggle", manager_script)
@@ -2470,7 +2532,7 @@ class OrchestratorTests(unittest.TestCase):
         self.assertIn("controllerchange", script)
         self.assertIn("url.pathname.startsWith('/api/')", worker)
         self.assertIn("url.pathname.startsWith('/auth/')", worker)
-        self.assertIn("consilium-shell-v99", worker)
+        self.assertIn("consilium-shell-v100", worker)
         self.assertIn("fetch(request)", worker)
         self.assertIn("/static/styles.css?v=20260906-consultations-v1", index)
         self.assertIn("/static/rich-text.2bf1f5fab764.css", index)

@@ -175,6 +175,11 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                 BASE_DIR / "manifest.webmanifest",
                 "application/manifest+json; charset=utf-8",
             )
+        if path == "/manager-manifest.webmanifest":
+            return self._send_file(
+                BASE_DIR / "manager-manifest.webmanifest",
+                "application/manifest+json; charset=utf-8",
+            )
         if path == "/service-worker.js":
             return self._send_file(
                 BASE_DIR / "service-worker.js",
@@ -293,6 +298,7 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                         int(query.get("limit", ["100"])[0]),
                         query.get("include_related", ["0"])[0] == "1",
                         manager.get("role", "manager"),
+                        manager["id"],
                     ))
                 except (ValueError, TypeError) as exc:
                     return self._json(422, {"detail": str(exc)})
@@ -696,6 +702,19 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
             if not manager:
                 return
             suffix = path.removeprefix("/api/manager/conversations/")
+            if suffix.endswith("/read"):
+                conversation_id = suffix.removesuffix("/read").strip("/")
+                try:
+                    payload = self._read_json()
+                    result = db.manager_mark_conversation_read(
+                        conversation_id, manager["id"], manager.get("role", "manager"),
+                        payload.get("last_message_id"),
+                    )
+                    if not result:
+                        return self._json(404, {"detail": "Диалог не найден"})
+                    return self._json(200, result)
+                except (ValueError, TypeError, json.JSONDecodeError, UnicodeDecodeError) as exc:
+                    return self._json(422, {"detail": str(exc)})
             if suffix.endswith("/close"):
                 conversation_id = suffix.removesuffix("/close").strip("/")
                 conversation = db.manager_close_conversation(

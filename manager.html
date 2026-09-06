@@ -6,6 +6,7 @@
   <meta name="color-scheme" content="light">
   <meta name="theme-color" content="#176f57">
   <title>Консилиум — панель менеджера</title>
+  <link rel="manifest" href="/manager-manifest.webmanifest">
   <link rel="icon" href="/static/favicon.svg" type="image/svg+xml">
   <link rel="icon" href="/static/icon-192.png" type="image/png" sizes="192x192">
   <link rel="apple-touch-icon" href="/static/apple-touch-icon.png">
@@ -25,6 +26,7 @@
       <label>Логин<input id="managerLogin" maxlength="64" autocomplete="username" placeholder="manager.ivan" required></label>
       <label>Пароль<input id="managerPassword" type="password" autocomplete="current-password" placeholder="Ваш пароль" required></label>
       <button type="submit">Войти</button>
+      <button type="button" class="manager-install-login" id="installManagerLoginButton">Установить на устройство</button>
       <p class="form-error hidden" id="loginError" role="alert"></p>
       <small>Учётную запись создаёт администратор. Панель содержит медицинские и персональные данные — не оставляйте её открытой на общем устройстве.</small>
     </form>
@@ -34,7 +36,10 @@
     <aside class="queue-panel">
       <header class="queue-header">
         <div class="brand"><span>К</span><div><strong>Консилиум</strong><small>Панель менеджера</small></div></div>
-        <button class="icon-button" id="logoutButton" title="Выйти" aria-label="Выйти">↪</button>
+        <div class="queue-header-actions">
+          <button class="icon-button" id="installManagerHeaderButton" title="Установить приложение" aria-label="Установить приложение">↓</button>
+          <button class="icon-button" id="logoutButton" title="Выйти" aria-label="Выйти">↪</button>
+        </div>
       </header>
       <div class="manager-identity">
         <span class="manager-avatar" id="managerAvatar">М</span>
@@ -120,6 +125,6 @@
 
   <div class="toast hidden" id="managerToast" role="status"></div>
   <script src="/static/rich-text.js?v=20260816-rich-text"></script>
-  <script src="/static/manager.js?v=20260906-consultations-v1" defer></script>
+  <script src="/static/manager.js?v=20260906-manager-pwa-v1" defer></script>
 </body>
 </html>

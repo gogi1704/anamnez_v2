@@ -9,10 +9,49 @@ const state = {
   detailTimer: null,
   notificationTimer: null,
   notificationSnapshot: null,
+  lastMarkedReadId: 0,
   collapsedPeople: new Set(),
   busy: false,
 };
 let managerAudioContext = null;
+let deferredManagerInstallPrompt = null;
+
+function managerAppInstalled() {
+  return window.matchMedia('(display-mode: standalone)').matches
+    || window.navigator.standalone === true;
+}
+
+function updateManagerInstallButtons() {
+  const hidden = managerAppInstalled();
+  $('#installManagerLoginButton')?.classList.toggle('hidden', hidden);
+  $('#installManagerHeaderButton')?.classList.toggle('hidden', hidden);
+}
+
+async function installManagerApp() {
+  if (!deferredManagerInstallPrompt) {
+    toast('Откройте меню браузера и выберите «Установить приложение» или «Добавить на экран Домой».');
+    return;
+  }
+  deferredManagerInstallPrompt.prompt();
+  await deferredManagerInstallPrompt.userChoice;
+  deferredManagerInstallPrompt = null;
+  updateManagerInstallButtons();
+}
+
+window.addEventListener('beforeinstallprompt', event => {
+  event.preventDefault();
+  deferredManagerInstallPrompt = event;
+  updateManagerInstallButtons();
+});
+
+window.addEventListener('appinstalled', () => {
+  deferredManagerInstallPrompt = null;
+  updateManagerInstallButtons();
+});
+
+if ('serviceWorker' in navigator) {
+  navigator.serviceWorker.register('/service-worker.js').catch(() => {});
+}
 
 function unlockManagerSound() {
   if (!managerAudioContext) {
@@ -213,7 +252,7 @@ async function pollManagerNotifications() {
     const items = await api('/api/manager/conversations?queue=open&limit=250');
     const next = new Map(items.map(item => [item.id, {
       ticket: item.human_ticket_id || '',
-      unanswered: Number(item.unanswered_user_messages || 0),
+      unread: Number(item.unread_user_messages || 0),
       aiEnabled: Boolean(item.ai_enabled),
     }]));
     if (state.notificationSnapshot) {
@@ -229,7 +268,7 @@ async function pollManagerNotifications() {
         }
         if (
           previous && !item.ai_enabled
-          && Number(item.unanswered_user_messages || 0) > previous.unanswered
+          && Number(item.unread_user_messages || 0) > previous.unread
         ) {
           waitingMessage = true;
         }
@@ -273,10 +312,10 @@ async function loadQueue() {
       const name = person.name || `Пользователь ${person.chelId.slice(-6)}`;
       const ticketCount = person.conversations.filter(item => item.human_ticket_id).length;
       const unreadTotal = person.conversations.reduce(
-        (total, item) => total + Number(item.unanswered_user_messages || 0), 0,
+        (total, item) => total + Number(item.unread_user_messages || 0), 0,
       );
       const cards = person.conversations.map(item => {
-        const unread = Number(item.unanswered_user_messages || 0);
+        const unread = Number(item.unread_user_messages || 0);
         const reference = item.human_ticket_id
           ? `Обращение ${item.human_ticket_id}`
           : `Диалог ${item.id.slice(0, 8)}`;
@@ -306,6 +345,7 @@ async function loadQueue() {
 async function selectConversation(id) {
   state.selectedId = id;
   state.detail = null;
+  state.lastMarkedReadId = 0;
   document.querySelectorAll('.request-card').forEach(card => {
     card.classList.toggle('active', card.dataset.conversationId === id);
   });
@@ -327,6 +367,14 @@ async function loadDetail(force = false) {
     renderHeader();
     if (force || nextLast !== previousLast) renderMessages();
     if (force || modeChanged) renderUserDetails();
+    if (nextLast > state.lastMarkedReadId) {
+      const openedConversationId = detail.conversation.id;
+      await api(`/api/manager/conversations/${encodeURIComponent(openedConversationId)}/read`, {
+        method:'POST', body:JSON.stringify({last_message_id:nextLast}),
+      });
+      if (state.selectedId === openedConversationId) state.lastMarkedReadId = nextLast;
+      await loadQueue();
+    }
   } catch (error) {
     if (error.status === 401) return showManagerLogin('Сеанс завершён. Войдите снова.');
     toast(error.message, true);
@@ -538,6 +586,8 @@ function closeProfile() {
 }
 
 $('#loginForm').addEventListener('submit', login);
+$('#installManagerLoginButton').addEventListener('click', installManagerApp);
+$('#installManagerHeaderButton').addEventListener('click', installManagerApp);
 $('#logoutButton').addEventListener('click', logout);
 $('#requestList').addEventListener('click', event => {
   const card = event.target.closest('[data-conversation-id]');
@@ -588,4 +638,5 @@ $('#mobileQueueButton').addEventListener('click', () => $('#managerApp').classLi
 document.addEventListener('pointerdown', unlockManagerSound, {once:true});
 document.addEventListener('keydown', unlockManagerSound, {once:true});
 
+updateManagerInstallButtons();
 api('/api/manager/me').then(enterWorkspace).catch(() => showManagerLogin());

@@ -2629,6 +2629,7 @@ def revoke_staff_session(token: str) -> None:
 def manager_list_conversations(
     query: str = "", queue: str = "open", limit: int = 100,
     include_related: bool = False, staff_role: str = "manager",
+    staff_id: int | None = None,
 ) -> list[dict]:
     """Return the human-support queue. This deliberately contains sensitive data."""
     query = " ".join(str(query or "").split())[:120]
@@ -2722,13 +2723,83 @@ def manager_list_conversations(
                          c.updated_at DESC LIMIT ?""",
                 tuple(params + [limit]),
             ).fetchall()
+        unread_by_conversation: dict[str, int] = {}
+        if staff_id is not None and rows:
+            conversation_ids = [str(row["id"]) for row in rows]
+            # Keep the query below SQLite's bound-variable limit when a search
+            # returns many dialogs belonging to the same person.
+            for offset in range(0, len(conversation_ids), 500):
+                chunk = conversation_ids[offset:offset + 500]
+                placeholders = ",".join("?" for _ in chunk)
+                unread_rows = conn.execute(
+                    f"""SELECT m.conversation_id, COUNT(*) AS unread_count
+                    FROM messages m
+                    LEFT JOIN staff_conversation_reads r
+                      ON r.conversation_id = m.conversation_id
+                     AND r.staff_user_id = ?
+                    WHERE m.role = 'user'
+                      AND m.id > COALESCE(r.last_read_message_id, 0)
+                      AND m.conversation_id IN ({placeholders})
+                    GROUP BY m.conversation_id""",
+                    (int(staff_id), *chunk),
+                ).fetchall()
+                unread_by_conversation.update({
+                    str(unread["conversation_id"]): int(unread["unread_count"] or 0)
+                    for unread in unread_rows
+                })
     result = []
     for row in rows:
         item = dict(row)
         item["ai_enabled"] = bool(item["ai_enabled"])
         item["last_message"] = str(item.get("last_message") or "")[:180]
+        item["unread_user_messages"] = unread_by_conversation.get(item["id"], 0)
         result.append(item)
     return result
+
+
+def manager_mark_conversation_read(
+    conversation_id: str, staff_id: int, staff_role: str,
+    last_message_id: int | None = None,
+) -> dict | None:
+    """Persist how far one staff member has actually viewed a conversation."""
+    conversation_id = str(conversation_id or "").strip()
+    staff_id = int(staff_id)
+    staff_role = _staff_role(staff_role)
+    requested_id = None if last_message_id is None else max(0, int(last_message_id))
+    with _write_lock, connection() as conn:
+        row = conn.execute(
+            """SELECT c.id, COALESCE(MAX(m.id), 0) AS last_message_id
+            FROM conversations c
+            LEFT JOIN messages m ON m.conversation_id = c.id
+            WHERE c.id = ?
+              AND COALESCE(c.human_recipient_role, 'manager') = ?
+            GROUP BY c.id""",
+            (conversation_id, staff_role),
+        ).fetchone()
+        if not row:
+            return None
+        visible_message_id = int(row["last_message_id"] or 0)
+        if requested_id is not None:
+            visible_message_id = min(visible_message_id, requested_id)
+        now = utc_now()
+        conn.execute(
+            """INSERT INTO staff_conversation_reads
+            (staff_user_id, conversation_id, last_read_message_id, read_at)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(staff_user_id, conversation_id) DO UPDATE SET
+                last_read_message_id = MAX(
+                    staff_conversation_reads.last_read_message_id,
+                    excluded.last_read_message_id
+                ),
+                read_at = excluded.read_at""",
+            (staff_id, conversation_id, visible_message_id, now),
+        )
+        conn.commit()
+    return {
+        "conversation_id": conversation_id,
+        "last_read_message_id": visible_message_id,
+        "read_at": now,
+    }
 
 
 def manager_conversation_detail(
@@ -3152,6 +3223,16 @@ def init_db() -> None:
                 expires_at TEXT NOT NULL,
                 revoked_at TEXT,
                 FOREIGN KEY(staff_user_id) REFERENCES staff_users(id) ON DELETE CASCADE
+            );
+
+            CREATE TABLE IF NOT EXISTS staff_conversation_reads (
+                staff_user_id INTEGER NOT NULL,
+                conversation_id TEXT NOT NULL,
+                last_read_message_id INTEGER NOT NULL DEFAULT 0,
+                read_at TEXT NOT NULL,
+                PRIMARY KEY(staff_user_id, conversation_id),
+                FOREIGN KEY(staff_user_id) REFERENCES staff_users(id) ON DELETE CASCADE,
+                FOREIGN KEY(conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
             );
 
             CREATE TABLE IF NOT EXISTS staff_messenger_tokens (
@@ -3716,6 +3797,10 @@ def init_db() -> None:
         )
         conn.execute("CREATE INDEX IF NOT EXISTS idx_manager_actions_conversation_id ON manager_actions(conversation_id, created_at)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_staff_sessions_user ON staff_sessions(staff_user_id, expires_at)")
+        conn.execute(
+            """CREATE INDEX IF NOT EXISTS idx_staff_conversation_reads_conversation
+            ON staff_conversation_reads(conversation_id, staff_user_id)"""
+        )
         conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_staff_telegram_id ON staff_users(telegram_id) WHERE telegram_id <> ''")
         conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_staff_max_id ON staff_users(max_id) WHERE max_id <> ''")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_staff_messenger_tokens ON staff_messenger_tokens(staff_user_id, provider, expires_at)")
