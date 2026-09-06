@@ -55,7 +55,7 @@ class FunnelMonitorTests(unittest.TestCase):
             "flow_label": "Обычный путь",
             "summary": {"start_users": 40, "reached_completion": 12},
             "screens": [{
-                "id": "registration", "title": "Регистрация", "users": 20,
+                "id": "registration", "title": "Ошибочное внешнее название", "users": 20,
                 "percent_of_start": 50, "percent_of_parent": 50,
                 "comparison_users": 40, "actual_dropoff_users": 20,
                 "stopped_users": 2, "incomplete_transition_users": 0,
@@ -77,6 +77,17 @@ class FunnelMonitorTests(unittest.TestCase):
             )
         self.assertEqual(report["current_period"], {"date_from": "2026-09-02", "date_to": "2026-09-02"})
         self.assertEqual(report["flows"][0]["alerts"][0]["change_pp"], -30.0)
+        self.assertEqual(
+            report["flows"][0]["screens"][0]["title"],
+            "Выбор способа входа",
+        )
+        instruction = report["ai_instruction"]
+        self.assertIn("Описание чек-апов", instruction)
+        self.assertIn("не основная цель воронки", instruction)
+        self.assertIn("Сообщите ИНН вашего предприятия", instruction)
+        self.assertIn("Оплатить на медосмотре", instruction)
+        self.assertIn("целевым успешным действием", instruction)
+        self.assertIn("flows[].screens[].title", instruction)
         serialized = json.dumps(report, ensure_ascii=False)
         for forbidden in ("chel_id", "tube_number", "messages", "answers"):
             self.assertNotIn(forbidden, serialized)
@@ -107,6 +118,58 @@ class FunnelMonitorTests(unittest.TestCase):
         self.assertTrue(result["screens"][0]["terminal"])
         previous["screens"][0].update(comparison_users=100, data_quality="incomplete")
         self.assertEqual(funnel_monitor._compact_flow(current, previous, config)["alerts"], [])
+
+    def test_inn_and_checkup_description_remain_visible_but_do_not_raise_alarm(self):
+        config = {
+            **db.FUNNEL_MONITOR_DEFAULTS,
+            "minimum_users": 20,
+            "alert_threshold_pp": 10,
+        }
+        current = {
+            "flow_label": "Обычный путь",
+            "summary": {"start_users": 100},
+            "screens": [
+                {
+                    "id": "question_company_inn",
+                    "title": "Сообщите ИНН вашего предприятия",
+                    "users": 40,
+                    "percent_of_parent": 40,
+                    "comparison_users": 100,
+                    "data_quality": "complete",
+                },
+                {
+                    "id": "exam_catalog",
+                    "title": "Описание чек-апов",
+                    "users": 20,
+                    "percent_of_parent": 20,
+                    "comparison_users": 100,
+                    "data_quality": "complete",
+                },
+            ],
+        }
+        previous = {
+            "summary": {"start_users": 100},
+            "screens": [
+                {
+                    "id": "question_company_inn",
+                    "percent_of_parent": 90,
+                    "comparison_users": 100,
+                    "data_quality": "complete",
+                },
+                {
+                    "id": "exam_catalog",
+                    "percent_of_parent": 80,
+                    "comparison_users": 100,
+                    "data_quality": "complete",
+                },
+            ],
+        }
+        result = funnel_monitor._compact_flow(current, previous, config)
+        self.assertEqual(result["alerts"], [])
+        self.assertEqual(
+            [screen["title"] for screen in result["screens"]],
+            ["Сообщите ИНН вашего предприятия", "Описание чек-апов"],
+        )
 
 
 if __name__ == "__main__":

@@ -20,6 +20,10 @@ class FunnelMonitorUnavailable(RuntimeError):
 
 _send_lock = threading.Lock()
 
+# These screens remain visible in the report, but their conversion is not a
+# standalone failure signal according to the product's intended user journey.
+NON_ALERT_SCREEN_IDS = {"exam_catalog", "question_company_inn"}
+
 MANUAL_ANALYSES = {
     "all": ("Полный отчёт", True, True, True, True),
     "standard": ("Обычная воронка", True, False, False, False),
@@ -35,6 +39,27 @@ ANALYSIS_INSTRUCTIONS = {
     "payments": "Проанализируй попытки и успешность оплат, конверсию, выручку и неуспешные статусы. Укажи, какие причины можно подтвердить данными и что следует проверить.",
     "errors": "Проанализируй динамику технических ошибок, выдели наиболее массовые и предложи порядок технической проверки по влиянию на пользователей.",
 }
+
+FUNNEL_AI_BUSINESS_CONTEXT = (
+    "Учитывай бизнес-смысл этапов и используй названия экранов дословно так, "
+    "как они переданы в поле flows[].screens[].title из Метрики 2.0. "
+    "Экран «Описание чек-апов» — не основная цель воронки, а информационный "
+    "инструмент для пользователей, которые после анкеты ещё не готовы сразу "
+    "перейти к оплате, и промежуточный путь к будущему переходу на страницу "
+    "оплаты; снижение перехода на этот экран само по себе не "
+    "считай проблемой и не формируй по нему тревогу. Экран «Сообщите ИНН вашего "
+    "предприятия» является обязательным идентификационным шагом анкеты; потери "
+    "на нём не оценивай как продуктовую просадку или ошибку и не предлагай "
+    "оптимизировать сам экран. Допустимо отдельно отметить только подтверждённую "
+    "техническую ошибку, неполные связи данных или маршрут «Я не на мед-осмотр». "
+    "Действие «Оплатить на "
+    "медосмотре» на экране «Выбор способа оплаты» является целевым успешным "
+    "действием наравне с подтверждённой онлайн-оплатой: таких пользователей не "
+    "считай потерей, ошибкой оплаты или незавершённой конверсией. Различай "
+    "просмотр информационного ответвления, выбор целевого действия и реальную "
+    "техническую ошибку. Не переименовывай экраны и не подменяй их названия "
+    "внутренними id событий."
+)
 
 
 def configured() -> bool:
@@ -108,6 +133,10 @@ def _compact_admin(report: dict, config: dict) -> dict:
 
 def _compact_flow(current: dict, comparison: dict, config: dict) -> dict:
     previous = {str(item.get("id")): item for item in comparison.get("screens", [])}
+    metric_screen_titles = {
+        str(item.get("id")): str(item.get("title", ""))
+        for item in analytics._metric2_screen_definitions()
+    }
     screens = []
     alerts = []
     threshold = float(config["alert_threshold_pp"])
@@ -120,7 +149,9 @@ def _compact_flow(current: dict, comparison: dict, config: dict) -> dict:
         delta = round(current_conversion - previous_conversion, 1)
         compact = {
             "id": screen_id[:80],
-            "title": str(item.get("title", ""))[:160],
+            "title": metric_screen_titles.get(
+                screen_id, str(item.get("title", ""))
+            )[:160],
             "users": int(item.get("users", 0) or 0),
             "percent_of_start": float(item.get("percent_of_start", 0) or 0),
             "percent_of_parent": current_conversion,
@@ -138,7 +169,8 @@ def _compact_flow(current: dict, comparison: dict, config: dict) -> dict:
         comparison_users = int(item.get("comparison_users", 0) or 0)
         previous_comparison_users = int(old.get("comparison_users", 0) or 0)
         if (
-            min(comparison_users, previous_comparison_users) >= minimum_users
+            screen_id not in NON_ALERT_SCREEN_IDS
+            and min(comparison_users, previous_comparison_users) >= minimum_users
             and compact["data_quality"] == "complete"
             and old.get("data_quality") != "incomplete"
             and delta <= -threshold
@@ -222,6 +254,7 @@ def build_report(
         "flows": flows,
         "ai_instruction": (
             f"{ANALYSIS_INSTRUCTIONS.get(str(config.get('analysis')), 'Проанализируй изменения воронки.')} "
+            f"{FUNNEL_AI_BUSINESS_CONTEXT} "
             "Отдели подтверждённые фактами выводы "
             "от гипотез. Укажи критические отклонения, возможные причины, необходимые "
             "проверки и приоритетные действия. Не делай уверенных выводов при "
