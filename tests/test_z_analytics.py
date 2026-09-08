@@ -22,7 +22,11 @@ class AnalyticsTests(unittest.TestCase):
         conn = sqlite3.connect(settings.database_path)
         try:
             conn.executescript("""
-                CREATE TABLE user_profile (chel_id TEXT PRIMARY KEY, company_inn TEXT NOT NULL DEFAULT '');
+                CREATE TABLE user_profile (
+                    chel_id TEXT PRIMARY KEY,
+                    company_inn TEXT NOT NULL DEFAULT '',
+                    driving_time TEXT NOT NULL DEFAULT ''
+                );
                 CREATE TABLE payment_orders (
                     id TEXT PRIMARY KEY, chel_id TEXT NOT NULL, status TEXT NOT NULL,
                     amount_kopecks INTEGER NOT NULL, items TEXT NOT NULL DEFAULT '[]',
@@ -187,6 +191,43 @@ class AnalyticsTests(unittest.TestCase):
         self.assertEqual(driving["viewed"], 1)
         self.assertEqual(driving["answered"], 1)
         self.assertEqual(driving["conversion"], 100.0)
+
+    def test_driving_time_answer_distribution_uses_filtered_user_cohort(self):
+        conn = sqlite3.connect(settings.database_path)
+        try:
+            conn.executemany(
+                "INSERT INTO user_profile (chel_id, company_inn, driving_time) VALUES (?,?,?)",
+                [
+                    ("CHEL-NONE", "7700000001", "none"),
+                    ("CHEL-ONE", "7700000002", "up_to_1h"),
+                    ("CHEL-TWO", "7700000003", "up_to_1h"),
+                    ("CHEL-OUTSIDE", "7700000004", "over_2h"),
+                    ("CHEL-TEST-INN", "123123", "1_to_2h"),
+                ],
+            )
+            conn.commit()
+        finally:
+            conn.close()
+        for index, chel_id in enumerate(("CHEL-NONE", "CHEL-ONE", "CHEL-TWO", "CHEL-TEST-INN"), 1):
+            analytics.record_events(chel_id, [{
+                "event_id": f"driving-cohort-{index:04d}",
+                "session_id": f"driving-cohort-session-{index}",
+                "event_name": "question_answered",
+                "properties": {"question_key": "driving_time"},
+            }])
+
+        report = analytics.admin_report("30")
+        distribution = report["driving_time"]
+        self.assertEqual(distribution["answered_users"], 3)
+        self.assertEqual(
+            [(item["value"], item["users"], item["percent"]) for item in distribution["answers"]],
+            [
+                ("none", 1, 33.3),
+                ("up_to_1h", 2, 66.7),
+                ("1_to_2h", 0, 0.0),
+                ("over_2h", 0, 0.0),
+            ],
+        )
 
     def test_payment_method_does_not_replace_registration_method(self):
         analytics.record_events("CHEL-METHOD", [

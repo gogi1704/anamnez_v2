@@ -89,6 +89,7 @@ const favoriteDefinitions = [
   ['analytics-managers','#managerAttributionTable','Статистика по менеджерам','analytics'],
   ['analytics-examinations','#analyticsExaminations','Популярность обследований','analytics'],
   ['analytics-payments','.payment-analytics-panel','Статистика по оплате','analytics'],
+  ['analytics-driving-time','.driving-time-analytics-panel','Время за рулём','analytics'],
   ['analytics-questionnaire','#analyticsQuestionsChart','Статистика по анкете','analytics'],
   ['analytics-events','#analyticsRecent','Ошибки и последние события','analytics'],
   ['cost-daily','#costDailyChart','Расход по дням','costs'],
@@ -651,9 +652,15 @@ async function adminFetchRequest(path, token, options = {}, retryAttempt = 0) {
 
 async function adminReportFetch(path) {
   const startedAt = Date.now();
+  let requestPath = path;
   while (Date.now() - startedAt < 120000) {
-    const data = await adminFetch(path);
+    const data = await adminFetch(requestPath);
     if (data?.status !== 'building') return data;
+    // refresh=1 invalidates the cache only on the initial request. Repeating
+    // it while polling would remove the freshly completed report.
+    const pollingUrl = new URL(requestPath, window.location.origin);
+    pollingUrl.searchParams.delete('refresh');
+    requestPath = `${pollingUrl.pathname}${pollingUrl.search}`;
     await wait(Math.max(250, Math.min(Number(data.retry_after_ms) || 750, 2000)));
   }
   throw new Error('Расчёт занимает слишком много времени. Попробуйте обновить отчёт ещё раз.');
@@ -1103,6 +1110,23 @@ function renderAnalytics(data) {
   renderExaminationAnalytics(data.examinations || [], data.examination_summary || {});
   renderPaymentAnalytics(data.payments || {});
 
+  const drivingTime = data.driving_time || {};
+  const drivingAnswers = drivingTime.answers || [];
+  $('#drivingTimeAnswered').textContent = `${Number(drivingTime.answered_users || 0).toLocaleString('ru-RU')} ответов`;
+  const drivingRoot = $('#drivingTimeDistribution');
+  drivingRoot.replaceChildren();
+  const maxDriving = Math.max(1, ...drivingAnswers.map(item => Number(item.users || 0)));
+  for (const item of drivingAnswers) {
+    const row = document.createElement('div'); row.className = 'distribution-row driving-time-row';
+    const label = document.createElement('span'); label.textContent = item.label || item.value || 'Не указано';
+    const progress = document.createElement('div'); progress.className = 'progress';
+    const bar = document.createElement('i'); bar.style.width = `${Number(item.users || 0) / maxDriving * 100}%`; progress.append(bar);
+    const value = document.createElement('b');
+    value.textContent = `${Number(item.users || 0).toLocaleString('ru-RU')} · ${Number(item.percent || 0).toLocaleString('ru-RU')}%`;
+    row.append(label,progress,value); drivingRoot.append(row);
+  }
+  if (!drivingAnswers.length) drivingRoot.textContent = 'Пока нет данных';
+
   const questions = $('#analyticsQuestionsChart'); questions.replaceChildren();
   if (!(data.questions || []).length) {
     const empty = document.createElement('p'); empty.className = 'form-error'; empty.textContent = 'Пока нет данных по заполнению анкеты'; questions.append(empty);
@@ -1151,6 +1175,7 @@ async function loadAnalytics() {
       if ($(selector).value) params.set(key,$(selector).value);
     }
     appendDateRange(params, '#analyticsDateFrom', '#analyticsDateTo');
+    params.set('refresh','1');
     renderAnalytics(await adminReportFetch(`/api/admin/analytics?${params}`));
   }, 'Считаем воронку и поведение…');
 }
@@ -1193,7 +1218,7 @@ const metric2ExamAudiences = {
 
 function metric2PreviewMarkup(screen, large = false) {
   const kind = screen.kind || '';
-  const action = (label,secondary = false) => `<span class="metric2-mock-button${secondary ? ' secondary' : ''}">${escapeHtml(label)}</span>`;
+  const action = (label,secondary = false,disabled = false) => `<span class="metric2-mock-button${secondary ? ' secondary' : ''}${disabled ? ' disabled' : ''}">${escapeHtml(label)}</span>`;
   const messengerAction = (icon,label) => `<span class="metric2-mock-button metric2-mock-messenger"><i>${escapeHtml(icon)}</i><span><b>${escapeHtml(label)}</b><small>Подтверждение через бота</small></span></span>`;
   const examinations = latestMetric2Data?.examinations || [];
   let content = '';
@@ -1206,7 +1231,7 @@ function metric2PreviewMarkup(screen, large = false) {
     const index = metric2QuestionContent.findIndex(item => item.key === screen.question_key);
     const question = metric2QuestionContent[index] || {title:screen.title,lead:'',placeholder:''};
     const control = question.choices
-      ? question.choices.map(label => `<span class="metric2-mock-choice">${escapeHtml(label)}</span>`).join('')
+      ? `<span class="metric2-mock-choice-grid">${question.choices.map(label => `<span class="metric2-mock-choice">${escapeHtml(label)}</span>`).join('')}</span>`
       : `<span class="metric2-mock-input${question.textarea ? ' textarea' : ''}">${escapeHtml(question.placeholder || '')}</span>`;
     const nextLabel = question.optional ? 'Пропустить' : 'Продолжить';
     const controls = index > 0 ? `<div class="metric2-mock-actions">${action('Назад',true)}${action(nextLabel)}</div>` : action(nextLabel);
@@ -1218,9 +1243,27 @@ function metric2PreviewMarkup(screen, large = false) {
     content = `<small>ДОСТУПНЫЕ ЧЕК-АПЫ</small><b>Что можно проверить</b><p>Краткое описание поможет сориентироваться. Необходимость обследований и интерпретацию результатов лучше обсуждать с врачом.</p>${cards}${action('Выбрать анализы')}${action('Вернуться к вопросу',true)}`;
   } else if (kind === 'exam_objection') content = `<small>ПЕРЕД ТЕМ КАК ПРОДОЛЖИТЬ</small><b>После обследований вы получите больше, чем результаты</b><p>Врач высшей категории <strong>Татьяна Витальевна</strong> подготовит подробную расшифровку сложных показателей.</p><p>И самое главное — вы получите <strong>бесплатную консультацию</strong> по результатам.</p><p>Всё будет доступно в этом сервисе — без очередей и доплат за расшифровку.</p><span class="metric2-mock-benefit"><b>✓ Ничего дополнительно делать не нужно</b><small>Выберите обследования сейчас, а в день медосмотра сдайте всё вместе.</small></span><span class="metric2-mock-benefit"><b>✓ Один визит вместо отдельной поездки</b><small>Вы уже будете на осмотре — дополнительные анализы можно сдать за один раз.</small></span><span class="metric2-mock-benefit"><b>✓ Бесплатная консультация специалиста</b><small>После готовности дополнительных анализов врач высшей категории поможет разобраться в результатах.</small></span><span class="metric2-mock-benefit"><b>✓ Не придётся записываться отдельно</b><small>Если отложить обследования, позже могут потребоваться отдельная запись и поездка.</small></span><p class="metric2-mock-note">Дополнительные обследования добровольны — окончательное решение остаётся за вами.</p>${action('Выбрать обследования')}${action('Всё равно отказаться',true)}`;
   else if (kind === 'exam_selection') {
-    const cards = examinations.map((test,index) => `<span class="metric2-mock-test${index === 0 ? ' selected' : ''}"><strong>${index === 0 ? '✓ ' : ''}${escapeHtml(test.name)}</strong><em>${Number(test.price || 0).toLocaleString('ru-RU')} ₽</em><small>${escapeHtml(test.description || '')}</small><small>${escapeHtml(test.includes || '')}</small></span>`).join('');
-    const selected = examinations[0];
-    content = `<small>ПОСЛЕ АНКЕТЫ</small><b>Персональные рекомендации по итогам анкеты</b><p>Мы учли ответы пользователя. Ниже показаны подходящие обследования.</p><span class="metric2-mock-info"><b>🩸 Одна проба крови</b><small>Дополнительные чек-апы делаются из той же пробы, без нового укола.</small></span><span class="metric2-mock-info"><b>🩺 После результатов</b><small>Рекомендации медицинского ИИ и чат с врачом прямо в личном кабинете.</small></span>${cards}<span class="metric2-mock-total">Выбрано: ${selected ? 1 : 0}<b>${Number(selected?.price || 0).toLocaleString('ru-RU')} ₽</b></span><div class="metric2-mock-actions">${action('Назад',true)}${action('Далее')}</div>${action('Ничего не выбирать',true)}`;
+    const priceMarkup = (test,recommended) => {
+      const price = Number(test.price || 0);
+      const retail = Number(test.price_without_discount || 0);
+      const competitor = Number(test.competitor_price || 0);
+      const showCompetitor = test.show_competitor_price !== 0 && test.show_competitor_price !== false;
+      const showRetail = test.show_retail_price !== 0 && test.show_retail_price !== false;
+      const showDiscount = test.show_discount_price !== 0 && test.show_discount_price !== false;
+      const discounted = recommended && retail > price;
+      const rows = [];
+      if (competitor > 0 && showCompetitor) rows.push(`<small>${escapeHtml(test.competitor_label || 'У конкурентов')} — ${competitor.toLocaleString('ru-RU')} ₽</small>`);
+      if (discounted) {
+        if (showRetail) rows.push(`<small>${escapeHtml(test.retail_price_label || 'Розничная цена')} — <s>${retail.toLocaleString('ru-RU')} ₽</s></small>`);
+        if (showDiscount) rows.push(`<b>${escapeHtml(test.discount_price_label || 'С учётом вашей скидки')} — ${price.toLocaleString('ru-RU')} ₽</b>`);
+      } else if (showRetail) rows.push(`<b>${escapeHtml(test.retail_price_label || 'Розничная цена')} — ${price.toLocaleString('ru-RU')} ₽</b>`);
+      return `<span class="metric2-mock-pricing">${rows.join('')}</span>`;
+    };
+    const cards = examinations.map((test,index) => {
+      const recommended = index === 0;
+      return `<span class="metric2-mock-test"><i class="metric2-mock-checkbox"></i>${recommended ? '<mark>АКТУАЛЬНО ДЛЯ ВАС</mark>' : ''}<strong>${escapeHtml(test.name)}</strong>${priceMarkup(test,recommended)}<small>${escapeHtml(test.description || '')}</small><em>${escapeHtml(test.includes || '')}</em></span>`;
+    }).join('');
+    content = `<small>ПОСЛЕ АНКЕТЫ</small><b>Дополнительные обследования для вас</b><p>Рекомендации отмечены по ответам анкеты и не являются назначением.</p><span class="metric2-mock-info metric2-mock-blood"><b>🩸 Во время медосмотра</b><small>У вас в любом случае возьмут кровь на общий анализ — за счёт работодателя. Дополнительные чек-апы делаются из той же пробы, без нового укола.</small></span><span class="metric2-mock-info"><b>🩺 После результатов</b><small>Рекомендации медицинского ИИ и чат с врачом прямо в личном кабинете.</small></span>${cards}<span class="metric2-mock-total">Выбрано: 0<b>0 ₽</b></span><div class="metric2-mock-actions">${action('Назад',true)}${action('Далее',false,true)}</div>${action('Ничего не выбирать',true)}`;
   } else if (kind === 'payment') {
     const selected = examinations[0];
     content = `<small>ПОСЛЕДНИЙ ШАГ</small><b>Проверим заказ</b><p>Выберите, как вам будет удобнее оплатить дополнительные обследования.</p><span class="metric2-mock-test"><strong>${escapeHtml(selected?.name || 'Выбранное обследование')}</strong><em>${Number(selected?.price || 0).toLocaleString('ru-RU')} ₽</em></span><span class="metric2-mock-total">Итого <b>${Number(selected?.price || 0).toLocaleString('ru-RU')} ₽</b></span>${action('Оплатить онлайн')}${action('Оплатить на медосмотре')}${action('← Вернуться к обследованиям',true)}`;
@@ -1463,6 +1506,7 @@ async function loadMetric2(flow = metric2ActiveFlow) {
       if ($(selector).value) params.set(key,$(selector).value);
     }
     appendDateRange(params, '#metric2DateFrom', '#metric2DateTo');
+    params.set('refresh','1');
     const requestedFlow = metric2ActiveFlow;
     const report = await adminReportFetch(`/api/admin/metric2?${params}`);
     if (requestedFlow === metric2ActiveFlow) renderMetric2(report);

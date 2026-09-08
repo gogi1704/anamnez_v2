@@ -11,7 +11,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/static/dashboard.css?v=20260906-consultations-v1">
+  <link rel="stylesheet" href="/static/dashboard.css?v=20260908-driving-analytics-v1">
 </head>
 <body>
   <main class="dashboard-shell">
@@ -137,6 +137,7 @@
             <tbody id="paymentRecentTable"></tbody>
           </table></div>
         </article>
+        <article class="panel driving-time-analytics-panel"><div class="panel-heading"><div><p class="eyebrow">Ответы пользователей</p><h2>Сколько времени проводят за рулём</h2><p>Распределение текущих сохранённых ответов пользователей, попавших в выбранный период и фильтры аналитики.</p></div><span class="table-count" id="drivingTimeAnswered">0 ответов</span></div><div class="distribution-list driving-time-distribution" id="drivingTimeDistribution"></div></article>
         <article class="panel questionnaire-analytics-panel"><div class="panel-heading"><div><p class="eyebrow">Отдельно от общей воронки</p><h2>Статистика по анкете</h2><p>В общей воронке анкета считается одним этапом. Здесь можно увидеть, на каких вопросах пользователи чаще пропускают ответ или прекращают заполнение.</p></div></div><div class="questionnaire-chart" id="analyticsQuestionsChart"></div></article>
         <article class="panel table-panel"><div class="panel-heading"><div><p class="eyebrow">Контроль качества</p><h2>Ошибки и последние события</h2></div><span class="table-count" id="analyticsErrors"></span></div><div class="table-scroll"><table><thead><tr><th>Время</th><th>Событие</th><th>chel_id</th><th>Экран</th><th>Устройство</th><th>Браузер</th></tr></thead><tbody id="analyticsRecent"></tbody></table></div><div class="table-pagination"><button id="analyticsRecentPrev" type="button">← Назад</button><span id="analyticsRecentPage">Страница 1 из 1</span><button id="analyticsRecentNext" type="button">Далее →</button></div></article>
       </section>
@@ -485,6 +486,6 @@
       </div>
     </section>
   </div>
-  <script src="/static/dashboard.js?v=20260908-question-body-map-metric-v3" defer></script>
+  <script src="/static/dashboard.js?v=20260908-driving-analytics-v4" defer></script>
 </body>
 </html>

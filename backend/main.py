@@ -261,6 +261,8 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
             query = parse_qs(parsed.query)
             if path == "/api/admin/metric2":
                 try:
+                    if query.get("refresh", [""])[0] == "1":
+                        analytics.refresh_reports()
                     report = analytics.metric2_report(
                         query.get("period", ["30"])[0],
                         query.get("device", [""])[0],
@@ -281,6 +283,8 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                     return self._json(422, {"detail": str(exc)})
             if path == "/api/admin/analytics":
                 try:
+                    if query.get("refresh", [""])[0] == "1":
+                        analytics.refresh_reports()
                     period = query.get("period", ["30"])[0]
                     report = analytics.admin_report(
                         period,

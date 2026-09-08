@@ -34,6 +34,11 @@ def _invalidate_report_cache() -> None:
         _report_failures.clear()
 
 
+def refresh_reports() -> None:
+    """Force the next manually requested analytics reports to use fresh data."""
+    _invalidate_report_cache()
+
+
 class ReportBuilding(RuntimeError):
     """The requested report is being calculated outside the HTTP request."""
 
@@ -186,6 +191,13 @@ METRIC2_QUESTIONS = [
     ("allergies", "Есть аллергии?", "textarea"),
     ("notes", "Есть ли у вас жалобы?", "textarea"),
 ]
+
+DRIVING_TIME_ANSWERS = (
+    ("none", "Не управляю автомобилем"),
+    ("up_to_1h", "До 1 часа"),
+    ("1_to_2h", "От 1 до 2 часов"),
+    ("over_2h", "Более 2 часов"),
+)
 METRIC2_OPTIONAL_QUESTIONS = {
     "preferred_name", "conditions", "medications", "allergies", "notes",
 }
@@ -904,6 +916,51 @@ def _payment_statistics(
     return report
 
 
+def _driving_time_statistics(eligible_users: set[str]) -> dict:
+    """Return current saved answers for users in the selected analytics cohort."""
+    counts = Counter()
+    main_conn = None
+    try:
+        main_conn = sqlite3.connect(settings.database_path, timeout=5)
+        columns = {
+            str(row[1])
+            for row in main_conn.execute("PRAGMA table_info(user_profile)").fetchall()
+        }
+        if "driving_time" not in columns:
+            raise sqlite3.OperationalError("user_profile.driving_time is not available")
+        rows = main_conn.execute(
+            "SELECT chel_id, driving_time FROM user_profile "
+            "WHERE TRIM(COALESCE(driving_time,'')) <> '' "
+            "AND chel_id NOT IN ('chel_legacy','chel_test_default') "
+            "AND TRIM(COALESCE(company_inn,'')) <> ?",
+            (TEST_COMPANY_INN,),
+        ).fetchall()
+        allowed = dict(DRIVING_TIME_ANSWERS)
+        for chel_id, value in rows:
+            normalized = str(value or "").strip()
+            if str(chel_id) in eligible_users and normalized in allowed:
+                counts[normalized] += 1
+    except sqlite3.Error:
+        pass
+    finally:
+        if main_conn is not None:
+            main_conn.close()
+    answered_users = sum(counts.values())
+    return {
+        "answered_users": answered_users,
+        "answers": [
+            {
+                "value": value,
+                "label": label,
+                "users": counts[value],
+                "percent": round(counts[value] / answered_users * 100, 1)
+                if answered_users else 0.0,
+            }
+            for value, label in DRIVING_TIME_ANSWERS
+        ],
+    }
+
+
 def _cache_report_result(cache_key: tuple, result: dict) -> dict:
     now = time.monotonic()
     with _report_cache_lock:
@@ -1122,6 +1179,12 @@ def _admin_report_uncached(
         operating_systems = grouped("e.operating_system")
         browsers = grouped("e.browser")
         sources = grouped("COALESCE(NULLIF(e.source,''),s.entry_source)")
+        driving_time_eligible_users = {
+            str(row[0]) for row in conn.execute(
+                "SELECT DISTINCT e.chel_id" + join + where, params,
+            ).fetchall()
+        }
+        driving_time = _driving_time_statistics(driving_time_eligible_users)
         payment_eligible_users = None
         if device or method or source:
             payment_eligible_users = {
@@ -1215,6 +1278,7 @@ def _admin_report_uncached(
         "generated_at": _now(), "period": period, "date_from": date_from, "date_to": date_to,
         "summary": {"users": registered_users, "visitors": total_users, "sessions": total_sessions, "events": total_events},
         "funnel": funnel, "daily": daily, "questions": questions,
+        "driving_time": driving_time,
         "registrations": registrations, "devices": devices,
         "operating_systems": operating_systems, "browsers": browsers,
         "sources": sources, "examinations": examinations,
@@ -1226,7 +1290,7 @@ def _admin_report_uncached(
             "pages": recent_pages,
         },
         "filter_options": filter_options,
-        "privacy": "Медицинские ответы, сообщения, телефоны и номера пробирок не сохраняются.",
+        "privacy": "В аналитических событиях не сохраняются медицинские ответы, сообщения, телефоны и номера пробирок.",
     }
 
 

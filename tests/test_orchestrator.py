@@ -3071,6 +3071,7 @@ class OrchestratorTests(unittest.TestCase):
         project_root = Path(__file__).resolve().parents[1]
         app = (project_root / "static" / "app.js").read_text(encoding="utf-8")
         dashboard = (project_root / "static" / "dashboard.js").read_text(encoding="utf-8")
+        dashboard_html = (project_root / "dashboard.html").read_text(encoding="utf-8")
         questionnaire = app.split("const onboardingQuestions = [", 1)[1].split("];", 1)[0]
         keys = re.findall(r"key:'([^']+)'", questionnaire)
 
@@ -3083,6 +3084,9 @@ class OrchestratorTests(unittest.TestCase):
         ):
             self.assertIn(text, questionnaire)
             self.assertIn(text, dashboard)
+        self.assertIn('id="drivingTimeDistribution"', dashboard_html)
+        self.assertIn('id="drivingTimeAnswered"', dashboard_html)
+        self.assertIn("metric2-mock-choice-grid", dashboard)
 
         definitions = analytics._metric2_screen_definitions()
         screens = {item["id"]: item for item in definitions}
@@ -3268,7 +3272,9 @@ class OrchestratorTests(unittest.TestCase):
         self.assertIn("exam-selection-benefits", script)
         self.assertIn(".exam-blood-note", styles)
         self.assertIn(".exam-ai-note", styles)
-        self.assertIn("Одна проба крови", dashboard)
+        self.assertIn("Во время медосмотра", dashboard)
+        self.assertIn("Дополнительные обследования для вас", dashboard)
+        self.assertIn("metric2-mock-checkbox", dashboard)
 
     def test_recommended_examination_gets_discount_and_competitor_price_is_public(self):
         catalog = [{
