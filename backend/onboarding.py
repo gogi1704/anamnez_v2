@@ -116,6 +116,92 @@ def recommend_test_ids(profile: dict) -> list[str]:
     return recommendations
 
 
+def featured_test_ids(profile: dict) -> list[str]:
+    """Build the first three catalog positions for the questionnaire scenario.
+
+    With a relevant complaint the order is: direct match, adjacent check-up,
+    universal check-up. Without complaints it is: gender check-up and two
+    simple universal options. The complete catalog remains available below.
+    """
+    notes = str(profile.get("notes") or "").strip().lower()
+    no_complaint_answers = {
+        "нет", "нет жалоб", "жалоб нет", "не беспокоит", "ничего",
+    }
+    has_free_text_complaint = bool(notes and notes not in no_complaint_answers)
+    height = profile.get("height_cm") or 0
+    weight = profile.get("weight_kg") or 0
+    bmi = weight / ((height / 100) ** 2) if height else 0
+
+    keyword_routes = (
+        (("устал", "слабост", "сонлив", "нет сил", "упадок сил"), "fatigue_basic", "iron"),
+        (("сустав", "колен", "локт", "скован", "отёк", "отек"), "joints", "inflammation"),
+        (("волос", "кож", "сып", "ломк"), "hair_loss", "iron"),
+        (("вес", "похуд", "ожир", "набор веса"), "weight_basic", "thyroid"),
+        (("серд", "давлен", "пульс", "одыш"), "lipids", "kidneys"),
+        (("печен", "печён", "живот", "поджелуд", "желч"), "liver_basic", "liver_extended"),
+        (("почк", "моч", "отёк", "отек"), "kidneys", "protein"),
+        (("щитовид", "тиреоид"), "thyroid", "vitamin_d"),
+        (("стресс", "тревог", "бессон", "сон"), "cortisol", "vitamin_d"),
+    )
+    direct = adjacent = ""
+    for keywords, direct_id, adjacent_id in keyword_routes:
+        if any(keyword in notes for keyword in keywords):
+            direct, adjacent = direct_id, adjacent_id
+            break
+    if not direct and profile.get("fatigue") == "yes":
+        direct, adjacent = "fatigue_basic", "iron"
+    elif not direct and profile.get("joint_pain") == "yes":
+        direct, adjacent = "joints", "inflammation"
+    elif not direct and bmi >= 25:
+        direct, adjacent = "weight_basic", "lipids"
+    elif not direct and profile.get("blood_pressure") in {"high", "unstable"}:
+        direct, adjacent = "lipids", "kidneys"
+
+    result: list[str] = []
+    if direct:
+        result.extend((direct, adjacent))
+        result.append(next(item for item in ("lipids", "vitamin_d", "iron") if item not in result))
+    elif has_free_text_complaint:
+        # The complaint cannot be matched safely by a deterministic rule.
+        # Keep useful low-threshold options and avoid pretending to diagnose it.
+        result.extend(("inflammation", "lipids", "vitamin_d"))
+    else:
+        gender_test = {"female": "female_hormones", "male": "male_health"}.get(profile.get("sex"))
+        if gender_test:
+            result.append(gender_test)
+        result.extend(("lipids", "vitamin_d"))
+    return list(dict.fromkeys(result))[:3]
+
+
+def examination_recommendation_copy(profile: dict) -> dict:
+    featured = featured_test_ids(profile)
+    recommendations = set(recommend_test_ids(profile))
+    complaint_based = bool(featured and featured[0] in recommendations and featured[0] not in {"female_hormones", "male_health"})
+    if complaint_based or str(profile.get("notes") or "").strip().lower() not in {"", "нет", "нет жалоб", "жалоб нет", "не беспокоит", "ничего"}:
+        descriptions = {
+            "fatigue_basic": "Вы отметили упадок сил или усталость — ниже обследования, которые чаще всего помогают разобраться в возможной причине.",
+            "joints": "Вы отметили дискомфорт в суставах — ниже обследования, которые могут помочь уточнить возможные причины боли и воспаления.",
+            "hair_loss": "Вы отметили жалобы на волосы или кожу — ниже обследования для проверки частых дефицитов и обменных причин.",
+            "weight_basic": "Мы учли данные о весе — ниже обследования, которые помогают оценить возможные обменные и гормональные факторы.",
+            "lipids": "Мы учли ваши ответы о давлении или работе сердца — ниже обследования для дополнительной оценки сердечно-сосудистых факторов.",
+            "liver_basic": "Вы отметили жалобы со стороны пищеварения — ниже обследования для дополнительной оценки печени и поджелудочной железы.",
+            "kidneys": "Вы отметили жалобы, которые могут быть связаны с работой почек — ниже подходящие дополнительные обследования.",
+            "thyroid": "Вы отметили возможные признаки изменений работы щитовидной железы — ниже обследования для её дополнительной оценки.",
+            "cortisol": "Вы отметили стресс, тревогу или проблемы со сном — ниже обследования, которые могут дополнить оценку состояния.",
+        }
+        return {
+            "title": "Персональные рекомендации по итогам анкеты",
+            "description": descriptions.get(
+                featured[0] if featured else "",
+                "Мы учли ваши ответы — ниже обследования, которые могут помочь уточнить возможные причины жалоб.",
+            ),
+        }
+    return {
+        "title": "Дополнительные обследования для вас",
+        "description": "Явных жалоб вы не отметили — ниже показаны три обследования, которые часто выбирают в дополнение к медосмотру.",
+    }
+
+
 def effective_examination_price(examination: dict) -> int:
     """Return the actual price; comparison prices are presentation-only."""
     return max(0, int(examination.get("price") or 0))
@@ -145,4 +231,6 @@ def public_onboarding(
         "profile": profile,
         "tests": public_catalog,
         "recommended_test_ids": recommended_ids,
+        "featured_test_ids": [item for item in featured_test_ids(profile) if item in available_ids],
+        "examination_recommendation_copy": examination_recommendation_copy(profile),
     }

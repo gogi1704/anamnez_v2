@@ -20,15 +20,26 @@ from .config import settings
 _write_lock = threading.Lock()
 _report_cache_lock = threading.Lock()
 _report_cache: dict[tuple, tuple[float, dict]] = {}
+_report_builds: set[tuple] = set()
+_report_failures: dict[tuple, tuple[float, str]] = {}
 REPORT_CACHE_SECONDS = 15
 TEST_COMPANY_INN = "123123"
 REPORT_TIMEZONE = timezone(timedelta(hours=3))
 
 
 def _invalidate_report_cache() -> None:
-    """Discard aggregates after any successful analytics write."""
+    """Discard aggregates after destructive analytics maintenance."""
     with _report_cache_lock:
         _report_cache.clear()
+        _report_failures.clear()
+
+
+class ReportBuilding(RuntimeError):
+    """The requested report is being calculated outside the HTTP request."""
+
+
+class ReportBuildFailed(RuntimeError):
+    """The latest background calculation failed."""
 
 
 def _statistics_excluded_chel_ids() -> set[str]:
@@ -81,7 +92,8 @@ ALLOWED_EVENTS = {
     "first_message_sent", "ai_response_completed", "ai_response_error", "council_started",
     "council_completed", "council_error", "human_requested", "human_channel_selected",
     "manager_joined", "human_request_closed", "lab_results_requested", "lab_results_found",
-    "lab_results_not_found", "lab_interpretation_started", "lab_interpretation_completed",
+    "lab_results_processing", "lab_results_not_found", "lab_results_error",
+    "lab_interpretation_started", "lab_interpretation_completed",
     "lab_interpretation_error", "lab_interpretation_profile_requested",
     "lab_interpretation_profile_completed", "lab_results_notification_requested", "result_entry_started",
     "api_error", "javascript_error", "performance_measured",
@@ -147,6 +159,7 @@ QUESTION_LABELS = {
     "sex": "Пол", "height_cm": "Рост", "weight_kg": "Вес", "smoking": "Курение",
     "alcohol": "Алкоголь", "activity": "Активность", "blood_pressure": "Давление",
     "dark_in_eyes": "Потемнение в глазах", "blood_sugar": "Сахар крови",
+    "driving_time": "Время за рулём",
     "joint_pain": "Суставы", "fatigue": "Усталость",
     "conditions": "Хронические заболевания", "medications": "Лекарства",
     "allergies": "Аллергии", "notes": "Жалобы",
@@ -165,6 +178,7 @@ METRIC2_QUESTIONS = [
     ("blood_pressure", "Как вы оцениваете своё давление?", "choices"),
     ("dark_in_eyes", "Темнеет ли в глазах при резком подъёме?", "choices"),
     ("blood_sugar", "Знаете ли вы уровень сахара в крови?", "choices"),
+    ("driving_time", "Сколько в среднем времени в день вы проводите за рулём?", "choices"),
     ("joint_pain", "Бывают боли или отёчность суставов?", "choices"),
     ("fatigue", "Беспокоит длительная усталость?", "choices"),
     ("conditions", "Есть хронические заболевания?", "textarea"),
@@ -231,7 +245,7 @@ def _metric2_screen_definitions() -> list[dict]:
     for index, (key, title, kind) in enumerate(METRIC2_QUESTIONS):
         next_target = (
             f"question_{METRIC2_QUESTIONS[index + 1][0]}"
-            if index + 1 < len(METRIC2_QUESTIONS) else "exam_offer"
+            if index + 1 < len(METRIC2_QUESTIONS) else "exam_selection"
         )
         previous_target = (
             f"question_{METRIC2_QUESTIONS[index - 1][0]}" if index else "appearance"
@@ -246,6 +260,11 @@ def _metric2_screen_definitions() -> list[dict]:
             actions.append({
                 "id": "skip", "label": "Пропустить", "target": next_target,
                 "legacy": [_metric2_spec("question_skipped", question_key=key)],
+            })
+        if key == "notes":
+            actions.append({
+                "id": "open_body_map", "label": "Указать на карте тела",
+                "target": "question_body_map", "interaction": True, "legacy": [],
             })
         if kind == "choices":
             # Track only the interaction, never the selected medical value.
@@ -264,6 +283,16 @@ def _metric2_screen_definitions() -> list[dict]:
             "legacy_reach": [_metric2_spec("question_viewed", question_key=key)],
             "actions": actions,
         })
+    screens.append({
+        "id": "question_body_map", "title": "Карта тела", "stage": "Анкета · ответвление",
+        "kind": "questionnaire_body_map", "description": "Уточнение жалобы на интерактивной карте тела.",
+        "parent_id": "question_notes", "branch": True,
+        "preserve_observed_edges": True, "legacy_reach": [],
+        "actions": [
+            {"id": "return_with_selection", "label": "Сохранили отметку", "target": "question_notes", "legacy": []},
+            {"id": "return_without_selection", "label": "Вернулись без отметки", "target": "question_notes", "legacy": []},
+        ],
+    })
     screens.extend([
         {
             "id": "result_existing", "title": "Возврат за результатами", "stage": "Результаты · возврат",
@@ -272,45 +301,33 @@ def _metric2_screen_definitions() -> list[dict]:
             "legacy_reach": [], "actions": [],
         },
         {
-            "id": "exam_offer", "title": "Предложение дополнительных обследований", "stage": "Обследования",
-            "kind": "exam_offer", "description": "Основное предложение после завершения анкеты.",
-            "legacy_reach": [_metric2_spec("examinations_offer_viewed")],
+            "id": "exam_selection", "title": "Выбор наборов обследований", "stage": "Обследования",
+            "kind": "exam_selection", "description": "Карточки обследований и итоговая сумма.",
+            "legacy_reach": [_metric2_spec("examinations_opened")],
             "actions": [
-                {"id": "catalog_info", "label": "Посмотреть описания чек-апов", "target": "exam_catalog", "legacy": [_metric2_spec("funnel_action", action="catalog_info")]},
-                {"id": "view_options", "label": "Да, выбрать анализы", "target": "exam_selection", "legacy": [_metric2_spec("funnel_action", action="view_options")]},
-                {"id": "skip", "label": "Нет, не сейчас", "target": "exam_objection", "legacy": [_metric2_spec("funnel_action", action="skip")]},
-                {"id": "edit_questionnaire", "label": "Изменить ответы анкеты", "target": "question_notes", "legacy": [_metric2_spec("funnel_action", action="edit_questionnaire")]},
-            ],
-        },
-        {
-            "id": "exam_catalog", "title": "Описание чек-апов", "stage": "Обследования · ответвление",
-            "kind": "exam_catalog", "description": "Список составов, показаний и цен.",
-            "parent_id": "exam_offer", "branch": True,
-            "legacy_reach": [_metric2_spec("funnel_action", action="catalog_info")],
-            "actions": [
-                {"id": "choose", "label": "Выбрать анализы", "target": "exam_selection", "legacy": []},
-                {"id": "back", "label": "Вернуться к вопросу", "target": "exam_offer", "legacy": []},
+                {
+                    "id": "select_exam",
+                    "label": "Выбрали хотя бы один набор",
+                    "legacy": [_metric2_spec("examination_selected")],
+                    # A successful Continue action is authoritative proof that
+                    # at least one examination was selected.  This also keeps
+                    # the metric correct for a previously saved selection and
+                    # for historical clients that did not emit select_exam.
+                    "implied_by_final_actions": ["continue"],
+                },
+                {"id": "continue", "label": "Далее", "target": "payment", "legacy": [_metric2_spec("examinations_selection_completed")]},
+                {"id": "back", "label": "Назад", "target": "question_notes", "legacy": [_metric2_spec("funnel_action", action="options_back")]},
+                {"id": "nothing", "label": "Ничего не выбирать", "target": "exam_objection", "legacy": [_metric2_spec("funnel_action", action="nothing_selected")]},
             ],
         },
         {
             "id": "exam_objection", "title": "Отработка возражения", "stage": "Обследования · ответвление",
             "kind": "exam_objection", "description": "Показывается после попытки отказаться.",
-            "parent_id": "exam_offer", "branch": True,
+            "parent_id": "exam_selection", "branch": True,
             "legacy_reach": [_metric2_spec("examinations_objection_viewed")],
             "actions": [
                 {"id": "choose", "label": "Выбрать обследования", "target": "exam_selection", "legacy": [_metric2_spec("funnel_action", action="choose_after_objection")]},
                 {"id": "refuse", "label": "Всё равно отказаться", "target": "completion_skipped", "legacy": [_metric2_spec("funnel_action", action="refuse")]},
-            ],
-        },
-        {
-            "id": "exam_selection", "title": "Выбор наборов обследований", "stage": "Обследования",
-            "kind": "exam_selection", "description": "Карточки обследований и итоговая сумма.",
-            "legacy_reach": [_metric2_spec("examinations_opened")],
-            "actions": [
-                {"id": "select_exam", "label": "Выбрали хотя бы один набор", "legacy": [_metric2_spec("examination_selected")]},
-                {"id": "continue", "label": "Далее", "target": "payment", "legacy": [_metric2_spec("examinations_selection_completed")]},
-                {"id": "back", "label": "Назад", "target": "exam_offer", "legacy": [_metric2_spec("funnel_action", action="options_back")]},
-                {"id": "nothing", "label": "Ничего не выбирать", "target": "exam_objection", "legacy": [_metric2_spec("funnel_action", action="nothing_selected")]},
             ],
         },
         {
@@ -647,8 +664,10 @@ def record_events(chel_id: str, events: list[dict], *, user_agent: str = "", is_
                      event["operating_system"], event["browser"], event["app_mode"]),
                 )
         conn.commit()
-    if accepted:
-        _invalidate_report_cache()
+    # Do not invalidate every aggregate on every live user event. Under normal
+    # traffic that made the report cache effectively useless and repeatedly
+    # launched the most expensive Metric 2.0 calculation. The short cache TTL
+    # bounds report staleness; destructive maintenance operations still clear it.
     return {"accepted": accepted, "duplicates": len(prepared) - accepted}
 
 
@@ -885,7 +904,40 @@ def _payment_statistics(
     return report
 
 
-def _cached_report(cache_name: str, arguments: tuple, builder) -> dict:
+def _cache_report_result(cache_key: tuple, result: dict) -> dict:
+    now = time.monotonic()
+    with _report_cache_lock:
+        if len(_report_cache) >= 64:
+            expired = [key for key, value in _report_cache.items() if value[0] <= now]
+            for key in expired:
+                _report_cache.pop(key, None)
+            if len(_report_cache) >= 64:
+                oldest = min(_report_cache, key=lambda key: _report_cache[key][0])
+                _report_cache.pop(oldest, None)
+        _report_cache[cache_key] = (
+            now + REPORT_CACHE_SECONDS, copy.deepcopy(result),
+        )
+        _report_failures.pop(cache_key, None)
+    return result
+
+
+def _build_report_in_background(cache_key: tuple, builder) -> None:
+    try:
+        _cache_report_result(cache_key, builder())
+    except Exception as exc:  # reported to the polling admin request
+        with _report_cache_lock:
+            _report_failures[cache_key] = (
+                time.monotonic() + 30,
+                f"{exc.__class__.__name__}: {str(exc)[:500]}",
+            )
+    finally:
+        with _report_cache_lock:
+            _report_builds.discard(cache_key)
+
+
+def _cached_report(
+    cache_name: str, arguments: tuple, builder, *, background: bool = False,
+) -> dict:
     """Cache expensive read-only aggregates for a few seconds.
 
     A manual refresh and tab switches can otherwise launch the same full
@@ -898,6 +950,21 @@ def _cached_report(cache_name: str, arguments: tuple, builder) -> dict:
         cached = _report_cache.get(cache_key)
         if cached and cached[0] > now:
             return copy.deepcopy(cached[1])
+        failure = _report_failures.get(cache_key)
+        if failure and failure[0] > now:
+            _report_failures.pop(cache_key, None)
+            raise ReportBuildFailed(failure[1])
+        if failure:
+            _report_failures.pop(cache_key, None)
+        if background:
+            if cache_key not in _report_builds:
+                _report_builds.add(cache_key)
+                threading.Thread(
+                    target=_build_report_in_background,
+                    args=(cache_key, builder),
+                    name=f"analytics-{cache_name}", daemon=True,
+                ).start()
+            raise ReportBuilding("Отчёт рассчитывается")
 
     # Do not keep the global cache mutex while SQLite and Python build the
     # report. Analytics and Metric 2.0 are independent reports; serialising
@@ -912,15 +979,7 @@ def _cached_report(cache_name: str, arguments: tuple, builder) -> dict:
         cached = _report_cache.get(cache_key)
         if cached and cached[0] > now:
             return copy.deepcopy(cached[1])
-        if len(_report_cache) >= 64:
-            expired = [key for key, value in _report_cache.items() if value[0] <= now]
-            for key in expired:
-                _report_cache.pop(key, None)
-            if len(_report_cache) >= 64:
-                oldest = min(_report_cache, key=lambda key: _report_cache[key][0])
-                _report_cache.pop(oldest, None)
-        _report_cache[cache_key] = (now + REPORT_CACHE_SECONDS, copy.deepcopy(result))
-        return result
+    return _cache_report_result(cache_key, result)
 
 
 def _admin_report_uncached(
@@ -1174,7 +1233,7 @@ def _admin_report_uncached(
 def admin_report(
     period: str = "30", device: str = "", method: str = "", source: str = "",
     recent_page: int = 1, recent_limit: int = 25,
-    date_from: str = "", date_to: str = "",
+    date_from: str = "", date_to: str = "", *, background: bool = False,
 ) -> dict:
     arguments = (
         str(period), str(device), str(method), str(source), int(recent_page),
@@ -1185,7 +1244,7 @@ def admin_report(
         lambda: _admin_report_uncached(
             period, device, method, source, recent_page, recent_limit,
             date_from, date_to,
-        ),
+        ), background=background,
     )
 
 
@@ -1352,6 +1411,16 @@ def _metric2_report_uncached(
         for chel_id, path in canonical_paths.items():
             for source_id, target_id in zip(path, path[1:]):
                 edge_users[(source_id, target_id)].add(chel_id)
+        # Loop erasure intentionally removes ordinary returns.  Explicit
+        # questionnaire branches can opt in to retaining their observed
+        # entry and return edges so their two-way result remains inspectable.
+        for chel_id, items in generic_paths.items():
+            ordered_screens = [item[1] for item in sorted(items, key=lambda item: item[0])]
+            for source_id, target_id in zip(ordered_screens, ordered_screens[1:]):
+                source = definition_by_id.get(source_id, {})
+                target = definition_by_id.get(target_id, {})
+                if source.get("preserve_observed_edges") or target.get("preserve_observed_edges"):
+                    edge_users[(source_id, target_id)].add(chel_id)
 
         transition_explanations = {
             ("welcome", "registration"): "Новый пользователь продолжил и выбрал способ входа.",
@@ -1399,7 +1468,7 @@ def _metric2_report_uncached(
             actions = []
             grouped_actions: dict[str, list[dict]] = defaultdict(list)
             for action in definition.get("actions", []):
-                if action.get("target") or action.get("terminal_outcome"):
+                if (action.get("target") or action.get("terminal_outcome")) and not action.get("interaction"):
                     grouped_actions["final_transition"].append(action)
                 elif action.get("exclusive_group"):
                     grouped_actions[f"choice:{action['exclusive_group']}"].append(action)
@@ -1432,7 +1501,7 @@ def _metric2_report_uncached(
                     action=action["id"], context=definition.get("flow", "onboarding"),
                 )
                 target_id = action.get("target", "")
-                if target_id or action.get("terminal_outcome"):
+                if (target_id or action.get("terminal_outcome")) and not action.get("interaction"):
                     action_group = "final_transition"
                 elif action.get("exclusive_group"):
                     action_group = f"choice:{action['exclusive_group']}"
@@ -1445,6 +1514,14 @@ def _metric2_report_uncached(
                     }
                 else:
                     action_users = users_for([generic, *action.get("legacy", [])]) & reached
+                implied_final_actions = set(action.get("implied_by_final_actions", []))
+                if implied_final_actions:
+                    action_users |= {
+                        chel_id
+                        for (group_id, chel_id), (_, action_id) in final_group_action.items()
+                        if group_id == "final_transition"
+                        and action_id in implied_final_actions
+                    }
                 actions.append({
                     "id": action["id"], "label": action["label"],
                     "users": len(action_users),
@@ -1578,6 +1655,7 @@ def _metric2_report_uncached(
 def metric2_report(
     period: str = "30", device: str = "", method: str = "", source: str = "",
     date_from: str = "", date_to: str = "", flow: str = "standard",
+    *, background: bool = False,
 ) -> dict:
     arguments = (
         str(period), str(device), str(method), str(source),
@@ -1587,7 +1665,7 @@ def metric2_report(
         "metric2", arguments,
         lambda: _metric2_report_uncached(
             period, device, method, source, date_from, date_to, flow,
-        ),
+        ), background=background,
     )
 
 

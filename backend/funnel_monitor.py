@@ -153,7 +153,9 @@ def _compact_flow(current: dict, comparison: dict, config: dict) -> dict:
                 screen_id, str(item.get("title", ""))
             )[:160],
             "users": int(item.get("users", 0) or 0),
+            "previous_users": int(old.get("users", 0) or 0),
             "percent_of_start": float(item.get("percent_of_start", 0) or 0),
+            "previous_percent_of_start": float(old.get("percent_of_start", 0) or 0),
             "percent_of_parent": current_conversion,
             "previous_percent_of_parent": previous_conversion,
             "change_pp": delta,
@@ -161,9 +163,15 @@ def _compact_flow(current: dict, comparison: dict, config: dict) -> dict:
             "comparison_users": int(item.get("comparison_users", 0) or 0),
             "previous_comparison_users": int(old.get("comparison_users", 0) or 0),
             "actual_dropoff_users": int(item.get("actual_dropoff_users", 0) or 0),
+            "previous_actual_dropoff_users": int(old.get("actual_dropoff_users", 0) or 0),
             "stopped_users": int(item.get("stopped_users", 0) or 0),
+            "previous_stopped_users": int(old.get("stopped_users", 0) or 0),
             "incomplete_transition_users": int(item.get("incomplete_transition_users", 0) or 0),
+            "previous_incomplete_transition_users": int(old.get("incomplete_transition_users", 0) or 0),
             "data_quality": "incomplete" if item.get("data_quality") == "incomplete" else "complete",
+            "previous_data_quality": (
+                "incomplete" if old.get("data_quality") == "incomplete" else "complete"
+            ),
         }
         screens.append(compact)
         comparison_users = int(item.get("comparison_users", 0) or 0)
@@ -186,7 +194,13 @@ def _compact_flow(current: dict, comparison: dict, config: dict) -> dict:
         "label": str(current.get("flow_label", ""))[:100],
         "summary": {
             "start_users": int(current.get("summary", {}).get("start_users", 0) or 0),
+            "previous_start_users": int(
+                comparison.get("summary", {}).get("start_users", 0) or 0
+            ),
             "reached_completion": int(current.get("summary", {}).get("reached_completion", 0) or 0),
+            "previous_reached_completion": int(
+                comparison.get("summary", {}).get("reached_completion", 0) or 0
+            ),
         },
         "screens": screens,
         "alerts": alerts[:10],
@@ -255,6 +269,8 @@ def build_report(
         "ai_instruction": (
             f"{ANALYSIS_INSTRUCTIONS.get(str(config.get('analysis')), 'Проанализируй изменения воронки.')} "
             f"{FUNNEL_AI_BUSINESS_CONTEXT} "
+            "Сравнивай значения текущего периода со значениями периода сравнения, "
+            "которые указаны рядом с ними; не анализируй текущий период изолированно. "
             "Отдели подтверждённые фактами выводы "
             "от гипотез. Укажи критические отклонения, возможные причины, необходимые "
             "проверки и приоритетные действия. Не делай уверенных выводов при "

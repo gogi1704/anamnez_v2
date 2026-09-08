@@ -77,6 +77,7 @@ class LLMService:
             "allergies": "аллергии", "smoking": "курение", "alcohol": "алкоголь",
             "activity": "физическая активность", "blood_pressure": "давление",
             "blood_sugar": "сахар крови", "dark_in_eyes": "потемнение в глазах",
+            "driving_time": "среднее время за рулём в день",
             "joint_pain": "боль в суставах", "fatigue": "утомляемость",
             "notes": "дополнительные сведения",
         }

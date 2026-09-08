@@ -65,7 +65,13 @@ class FunnelMonitorTests(unittest.TestCase):
         previous_flow = {
             "flow_label": "Обычный путь",
             "summary": {"start_users": 40, "reached_completion": 25},
-            "screens": [{"id": "registration", "percent_of_parent": 80, "comparison_users": 40}],
+            "screens": [{
+                "id": "registration", "users": 32,
+                "percent_of_start": 80, "percent_of_parent": 80,
+                "comparison_users": 40, "actual_dropoff_users": 8,
+                "stopped_users": 5, "incomplete_transition_users": 1,
+                "data_quality": "complete",
+            }],
         }
         with (
             patch("backend.funnel_monitor.analytics.admin_report", side_effect=[admin_current, admin_previous]),
@@ -81,6 +87,12 @@ class FunnelMonitorTests(unittest.TestCase):
             report["flows"][0]["screens"][0]["title"],
             "Выбор способа входа",
         )
+        flow = report["flows"][0]
+        self.assertEqual(flow["summary"]["previous_start_users"], 40)
+        self.assertEqual(flow["summary"]["previous_reached_completion"], 25)
+        self.assertEqual(flow["screens"][0]["previous_users"], 32)
+        self.assertEqual(flow["screens"][0]["previous_percent_of_start"], 80)
+        self.assertEqual(flow["screens"][0]["previous_stopped_users"], 5)
         instruction = report["ai_instruction"]
         self.assertIn("Описание чек-апов", instruction)
         self.assertIn("не основная цель воронки", instruction)
@@ -88,6 +100,7 @@ class FunnelMonitorTests(unittest.TestCase):
         self.assertIn("Оплатить на медосмотре", instruction)
         self.assertIn("целевым успешным действием", instruction)
         self.assertIn("flows[].screens[].title", instruction)
+        self.assertIn("не анализируй текущий период изолированно", instruction)
         serialized = json.dumps(report, ensure_ascii=False)
         for forbidden in ("chel_id", "tube_number", "messages", "answers"):
             self.assertNotIn(forbidden, serialized)

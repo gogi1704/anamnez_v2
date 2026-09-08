@@ -25,11 +25,11 @@ from backend.lab_results import (  # noqa: E402
     LabResult, extract_urls, lab_result_documents, normalize_med_id,
 )
 from backend.llm import LLMService  # noqa: E402
-from backend.main import ConsiliumHandler, admin_token_valid  # noqa: E402
+from backend.main import ConsiliumHandler, _chat_access_allowed, _lab_result_analytics_event, _result_entry_can_start, admin_token_valid  # noqa: E402
 from backend.orchestrator import ConversationOrchestrator  # noqa: E402
 from backend.onboarding import (  # noqa: E402
-    EXAMINATION_UPGRADE_PAIRS, TEST_CATALOG, effective_examination_price, normalize_examination_selection,
-    public_onboarding, recommend_test_ids,
+    EXAMINATION_UPGRADE_PAIRS, TEST_CATALOG, effective_examination_price, examination_recommendation_copy,
+    featured_test_ids, normalize_examination_selection, public_onboarding, recommend_test_ids,
 )
 from backend.prompts import ORCHESTRATOR_PROMPT, PROFILES  # noqa: E402
 from backend.schemas import AgentResult, RouteDecision, normalize_context  # noqa: E402
@@ -814,6 +814,16 @@ class OrchestratorTests(unittest.TestCase):
         )
         self.assertIn("export=download", documents[1]["analysis_url"])
         self.assertNotEqual(documents[0]["id"], documents[1]["id"])
+
+    def test_lab_result_analytics_event_matches_actual_lookup_status(self):
+        self.assertEqual(_lab_result_analytics_event("found"), "lab_results_found")
+        self.assertEqual(_lab_result_analytics_event("processing"), "lab_results_processing")
+        self.assertEqual(_lab_result_analytics_event("not_found"), "lab_results_not_found")
+        self.assertEqual(_lab_result_analytics_event("unexpected"), "lab_results_error")
+        self.assertTrue({
+            "lab_results_found", "lab_results_processing",
+            "lab_results_not_found", "lab_results_error",
+        }.issubset(analytics.ALLOWED_EVENTS))
 
     def test_text_results_request_asks_for_tube_without_calling_ai(self):
         chel_id = "chel_lab_without_tube"
@@ -1647,12 +1657,11 @@ class OrchestratorTests(unittest.TestCase):
         for text in (
             "Продолжить с Telegram", "Продолжить с MAX", "Подтверждение через бота",
             "Войти анонимно", "Понимаю, продолжить", "Какой размер текста вам удобен?",
-            "Я не на мед-осмотр", "Посмотреть описания чек-апов",
-            "Да, выбрать анализы", "Нет, не сейчас", "Изменить ответы анкеты",
+            "Я не на мед-осмотр",
             "Выбрать обследования", "Всё равно отказаться", "Ничего не выбирать",
             "Оплатить онлайн", "Оплатить на медосмотре", "Понятно",
             "Привязать мессенджер", "Установить приложение", "Установлю позже",
-            "Перейти в Консилиум",
+            "Перейти в Консилиум", "Указать на карте тела",
         ):
             self.assertIn(text, index + app, f"Кнопка отсутствует в приложении: {text}")
             self.assertIn(text, script, f"Кнопка отсутствует в Метрике 2.0: {text}")
@@ -1665,10 +1674,33 @@ class OrchestratorTests(unittest.TestCase):
         self.assertNotIn("Вариант ответа", script)
 
         screens = {item["id"]: item for item in analytics._metric2_screen_definitions()}
+        self.assertNotIn("exam_offer", screens)
+        self.assertNotIn("exam_catalog", screens)
         inn_actions = {item["id"] for item in screens["question_company_inn"]["actions"]}
         notes_actions = {item["id"] for item in screens["question_notes"]["actions"]}
         self.assertEqual(inn_actions, {"answer", "not_medical_exam"})
         self.assertIn("skip", notes_actions)
+        self.assertIn("open_body_map", notes_actions)
+        body_map = screens["question_body_map"]
+        self.assertEqual(body_map["parent_id"], "question_notes")
+        self.assertEqual(
+            {item["id"] for item in body_map["actions"]},
+            {"return_with_selection", "return_without_selection"},
+        )
+        body_map_actions = {item["id"]: item for item in body_map["actions"]}
+        self.assertEqual(body_map_actions["return_with_selection"]["label"], "Сохранили отметку")
+        self.assertEqual(body_map_actions["return_without_selection"]["label"], "Вернулись без отметки")
+        self.assertIn("Также можно отметить область тела и симптом на карте.", app)
+        self.assertIn("Также можно отметить область тела и симптом на карте.", script)
+        self.assertIn("openQuestionnaireBodyMap", app)
+        self.assertIn("questionnaireBodySymptomText", app)
+        notes_finish = next(item for item in screens["question_notes"]["actions"] if item["id"] == "answer")
+        notes_skip = next(item for item in screens["question_notes"]["actions"] if item["id"] == "skip")
+        self.assertEqual(notes_finish["target"], "exam_selection")
+        self.assertEqual(notes_skip["target"], "exam_selection")
+        selection_back = next(item for item in screens["exam_selection"]["actions"] if item["id"] == "back")
+        self.assertEqual(selection_back["target"], "question_notes")
+        self.assertEqual(screens["exam_objection"]["parent_id"], "exam_selection")
         self.assertIn("screen.id === 'question_company_inn'", script)
         self.assertIn("action.id !== 'skip'", script)
         skipped_completion = screens["completion_skipped"]
@@ -2435,7 +2467,7 @@ class OrchestratorTests(unittest.TestCase):
         self.assertIn(".capability-danger-zone", styles)
         self.assertIn(".delete-my-data-modal", styles)
 
-    def test_exam_offer_explains_choices_and_confirms_skipping(self):
+    def test_exam_selection_opens_directly_and_confirms_skipping(self):
         project_root = Path(__file__).resolve().parents[1]
         index = (project_root / "index.html").read_text(encoding="utf-8")
         script = (project_root / "static" / "app.js").read_text(encoding="utf-8")
@@ -2450,17 +2482,16 @@ class OrchestratorTests(unittest.TestCase):
         self.assertIn("placeholder:'Например: две недели болит голова по вечерам, принимаю ибупрофен', optional:true", questionnaire)
         self.assertIn("if (question.optional && empty) return 'Пропустить'", script)
         self.assertIn("Жалобы и дополнительные сведения", index)
-        self.assertIn("Давайте честно: здоровых людей не бывает", script)
-        self.assertIn("Можно пригласить родственника или друга", script)
-        self.assertIn("Хотели бы вы сдать дополнительные анализы", script)
-        self.assertIn('data-onboarding-action="open-exam-catalog-info"', script)
+        self.assertNotIn("function renderExamOffer()", script)
+        self.assertIn("trackEvent('examinations_opened', { screen:'examinations' })", script)
+        self.assertIn("state.profile = state.onboarding.profile;\n    trackEvent('examinations_opened'", script)
+        self.assertIn("else if (state.onboarding.status === 'exams') renderExamSelection()", script)
+        self.assertIn("Во время медосмотра у вас в любом случае возьмут кровь", script)
+        self.assertIn("После результатов — рекомендации медицинского ИИ", script)
         self.assertIn("function renderExamCatalogInfo()", script)
         self.assertIn("Кому подходит", script)
         self.assertIn("Для чего", script)
         self.assertIn("Что входит", script)
-        self.assertIn("action:'catalog_info'", script)
-        self.assertIn("Да, выбрать анализы", script)
-        self.assertIn("← Изменить ответы анкеты", script)
         self.assertIn('data-onboarding-action="review-exam-skip"', script)
         self.assertIn("Татьяна Витальевна", script)
         self.assertIn("бесплатную консультацию", script)
@@ -2534,11 +2565,11 @@ class OrchestratorTests(unittest.TestCase):
         self.assertIn("url.pathname.startsWith('/auth/')", worker)
         self.assertIn("consilium-shell-v100", worker)
         self.assertIn("fetch(request)", worker)
-        self.assertIn("/static/styles.css?v=20260906-consultations-v1", index)
+        self.assertIn("/static/styles.css?v=20260908-onboarding-chat-guard-v4", index)
         self.assertIn("/static/rich-text.2bf1f5fab764.css", index)
         self.assertTrue((project_root / "static" / "styles.07ffaefb4795.css").is_file())
         self.assertTrue((project_root / "static" / "rich-text.2bf1f5fab764.css").is_file())
-        self.assertIn("/static/app.js?v=20260906-consultations-v1", index)
+        self.assertIn("/static/app.js?v=20260908-onboarding-chat-guard-v4", index)
         self.assertIn("/static/metrika.js?v=20260829-interpret-profile-v1", index)
         self.assertIn('id="welcomeScreen"', index)
         self.assertIn('id="welcomeNextButton"', index)
@@ -2904,7 +2935,7 @@ class OrchestratorTests(unittest.TestCase):
         self.assertIn("/api/auth/messenger/start", script)
         self.assertIn("identity.authenticated", script)
 
-    def test_returning_messenger_user_with_questionnaire_opens_chat_directly(self):
+    def test_returning_user_cannot_skip_examination_and_final_screens(self):
         project_root = Path(__file__).resolve().parents[1]
         script = (project_root / "static" / "app.js").read_text(encoding="utf-8")
         main_source = (project_root / "backend" / "main.py").read_text(encoding="utf-8")
@@ -2915,8 +2946,71 @@ class OrchestratorTests(unittest.TestCase):
         self.assertIn("async function enterKnownUser()", script)
         self.assertIn("const onboarding = await api('/api/onboarding');", script)
         self.assertIn("openCompletedMessengerAccount:true", script)
-        self.assertIn("return openMainApp({ skipIntro:true });", script)
+        self.assertIn("&& state.onboarding.status === 'complete'", script)
+        self.assertIn("&& state.onboarding.intro_seen", script)
+        self.assertIn("function renderRequiredStandardOnboarding()", script)
+        self.assertIn("if (!allowIncompleteOnboarding && renderRequiredStandardOnboarding()) return false", script)
+        self.assertIn("state.returnToChatAfterExaminations && state.onboarding.intro_seen", script)
+        self.assertIn("['questionnaire','exams','payment'].includes(onboarding.status)", script)
+        self.assertIn("allowIncompleteOnboarding:true", script)
+        self.assertIn("if not _chat_access_allowed():", main_source)
+        self.assertIn('if path == "/api/result-entry/start":', main_source)
+        self.assertIn("if not _result_entry_can_start(onboarding):", main_source)
         self.assertIn('self.send_header("Location", "/?auth=messenger_login")', main_source)
+
+    def test_chat_access_requires_final_standard_onboarding_screen(self):
+        chel_id = "chel_chat_funnel_guard"
+        db.ensure_user(chel_id)
+        try:
+            db.set_current_chel_id(chel_id)
+            db.save_onboarding(status="questionnaire", intro_seen=False)
+            self.assertFalse(_chat_access_allowed())
+            db.save_onboarding(status="exams", intro_seen=False)
+            self.assertFalse(_chat_access_allowed())
+            db.save_onboarding(status="payment", selected_tests=["lipids"], intro_seen=False)
+            self.assertFalse(_chat_access_allowed())
+            db.save_onboarding(
+                status="complete", selected_tests=["lipids"],
+                payment_status="pay_at_exam", intro_seen=False,
+            )
+            self.assertFalse(_chat_access_allowed())
+            db.save_onboarding(status="complete", intro_seen=True)
+            self.assertTrue(_chat_access_allowed())
+        finally:
+            db.ensure_user("chel_test_default")
+            db.set_current_chel_id("chel_test_default")
+
+        result_chel_id = "chel_result_chat_guard"
+        db.ensure_user(result_chel_id)
+        try:
+            db.set_current_chel_id(result_chel_id)
+            db.save_onboarding(status="appearance", intro_seen=False)
+            self.assertFalse(_chat_access_allowed())
+            db.mark_current_user_result_entry()
+            self.assertTrue(_chat_access_allowed())
+            db.save_onboarding(status="questionnaire", intro_seen=False)
+            self.assertFalse(_chat_access_allowed())
+        finally:
+            db.ensure_user("chel_test_default")
+            db.set_current_chel_id("chel_test_default")
+
+    def test_result_link_cannot_replace_an_active_standard_funnel(self):
+        self.assertTrue(_result_entry_can_start({"status": "appearance"}))
+        self.assertFalse(_result_entry_can_start({"status": "questionnaire"}))
+        self.assertFalse(_result_entry_can_start({"status": "exams"}))
+        self.assertFalse(_result_entry_can_start({"status": "payment"}))
+        self.assertFalse(_result_entry_can_start({
+            "status": "complete", "intro_seen": False,
+            "payment_status": "skipped", "selected_tests": [],
+        }))
+        self.assertFalse(_result_entry_can_start({
+            "status": "complete", "intro_seen": False,
+            "payment_status": "pay_at_exam", "selected_tests": ["lipids"],
+        }))
+        self.assertTrue(_result_entry_can_start({
+            "status": "complete", "intro_seen": True,
+            "payment_status": "pay_at_exam", "selected_tests": ["lipids"],
+        }))
 
     def test_messenger_can_be_linked_from_menu_and_after_examinations(self):
         project_root = Path(__file__).resolve().parents[1]
@@ -2955,12 +3049,13 @@ class OrchestratorTests(unittest.TestCase):
             "age": 41, "sex": "male", "height_cm": 178, "weight_kg": 92,
             "smoking": "former", "alcohol": "rarely", "activity": "moderate",
             "blood_pressure": "high", "blood_sugar": "unknown", "dark_in_eyes": "no",
-            "joint_pain": "no", "fatigue": "yes",
+            "driving_time": "1_to_2h", "joint_pain": "no", "fatigue": "yes",
         })
         state = db.save_onboarding(
             status="payment", selected_tests=["fatigue_basic", "lipids"], payment_status="pending"
         )
         self.assertEqual(profile["activity"], "moderate")
+        self.assertEqual(profile["driving_time"], "1_to_2h")
         self.assertEqual(state["selected_tests"], ["fatigue_basic", "lipids"])
         self.assertFalse(state["intro_seen"])
         state = db.save_onboarding(status="complete", intro_seen=True)
@@ -2971,6 +3066,38 @@ class OrchestratorTests(unittest.TestCase):
         self.assertIn("fatigue_extended", recommend_test_ids(profile))
         self.assertIn("weight_basic", recommend_test_ids(profile))
         self.assertIn("weight_extended", recommend_test_ids(profile))
+
+    def test_driving_time_question_is_inserted_after_blood_sugar_everywhere(self):
+        project_root = Path(__file__).resolve().parents[1]
+        app = (project_root / "static" / "app.js").read_text(encoding="utf-8")
+        dashboard = (project_root / "static" / "dashboard.js").read_text(encoding="utf-8")
+        questionnaire = app.split("const onboardingQuestions = [", 1)[1].split("];", 1)[0]
+        keys = re.findall(r"key:'([^']+)'", questionnaire)
+
+        self.assertEqual(keys[keys.index("blood_sugar") + 1], "driving_time")
+        self.assertEqual(keys[keys.index("driving_time") + 1], "joint_pain")
+        self.assertEqual(len(keys), 19)
+        for text in (
+            "Сколько в среднем времени в день вы проводите за рулём?",
+            "Не управляю автомобилем", "До 1 часа", "От 1 до 2 часов", "Более 2 часов",
+        ):
+            self.assertIn(text, questionnaire)
+            self.assertIn(text, dashboard)
+
+        definitions = analytics._metric2_screen_definitions()
+        screens = {item["id"]: item for item in definitions}
+        driving = screens["question_driving_time"]
+        self.assertEqual(driving["stage"], "Анкета · 13/19")
+        definition_ids = [item["id"] for item in definitions]
+        self.assertEqual(
+            definition_ids[definition_ids.index("question_driving_time") - 1],
+            "question_blood_sugar",
+        )
+        answer = next(item for item in driving["actions"] if item["id"] == "answer")
+        self.assertEqual(answer["target"], "question_joint_pain")
+
+        with self.assertRaisesRegex(ValueError, "driving_time"):
+            ConsiliumHandler._validate_profile({"driving_time": "all_day"})
 
     def test_checkup_catalog_matches_2026_08_31_spreadsheet_everywhere(self):
         expected_names_and_prices = {
@@ -3078,6 +3205,70 @@ class OrchestratorTests(unittest.TestCase):
                 "sex": "male", "fatigue": "yes", "height_cm": 180, "weight_kg": 78,
             }),
         )
+
+    def test_featured_examinations_follow_personalization_mockup(self):
+        self.assertEqual(
+            featured_test_ids({
+                "sex": "female", "fatigue": "yes", "joint_pain": "no",
+                "blood_pressure": "normal", "height_cm": 168, "weight_kg": 62,
+            }),
+            ["fatigue_basic", "iron", "lipids"],
+        )
+        self.assertEqual(
+            featured_test_ids({
+                "sex": "female", "fatigue": "no", "joint_pain": "no",
+                "blood_pressure": "normal", "height_cm": 168, "weight_kg": 62,
+                "notes": "",
+            }),
+            ["female_hormones", "lipids", "vitamin_d"],
+        )
+        self.assertEqual(
+            featured_test_ids({
+                "sex": "male", "fatigue": "no", "joint_pain": "no",
+                "blood_pressure": "normal", "height_cm": 180, "weight_kg": 78,
+                "notes": "болят колени и есть скованность",
+            }),
+            ["joints", "inflammation", "lipids"],
+        )
+        dynamic_cases = (
+            ({"fatigue": "yes"}, "fatigue_basic", "упадок сил или усталость"),
+            ({"joint_pain": "yes"}, "joints", "дискомфорт в суставах"),
+            ({"height_cm": 170, "weight_kg": 90}, "weight_basic", "данные о весе"),
+            ({"blood_pressure": "high"}, "lipids", "давлении или работе сердца"),
+            ({"notes": "сильно выпадают волосы"}, "hair_loss", "жалобы на волосы или кожу"),
+            ({"notes": "беспокоит живот"}, "liver_basic", "жалобы со стороны пищеварения"),
+            ({"notes": "не могу уснуть из-за стресса"}, "cortisol", "стресс, тревогу или проблемы со сном"),
+        )
+        for profile, expected_first, expected_copy in dynamic_cases:
+            featured = featured_test_ids(profile)
+            copy = examination_recommendation_copy(profile)
+            self.assertEqual(featured[0], expected_first)
+            self.assertIn(expected_copy, copy["description"])
+            self.assertIn("ниже", copy["description"].lower())
+            self.assertNotIn("выше", copy["description"].lower())
+        payload = public_onboarding(
+            {"selected_tests": []},
+            {"sex": "male", "fatigue": "no", "joint_pain": "no", "notes": "нет жалоб"},
+            TEST_CATALOG,
+        )
+        self.assertEqual(payload["featured_test_ids"], ["male_health", "lipids", "vitamin_d"])
+        self.assertEqual(
+            payload["examination_recommendation_copy"],
+            examination_recommendation_copy({"sex": "male", "notes": "нет жалоб"}),
+        )
+
+        project_root = Path(__file__).resolve().parents[1]
+        script = (project_root / "static" / "app.js").read_text(encoding="utf-8")
+        styles = (project_root / "static" / "styles.css").read_text(encoding="utf-8")
+        dashboard = (project_root / "static" / "dashboard.js").read_text(encoding="utf-8")
+        self.assertIn("featuredOrder", script)
+        self.assertIn("state.onboarding.featured_test_ids || []", script)
+        self.assertIn("Во время медосмотра у вас в любом случае возьмут кровь", script)
+        self.assertIn("После результатов — рекомендации медицинского ИИ", script)
+        self.assertIn("exam-selection-benefits", script)
+        self.assertIn(".exam-blood-note", styles)
+        self.assertIn(".exam-ai-note", styles)
+        self.assertIn("Одна проба крови", dashboard)
 
     def test_recommended_examination_gets_discount_and_competitor_price_is_public(self):
         catalog = [{
@@ -3203,6 +3394,17 @@ class OrchestratorTests(unittest.TestCase):
             self.assertEqual(db.get_onboarding()["payment_status"], "paid_online")
             repeated = db.apply_yookassa_status(order["id"], succeeded)
             self.assertTrue(repeated["paid"])
+            stale_pending = db.apply_yookassa_status(order["id"], provider)
+            self.assertEqual(stale_pending["status"], "succeeded")
+            self.assertTrue(stale_pending["paid"])
+            stale_canceled = db.apply_yookassa_status(order["id"], {
+                **provider,
+                "status": "canceled",
+                "paid": False,
+                "cancellation_details": {"reason": "expired_on_confirmation"},
+            })
+            self.assertEqual(stale_canceled["status"], "succeeded")
+            self.assertTrue(stale_canceled["paid"])
         finally:
             db.set_current_chel_id(chel_id)
             db.reset_current_user()
@@ -3608,6 +3810,55 @@ class OrchestratorTests(unittest.TestCase):
         self.assertEqual(validated["symptom_type"], "чувство распирания")
         with self.assertRaisesRegex(ValueError, "Опишите симптом"):
             ConsiliumHandler._validate_body_symptom({**payload, "custom_symptom": ""})
+
+    def test_body_symptom_deletion_is_limited_to_its_owner(self):
+        owner_id = "chel_body_symptom_owner"
+        other_id = "chel_body_symptom_other"
+        db.ensure_user(owner_id)
+        db.ensure_user(other_id)
+        try:
+            db.set_current_chel_id(owner_id)
+            symptom = db.add_body_symptom({
+                "region": "Голова", "view": "front", "symptom_type": "Боль",
+                "intensity": 3, "duration": "hours", "pattern": "constant",
+            })
+            db.set_current_chel_id(other_id)
+            self.assertFalse(db.delete_body_symptom(symptom["id"]))
+            db.set_current_chel_id(owner_id)
+            self.assertTrue(db.delete_body_symptom(symptom["id"]))
+            self.assertFalse(any(
+                item["id"] == symptom["id"] for item in db.list_body_symptoms()
+            ))
+        finally:
+            db.set_current_chel_id("chel_test_default")
+
+    def test_body_map_has_numbered_progress_and_context_aware_close(self):
+        project_root = Path(__file__).resolve().parents[1]
+        index = (project_root / "index.html").read_text(encoding="utf-8")
+        script = (project_root / "static" / "app.js").read_text(encoding="utf-8")
+        styles = (project_root / "static" / "styles.css").read_text(encoding="utf-8")
+        dashboard_script = (project_root / "static" / "dashboard.js").read_text(encoding="utf-8")
+
+        for step_id, number in (("bodyRegionStep", 1), ("bodySymptomStep", 2), ("bodyDetailsStep", 3)):
+            self.assertIn(f'id="{step_id}"', index)
+            self.assertIn(f'<span>{number}</span>', index)
+        self.assertIn('id="bodyMapDetailsFields"', index)
+        self.assertIn('id="bodyMapBottomClose"', index)
+        self.assertIn('id="bodyMapActiveList"', index)
+        self.assertIn('id="bodyMapActiveCount"', index)
+        self.assertIn('data-body-map-delete=', script)
+        self.assertIn('function renderActiveBodySymptoms()', script)
+        self.assertIn("deleteBodySymptom(Number(button.dataset.bodyMapDelete), button)", script)
+        self.assertIn('function updateBodyMapProgress()', script)
+        self.assertIn("step.classList.toggle('complete', complete)", script)
+        self.assertIn("details.classList.toggle('is-locked', !symptomReady)", script)
+        self.assertIn("$('#bodyMapBottomClose').addEventListener('click', closeBodyMap)", script)
+        self.assertIn("if (returnScreen !== 'question_notes') return", script)
+        self.assertIn('.body-map-step-heading.active', styles)
+        self.assertIn('.body-map-step-heading.complete', styles)
+        self.assertIn('.body-map-details-step.is-locked', styles)
+        self.assertIn('1. Выберите область тела', dashboard_script)
+        self.assertIn("action('Закрыть')", dashboard_script)
 
     def test_result_entry_marks_user_without_questionnaire(self):
         chel_id = "chel_result_entry_test"

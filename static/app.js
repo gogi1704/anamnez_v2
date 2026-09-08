@@ -17,6 +17,7 @@ const state = {
   selectedBodyRegion: null,
   selectedBodyView: 'front',
   selectedSymptomType: null,
+  bodyMapReturnScreen: '',
   healthHistory: [],
   healthHistoryFilter: 'all',
   labDocuments: [],
@@ -421,12 +422,13 @@ const onboardingQuestions = [
   { key:'blood_pressure', title:'Как вы оцениваете своё давление?', lead:'Если не измеряли или не уверены, выберите «Не знаю».', choices:[['normal','Обычно в норме'],['high','Бывает повышенным'],['low','Бывает пониженным'],['unstable','Сильно меняется'],['unknown','Не знаю']] },
   { key:'dark_in_eyes', title:'Темнеет ли в глазах при резком подъёме?', lead:'Например, когда быстро встаёте с кровати или стула.', choices:[['no','Нет'],['yes','Да'],['unknown','Не уверен(а)']] },
   { key:'blood_sugar', title:'Знаете ли вы уровень сахара в крови?', lead:'Это не оценка диагноза — только уже известная вам информация.', choices:[['normal','Был в норме'],['high','Бывал повышен'],['unknown','Не измерял(а) / не знаю']] },
+  { key:'driving_time', title:'Сколько в среднем времени в день вы проводите за рулём?', lead:'Выберите наиболее близкий вариант для обычного дня.', choices:[['none','Не управляю автомобилем'],['up_to_1h','До 1 часа'],['1_to_2h','От 1 до 2 часов'],['over_2h','Более 2 часов']] },
   { key:'joint_pain', title:'Бывают боли или отёчность суставов?', lead:'В том числе при нагрузке или смене погоды.', choices:[['no','Нет'],['yes','Да'],['unknown','Не уверен(а)']] },
   { key:'fatigue', title:'Беспокоит длительная усталость?', lead:'Имеется в виду усталость, которая сохраняется после обычного отдыха.', choices:[['no','Нет'],['yes','Да'],['unknown','Не уверен(а)']] },
   { key:'conditions', title:'Есть хронические заболевания?', lead:'Напишите по одному на строку. Если нет — этот шаг можно пропустить.', type:'textarea', placeholder:'Например:\nГипертония\nАстма', optional:true, list:true },
   { key:'medications', title:'Какие лекарства принимаете постоянно?', lead:'Название и дозировка, если известна. Шаг можно пропустить.', type:'textarea', placeholder:'По одному препарату на строку', optional:true, list:true },
   { key:'allergies', title:'Есть аллергии?', lead:'Укажите лекарства, продукты или другие известные аллергены. Шаг можно пропустить.', type:'textarea', placeholder:'По одному аллергену на строку', optional:true, list:true },
-  { key:'notes', title:'Есть ли у вас жалобы?', lead:'Введите в одном сообщении всё, что вас тревожит: проблему, симптомы и что вы принимаете в связи с ними. Если жалоб нет, этот вопрос можно пропустить.', type:'textarea', maxlength:1000, placeholder:'Например: две недели болит голова по вечерам, принимаю ибупрофен', optional:true },
+  { key:'notes', title:'Есть ли у вас жалобы?', lead:'Введите в одном сообщении всё, что вас тревожит: проблему, симптомы и что вы принимаете в связи с ними. Если жалоб нет, этот вопрос можно пропустить. Также можно отметить область тела и симптом на карте.', type:'textarea', maxlength:1000, placeholder:'Например: две недели болит голова по вечерам, принимаю ибупрофен', optional:true },
 ];
 
 async function api(path, options = {}) {
@@ -731,7 +733,7 @@ async function finishResultFlow({openResults = false} = {}) {
   trackResultAction('open_chat');
   const documents = [...state.resultFlowDocuments];
   clearResultFlow();
-  await openMainApp({skipIntro:true});
+  await openMainApp({skipIntro:true, allowIncompleteOnboarding:true});
   if (openResults || documents.length) await openLabResults();
 }
 
@@ -740,6 +742,15 @@ async function enterResultFlow({explicit = false} = {}) {
   state.onboarding = onboarding;
   state.profile = onboarding.profile || await api('/api/profile');
   applyFontSize(onboarding.font_size || 'extra');
+  if (
+    ['questionnaire','exams','payment'].includes(onboarding.status)
+    || (onboarding.status === 'complete' && !onboarding.intro_seen
+      && (onboarding.payment_status === 'skipped' || onboarding.selected_tests?.length))
+  ) {
+    clearResultFlow();
+    await loadOnboarding({initialOnboarding:onboarding});
+    return;
+  }
   const registration = await api('/api/result-entry/start', {method:'POST', body:'{}'});
   state.identity = {...state.identity, result_entry:true};
   localStorage.setItem(ANONYMOUS_ACCESS_KEY, registration.chel_id || state.identity?.chel_id || '');
@@ -1143,10 +1154,13 @@ function renderQuestion() {
       ? `<textarea class="onboarding-input onboarding-input-area" id="onboardingInput" placeholder="${escapeAttr(question.placeholder || '')}" ${question.maxlength ? `maxlength="${question.maxlength}"` : ''}>${escapeHtml(Array.isArray(value) ? value.join('\n') : value)}</textarea>`
       : `<input class="onboarding-input" id="onboardingInput" type="${question.type || 'text'}" value="${escapeAttr(value)}" placeholder="${escapeAttr(question.placeholder || '')}" ${question.inputmode ? `inputmode="${question.inputmode}"` : ''} ${question.maxlength ? `maxlength="${question.maxlength}"` : ''} ${question.min !== undefined ? `min="${question.min}"` : ''} ${question.max !== undefined ? `max="${question.max}"` : ''} ${question.step ? `step="${question.step}"` : ''}>`;
   if (question.key === 'company_inn') control = companyInnControl(control, 'onboardingCompanyInnSuggestions');
+  const bodyMapAction = question.key === 'notes'
+    ? '<button type="button" class="onboarding-body-map-button" data-onboarding-action="question-body-map"><span>Указать на карте тела</span><b aria-hidden="true">→</b></button>'
+    : '';
   const notMedicalExam = question.key === 'company_inn'
     ? '<button type="button" class="not-medical-exam-button" data-onboarding-action="skip-medical-exam">Я не на мед-осмотр</button>'
     : '';
-  $('#onboardingContent').innerHTML = `<span class="onboarding-kicker">Шаг ${state.onboardingStep + 1} из ${questions.length}</span><h1>${question.title}</h1><p class="onboarding-lead">${question.lead}</p>${control}<div class="onboarding-actions">${state.onboardingStep ? '<button type="button" class="onboarding-back" data-onboarding-action="back">Назад</button>' : ''}<button type="button" class="onboarding-next" data-onboarding-action="next">${onboardingNextLabel(question, value, state.onboardingStep === questions.length - 1)}</button></div>${notMedicalExam}`;
+  $('#onboardingContent').innerHTML = `<span class="onboarding-kicker">Шаг ${state.onboardingStep + 1} из ${questions.length}</span><h1>${question.title}</h1><p class="onboarding-lead">${question.lead}</p>${control}${bodyMapAction}<div class="onboarding-actions">${state.onboardingStep ? '<button type="button" class="onboarding-back" data-onboarding-action="back">Назад</button>' : ''}<button type="button" class="onboarding-next" data-onboarding-action="next">${onboardingNextLabel(question, value, state.onboardingStep === questions.length - 1)}</button></div>${notMedicalExam}`;
   if (question.key === 'company_inn') setupCompanyInnSuggestions('#onboardingInput', '#onboardingCompanyInnSuggestions');
   $('#onboardingInput')?.focus();
 }
@@ -1191,12 +1205,13 @@ async function nextQuestion() {
     const payload = {
       company_inn:'', preferred_name:'', age:'', sex:'', height_cm:'', weight_kg:'', pregnancy:'not_applicable',
       conditions:[], medications:[], allergies:[], smoking:'unknown', alcohol:'unknown', activity:'unknown',
-      blood_pressure:'unknown', blood_sugar:'unknown', dark_in_eyes:'unknown', joint_pain:'unknown', fatigue:'unknown', notes:'',
+      blood_pressure:'unknown', blood_sugar:'unknown', dark_in_eyes:'unknown', driving_time:'unknown', joint_pain:'unknown', fatigue:'unknown', notes:'',
       ...state.onboardingAnswers,
     };
     state.onboarding = await api('/api/onboarding/profile', { method:'POST', body:JSON.stringify(payload) });
     state.profile = state.onboarding.profile;
-    renderExamOffer();
+    trackEvent('examinations_opened', { screen:'examinations' });
+    renderExamSelection();
   } catch (error) {
     const question = activeOnboardingQuestions()[state.onboardingStep];
     trackEvent('question_validation_error', {
@@ -1245,24 +1260,6 @@ const EXAMINATION_AUDIENCES = {
   ca199:'Только при наличии врачебных показаний; онкомаркер не подходит для самостоятельной диагностики.',
 };
 
-function renderExamOffer() {
-  trackEvent('examinations_offer_viewed', { screen:'examinations_offer' });
-  trackOnboardingScreen('exam_offer');
-  setOnboardingMeta('Обследования', 72);
-  $('#onboardingContent').innerHTML = `
-    <span class="onboarding-kicker">После анкеты</span>
-    <h1>Дополнительные обследования</h1>
-    <blockquote class="exam-offer-quote"><strong>Давайте честно: здоровых людей не бывает.</strong><span>У каждого есть своё слабое место, и лучше бы его знать.<br>Пара быстрых обследований — и жить спокойнее.</span></blockquote>
-    <div class="exam-offer-copy">
-      <p>Чтобы получить более полную информацию о состоянии своего здоровья, вы можете пройти дополнительные обследования во время медосмотра.</p>
-      <p class="exam-relative-note"><b>Можно пригласить родственника или друга</b> пройти один или несколько чек-апов. Позаботьтесь о близких — отправьте им ссылку на сервис.</p>
-    </div>
-    <button type="button" class="exam-catalog-button" data-onboarding-action="open-exam-catalog-info"><span>◫</span><span><strong>Посмотреть описания чек-апов</strong><small>Что входит, кому и для чего они нужны</small></span><b>→</b></button>
-    <div class="exam-offer-question"><strong>Хотели бы вы сдать дополнительные анализы во время медосмотра на работе?</strong><small>Выберите соответствующий вариант.</small></div>
-    <div class="onboarding-actions exam-offer-actions"><button type="button" class="onboarding-next" data-onboarding-action="start-exams">Да, выбрать анализы</button><button type="button" class="exam-decline-button" data-onboarding-action="review-exam-skip">Нет, не сейчас</button></div>
-    <button type="button" class="exam-edit-profile" data-onboarding-action="question-back">← Изменить ответы анкеты</button>`;
-}
-
 function examinationEffectivePrice(test) {
   const effective = Number(test?.effective_price);
   return Number.isFinite(effective) ? effective : Number(test?.price || 0);
@@ -1302,8 +1299,13 @@ function examinationPriceMarkup(test, recommended = false) {
     : '';
 }
 
-function sortExaminationsForUser(tests, recommended) {
+function sortExaminationsForUser(tests, recommended, featuredIds = []) {
+  const featuredOrder = new Map(featuredIds.map((id, index) => [id, index]));
   return [...tests].sort((left, right) => {
+    const leftFeatured = featuredOrder.has(left.id);
+    const rightFeatured = featuredOrder.has(right.id);
+    if (leftFeatured !== rightFeatured) return rightFeatured - leftFeatured;
+    if (leftFeatured && rightFeatured) return featuredOrder.get(left.id) - featuredOrder.get(right.id);
     const recommendationOrder = Number(recommended.has(right.id)) - Number(recommended.has(left.id));
     if (recommendationOrder) return recommendationOrder;
     const priceOrder = examinationEffectivePrice(left) - examinationEffectivePrice(right);
@@ -1316,7 +1318,9 @@ function renderExamCatalogInfo() {
   trackOnboardingScreen('exam_catalog');
   setOnboardingMeta('Описание чек-апов', 76);
   const recommended = new Set(state.onboarding?.recommended_test_ids || []);
-  const tests = sortExaminationsForUser(state.onboarding?.tests || [], recommended);
+  const tests = sortExaminationsForUser(
+    state.onboarding?.tests || [], recommended, state.onboarding?.featured_test_ids || [],
+  );
   const cards = tests.map(test => `
     <article class="exam-info-card">
       <header><strong>${escapeHtml(test.name)}</strong>${examinationPriceMarkup(test, recommended.has(test.id))}</header>
@@ -1367,7 +1371,9 @@ function renderExamSelection(scrollPosition = null) {
   normalizeSelectedTestPairs();
   setOnboardingMeta('Обследования', 80);
   const recommended = new Set(state.onboarding.recommended_test_ids || []);
-  const sortedTests = sortExaminationsForUser(state.onboarding.tests, recommended);
+  const sortedTests = sortExaminationsForUser(
+    state.onboarding.tests, recommended, state.onboarding.featured_test_ids || [],
+  );
   const cards = sortedTests.map(test => {
     const selected = state.selectedTests.has(test.id);
     const extendedId = EXAMINATION_UPGRADE_PAIRS[test.id];
@@ -1381,7 +1387,8 @@ function renderExamSelection(scrollPosition = null) {
     return `<label class="exam-card ${selected ? 'selected' : ''} ${disabled ? 'disabled-by-upgrade' : ''}" data-test-card="${test.id}" ${disabled ? 'aria-disabled="true"' : ''}><input type="checkbox" ${selected ? 'checked' : ''} ${disabled ? 'disabled' : ''}><span class="exam-check">✓</span>${recommended.has(test.id) ? '<small class="recommended-badge">Актуально для вас</small>' : ''}<span class="exam-card-top"><strong>${escapeHtml(test.name)}</strong>${examinationPriceMarkup(test, recommended.has(test.id))}</span><small>${escapeHtml(test.description)}</small><em>${escapeHtml(test.includes)}</em>${disabledNote}</label>`;
   }).join('');
   const total = state.onboarding.tests.filter(test => state.selectedTests.has(test.id)).reduce((sum,test) => sum + examinationEffectivePrice(test), 0);
-  $('#onboardingContent').innerHTML = `<span class="onboarding-kicker">Выбор анализов</span><h1>Выберите интересующие наборы</h1><p class="onboarding-lead">Рекомендации отмечены по ответам анкеты и не являются назначением.</p><div class="exam-list">${cards}</div><div class="exam-total"><span>Выбрано: ${state.selectedTests.size}</span><strong>${total.toLocaleString('ru')} ₽</strong></div><div class="onboarding-actions"><button type="button" class="onboarding-back" data-onboarding-action="exam-offer">Назад</button><button type="button" class="onboarding-next" data-onboarding-action="continue-payment" ${state.selectedTests.size ? '' : 'disabled'}>Далее</button></div><button type="button" class="exam-skip" data-onboarding-action="review-exam-skip">Ничего не выбирать</button>`;
+  const copy = state.onboarding.examination_recommendation_copy || {};
+  $('#onboardingContent').innerHTML = `<span class="onboarding-kicker">После анкеты</span><h1>${escapeHtml(copy.title || 'Дополнительные обследования для вас')}</h1><p class="onboarding-lead">${escapeHtml(copy.description || 'Рекомендации отмечены по ответам анкеты и не являются назначением.')}</p><div class="exam-selection-benefits"><div class="exam-blood-note"><span aria-hidden="true">🩸</span><p>Во время медосмотра у вас в любом случае возьмут кровь на общий анализ — за счёт работодателя. Дополнительные чек-апы делаются из той же пробы, без нового укола.</p></div><div class="exam-ai-note"><span aria-hidden="true">🩺</span><p><strong>После результатов — рекомендации медицинского ИИ и чат с врачом прямо в личном кабинете.</strong></p></div></div><div class="exam-list">${cards}</div><div class="exam-total"><span>Выбрано: ${state.selectedTests.size}</span><strong>${total.toLocaleString('ru')} ₽</strong></div><div class="onboarding-actions"><button type="button" class="onboarding-back" data-onboarding-action="exam-offer">Назад</button><button type="button" class="onboarding-next" data-onboarding-action="continue-payment" ${state.selectedTests.size ? '' : 'disabled'}>Далее</button></div><button type="button" class="exam-skip" data-onboarding-action="review-exam-skip">Ничего не выбирать</button>`;
   if (scrollPosition) {
     const examList = $('#onboardingContent .exam-list');
     const onboarding = $('#onboarding');
@@ -1426,6 +1433,9 @@ async function submitExamSelection(skip = false) {
       renderExamSkipCompletion();
       return;
     }
+    // Count Continue only after the server has accepted a non-empty selection.
+    // Otherwise a failed request looks like a real transition in Metric 2.0.
+    trackOnboardingAction('continue', 'exam_selection');
     renderPayment();
   } catch (error) { showOnboardingError(error.message); }
 }
@@ -1989,7 +1999,11 @@ async function loadOnboarding({ openCompletedMessengerAccount = false, initialOn
   state.profile = state.onboarding.profile;
   seedOnboardingAnswers(state.profile);
   state.selectedTests = new Set(state.onboarding.selected_tests || []);
-  if (openCompletedMessengerAccount && hasCompletedQuestionnaire(state.onboarding)) {
+  if (
+    openCompletedMessengerAccount
+    && state.onboarding.status === 'complete'
+    && state.onboarding.intro_seen
+  ) {
     return openMainApp({ skipIntro:true });
   }
   if (state.onboarding.status === 'complete') {
@@ -2016,11 +2030,32 @@ async function loadOnboarding({ openCompletedMessengerAccount = false, initialOn
   $('#appShell').classList.add('hidden');
   if (state.onboarding.status === 'appearance') renderAppearance();
   else if (state.onboarding.status === 'payment') renderPayment();
-  else if (state.onboarding.status === 'exams') renderExamOffer();
+  else if (state.onboarding.status === 'exams') renderExamSelection();
   else renderQuestion();
 }
 
-async function openMainApp({ skipIntro = false } = {}) {
+function renderRequiredStandardOnboarding() {
+  if (!state.onboarding) return false;
+  if (state.returnToChatAfterExaminations && state.onboarding.intro_seen) return false;
+  const onboarding = state.onboarding;
+  const finalScreenRequired = onboarding.status === 'complete'
+    && !onboarding.intro_seen
+    && (onboarding.payment_status === 'skipped' || Boolean(onboarding.selected_tests?.length));
+  if (onboarding.status === 'complete' && !finalScreenRequired) return false;
+  $('#onboarding').classList.remove('hidden');
+  $('#appShell').classList.add('hidden');
+  if (finalScreenRequired) {
+    if (onboarding.payment_status === 'skipped') renderExamSkipCompletion();
+    else renderExamCompletion();
+  } else if (onboarding.status === 'appearance') renderAppearance();
+  else if (onboarding.status === 'payment') renderPayment();
+  else if (onboarding.status === 'exams') renderExamSelection();
+  else renderQuestion();
+  return true;
+}
+
+async function openMainApp({ skipIntro = false, allowIncompleteOnboarding = false } = {}) {
+  if (!allowIncompleteOnboarding && renderRequiredStandardOnboarding()) return false;
   state.returnToChatAfterExaminations = false;
   $('#onboarding').classList.add('hidden');
   $('#appShell').classList.remove('hidden');
@@ -2036,6 +2071,7 @@ async function openMainApp({ skipIntro = false } = {}) {
     state.messengerLinkJustCompleted = '';
     requestAnimationFrame(() => openMessengerLinkModal({source:'return', justLinked:provider}));
   }
+  return true;
 }
 
 $('#onboardingContent').addEventListener('click', async event => {
@@ -2095,14 +2131,15 @@ $('#onboardingContent').addEventListener('click', async event => {
   if (!action) return;
   if (action === 'next') nextQuestion();
   else if (action === 'back') { const question = activeOnboardingQuestions()[state.onboardingStep]; try { captureQuestionAnswer({trackAction:false}); } catch {} trackOnboardingAction('back', `question_${question.key}`); trackEvent('question_back', { step_number:state.onboardingStep + 1 }); state.onboardingStep -= 1; renderQuestion(); }
-  else if (action === 'question-back') { trackOnboardingAction('edit_questionnaire', 'exam_offer'); trackEvent('question_back', { screen:'examinations_offer' }); trackEvent('funnel_action', {stage:'examinations_offer',action:'edit_questionnaire'}); if (state.returnToChatAfterExaminations) editProfileFromChatExamFlow(); else { state.onboardingStep = activeOnboardingQuestions().length - 1; renderQuestion(); } }
-  else if (action === 'open-exam-catalog-info') { trackOnboardingAction('catalog_info', 'exam_offer'); trackEvent('funnel_action', {stage:'examinations_offer',action:'catalog_info'}); renderExamCatalogInfo(); }
-  else if (action === 'close-exam-catalog-info') { trackOnboardingAction('back', 'exam_catalog'); renderExamOffer(); }
+  else if (action === 'question-body-map') { openQuestionnaireBodyMap(); }
+  else if (action === 'question-back') { if (state.returnToChatAfterExaminations) editProfileFromChatExamFlow(); else { state.onboardingStep = activeOnboardingQuestions().length - 1; renderQuestion(); } }
+  else if (action === 'open-exam-catalog-info') { trackOnboardingAction('catalog_info', 'exam_selection'); renderExamCatalogInfo(); }
+  else if (action === 'close-exam-catalog-info') { trackOnboardingAction('back', 'exam_catalog'); renderExamSelection(); }
   else if (action === 'start-exams') { const sourceScreen = currentOnboardingAnalyticsScreen; const afterObjection = sourceScreen === 'exam_objection'; trackOnboardingAction(sourceScreen === 'exam_catalog' ? 'choose' : afterObjection ? 'choose' : 'view_options', sourceScreen); trackEvent('funnel_action', {stage:'examinations_offer',action:afterObjection ? 'choose_after_objection' : 'view_options'}); trackEvent('examinations_opened', { screen:'examinations' }); renderExamSelection(); }
-  else if (action === 'exam-offer') { trackOnboardingAction('back', 'exam_selection'); trackEvent('funnel_action', {stage:'examinations_options',action:'options_back'}); if (state.returnToChatAfterExaminations) { state.selectedTests = new Set(state.onboarding?.selected_tests || []); renderCurrentExamSelectionSummary(); } else renderExamOffer(); }
+  else if (action === 'exam-offer') { trackOnboardingAction('back', 'exam_selection'); trackEvent('funnel_action', {stage:'examinations_options',action:'options_back'}); if (state.returnToChatAfterExaminations) { state.selectedTests = new Set(state.onboarding?.selected_tests || []); renderCurrentExamSelectionSummary(); } else { state.onboardingStep = activeOnboardingQuestions().length - 1; renderQuestion(); } }
   else if (action === 'review-exam-skip') { const fromOptions = Boolean($('#onboardingContent .exam-list')); trackOnboardingAction(fromOptions ? 'nothing' : 'skip', fromOptions ? 'exam_selection' : 'exam_offer'); trackEvent('funnel_action', {stage:fromOptions ? 'examinations_options' : 'examinations_offer',action:fromOptions ? 'nothing_selected' : 'skip'}); trackEvent('examinations_skip_clicked', { selected_count:state.selectedTests.size }); renderExamSkipConfirmation(); }
   else if (action === 'confirm-skip-exams') { trackOnboardingAction('refuse', 'exam_objection'); trackEvent('funnel_action', {stage:'examinations_offer',action:'refuse'}); trackEvent('examinations_skipped', { screen:'examinations_skip' }); submitExamSelection(true); }
-  else if (action === 'continue-payment') { trackOnboardingAction('continue', 'exam_selection'); submitExamSelection(false); }
+  else if (action === 'continue-payment') { submitExamSelection(false); }
   else if (action === 'back-to-exams') { trackOnboardingAction('back', 'payment'); renderExamSelection(); }
   else if (action === 'close-payment-review') {
     trackOnboardingAction('close', 'payment');
@@ -3127,7 +3164,8 @@ function profileCompletion(profile = state.profile) {
   if (!profile) return 0;
   const checks = [profile.company_inn, profile.age, profile.sex, profile.height_cm, profile.weight_kg,
     profile.smoking && profile.smoking !== 'unknown', profile.alcohol && profile.alcohol !== 'unknown',
-    profile.activity && profile.activity !== 'unknown', profile.blood_pressure && profile.blood_pressure !== 'unknown'];
+    profile.activity && profile.activity !== 'unknown', profile.blood_pressure && profile.blood_pressure !== 'unknown',
+    profile.driving_time && profile.driving_time !== 'unknown'];
   return Math.round(checks.filter(Boolean).length / checks.length * 100);
 }
 
@@ -3156,6 +3194,7 @@ async function openProfile() {
   $('#profileActivity').value = profile.activity || 'unknown';
   $('#profilePressure').value = profile.blood_pressure || 'unknown';
   $('#profileSugar').value = profile.blood_sugar || 'unknown';
+  $('#profileDrivingTime').value = profile.driving_time || 'unknown';
   $('#profileFatigue').value = profile.fatigue || 'unknown';
   $('#profileJoints').value = profile.joint_pain || 'unknown';
   $('#profileConditions').value = (profile.conditions || []).join('\n');
@@ -3197,6 +3236,7 @@ async function saveProfile() {
     smoking: $('#profileSmoking').value, conditions: profileLines('#profileConditions'),
     alcohol: $('#profileAlcohol').value, activity: $('#profileActivity').value,
     blood_pressure: $('#profilePressure').value, blood_sugar: $('#profileSugar').value,
+    driving_time: $('#profileDrivingTime').value,
     fatigue: $('#profileFatigue').value, joint_pain: $('#profileJoints').value,
     dark_in_eyes: state.profile?.dark_in_eyes || 'unknown',
     medications: profileLines('#profileMedications'), allergies: profileLines('#profileAllergies'),
@@ -3226,6 +3266,7 @@ function profilePayloadWithTube(tubeNumber) {
     activity: profile.activity || 'unknown',
     blood_pressure: profile.blood_pressure || 'unknown',
     blood_sugar: profile.blood_sugar || 'unknown',
+    driving_time: profile.driving_time || 'unknown',
     dark_in_eyes: profile.dark_in_eyes || 'unknown',
     joint_pain: profile.joint_pain || 'unknown',
     fatigue: profile.fatigue || 'unknown',
@@ -3651,6 +3692,17 @@ const durationLabels = { minutes:'Несколько минут', hours:'Нес�
 const patternLabels = { constant:'Постоянно', episodes:'Приступами', movement:'При движении', touch:'При прикосновении', unknown:'Не уверен(а)' };
 const agentLabels = Object.fromEntries(Object.keys(AGENTS).map(id => [id, 'Ольга · Медицинский помощник']));
 
+function renderActiveBodySymptoms() {
+  const active = state.bodySymptoms.filter(item => item.status === 'active');
+  $('#bodyMapActiveCount').textContent = active.length;
+  $('#bodyMapActiveList').innerHTML = active.length
+    ? active.map(item => `<article class="body-map-active-item">
+        <div><strong>${escapeHtml(item.region)}</strong><span>${escapeHtml(item.symptom_type)} · интенсивность ${Number(item.intensity) || 0}/10</span><small>${healthEventDate(item.started_at || item.created_at)}</small></div>
+        <button type="button" data-body-map-delete="${Number(item.id)}" aria-label="Удалить отметку: ${escapeAttr(item.region)}">Удалить</button>
+      </article>`).join('')
+    : '<div class="body-map-active-empty">Активных отметок пока нет.</div>';
+}
+
 async function loadBodySymptoms() {
   try { state.bodySymptoms = await api('/api/body-symptoms'); }
   catch { state.bodySymptoms = []; }
@@ -3660,13 +3712,14 @@ async function loadBodySymptoms() {
   document.querySelectorAll('.body-zone').forEach(zone => {
     zone.classList.toggle('has-symptom', active.some(item => item.region === zone.dataset.region && item.view === zone.dataset.view));
   });
+  renderActiveBodySymptoms();
 }
 
 function resetBodySymptomForm() {
   state.selectedBodyRegion = null;
   state.selectedSymptomType = null;
   document.querySelectorAll('.body-zone,.symptom-choice-grid button').forEach(item => item.classList.remove('selected'));
-  $('#selectedBodyRegion').innerHTML = '<span>1</span><div><small>Выбранная область</small><strong>Нажмите на карту</strong></div>';
+  $('#selectedBodyRegion').innerHTML = '<span>—</span><div><small>Выбранная область</small><strong>Нажмите на карту</strong></div>';
   $('#symptomTypeField').disabled = true;
   $('#customSymptomField').classList.add('hidden');
   $('#customSymptomText').value = '';
@@ -3677,6 +3730,7 @@ function resetBodySymptomForm() {
   $('#symptomPattern').value = 'constant';
   $('#symptomNotes').value = '';
   $('#saveBodySymptomButton').disabled = true;
+  updateBodyMapProgress();
 }
 
 function setBodyView(view) {
@@ -3700,6 +3754,25 @@ function selectBodyRegion(zone) {
 function updateBodySymptomSaveState() {
   const customReady = state.selectedSymptomType !== 'Другое' || Boolean($('#customSymptomText').value.trim());
   $('#saveBodySymptomButton').disabled = !(state.selectedBodyRegion && state.selectedSymptomType && customReady);
+  updateBodyMapProgress();
+}
+
+function updateBodyMapProgress() {
+  const regionReady = Boolean(state.selectedBodyRegion);
+  const customReady = state.selectedSymptomType !== 'Другое' || Boolean($('#customSymptomText').value.trim());
+  const symptomReady = regionReady && Boolean(state.selectedSymptomType) && customReady;
+  const setStep = (selector, {active = false, complete = false}) => {
+    const step = $(selector);
+    step.classList.toggle('active', active);
+    step.classList.toggle('complete', complete);
+  };
+  setStep('#bodyRegionStep', {active:!regionReady, complete:regionReady});
+  setStep('#bodySymptomStep', {active:regionReady && !symptomReady, complete:symptomReady});
+  setStep('#bodyDetailsStep', {active:symptomReady});
+  $('#symptomTypeField').disabled = !regionReady;
+  const details = $('#bodyMapDetailsFields');
+  details.classList.toggle('is-locked', !symptomReady);
+  details.querySelectorAll('input,select,textarea').forEach(field => { field.disabled = !symptomReady; });
 }
 
 function selectSymptomType(button) {
@@ -3711,8 +3784,9 @@ function selectSymptomType(button) {
   if (isCustom) $('#customSymptomText').focus();
 }
 
-async function openBodyMap() {
+async function openBodyMap({returnScreen = ''} = {}) {
   closeFunctionMenu();
+  state.bodyMapReturnScreen = returnScreen;
   await loadBodySymptoms();
   resetBodySymptomForm();
   setBodyView('front');
@@ -3720,12 +3794,52 @@ async function openBodyMap() {
   document.querySelector('#bodyMapModal .body-map-modal').scrollTop = 0;
 }
 
-function closeBodyMap() { $('#bodyMapModal').classList.add('hidden'); }
+function closeBodyMap(outcome = '') {
+  if (typeof outcome !== 'string') outcome = '';
+  $('#bodyMapModal').classList.add('hidden');
+  const returnScreen = state.bodyMapReturnScreen;
+  state.bodyMapReturnScreen = '';
+  if (returnScreen !== 'question_notes') return;
+  trackOnboardingAction(
+    outcome === 'with_selection' ? 'return_with_selection' : 'return_without_selection',
+    'question_body_map',
+  );
+  renderQuestion();
+}
+
+function openQuestionnaireBodyMap() {
+  const input = $('#onboardingInput');
+  if (input) state.onboardingAnswers.notes = input.value;
+  trackOnboardingAction('open_body_map', 'question_notes');
+  trackOnboardingScreen('question_body_map');
+  openBodyMap({returnScreen:'question_notes'});
+}
+
+function questionnaireBodySymptomText() {
+  const symptom = state.selectedSymptomType === 'Другое'
+    ? $('#customSymptomText').value.trim()
+    : state.selectedSymptomType;
+  const details = [
+    `${state.selectedBodyRegion}: ${symptom}`,
+    `интенсивность ${$('#symptomIntensity').value} из 10`,
+  ];
+  const duration = durationLabels[$('#symptomDuration').value];
+  if (duration) details.push(`длительность — ${duration.toLocaleLowerCase('ru')}`);
+  const pattern = patternLabels[$('#symptomPattern').value];
+  if (pattern && $('#symptomPattern').value !== 'unknown') {
+    details.push(`проявляется ${pattern.toLocaleLowerCase('ru')}`);
+  }
+  const notes = $('#symptomNotes').value.trim();
+  if (notes) details.push(notes);
+  return `${details.join(', ')}.`;
+}
 
 async function saveBodySymptom() {
   if (!state.selectedBodyRegion || !state.selectedSymptomType) return;
   const button = $('#saveBodySymptomButton');
   button.disabled = true;
+  const returnToQuestionnaire = state.bodyMapReturnScreen === 'question_notes';
+  const questionnaireText = returnToQuestionnaire ? questionnaireBodySymptomText() : '';
   try {
     await api('/api/body-symptoms', {
       method:'POST',
@@ -3740,8 +3854,15 @@ async function saveBodySymptom() {
     await loadBodySymptoms();
     resetBodySymptomForm();
     $('#taskStatus').textContent = 'Симптом добавлен в историю · специалисты учтут его';
-    closeBodyMap();
-    await openHealthHistory('symptom');
+    if (returnToQuestionnaire) {
+      const currentNotes = String(state.onboardingAnswers.notes || '').trim();
+      state.onboardingAnswers.notes = [currentNotes, questionnaireText]
+        .filter(Boolean).join('\n').slice(0, 1000);
+      closeBodyMap('with_selection');
+    } else {
+      closeBodyMap();
+      await openHealthHistory('symptom');
+    }
   } catch (error) {
     button.disabled = false;
     addSystemError(error.message);
@@ -3816,11 +3937,22 @@ async function changeBodySymptomStatus(id, status) {
   } catch (error) { addSystemError(error.message); }
 }
 
-async function deleteBodySymptom(id) {
+async function deleteBodySymptom(id, sourceButton = null) {
+  const originalText = sourceButton?.textContent || '';
+  if (sourceButton) {
+    sourceButton.disabled = true;
+    sourceButton.textContent = 'Удаляем…';
+  }
   try {
     await api(`/api/body-symptoms/${id}`, { method:'DELETE' });
     await Promise.all([loadBodySymptoms(), loadHealthHistory()]);
-  } catch (error) { addSystemError(error.message); }
+  } catch (error) {
+    addSystemError(error.message);
+    if (sourceButton) {
+      sourceButton.disabled = false;
+      sourceButton.textContent = originalText;
+    }
+  }
 }
 
 async function addAttachments(files) {
@@ -4077,6 +4209,7 @@ $('#profileHeight').addEventListener('input', updateProfileBmi);
 $('#profileWeight').addEventListener('input', updateProfileBmi);
 $('#memoryList').addEventListener('click', event => { const button = event.target.closest('[data-memory-delete]'); if (button) deleteMemory(Number(button.dataset.memoryDelete)); });
 $('#bodyMapClose').addEventListener('click', closeBodyMap);
+$('#bodyMapBottomClose').addEventListener('click', closeBodyMap);
 $('#bodyMapModal').addEventListener('click', event => { if (event.target.id === 'bodyMapModal') closeBodyMap(); });
 document.querySelectorAll('[data-body-view]').forEach(button => button.addEventListener('click', () => setBodyView(button.dataset.bodyView)));
 document.querySelectorAll('.body-zone').forEach(zone => {
@@ -4085,6 +4218,10 @@ document.querySelectorAll('.body-zone').forEach(zone => {
   zone.addEventListener('keydown', event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); selectBodyRegion(zone); } });
 });
 $('#symptomTypeChoices').addEventListener('click', event => { const button=event.target.closest('[data-symptom-type]'); if (button) selectSymptomType(button); });
+$('#bodyMapActiveList').addEventListener('click', event => {
+  const button = event.target.closest('[data-body-map-delete]');
+  if (button) deleteBodySymptom(Number(button.dataset.bodyMapDelete), button);
+});
 $('#customSymptomText').addEventListener('input', updateBodySymptomSaveState);
 $('#symptomIntensity').addEventListener('input', event => { $('#symptomIntensityValue').textContent = `${event.target.value} из 10`; });
 $('#saveBodySymptomButton').addEventListener('click', saveBodySymptom);

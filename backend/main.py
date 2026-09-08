@@ -51,6 +51,47 @@ def _fulfill_consultation_payment(order: dict | None) -> dict | None:
     return fulfillment
 
 
+def _lab_result_analytics_event(status: str) -> str:
+    return {
+        "found": "lab_results_found",
+        "processing": "lab_results_processing",
+        "not_found": "lab_results_not_found",
+    }.get(str(status or ""), "lab_results_error")
+
+
+def _chat_access_allowed() -> bool:
+    """Keep the standard questionnaire funnel closed until its final screen."""
+    state = db.get_onboarding()
+    status = str(state.get("status") or "appearance")
+    if status in {"exams", "payment"}:
+        return False
+    if status == "questionnaire":
+        return False
+    if status == "appearance":
+        return db.current_user_has_result_entry()
+    if status == "complete" and not state.get("intro_seen"):
+        final_screen_required = (
+            state.get("payment_status") == "skipped"
+            or bool(state.get("selected_tests"))
+        )
+        if final_screen_required:
+            return False
+    return status == "complete" or db.current_user_has_result_entry()
+
+
+def _result_entry_can_start(onboarding: dict) -> bool:
+    """Do not let /result replace an already active standard questionnaire."""
+    status = str(onboarding.get("status") or "appearance")
+    if status in {"questionnaire", "exams", "payment"}:
+        return False
+    if status != "complete" or onboarding.get("intro_seen"):
+        return True
+    return not (
+        onboarding.get("payment_status") == "skipped"
+        or bool(onboarding.get("selected_tests"))
+    )
+
+
 def admin_token_valid(authorization: str, expected: str | None = None) -> bool:
     expected = settings.admin_dashboard_token if expected is None else expected
     authorization = str(authorization or "")
@@ -228,9 +269,14 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                         query.get("date_from", [""])[0],
                         query.get("date_to", [""])[0],
                         query.get("flow", ["standard"])[0],
+                        background=True,
                     )
                     report["examinations"] = db.list_examinations()
                     return self._json(200, report)
+                except analytics.ReportBuilding:
+                    return self._json(202, {"status": "building", "retry_after_ms": 750})
+                except analytics.ReportBuildFailed as exc:
+                    return self._json(503, {"detail": f"Не удалось рассчитать отчёт: {exc}"})
                 except (ValueError, TypeError) as exc:
                     return self._json(422, {"detail": str(exc)})
             if path == "/api/admin/analytics":
@@ -245,6 +291,7 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                         int(query.get("recent_limit", ["25"])[0]),
                         query.get("date_from", [""])[0],
                         query.get("date_to", [""])[0],
+                        background=True,
                     )
                     report["manager_attribution"] = db.admin_manager_attribution(
                         period,
@@ -252,6 +299,10 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                         query.get("date_to", [""])[0],
                     )
                     return self._json(200, report)
+                except analytics.ReportBuilding:
+                    return self._json(202, {"status": "building", "retry_after_ms": 750})
+                except analytics.ReportBuildFailed as exc:
+                    return self._json(503, {"detail": f"Не удалось рассчитать отчёт: {exc}"})
                 except (ValueError, TypeError) as exc:
                     return self._json(422, {"detail": str(exc)})
             if path == "/api/admin/ai-costs":
@@ -981,6 +1032,11 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                 return self._json(422, {"detail": str(exc)})
         if path == "/api/result-entry/start":
             try:
+                onboarding = db.get_onboarding()
+                if not _result_entry_can_start(onboarding):
+                    return self._json(409, {
+                        "detail": "Сначала завершите текущую анкету и её финальный экран",
+                    })
                 first_result_entry = not db.current_user_has_result_entry()
                 user = db.mark_current_user_result_entry()
                 self._track_analytics("result_entry_started", {
@@ -1128,7 +1184,10 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                 })
             try:
                 lab_result = lookup_lab_results(tube_number).to_dict()
-                self._track_analytics("lab_results_found", {
+                result_status = str(lab_result.get("status") or "not_found")
+                event_name = _lab_result_analytics_event(result_status)
+                self._track_analytics(event_name, {
+                    "result": result_status,
                     "document_count": len(lab_result.get("documents", [])),
                 })
                 return self._json(200, lab_result)
@@ -1136,7 +1195,7 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                 self._track_analytics("lab_results_not_found", {"error_code": "invalid_tube"})
                 return self._json(422, {"status": "invalid_tube", "detail": str(exc)})
             except LabResultsUnavailable:
-                self._track_analytics("lab_results_not_found", {"error_code": "unavailable"})
+                self._track_analytics("lab_results_error", {"error_code": "unavailable"})
                 return self._json(503, {
                     "status": "unavailable",
                     "detail": "Сервис результатов временно недоступен. Попробуйте позже.",
@@ -1296,6 +1355,10 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
             return self._json(200, {**result, "unread_counts": db.conversation_unread_counts()})
         if path != "/api/chat":
             return self._json(404, {"detail": "Маршрут не найден"})
+        if not _chat_access_allowed():
+            return self._json(409, {
+                "detail": "Сначала завершите выбор обследований и финальный экран анкеты",
+            })
         try:
             chat_started = time.perf_counter()
             payload = self._read_json(max_bytes=17_000_000)
@@ -1607,6 +1670,7 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
         activity = str(payload.get("activity", "unknown"))
         blood_pressure = str(payload.get("blood_pressure", "unknown"))
         blood_sugar = str(payload.get("blood_sugar", "unknown"))
+        driving_time = str(payload.get("driving_time", "unknown"))
         dark_in_eyes = str(payload.get("dark_in_eyes", "unknown"))
         joint_pain = str(payload.get("joint_pain", "unknown"))
         fatigue = str(payload.get("fatigue", "unknown"))
@@ -1621,6 +1685,7 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
             "activity": (activity, {"low", "moderate", "high", "unknown"}),
             "blood_pressure": (blood_pressure, {"normal", "high", "low", "unstable", "unknown"}),
             "blood_sugar": (blood_sugar, {"normal", "high", "unknown"}),
+            "driving_time": (driving_time, {"none", "up_to_1h", "1_to_2h", "over_2h", "unknown"}),
             "dark_in_eyes": (dark_in_eyes, {"yes", "no", "unknown"}),
             "joint_pain": (joint_pain, {"yes", "no", "unknown"}),
             "fatigue": (fatigue, {"yes", "no", "unknown"}),
@@ -1651,6 +1716,7 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
             "pregnancy": pregnancy, "smoking": smoking,
             "alcohol": alcohol, "activity": activity, "blood_pressure": blood_pressure,
             "blood_sugar": blood_sugar, "dark_in_eyes": dark_in_eyes,
+            "driving_time": driving_time,
             "joint_pain": joint_pain, "fatigue": fatigue,
             "conditions": lines("conditions"), "medications": lines("medications"),
             "allergies": lines("allergies"),
@@ -1661,8 +1727,8 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
             missing = [name for name in ("company_inn", "age", "sex", "height_cm", "weight_kg") if result[name] in (None, "")]
             if missing:
                 raise ValueError("Заполните обязательные поля: ИНН предприятия, возраст, пол, рост и вес")
-            if smoking == "unknown" or alcohol == "unknown" or activity == "unknown":
-                raise ValueError("Ответьте на вопросы о курении, алкоголе и активности")
+            if smoking == "unknown" or alcohol == "unknown" or activity == "unknown" or driving_time == "unknown":
+                raise ValueError("Ответьте на вопросы о курении, алкоголе, активности и времени за рулём")
         return result
 
     def _read_json(self, max_bytes: int = 32_000) -> dict:

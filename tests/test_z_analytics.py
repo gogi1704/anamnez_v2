@@ -2,6 +2,7 @@ import json
 import sqlite3
 import tempfile
 import threading
+import time
 import unittest
 from pathlib import Path
 
@@ -88,6 +89,40 @@ class AnalyticsTests(unittest.TestCase):
         self.assertFalse(second.is_alive())
         self.assertEqual(errors, [])
 
+    def test_background_report_returns_pending_and_coalesces_same_request(self):
+        started = threading.Event()
+        release = threading.Event()
+        calls = []
+
+        def builder():
+            calls.append(1)
+            started.set()
+            self.assertTrue(release.wait(2))
+            return {"report": "ready"}
+
+        cache_name = f"background-{self.temp_dir.name}"
+        with self.assertRaises(analytics.ReportBuilding):
+            analytics._cached_report(cache_name, ("same",), builder, background=True)
+        self.assertTrue(started.wait(1))
+        with self.assertRaises(analytics.ReportBuilding):
+            analytics._cached_report(cache_name, ("same",), builder, background=True)
+        self.assertEqual(len(calls), 1)
+
+        release.set()
+        deadline = time.monotonic() + 2
+        while True:
+            try:
+                result = analytics._cached_report(
+                    cache_name, ("same",), builder, background=True,
+                )
+                break
+            except analytics.ReportBuilding:
+                if time.monotonic() >= deadline:
+                    self.fail("Фоновый отчёт не был опубликован в кэше")
+                time.sleep(0.01)
+        self.assertEqual(result, {"report": "ready"})
+        self.assertEqual(len(calls), 1)
+
     def test_delete_user_data_removes_only_target_events_and_sessions(self):
         analytics.record_events("CHEL-DELETE", [{
             "event_id": "delete-event-0001", "session_id": "delete-session-0001",
@@ -129,6 +164,29 @@ class AnalyticsTests(unittest.TestCase):
         self.assertEqual(report["questions"][0]["avg_duration_ms"], 2200)
         self.assertEqual(report["devices"][0]["label"], "android")
         self.assertEqual(report["recent_pagination"], {"page": 1, "limit": 25, "total": 4, "pages": 1})
+
+    def test_driving_time_question_is_in_questionnaire_statistics(self):
+        analytics.record_events("CHEL-DRIVING-STATS", [
+            {
+                "event_id": "driving-viewed-0001",
+                "session_id": "driving-session-01",
+                "event_name": "question_viewed",
+                "properties": {"question_key": "driving_time"},
+            },
+            {
+                "event_id": "driving-answered-01",
+                "session_id": "driving-session-01",
+                "event_name": "question_answered",
+                "properties": {"question_key": "driving_time", "duration_ms": 1800},
+            },
+        ])
+
+        report = analytics.admin_report("30")
+        driving = next(item for item in report["questions"] if item["step_key"] == "driving_time")
+        self.assertEqual(driving["label"], "Время за рулём")
+        self.assertEqual(driving["viewed"], 1)
+        self.assertEqual(driving["answered"], 1)
+        self.assertEqual(driving["conversion"], 100.0)
 
     def test_payment_method_does_not_replace_registration_method(self):
         analytics.record_events("CHEL-METHOD", [
@@ -383,7 +441,7 @@ class AnalyticsTests(unittest.TestCase):
             {"event_id": "path-one-registration-return", "session_id": "path-session-one", "event_name": "onboarding_screen_viewed", "properties": {"screen": "registration", "context": "onboarding"}},
             {"event_id": "path-one-warning-repeat", "session_id": "path-session-one", "event_name": "onboarding_screen_viewed", "properties": {"screen": "anonymous_warning", "context": "onboarding"}},
             {"event_id": "path-one-appearance", "session_id": "path-session-one", "event_name": "onboarding_screen_viewed", "properties": {"screen": "appearance", "context": "onboarding"}},
-            {"event_id": "path-one-offer-with-gap", "session_id": "path-session-one", "event_name": "onboarding_screen_viewed", "properties": {"screen": "exam_offer", "context": "onboarding"}},
+            {"event_id": "path-one-selection-with-gap", "session_id": "path-session-one", "event_name": "onboarding_screen_viewed", "properties": {"screen": "exam_selection", "context": "onboarding"}},
         ])
         analytics.record_events("CHEL-METRIC-PATH-TWO", [
             {"event_id": "path-two-welcome", "session_id": "path-session-two", "event_name": "onboarding_screen_viewed", "properties": {"screen": "welcome", "context": "onboarding"}},
@@ -414,8 +472,8 @@ class AnalyticsTests(unittest.TestCase):
         appearance_destinations = {
             item["screen_id"]: item for item in screens["appearance"]["outgoing_transitions"]
         }
-        self.assertFalse(appearance_destinations["exam_offer"]["direct"])
-        self.assertIn("не прямой переход", appearance_destinations["exam_offer"]["explanation"])
+        self.assertFalse(appearance_destinations["exam_selection"]["direct"])
+        self.assertIn("не прямой переход", appearance_destinations["exam_selection"]["explanation"])
 
     def test_metric2_loop_erases_returns_without_losing_screen_reach(self):
         analytics.record_events("CHEL-METRIC-LOOP", [
@@ -504,6 +562,117 @@ class AnalyticsTests(unittest.TestCase):
                 screen["id"],
             )
 
+    def test_metric2_continue_implies_an_examination_was_selected(self):
+        analytics.record_events("CHEL-METRIC-EXAM-CONTINUE", [
+            {
+                "event_id": "exam-continue-welcome",
+                "session_id": "exam-continue-session",
+                "event_name": "onboarding_screen_viewed",
+                "properties": {"screen": "welcome", "context": "onboarding"},
+            },
+            {
+                "event_id": "exam-continue-selection",
+                "session_id": "exam-continue-session",
+                "event_name": "onboarding_screen_viewed",
+                "properties": {"screen": "exam_selection", "context": "onboarding"},
+            },
+            {
+                "event_id": "exam-continue-action",
+                "session_id": "exam-continue-session",
+                "event_name": "onboarding_screen_action",
+                "properties": {
+                    "screen": "exam_selection",
+                    "action": "continue",
+                    "context": "onboarding",
+                },
+            },
+            {
+                "event_id": "exam-continue-payment",
+                "session_id": "exam-continue-session",
+                "event_name": "onboarding_screen_viewed",
+                "properties": {"screen": "payment", "context": "onboarding"},
+            },
+        ])
+
+        report = analytics.metric2_report("30")
+        selection = next(item for item in report["screens"] if item["id"] == "exam_selection")
+        actions = {item["id"]: item for item in selection["actions"]}
+        self.assertEqual(actions["continue"]["users"], 1)
+        self.assertEqual(actions["select_exam"]["users"], 1)
+
+    def test_metric2_tracks_body_map_entry_and_both_return_results(self):
+        for suffix, result_action in (
+            ("selected", "return_with_selection"),
+            ("empty", "return_without_selection"),
+        ):
+            session_id = f"body-map-session-{suffix}"
+            analytics.record_events(f"CHEL-BODY-MAP-{suffix.upper()}", [
+                {
+                    "event_id": f"body-map-welcome-{suffix}",
+                    "session_id": session_id,
+                    "event_name": "onboarding_screen_viewed",
+                    "properties": {"screen": "welcome", "context": "onboarding"},
+                },
+                {
+                    "event_id": f"body-map-notes-{suffix}",
+                    "session_id": session_id,
+                    "event_name": "onboarding_screen_viewed",
+                    "properties": {"screen": "question_notes", "context": "onboarding"},
+                },
+                {
+                    "event_id": f"body-map-open-{suffix}",
+                    "session_id": session_id,
+                    "event_name": "onboarding_screen_action",
+                    "properties": {
+                        "screen": "question_notes", "action": "open_body_map",
+                        "context": "onboarding",
+                    },
+                },
+                {
+                    "event_id": f"body-map-view-{suffix}",
+                    "session_id": session_id,
+                    "event_name": "onboarding_screen_viewed",
+                    "properties": {
+                        "screen": "question_body_map", "previous_screen": "question_notes",
+                        "context": "onboarding",
+                    },
+                },
+                {
+                    "event_id": f"body-map-return-action-{suffix}",
+                    "session_id": session_id,
+                    "event_name": "onboarding_screen_action",
+                    "properties": {
+                        "screen": "question_body_map", "action": result_action,
+                        "context": "onboarding",
+                    },
+                },
+                {
+                    "event_id": f"body-map-return-view-{suffix}",
+                    "session_id": session_id,
+                    "event_name": "onboarding_screen_viewed",
+                    "properties": {
+                        "screen": "question_notes", "previous_screen": "question_body_map",
+                        "context": "onboarding",
+                    },
+                },
+            ])
+
+        report = analytics.metric2_report("30")
+        screens = {item["id"]: item for item in report["screens"]}
+        notes_actions = {item["id"]: item for item in screens["question_notes"]["actions"]}
+        body_map = screens["question_body_map"]
+        body_actions = {item["id"]: item for item in body_map["actions"]}
+        self.assertEqual(notes_actions["open_body_map"]["users"], 2)
+        self.assertEqual(notes_actions["open_body_map"]["counting_mode"], "interaction")
+        self.assertEqual(body_actions["return_with_selection"]["users"], 1)
+        self.assertEqual(body_actions["return_without_selection"]["users"], 1)
+        self.assertIn("question_notes", {
+            item["screen_id"] for item in body_map["incoming_transitions"]
+        })
+        self.assertIn("question_notes", {
+            item["screen_id"] for item in body_map["outgoing_transitions"]
+        })
+
     def test_metric2_reports_skipped_examinations_completion_screen(self):
         events = []
         for index, definition in enumerate(analytics._metric2_screen_definitions()):
@@ -515,7 +684,7 @@ class AnalyticsTests(unittest.TestCase):
                 "event_name": "onboarding_screen_viewed",
                 "properties": {"screen": definition["id"], "context": "onboarding"},
             })
-            if definition["id"] == "exam_offer":
+            if definition["id"] == "exam_selection":
                 break
         events.extend([
             {"event_id": "metric-skip-objection", "session_id": "metric-session-skip", "event_name": "onboarding_screen_viewed", "properties": {"screen": "exam_objection", "context": "onboarding"}},

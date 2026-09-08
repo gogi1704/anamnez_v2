@@ -1499,7 +1499,7 @@ def _manager_profile(conn: sqlite3.Connection, chel_id: str) -> dict:
             "conditions": [], "medications": [], "allergies": [],
             "smoking": "unknown", "alcohol": "unknown", "activity": "unknown",
             "blood_pressure": "unknown", "blood_sugar": "unknown",
-            "dark_in_eyes": "unknown", "joint_pain": "unknown", "fatigue": "unknown",
+            "driving_time": "unknown", "dark_in_eyes": "unknown", "joint_pain": "unknown", "fatigue": "unknown",
             "tube_number": "", "notes": "", "updated_at": None,
         }
     result = dict(row)
@@ -2260,7 +2260,23 @@ def apply_yookassa_status(order_id: str, payment: dict) -> dict:
             or str(metadata.get("order_id", "")) != row["id"]
         ):
             raise ValueError("Сумма или реквизиты платежа не совпадают с заказом")
+        current_status = str(row["status"] or "")
+        terminal_statuses = {"succeeded", "canceled"}
+        status_rank = {
+            "creating": -2, "abandoned": -1, "pending": 0,
+            "waiting_for_capture": 1, "succeeded": 2, "canceled": 2,
+        }
+        if (
+            current_status in terminal_statuses
+            or status_rank.get(status, -1) < status_rank.get(current_status, -1)
+        ):
+            # Provider notifications and status checks may arrive out of order.
+            # A delayed pending/canceled response must never undo a confirmed
+            # payment, and a final provider state must remain final locally.
+            return _public_payment_order(row)
         paid = status == "succeeded" and bool(payment.get("paid"))
+        if status == "succeeded" and not paid:
+            raise ValueError("ЮKassa вернула неподтверждённый успешный платёж")
         conn.execute(
             """UPDATE payment_orders SET status = ?, paid = ?, test = ?, updated_at = ?,
                 last_error = CASE WHEN ? = 'canceled' THEN ? ELSE last_error END,
@@ -3293,6 +3309,7 @@ def init_db() -> None:
                 activity TEXT NOT NULL DEFAULT 'unknown',
                 blood_pressure TEXT NOT NULL DEFAULT 'unknown',
                 blood_sugar TEXT NOT NULL DEFAULT 'unknown',
+                driving_time TEXT NOT NULL DEFAULT 'unknown',
                 dark_in_eyes TEXT NOT NULL DEFAULT 'unknown',
                 joint_pain TEXT NOT NULL DEFAULT 'unknown',
                 fatigue TEXT NOT NULL DEFAULT 'unknown',
@@ -3698,6 +3715,7 @@ def init_db() -> None:
                     allergies TEXT NOT NULL DEFAULT '[]', smoking TEXT NOT NULL DEFAULT 'unknown',
                     alcohol TEXT NOT NULL DEFAULT 'unknown', activity TEXT NOT NULL DEFAULT 'unknown',
                     blood_pressure TEXT NOT NULL DEFAULT 'unknown', blood_sugar TEXT NOT NULL DEFAULT 'unknown',
+                    driving_time TEXT NOT NULL DEFAULT 'unknown',
                     dark_in_eyes TEXT NOT NULL DEFAULT 'unknown', joint_pain TEXT NOT NULL DEFAULT 'unknown',
                     fatigue TEXT NOT NULL DEFAULT 'unknown', tube_number TEXT NOT NULL DEFAULT '',
                     notes TEXT NOT NULL DEFAULT '', updated_at TEXT NOT NULL,
@@ -3708,15 +3726,15 @@ def init_db() -> None:
                 """INSERT INTO user_profile
                 (chel_id, preferred_name, company_inn, age, sex, height_cm, weight_kg, pregnancy, conditions,
                  medications, allergies, smoking, alcohol, activity, blood_pressure, blood_sugar,
-                 dark_in_eyes, joint_pain, fatigue, notes, updated_at)
+                 driving_time, dark_in_eyes, joint_pain, fatigue, notes, updated_at)
                 SELECT 'chel_legacy', preferred_name, '', age, sex, height_cm, weight_kg, pregnancy,
                  conditions, medications, allergies, smoking, alcohol, activity, blood_pressure,
-                 blood_sugar, dark_in_eyes, joint_pain, fatigue, notes, updated_at
+                 blood_sugar, 'unknown', dark_in_eyes, joint_pain, fatigue, notes, updated_at
                 FROM user_profile_legacy WHERE id = 1"""
             )
             conn.execute("DROP TABLE user_profile_legacy")
             profile_columns = {row[1] for row in conn.execute("PRAGMA table_info(user_profile)").fetchall()}
-        for name in ("alcohol", "activity", "blood_pressure", "blood_sugar", "dark_in_eyes", "joint_pain", "fatigue"):
+        for name in ("alcohol", "activity", "blood_pressure", "blood_sugar", "driving_time", "dark_in_eyes", "joint_pain", "fatigue"):
             if name not in profile_columns:
                 conn.execute(f"ALTER TABLE user_profile ADD COLUMN {name} TEXT NOT NULL DEFAULT 'unknown'")
         if "tube_number" not in profile_columns:
@@ -4402,7 +4420,7 @@ def get_profile() -> dict:
             "medications": [], "allergies": [], "smoking": "unknown", "notes": "",
             "alcohol": "unknown", "activity": "unknown", "blood_pressure": "unknown",
             "blood_sugar": "unknown", "dark_in_eyes": "unknown", "joint_pain": "unknown",
-            "fatigue": "unknown", "tube_number": "",
+            "driving_time": "unknown", "fatigue": "unknown", "tube_number": "",
             "updated_at": None,
         }
     result = dict(row)
@@ -4426,6 +4444,7 @@ def save_profile(profile: dict) -> dict:
         str(profile.get("smoking", "unknown"))[:30],
         str(profile.get("alcohol", "unknown"))[:30], str(profile.get("activity", "unknown"))[:30],
         str(profile.get("blood_pressure", "unknown"))[:30], str(profile.get("blood_sugar", "unknown"))[:30],
+        str(profile.get("driving_time", "unknown"))[:30],
         str(profile.get("dark_in_eyes", "unknown"))[:30], str(profile.get("joint_pain", "unknown"))[:30],
         str(profile.get("fatigue", "unknown"))[:30],
         str(profile.get("tube_number", ""))[:80],
@@ -4434,13 +4453,14 @@ def save_profile(profile: dict) -> dict:
     with _write_lock, connection() as conn:
         conn.execute(
             """INSERT INTO user_profile
-            (chel_id, preferred_name, company_inn, age, sex, height_cm, weight_kg, pregnancy, conditions, medications, allergies, smoking, alcohol, activity, blood_pressure, blood_sugar, dark_in_eyes, joint_pain, fatigue, tube_number, notes, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            (chel_id, preferred_name, company_inn, age, sex, height_cm, weight_kg, pregnancy, conditions, medications, allergies, smoking, alcohol, activity, blood_pressure, blood_sugar, driving_time, dark_in_eyes, joint_pain, fatigue, tube_number, notes, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(chel_id) DO UPDATE SET preferred_name=excluded.preferred_name, company_inn=excluded.company_inn, age=excluded.age,
             sex=excluded.sex, height_cm=excluded.height_cm, weight_kg=excluded.weight_kg,
             pregnancy=excluded.pregnancy, conditions=excluded.conditions, medications=excluded.medications,
             allergies=excluded.allergies, smoking=excluded.smoking, alcohol=excluded.alcohol,
             activity=excluded.activity, blood_pressure=excluded.blood_pressure, blood_sugar=excluded.blood_sugar,
+            driving_time=excluded.driving_time,
             dark_in_eyes=excluded.dark_in_eyes, joint_pain=excluded.joint_pain, fatigue=excluded.fatigue,
             tube_number=excluded.tube_number, notes=excluded.notes, updated_at=excluded.updated_at""",
             (current_chel_id(), *values),

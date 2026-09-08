@@ -17,7 +17,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/static/styles.css?v=20260906-consultations-v1">
+  <link rel="stylesheet" href="/static/styles.css?v=20260908-onboarding-chat-guard-v4">
   <link rel="stylesheet" href="/static/rich-text.2bf1f5fab764.css">
 </head>
 <body>
@@ -392,6 +392,9 @@
       <p>Нажмите на область, затем опишите ощущение. Сохранённая отметка будет доступна всем врачам сервиса.</p>
       <div class="body-map-layout">
         <section class="body-picker">
+          <div class="body-map-step-heading active" id="bodyRegionStep">
+            <span>1</span><div><strong>Выберите область тела</strong><small>Нажмите на нужную область на изображении</small></div><i aria-hidden="true">✓</i>
+          </div>
           <div class="body-view-tabs" role="tablist" aria-label="Вид тела">
             <button class="selected" data-body-view="front" role="tab">Спереди</button>
             <button data-body-view="back" role="tab">Со спины</button>
@@ -461,7 +464,10 @@
           <div class="body-map-legend"><span><i></i> Нажмите на область</span><span><i class="saved"></i> Есть активная отметка</span></div>
         </section>
         <section class="symptom-form">
-          <div class="selected-body-region" id="selectedBodyRegion"><span>1</span><div><small>Выбранная область</small><strong>Нажмите на карту</strong></div></div>
+          <div class="body-map-step-heading" id="bodySymptomStep">
+            <span>2</span><div><strong>Укажите ощущение</strong><small>Выберите наиболее подходящий вариант</small></div><i aria-hidden="true">✓</i>
+          </div>
+          <div class="selected-body-region" id="selectedBodyRegion"><span>—</span><div><small>Выбранная область</small><strong>Нажмите на карту</strong></div></div>
           <fieldset id="symptomTypeField" disabled><legend>Что вы ощущаете?</legend><div class="symptom-choice-grid" id="symptomTypeChoices">
             <button type="button" data-symptom-type="Боль">Боль</button><button type="button" data-symptom-type="Жжение">Жжение</button>
             <button type="button" data-symptom-type="Онемение">Онемение</button><button type="button" data-symptom-type="Покалывание">Покалывание</button>
@@ -470,17 +476,30 @@
             <button type="button" data-symptom-type="Другое">Другое</button>
           </div></fieldset>
           <label class="field-label custom-symptom-field hidden" id="customSymptomField">Опишите симптом своими словами<input id="customSymptomText" maxlength="100" placeholder="Например: пульсация, чувство давления или спазм"></label>
-          <label class="intensity-field">Интенсивность <strong id="symptomIntensityValue">5 из 10</strong><input id="symptomIntensity" type="range" min="1" max="10" value="5"></label>
-          <div class="symptom-field-grid">
-            <label class="field-label">Когда началось?<input id="symptomStartedAt" type="datetime-local"></label>
-            <label class="field-label">Как давно?<select id="symptomDuration"><option value="">Не указано</option><option value="minutes">Минуты</option><option value="hours">Часы</option><option value="days">Дни</option><option value="weeks">Недели</option><option value="months">Месяцы</option></select></label>
+          <div class="body-map-step-heading" id="bodyDetailsStep">
+            <span>3</span><div><strong>Добавьте подробности</strong><small>Уточните интенсивность и особенности симптома</small></div><i aria-hidden="true">✓</i>
           </div>
-          <label class="field-label">Когда проявляется?<select id="symptomPattern"><option value="constant">Постоянно</option><option value="episodes">Приступами</option><option value="movement">При движении</option><option value="touch">При прикосновении</option><option value="unknown">Не уверен(а)</option></select></label>
-          <label class="field-label">Дополнительные детали<textarea id="symptomNotes" rows="3" maxlength="1000" placeholder="Что усиливает или уменьшает симптом, куда он распространяется"></textarea></label>
-          <div class="symptom-safety-note">Карта помогает собрать контекст, но не ставит диагноз. При резком ухудшении используйте срочную медицинскую помощь.</div>
-          <button class="primary-button" id="saveBodySymptomButton" disabled>Сохранить отметку</button>
+          <div class="body-map-details-step is-locked" id="bodyMapDetailsFields">
+            <label class="intensity-field">Интенсивность <strong id="symptomIntensityValue">5 из 10</strong><input id="symptomIntensity" type="range" min="1" max="10" value="5"></label>
+            <div class="symptom-field-grid">
+              <label class="field-label">Когда началось?<input id="symptomStartedAt" type="datetime-local"></label>
+              <label class="field-label">Как давно?<select id="symptomDuration"><option value="">Не указано</option><option value="minutes">Минуты</option><option value="hours">Часы</option><option value="days">Дни</option><option value="weeks">Недели</option><option value="months">Месяцы</option></select></label>
+            </div>
+            <label class="field-label">Когда проявляется?<select id="symptomPattern"><option value="constant">Постоянно</option><option value="episodes">Приступами</option><option value="movement">При движении</option><option value="touch">При прикосновении</option><option value="unknown">Не уверен(а)</option></select></label>
+            <label class="field-label">Дополнительные детали<textarea id="symptomNotes" rows="3" maxlength="1000" placeholder="Что усиливает или уменьшает симптом, куда он распространяется"></textarea></label>
+            <div class="symptom-safety-note">Карта помогает собрать контекст, но не ставит диагноз. При резком ухудшении используйте срочную медицинскую помощь.</div>
+            <button class="primary-button" id="saveBodySymptomButton" disabled>Сохранить отметку</button>
+          </div>
         </section>
       </div>
+      <section class="body-map-active-section" id="bodyMapActiveSection" aria-labelledby="bodyMapActiveTitle">
+        <div class="body-map-active-heading">
+          <div><strong id="bodyMapActiveTitle">Активные отметки</strong><small>Здесь можно удалить отметку, которая больше не актуальна</small></div>
+          <span id="bodyMapActiveCount">0</span>
+        </div>
+        <div class="body-map-active-list" id="bodyMapActiveList"></div>
+      </section>
+      <button class="secondary-button body-map-bottom-close" id="bodyMapBottomClose" type="button">Закрыть</button>
     </div>
   </div>
 
@@ -518,6 +537,7 @@
         <label class="field-label">Активность<select id="profileActivity"><option value="unknown">Не указано</option><option value="low">Низкая</option><option value="moderate">Средняя</option><option value="high">Высокая</option></select></label>
         <label class="field-label">Давление<select id="profilePressure"><option value="unknown">Не знаю</option><option value="normal">Обычно в норме</option><option value="high">Бывает повышенным</option><option value="low">Бывает пониженным</option><option value="unstable">Сильно меняется</option></select></label>
         <label class="field-label">Сахар крови<select id="profileSugar"><option value="unknown">Не знаю</option><option value="normal">Был в норме</option><option value="high">Бывал повышен</option></select></label>
+        <label class="field-label">Время за рулём<select id="profileDrivingTime"><option value="unknown">Не указано</option><option value="none">Не управляю автомобилем</option><option value="up_to_1h">До 1 часа</option><option value="1_to_2h">От 1 до 2 часов</option><option value="over_2h">Более 2 часов</option></select></label>
         <label class="field-label">Длительная усталость<select id="profileFatigue"><option value="unknown">Не уверен(а)</option><option value="no">Нет</option><option value="yes">Да</option></select></label>
         <label class="field-label">Боли в суставах<select id="profileJoints"><option value="unknown">Не уверен(а)</option><option value="no">Нет</option><option value="yes">Да</option></select></label>
         <label class="field-label wide">Хронические заболевания<textarea id="profileConditions" rows="3" placeholder="Одно на строку"></textarea></label>
@@ -599,6 +619,6 @@
   <script src="/static/metrika.js?v=20260829-interpret-profile-v1"></script>
   <script src="/static/agents.js?v=20260829-interpret-profile-v1"></script>
   <script src="/static/rich-text.js?v=20260829-interpret-profile-v1"></script>
-  <script src="/static/app.js?v=20260906-consultations-v1"></script>
+  <script src="/static/app.js?v=20260908-onboarding-chat-guard-v4"></script>
 </body>
 </html>

@@ -453,6 +453,7 @@ function valueLabel(key, value) {
     not_applicable:'Не применимо', never:'Никогда', former:'Раньше', current:'Сейчас',
     rarely:'Редко', weekly:'Еженедельно', often:'Часто', low:'Низкая',
     moderate:'Средняя', high:'Высокая', normal:'Норма', unstable:'Нестабильное',
+    none:'Не управляет автомобилем', up_to_1h:'До 1 часа', '1_to_2h':'От 1 до 2 часов', over_2h:'Более 2 часов',
     unknown:'Не указано',
   };
   if (value === null || value === undefined || value === '') return 'Не указано';
@@ -472,6 +473,7 @@ function renderUserDetails() {
     ['age','Возраст'], ['sex','Пол'], ['height_cm','Рост'], ['weight_kg','Вес'],
     ['smoking','Курение'], ['alcohol','Алкоголь'], ['activity','Активность'],
     ['blood_pressure','Давление'], ['blood_sugar','Сахар'], ['fatigue','Утомляемость'],
+    ['driving_time','Время за рулём'],
   ];
   $('#profileDetails').innerHTML = fields.map(([key,label]) =>
     `<div class="detail-item"><small>${label}</small><strong>${escapeHtml(valueLabel(key, profile[key]))}</strong></div>`).join('');

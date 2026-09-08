@@ -649,6 +649,16 @@ async function adminFetchRequest(path, token, options = {}, retryAttempt = 0) {
   return data;
 }
 
+async function adminReportFetch(path) {
+  const startedAt = Date.now();
+  while (Date.now() - startedAt < 120000) {
+    const data = await adminFetch(path);
+    if (data?.status !== 'building') return data;
+    await wait(Math.max(250, Math.min(Number(data.retry_after_ms) || 750, 2000)));
+  }
+  throw new Error('Расчёт занимает слишком много времени. Попробуйте обновить отчёт ещё раз.');
+}
+
 function showManagerStatus(message, error = false) {
   const status = $('#managerFormStatus');
   status.textContent = message;
@@ -1141,7 +1151,7 @@ async function loadAnalytics() {
       if ($(selector).value) params.set(key,$(selector).value);
     }
     appendDateRange(params, '#analyticsDateFrom', '#analyticsDateTo');
-    renderAnalytics(await adminFetch(`/api/admin/analytics?${params}`));
+    renderAnalytics(await adminReportFetch(`/api/admin/analytics?${params}`));
   }, 'Считаем воронку и поведение…');
 }
 
@@ -1168,12 +1178,13 @@ const metric2QuestionContent = [
   {key:'blood_pressure',title:'Как вы оцениваете своё давление?',lead:'Если не измеряли или не уверены, выберите «Не знаю».',choices:['Обычно в норме','Бывает повышенным','Бывает пониженным','Сильно меняется','Не знаю']},
   {key:'dark_in_eyes',title:'Темнеет ли в глазах при резком подъёме?',lead:'Например, когда быстро встаёте с кровати или стула.',choices:['Нет','Да','Не уверен(а)']},
   {key:'blood_sugar',title:'Знаете ли вы уровень сахара в крови?',lead:'Это не оценка диагноза — только уже известная вам информация.',choices:['Был в норме','Бывал повышен','Не измерял(а) / не знаю']},
+  {key:'driving_time',title:'Сколько в среднем времени в день вы проводите за рулём?',lead:'Выберите наиболее близкий вариант для обычного дня.',choices:['Не управляю автомобилем','До 1 часа','От 1 до 2 часов','Более 2 часов']},
   {key:'joint_pain',title:'Бывают боли или отёчность суставов?',lead:'В том числе при нагрузке или смене погоды.',choices:['Нет','Да','Не уверен(а)']},
   {key:'fatigue',title:'Беспокоит длительная усталость?',lead:'Имеется в виду усталость, которая сохраняется после обычного отдыха.',choices:['Нет','Да','Не уверен(а)']},
   {key:'conditions',title:'Есть хронические заболевания?',lead:'Напишите по одному на строку. Если нет — этот шаг можно пропустить.',placeholder:'Например:\nГипертония\nАстма',optional:true,textarea:true},
   {key:'medications',title:'Какие лекарства принимаете постоянно?',lead:'Название и дозировка, если известна. Шаг можно пропустить.',placeholder:'По одному препарату на строку',optional:true,textarea:true},
   {key:'allergies',title:'Есть аллергии?',lead:'Укажите лекарства, продукты или другие известные аллергены. Шаг можно пропустить.',placeholder:'По одному аллергену на строку',optional:true,textarea:true},
-  {key:'notes',title:'Есть ли у вас жалобы?',lead:'Введите в одном сообщении всё, что вас тревожит: проблему, симптомы и что вы принимаете в связи с ними. Если жалоб нет, этот вопрос можно пропустить.',placeholder:'Например: две недели болит голова по вечерам, принимаю ибупрофен',optional:true,textarea:true},
+  {key:'notes',title:'Есть ли у вас жалобы?',lead:'Введите в одном сообщении всё, что вас тревожит: проблему, симптомы и что вы принимаете в связи с ними. Если жалоб нет, этот вопрос можно пропустить. Также можно отметить область тела и симптом на карте.',placeholder:'Например: две недели болит голова по вечерам, принимаю ибупрофен',optional:true,textarea:true},
 ];
 
 const metric2ExamAudiences = {
@@ -1190,6 +1201,7 @@ function metric2PreviewMarkup(screen, large = false) {
   else if (kind === 'registration') content = `<div class="metric2-mock-brand"><span>К</span><div><strong>Консилиум</strong><small>Ваше личное пространство здоровья</small></div></div><small>БЕЗ ПАРОЛЯ</small><b>Войдите через удобный мессенджер</b><p>Так анкета, история диалогов и результаты останутся доступны на другом устройстве и после очистки браузера.</p>${messengerAction('➤','Продолжить с Telegram')}${messengerAction('М','Продолжить с MAX')}<span class="metric2-mock-link">Войти анонимно</span><p class="metric2-mock-note">Консилиум не получает пароль от мессенджера. Сохраняется только его технический ID для восстановления доступа.</p>`;
   else if (kind === 'warning') content = `<div class="metric2-mock-modal"><span class="metric2-mock-close">×</span><span class="metric2-mock-icon">!</span><b>Продолжить без мессенджера?</b><p>Данные будут связаны только с этим браузером.</p><ul><li>после очистки cookies доступ может потеряться;</li><li>на другом телефоне или компьютере история не откроется;</li><li>восстановить анонимный профиль служба поддержки не сможет.</li></ul><p class="metric2-mock-note">Мессенджер можно будет привязать позже без повторного заполнения анкеты.</p><div class="metric2-mock-actions">${action('Назад',true)}${action('Понимаю, продолжить')}</div></div>`;
   else if (kind === 'appearance') content = `<small>ПЕРЕД НАЧАЛОМ</small><b>Какой размер текста вам удобен?</b><p>Вы увидите изменение сразу. Позже размер можно поменять через меню функций.</p><span class="metric2-mock-choice"><b>Аа &nbsp; Обычный</b><small>Чуть крупнее базового интерфейса</small></span><span class="metric2-mock-choice"><b>Аа &nbsp; Крупный</b><small>Комфортно для большинства экранов</small></span><span class="metric2-mock-choice selected"><b>Аа &nbsp; Очень крупный</b><small>Максимальная читаемость</small></span>${action('Продолжить')}`;
+  else if (kind === 'questionnaire_body_map') content = `<div class="metric2-mock-modal"><span class="metric2-mock-close">×</span><span class="metric2-mock-icon">◉</span><b>Интерактивная карта тела</b><p>Пользователь проходит три понятных этапа и возвращается к вопросу о жалобах.</p><span class="metric2-mock-info"><b>1. Выберите область тела</b><small>Нажмите на нужную область на изображении</small></span><span class="metric2-mock-info"><b>2. Укажите ощущение</b><small>Выберите наиболее подходящий вариант</small></span><span class="metric2-mock-info"><b>3. Добавьте подробности</b><small>Уточните интенсивность и особенности симптома</small></span>${action('Сохранить отметку')}${action('Закрыть')}</div>`;
   else if (kind.startsWith('question_')) {
     const index = metric2QuestionContent.findIndex(item => item.key === screen.question_key);
     const question = metric2QuestionContent[index] || {title:screen.title,lead:'',placeholder:''};
@@ -1199,16 +1211,16 @@ function metric2PreviewMarkup(screen, large = false) {
     const nextLabel = question.optional ? 'Пропустить' : 'Продолжить';
     const controls = index > 0 ? `<div class="metric2-mock-actions">${action('Назад',true)}${action(nextLabel)}</div>` : action(nextLabel);
     const notMedical = question.key === 'company_inn' ? action('Я не на мед-осмотр',true) : '';
-    content = `<small>ШАГ ${index + 1} ИЗ ${metric2QuestionContent.length}</small><b>${escapeHtml(question.title)}</b><p>${escapeHtml(question.lead)}</p>${control}${controls}${notMedical}`;
-  } else if (kind === 'exam_offer') content = `<small>ПОСЛЕ АНКЕТЫ</small><b>Дополнительные обследования</b><blockquote><strong>Давайте честно: здоровых людей не бывает.</strong><br>У каждого есть своё слабое место, и лучше бы его знать.<br>Пара быстрых обследований — и жить спокойнее.</blockquote><p>Чтобы получить более полную информацию о состоянии своего здоровья, вы можете пройти дополнительные обследования во время медосмотра.</p><p class="metric2-mock-note"><b>Можно пригласить родственника или друга</b> пройти один или несколько чек-апов. Позаботьтесь о близких — отправьте им ссылку на сервис.</p><span class="metric2-mock-info"><b>◫ Посмотреть описания чек-апов</b><small>Что входит, кому и для чего они нужны →</small></span><span class="metric2-mock-question"><b>Хотели бы вы сдать дополнительные анализы во время медосмотра на работе?</b><small>Выберите соответствующий вариант.</small></span>${action('Да, выбрать анализы')}${action('Нет, не сейчас',true)}<span class="metric2-mock-link">← Изменить ответы анкеты</span>`;
-  else if (kind === 'exam_catalog') {
+    const bodyMapAction = question.key === 'notes' ? action('Указать на карте тела →',true) : '';
+    content = `<small>ШАГ ${index + 1} ИЗ ${metric2QuestionContent.length}</small><b>${escapeHtml(question.title)}</b><p>${escapeHtml(question.lead)}</p>${control}${bodyMapAction}${controls}${notMedical}`;
+  } else if (kind === 'exam_catalog') {
     const cards = examinations.map(test => `<span class="metric2-mock-catalog-card"><header><strong>${escapeHtml(test.name)}</strong><em>${Number(test.price || 0).toLocaleString('ru-RU')} ₽</em></header><small>КОМУ ПОДХОДИТ</small><p>${escapeHtml(metric2ExamAudiences[test.id] || test.description || 'Тем, кто хочет получить больше информации о состоянии здоровья.')}</p><small>ДЛЯ ЧЕГО</small><p>${escapeHtml(test.description || 'Для дополнительной оценки показателей здоровья.')}</p><small>ЧТО ВХОДИТ</small><p>${escapeHtml(test.includes || 'Состав уточняется')}</p></span>`).join('');
     content = `<small>ДОСТУПНЫЕ ЧЕК-АПЫ</small><b>Что можно проверить</b><p>Краткое описание поможет сориентироваться. Необходимость обследований и интерпретацию результатов лучше обсуждать с врачом.</p>${cards}${action('Выбрать анализы')}${action('Вернуться к вопросу',true)}`;
   } else if (kind === 'exam_objection') content = `<small>ПЕРЕД ТЕМ КАК ПРОДОЛЖИТЬ</small><b>После обследований вы получите больше, чем результаты</b><p>Врач высшей категории <strong>Татьяна Витальевна</strong> подготовит подробную расшифровку сложных показателей.</p><p>И самое главное — вы получите <strong>бесплатную консультацию</strong> по результатам.</p><p>Всё будет доступно в этом сервисе — без очередей и доплат за расшифровку.</p><span class="metric2-mock-benefit"><b>✓ Ничего дополнительно делать не нужно</b><small>Выберите обследования сейчас, а в день медосмотра сдайте всё вместе.</small></span><span class="metric2-mock-benefit"><b>✓ Один визит вместо отдельной поездки</b><small>Вы уже будете на осмотре — дополнительные анализы можно сдать за один раз.</small></span><span class="metric2-mock-benefit"><b>✓ Бесплатная консультация специалиста</b><small>После готовности дополнительных анализов врач высшей категории поможет разобраться в результатах.</small></span><span class="metric2-mock-benefit"><b>✓ Не придётся записываться отдельно</b><small>Если отложить обследования, позже могут потребоваться отдельная запись и поездка.</small></span><p class="metric2-mock-note">Дополнительные обследования добровольны — окончательное решение остаётся за вами.</p>${action('Выбрать обследования')}${action('Всё равно отказаться',true)}`;
   else if (kind === 'exam_selection') {
     const cards = examinations.map((test,index) => `<span class="metric2-mock-test${index === 0 ? ' selected' : ''}"><strong>${index === 0 ? '✓ ' : ''}${escapeHtml(test.name)}</strong><em>${Number(test.price || 0).toLocaleString('ru-RU')} ₽</em><small>${escapeHtml(test.description || '')}</small><small>${escapeHtml(test.includes || '')}</small></span>`).join('');
     const selected = examinations[0];
-    content = `<small>ВЫБОР АНАЛИЗОВ</small><b>Выберите интересующие наборы</b><p>Рекомендации отмечены по ответам анкеты и не являются назначением.</p>${cards}<span class="metric2-mock-total">Выбрано: ${selected ? 1 : 0}<b>${Number(selected?.price || 0).toLocaleString('ru-RU')} ₽</b></span><div class="metric2-mock-actions">${action('Назад',true)}${action('Далее')}</div>${action('Ничего не выбирать',true)}`;
+    content = `<small>ПОСЛЕ АНКЕТЫ</small><b>Персональные рекомендации по итогам анкеты</b><p>Мы учли ответы пользователя. Ниже показаны подходящие обследования.</p><span class="metric2-mock-info"><b>🩸 Одна проба крови</b><small>Дополнительные чек-апы делаются из той же пробы, без нового укола.</small></span><span class="metric2-mock-info"><b>🩺 После результатов</b><small>Рекомендации медицинского ИИ и чат с врачом прямо в личном кабинете.</small></span>${cards}<span class="metric2-mock-total">Выбрано: ${selected ? 1 : 0}<b>${Number(selected?.price || 0).toLocaleString('ru-RU')} ₽</b></span><div class="metric2-mock-actions">${action('Назад',true)}${action('Далее')}</div>${action('Ничего не выбирать',true)}`;
   } else if (kind === 'payment') {
     const selected = examinations[0];
     content = `<small>ПОСЛЕДНИЙ ШАГ</small><b>Проверим заказ</b><p>Выберите, как вам будет удобнее оплатить дополнительные обследования.</p><span class="metric2-mock-test"><strong>${escapeHtml(selected?.name || 'Выбранное обследование')}</strong><em>${Number(selected?.price || 0).toLocaleString('ru-RU')} ₽</em></span><span class="metric2-mock-total">Итого <b>${Number(selected?.price || 0).toLocaleString('ru-RU')} ₽</b></span>${action('Оплатить онлайн')}${action('Оплатить на медосмотре')}${action('← Вернуться к обследованиям',true)}`;
@@ -1233,14 +1245,13 @@ function metric2PreviewMarkup(screen, large = false) {
   const stage = kind === 'appearance' ? 'Настройка'
     : kind.startsWith('question_') ? 'Анкета'
     : kind === 'exam_catalog' ? 'Описание чек-апов'
-    : ['exam_offer','exam_objection','exam_selection'].includes(kind) ? 'Обследования'
+    : ['exam_objection','exam_selection'].includes(kind) ? 'Обследования'
     : ['payment','payment_processing','payment_success','payment_result','payment_unavailable'].includes(kind) ? 'Оплата'
     : ['completion','completion_skipped'].includes(kind) ? 'Готово'
     : kind.startsWith('result_') ? (screen.stage || 'Результаты').replace('Результаты · ', '')
     : (screen.stage || '').split(' · ')[0] || 'Анкета';
   const progress = kind === 'appearance' ? 2
     : kind.startsWith('question_') ? 5 + Math.round((Math.max(0,questionIndex) / metric2QuestionContent.length) * 60)
-    : kind === 'exam_offer' ? 72
     : ['exam_catalog','exam_objection'].includes(kind) ? 76
     : kind === 'exam_selection' ? 80
     : kind === 'payment' ? 92
@@ -1453,7 +1464,7 @@ async function loadMetric2(flow = metric2ActiveFlow) {
     }
     appendDateRange(params, '#metric2DateFrom', '#metric2DateTo');
     const requestedFlow = metric2ActiveFlow;
-    const report = await adminFetch(`/api/admin/metric2?${params}`);
+    const report = await adminReportFetch(`/api/admin/metric2?${params}`);
     if (requestedFlow === metric2ActiveFlow) renderMetric2(report);
   }, metric2ActiveFlow === 'result' ? 'Строим путь получения результатов…' : 'Строим обычный стартовый путь…');
 }
