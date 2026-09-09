@@ -538,7 +538,13 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                     _fulfill_consultation_payment(updated)
                     analytics.record_server_event(
                         order["chel_id"], "payment_completed",
-                        {"provider": "yookassa", "result": "succeeded"},
+                        {
+                            "provider": "yookassa", "result": "succeeded",
+                            "order_type": str(
+                                updated.get("order_type")
+                                or order.get("order_type") or "examinations"
+                            ),
+                        },
                     )
                     bitrix_payments.notify_verified_payment(
                         order, verified, db.payment_customer_profile(order["chel_id"]),

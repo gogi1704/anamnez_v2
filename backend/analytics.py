@@ -362,7 +362,18 @@ def _metric2_screen_definitions() -> list[dict]:
             "kind": "payment_processing", "description": "Экран после возвращения со страницы ЮKassa, пока сервис проверяет окончательный статус.",
             "parent_id": "payment", "branch": True,
             "legacy_reach": [_metric2_spec("payment_return_viewed")],
-            "actions": [],
+            "actions": [
+                {
+                    "id": "confirmed", "label": "Оплата подтверждена",
+                    "target": "payment_success",
+                    "legacy": [_metric2_spec("payment_completed", result="succeeded")],
+                },
+                {
+                    "id": "not_completed", "label": "Оплата не завершена",
+                    "target": "payment_result",
+                    "legacy": [_metric2_spec("payment_result_viewed")],
+                },
+            ],
         },
         {
             "id": "payment_success", "title": "Онлайн-оплата подтверждена", "stage": "Оплата · успешно",
@@ -1546,6 +1557,74 @@ def _metric2_report_uncached(
                         current = final_group_action.get(key)
                         if current is None or order_key >= current[0]:
                             final_group_action[key] = (order_key, action["id"])
+
+        # A successful YooKassa webhook is the authoritative payment outcome.
+        # The customer is not required to return from the provider to our
+        # return_url, so a browser-only ``payment_success_viewed`` counter loses
+        # valid payments. Enrich the route from paid examination orders and only
+        # attach the outcome to users whose final choice was online payment.
+        successful_exam_payments: dict[str, str] = {}
+        if flow == "standard":
+            main_conn = None
+            try:
+                payment_start, payment_end = _payment_date_bounds(
+                    period, date_from, date_to,
+                )
+                main_conn = sqlite3.connect(settings.database_path, timeout=5)
+                payment_columns = {
+                    str(row[1])
+                    for row in main_conn.execute(
+                        "PRAGMA table_info(payment_orders)"
+                    ).fetchall()
+                }
+                clauses = ["status='succeeded'", "paid=1"]
+                payment_params: list[Any] = []
+                if "order_type" in payment_columns:
+                    clauses.append("order_type='examinations'")
+                if payment_start:
+                    clauses.append("COALESCE(paid_at,updated_at)>=?")
+                    payment_params.append(payment_start)
+                if payment_end:
+                    clauses.append("COALESCE(paid_at,updated_at)<?")
+                    payment_params.append(payment_end)
+                for chel_id, paid_at in main_conn.execute(
+                    "SELECT chel_id,MAX(COALESCE(paid_at,updated_at)) "
+                    "FROM payment_orders WHERE " + " AND ".join(clauses) +
+                    " GROUP BY chel_id",
+                    payment_params,
+                ).fetchall():
+                    successful_exam_payments[str(chel_id or "")] = str(paid_at or "")
+            except sqlite3.Error:
+                successful_exam_payments = {}
+            finally:
+                if main_conn is not None:
+                    main_conn.close()
+
+        online_payment_users = {
+            chel_id
+            for (screen_id, group_id, chel_id), (_, action_id)
+            in final_group_action.items()
+            if screen_id == "payment" and group_id == "final_transition"
+            and action_id == "pay_online"
+        }
+        # Do not let a later consultation payment be mistaken for an
+        # examination payment merely because it uses the same generic event.
+        for key in list(final_group_action):
+            screen_id, group_id, chel_id = key
+            if (
+                screen_id == "payment_processing"
+                and group_id == "final_transition"
+                and chel_id not in online_payment_users
+            ):
+                final_group_action.pop(key, None)
+        for chel_id, paid_at in successful_exam_payments.items():
+            if chel_id not in canonical_paths or chel_id not in online_payment_users:
+                continue
+            order_key = (paid_at, paid_at, 0)
+            key = ("payment_processing", "final_transition", chel_id)
+            current = final_group_action.get(key)
+            if current is None or order_key >= current[0]:
+                final_group_action[key] = (order_key, "confirmed")
 
         # Returning to a screen without making another decision invalidates the
         # action from its previous visit: the user is currently stopped there.

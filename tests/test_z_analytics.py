@@ -731,6 +731,56 @@ class AnalyticsTests(unittest.TestCase):
         self.assertEqual(actions["nothing"]["users"], 1)
         self.assertEqual(set(destinations), {"exam_objection"})
 
+    def test_metric2_uses_paid_order_when_customer_does_not_return_from_yookassa(self):
+        analytics.record_events("CHEL-METRIC-PAID-NO-RETURN", [
+            {
+                "event_id": "paid-no-return-welcome", "session_id": "paid-no-return-session",
+                "event_name": "onboarding_screen_viewed",
+                "properties": {"screen": "welcome", "context": "onboarding"},
+            },
+            {
+                "event_id": "paid-no-return-payment", "session_id": "paid-no-return-session",
+                "event_name": "onboarding_screen_viewed",
+                "properties": {"screen": "payment", "context": "onboarding"},
+            },
+            {
+                "event_id": "paid-no-return-online", "session_id": "paid-no-return-session",
+                "event_name": "onboarding_screen_action",
+                "properties": {
+                    "screen": "payment", "action": "pay_online", "context": "onboarding",
+                },
+            },
+        ])
+        conn = sqlite3.connect(settings.database_path)
+        try:
+            conn.execute(
+                """INSERT INTO payment_orders
+                (id,chel_id,status,amount_kopecks,items,paid,test,created_at,updated_at,paid_at)
+                VALUES (?,?,?,?,?,?,?,?,?,?)""",
+                (
+                    "paid-no-return-order", "CHEL-METRIC-PAID-NO-RETURN", "succeeded",
+                    50000, "[]", 1, 0, "2099-01-01T10:00:00+00:00",
+                    "2099-01-01T10:01:00+00:00", "2099-01-01T10:01:00+00:00",
+                ),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        report = analytics.metric2_report("all")
+        screens = {item["id"]: item for item in report["screens"]}
+        payment_destinations = {
+            item["screen_id"]: item for item in screens["payment"]["outgoing_transitions"]
+        }
+        processing_destinations = {
+            item["screen_id"]: item
+            for item in screens["payment_processing"]["outgoing_transitions"]
+        }
+        self.assertEqual(payment_destinations["payment_processing"]["users"], 1)
+        self.assertEqual(screens["payment_processing"]["users"], 1)
+        self.assertEqual(processing_destinations["payment_success"]["users"], 1)
+        self.assertEqual(screens["payment_success"]["users"], 1)
+
     def test_metric2_tracks_body_map_entry_and_both_return_results(self):
         for suffix, result_action in (
             ("selected", "return_with_selection"),
