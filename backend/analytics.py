@@ -371,7 +371,10 @@ def _metric2_screen_definitions() -> list[dict]:
                 {
                     "id": "not_completed", "label": "Оплата не завершена",
                     "target": "payment_result",
-                    "legacy": [_metric2_spec("payment_result_viewed")],
+                    "legacy": [
+                        _metric2_spec("payment_result_viewed"),
+                        _metric2_spec("payment_completed", result="canceled"),
+                    ],
                 },
             ],
         },
@@ -1563,7 +1566,7 @@ def _metric2_report_uncached(
         # return_url, so a browser-only ``payment_success_viewed`` counter loses
         # valid payments. Enrich the route from paid examination orders and only
         # attach the outcome to users whose final choice was online payment.
-        successful_exam_payments: dict[str, str] = {}
+        exam_payment_outcomes: dict[str, tuple[str, str]] = {}
         if flow == "standard":
             main_conn = None
             try:
@@ -1577,7 +1580,7 @@ def _metric2_report_uncached(
                         "PRAGMA table_info(payment_orders)"
                     ).fetchall()
                 }
-                clauses = ["status='succeeded'", "paid=1"]
+                clauses = ["status IN ('succeeded','canceled','abandoned','failed')"]
                 payment_params: list[Any] = []
                 if "order_type" in payment_columns:
                     clauses.append("order_type='examinations'")
@@ -1587,15 +1590,22 @@ def _metric2_report_uncached(
                 if payment_end:
                     clauses.append("COALESCE(paid_at,updated_at)<?")
                     payment_params.append(payment_end)
-                for chel_id, paid_at in main_conn.execute(
-                    "SELECT chel_id,MAX(COALESCE(paid_at,updated_at)) "
+                payment_rows = main_conn.execute(
+                    "SELECT chel_id,status,paid,COALESCE(paid_at,canceled_at,updated_at) event_at "
                     "FROM payment_orders WHERE " + " AND ".join(clauses) +
-                    " GROUP BY chel_id",
+                    " ORDER BY chel_id,event_at DESC",
                     payment_params,
-                ).fetchall():
-                    successful_exam_payments[str(chel_id or "")] = str(paid_at or "")
+                ).fetchall()
+                for chel_id, status, paid, event_at in payment_rows:
+                    user_id = str(chel_id or "")
+                    outcome = "confirmed" if status == "succeeded" and bool(paid) else "not_completed"
+                    current = exam_payment_outcomes.get(user_id)
+                    # A verified successful charge is final even if an older or
+                    # unrelated failed attempt also exists for the same user.
+                    if current is None or (outcome == "confirmed" and current[0] != "confirmed"):
+                        exam_payment_outcomes[user_id] = (outcome, str(event_at or ""))
             except sqlite3.Error:
-                successful_exam_payments = {}
+                exam_payment_outcomes = {}
             finally:
                 if main_conn is not None:
                     main_conn.close()
@@ -1617,14 +1627,14 @@ def _metric2_report_uncached(
                 and chel_id not in online_payment_users
             ):
                 final_group_action.pop(key, None)
-        for chel_id, paid_at in successful_exam_payments.items():
+        for chel_id, (outcome, event_at) in exam_payment_outcomes.items():
             if chel_id not in canonical_paths or chel_id not in online_payment_users:
                 continue
-            order_key = (paid_at, paid_at, 0)
+            order_key = (event_at, event_at, 0)
             key = ("payment_processing", "final_transition", chel_id)
             current = final_group_action.get(key)
             if current is None or order_key >= current[0]:
-                final_group_action[key] = (order_key, "confirmed")
+                final_group_action[key] = (order_key, outcome)
 
         # Returning to a screen without making another decision invalidates the
         # action from its previous visit: the user is currently stopped there.

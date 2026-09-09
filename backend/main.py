@@ -534,20 +534,29 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                 # from YooKassa with server credentials before changing local state.
                 verified = yookassa.get_payment(provider_id)
                 updated = db.apply_yookassa_status(order["id"], verified)
+                order_type = str(
+                    updated.get("order_type")
+                    or order.get("order_type") or "examinations"
+                )
                 if updated["status"] == "succeeded" and updated.get("paid"):
                     _fulfill_consultation_payment(updated)
                     analytics.record_server_event(
                         order["chel_id"], "payment_completed",
                         {
                             "provider": "yookassa", "result": "succeeded",
-                            "order_type": str(
-                                updated.get("order_type")
-                                or order.get("order_type") or "examinations"
-                            ),
+                            "order_type": order_type,
                         },
                     )
                     bitrix_payments.notify_verified_payment(
                         order, verified, db.payment_customer_profile(order["chel_id"]),
+                    )
+                elif updated["status"] == "canceled":
+                    analytics.record_server_event(
+                        order["chel_id"], "payment_completed",
+                        {
+                            "provider": "yookassa", "result": "canceled",
+                            "order_type": order_type,
+                        },
                     )
                 return self._json(200, {"status": updated["status"]})
             except (ValueError, TypeError, json.JSONDecodeError, UnicodeDecodeError) as exc:
