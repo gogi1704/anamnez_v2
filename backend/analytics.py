@@ -327,7 +327,12 @@ def _metric2_screen_definitions() -> list[dict]:
                     # for historical clients that did not emit select_exam.
                     "implied_by_final_actions": ["continue"],
                 },
-                {"id": "continue", "label": "Далее", "target": "payment", "legacy": [_metric2_spec("examinations_selection_completed")]},
+                {
+                    "id": "continue", "label": "Далее", "target": "payment",
+                    "legacy": [_metric2_spec(
+                        "examinations_selection_completed", min_selected_count=1,
+                    )],
+                },
                 {"id": "back", "label": "Назад", "target": "question_notes", "legacy": [_metric2_spec("funnel_action", action="options_back")]},
                 {"id": "nothing", "label": "Ничего не выбирать", "target": "exam_objection", "legacy": [_metric2_spec("funnel_action", action="nothing_selected")]},
             ],
@@ -1318,7 +1323,8 @@ def _metric2_report_uncached(
 ) -> dict:
     """Return unique-user onboarding paths without storing questionnaire answers.
 
-    Screen reach counts every user once, while the route itself is loop-erased.
+    Screen reach counts every user once, while the final route is derived from
+    the latest decision on each screen and falls back to a loop-erased path.
     For example, ``A -> B -> C -> B -> D`` becomes ``A -> B -> D``.  This keeps
     the fact that C was visited, but prevents a return to B from creating the
     false incomplete edge ``C -> D``.
@@ -1369,10 +1375,17 @@ def _metric2_report_uncached(
         def matches(row: dict, spec: dict) -> bool:
             if row["event"] != spec.get("event"):
                 return False
-            return all(
-                str(row["properties"].get(key, "")) == str(value)
-                for key, value in spec.get("properties", {}).items()
-            )
+            for key, value in spec.get("properties", {}).items():
+                if key == "min_selected_count":
+                    try:
+                        if int(row["properties"].get("selected_count", 0)) < int(value):
+                            return False
+                    except (TypeError, ValueError):
+                        return False
+                    continue
+                if str(row["properties"].get(key, "")) != str(value):
+                    return False
+            return True
 
         rows_by_event: dict[str, list[dict]] = defaultdict(list)
         for row in parsed_rows:
@@ -1471,10 +1484,10 @@ def _metric2_report_uncached(
             }
             for definition in definitions
         }
-        edge_users: dict[tuple[str, str], set[str]] = defaultdict(set)
+        observed_edge_users: dict[tuple[str, str], set[str]] = defaultdict(set)
         for chel_id, path in canonical_paths.items():
             for source_id, target_id in zip(path, path[1:]):
-                edge_users[(source_id, target_id)].add(chel_id)
+                observed_edge_users[(source_id, target_id)].add(chel_id)
         # Loop erasure intentionally removes ordinary returns.  Explicit
         # questionnaire branches can opt in to retaining their observed
         # entry and return edges so their two-way result remains inspectable.
@@ -1484,6 +1497,85 @@ def _metric2_report_uncached(
                 source = definition_by_id.get(source_id, {})
                 target = definition_by_id.get(target_id, {})
                 if source.get("preserve_observed_edges") or target.get("preserve_observed_edges"):
+                    observed_edge_users[(source_id, target_id)].add(chel_id)
+
+        # A screen view describes what happened at some point in the journey,
+        # while an action describes the user's decision. Build route edges from
+        # the latest decision made after the latest visit to that screen. This
+        # prevents an earlier trip to an objection screen from replacing a later
+        # successful Continue decision in the final route.
+        latest_screen_entry: dict[tuple[str, str], tuple] = {}
+        for chel_id, items in generic_paths.items():
+            for order_key, screen_id, _ in items:
+                key = (screen_id, chel_id)
+                if key not in latest_screen_entry or order_key >= latest_screen_entry[key]:
+                    latest_screen_entry[key] = order_key
+        for chel_id, items in legacy_paths.items():
+            if generic_paths.get(chel_id):
+                continue
+            for order_key, screen_id in items:
+                key = (screen_id, chel_id)
+                if key not in latest_screen_entry or order_key >= latest_screen_entry[key]:
+                    latest_screen_entry[key] = order_key
+
+        final_group_action: dict[tuple[str, str, str], tuple[tuple, str]] = {}
+        for definition in definitions:
+            screen_id = definition["id"]
+            for action in definition.get("actions", []):
+                if (action.get("target") or action.get("terminal_outcome")) and not action.get("interaction"):
+                    group_id = "final_transition"
+                elif action.get("exclusive_group"):
+                    group_id = f"choice:{action['exclusive_group']}"
+                else:
+                    continue
+                generic = _metric2_spec(
+                    "onboarding_screen_action", screen=screen_id,
+                    action=action["id"], context=definition.get("flow", "onboarding"),
+                )
+                for spec in [generic, *action.get("legacy", [])]:
+                    for row in rows_by_event.get(str(spec.get("event") or ""), []):
+                        chel_id = row["chel_id"]
+                        if not chel_id or chel_id not in canonical_paths or not matches(row, spec):
+                            continue
+                        screen_users[screen_id].add(chel_id)
+                        order_key = (
+                            row["client_at"] or row["received_at"],
+                            row["received_at"], row["event_order"],
+                        )
+                        key = (screen_id, group_id, chel_id)
+                        current = final_group_action.get(key)
+                        if current is None or order_key >= current[0]:
+                            final_group_action[key] = (order_key, action["id"])
+
+        # Returning to a screen without making another decision invalidates the
+        # action from its previous visit: the user is currently stopped there.
+        for key, (order_key, _) in list(final_group_action.items()):
+            screen_id, _, chel_id = key
+            if latest_screen_entry.get((screen_id, chel_id), order_key) > order_key:
+                final_group_action.pop(key, None)
+
+        edge_users: dict[tuple[str, str], set[str]] = defaultdict(set)
+        decision_sources: set[tuple[str, str]] = set()
+        for definition in definitions:
+            screen_id = definition["id"]
+            actions_by_id = {action["id"]: action for action in definition.get("actions", [])}
+            for (candidate_screen, group_id, chel_id), (_, action_id) in final_group_action.items():
+                if candidate_screen != screen_id or group_id != "final_transition":
+                    continue
+                decision_sources.add((screen_id, chel_id))
+                target_id = actions_by_id.get(action_id, {}).get("target", "")
+                if target_id in definition_by_id:
+                    edge_users[(screen_id, target_id)].add(chel_id)
+                    screen_users[target_id].add(chel_id)
+
+        # Older clients may have screen views but no action events. Keep their
+        # loop-erased observed edge only when no authoritative decision exists.
+        for (source_id, target_id), users in observed_edge_users.items():
+            source = definition_by_id.get(source_id, {})
+            target = definition_by_id.get(target_id, {})
+            preserve = source.get("preserve_observed_edges") or target.get("preserve_observed_edges")
+            for chel_id in users:
+                if preserve or (source_id, chel_id) not in decision_sources:
                     edge_users[(source_id, target_id)].add(chel_id)
 
         transition_explanations = {
@@ -1530,35 +1622,6 @@ def _metric2_report_uncached(
             parent_users = screen_users.get(parent_id, set()) if parent_id else set()
             parent_count = len(parent_users)
             actions = []
-            grouped_actions: dict[str, list[dict]] = defaultdict(list)
-            for action in definition.get("actions", []):
-                if (action.get("target") or action.get("terminal_outcome")) and not action.get("interaction"):
-                    grouped_actions["final_transition"].append(action)
-                elif action.get("exclusive_group"):
-                    grouped_actions[f"choice:{action['exclusive_group']}"].append(action)
-            final_group_action: dict[tuple[str, str], tuple[tuple, str]] = {}
-            for group_id, group_actions in grouped_actions.items():
-                for action in group_actions:
-                    generic = _metric2_spec(
-                        "onboarding_screen_action", screen=screen_id,
-                        action=action["id"], context=definition.get("flow", "onboarding"),
-                    )
-                    for spec in [generic, *action.get("legacy", [])]:
-                        for row in rows_by_event.get(str(spec.get("event") or ""), []):
-                            chel_id = row["chel_id"]
-                            if not chel_id or chel_id not in reached or not matches(row, spec):
-                                continue
-                            order_key = (
-                                row["client_at"] or row["received_at"],
-                                row["received_at"], row["event_order"],
-                            )
-                            current = final_group_action.get((group_id, chel_id))
-                            if current is None or order_key >= current[0]:
-                                # Only the last choice in an exclusive group
-                                # represents the user's final outcome.
-                                final_group_action[(group_id, chel_id)] = (
-                                    order_key, action["id"],
-                                )
             for action in definition.get("actions", []):
                 generic = _metric2_spec(
                     "onboarding_screen_action", screen=screen_id,
@@ -1573,8 +1636,11 @@ def _metric2_report_uncached(
                     action_group = ""
                 if action_group:
                     action_users = {
-                        chel_id for (group_id, chel_id), (_, action_id) in final_group_action.items()
-                        if group_id == action_group and action_id == action["id"]
+                        chel_id
+                        for (candidate_screen, group_id, chel_id), (_, action_id)
+                        in final_group_action.items()
+                        if candidate_screen == screen_id
+                        and group_id == action_group and action_id == action["id"]
                     }
                 else:
                     action_users = users_for([generic, *action.get("legacy", [])]) & reached
@@ -1582,8 +1648,9 @@ def _metric2_report_uncached(
                 if implied_final_actions:
                     action_users |= {
                         chel_id
-                        for (group_id, chel_id), (_, action_id) in final_group_action.items()
-                        if group_id == "final_transition"
+                        for (candidate_screen, group_id, chel_id), (_, action_id)
+                        in final_group_action.items()
+                        if candidate_screen == screen_id and group_id == "final_transition"
                         and action_id in implied_final_actions
                     }
                 actions.append({
@@ -1633,16 +1700,18 @@ def _metric2_report_uncached(
                     })
             incoming.sort(key=lambda item: (-item["users"], item["title"]))
             outgoing.sort(key=lambda item: (-item["users"], item["title"]))
+            # Main steps may be connected through a visible branch (for example
+            # registration -> anonymous warning -> appearance). Membership in
+            # both cohorts therefore remains the correct main-step comparison.
             arrived_from_parent = reached & parent_users
-            not_transitioned_user_ids = parent_users - reached
-            alternate_path_user_ids: set[str] = set()
-            actual_dropoff_user_ids: set[str] = set()
-            for chel_id in not_transitioned_user_ids:
-                path = canonical_paths.get(chel_id, [])
-                if parent_id in path and path.index(parent_id) < len(path) - 1:
-                    alternate_path_user_ids.add(chel_id)
-                else:
-                    actual_dropoff_user_ids.add(chel_id)
+            not_transitioned_user_ids = parent_users - arrived_from_parent
+            alternate_path_user_ids = set().union(*(
+                transition_users
+                for (source_id, target_id), transition_users in edge_users.items()
+                if source_id == parent_id and target_id != screen_id
+            )) if parent_id else set()
+            alternate_path_user_ids &= not_transitioned_user_ids
+            actual_dropoff_user_ids = not_transitioned_user_ids - alternate_path_user_ids
             dropoff_users = len(not_transitioned_user_ids)
             stopped_users = max(0, len(reached) - len(outgoing_user_ids))
             item = {
@@ -1712,7 +1781,7 @@ def _metric2_report_uncached(
         },
         "screens": result_screens,
         "filter_options": filter_options,
-        "privacy": "Каждый пользователь и переход учитываются один раз. Повторные открытия и возвраты не увеличивают показатели; ответы анкеты и медицинские данные не передаются.",
+        "privacy": "Каждый пользователь учитывается один раз, а маршрут строится по его последнему решению. Промежуточные клики и возвраты не заменяют финальный путь; ответы анкеты и медицинские данные не передаются.",
     }
 
 

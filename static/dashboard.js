@@ -1441,7 +1441,7 @@ function openMetric2Screen(screenId) {
   const transitions = $('#metric2ModalTransitions'); transitions.replaceChildren();
   const routeNote = document.createElement('p');
   routeNote.className = 'metric2-route-note';
-  routeNote.textContent = 'Прямые переходы подтверждены логикой экранов. Если между двумя записанными экранами не хватает обязательных шагов, такая связь вынесена отдельно как неполный маршрут и не считается прямым переходом.';
+  routeNote.textContent = 'Маршрут построен по последнему решению пользователя на каждом экране. Промежуточные клики, отменённые последующим выбором, в итоговый путь не входят. Для старых клиентов переход может быть восстановлен по подтверждённому серверному действию.';
   transitions.append(routeNote);
   const transitionSection = (title,items,direction) => {
     const section = document.createElement('section');
@@ -1462,8 +1462,8 @@ function openMetric2Screen(screenId) {
   };
   const incomingTransitions = screen.incoming_transitions || [];
   const outgoingTransitions = screen.outgoing_transitions || [];
-  transitionSection('Откуда пришли — прямые переходы', incomingTransitions.filter(item => item.direct !== false), 'in');
-  transitionSection('Куда перешли — прямые переходы', outgoingTransitions.filter(item => item.direct !== false), 'out');
+  transitionSection('Откуда пришли — финальный путь', incomingTransitions.filter(item => item.direct !== false), 'in');
+  transitionSection('Куда перешли — финальный путь', outgoingTransitions.filter(item => item.direct !== false), 'out');
   const incompleteTransitions = [
     ...incomingTransitions.filter(item => item.direct === false).map(item => ({...item, gapDirection: 'in'})),
     ...outgoingTransitions.filter(item => item.direct === false).map(item => ({...item, gapDirection: 'out'})),

@@ -641,6 +641,96 @@ class AnalyticsTests(unittest.TestCase):
         self.assertEqual(actions["continue"]["users"], 1)
         self.assertEqual(actions["select_exam"]["users"], 1)
 
+    def test_metric2_routes_by_final_exam_decision_and_infers_payment_reach(self):
+        analytics.record_events("CHEL-METRIC-FINAL-EXAM", [
+            {
+                "event_id": "final-exam-welcome", "session_id": "final-exam-session",
+                "event_name": "onboarding_screen_viewed",
+                "properties": {"screen": "welcome", "context": "onboarding"},
+            },
+            {
+                "event_id": "final-exam-selection-one", "session_id": "final-exam-session",
+                "event_name": "onboarding_screen_viewed",
+                "properties": {"screen": "exam_selection", "context": "onboarding"},
+            },
+            {
+                "event_id": "final-exam-nothing", "session_id": "final-exam-session",
+                "event_name": "onboarding_screen_action",
+                "properties": {"screen": "exam_selection", "action": "nothing", "context": "onboarding"},
+            },
+            {
+                "event_id": "final-exam-objection", "session_id": "final-exam-session",
+                "event_name": "onboarding_screen_viewed",
+                "properties": {"screen": "exam_objection", "context": "onboarding"},
+            },
+            {
+                "event_id": "final-exam-selection-two", "session_id": "final-exam-session",
+                "event_name": "onboarding_screen_viewed",
+                "properties": {"screen": "exam_selection", "context": "onboarding"},
+            },
+            {
+                "event_id": "final-exam-continue", "session_id": "final-exam-session",
+                "event_name": "examinations_selection_completed",
+                "properties": {"selected_count": 1},
+            },
+        ])
+
+        report = analytics.metric2_report("30")
+        screens = {item["id"]: item for item in report["screens"]}
+        selection_actions = {
+            item["id"]: item for item in screens["exam_selection"]["actions"]
+        }
+        destinations = {
+            item["screen_id"]: item
+            for item in screens["exam_selection"]["outgoing_transitions"]
+        }
+        self.assertEqual(selection_actions["continue"]["users"], 1)
+        self.assertEqual(selection_actions["nothing"]["users"], 0)
+        self.assertEqual(set(destinations), {"payment"})
+        self.assertEqual(destinations["payment"]["users"], 1)
+        self.assertEqual(screens["payment"]["users"], 1)
+        self.assertEqual(screens["exam_selection"]["stopped_users"], 0)
+
+    def test_metric2_empty_selection_is_not_counted_as_continue(self):
+        analytics.record_events("CHEL-METRIC-FINAL-SKIP", [
+            {
+                "event_id": "final-skip-welcome", "session_id": "final-skip-session",
+                "event_name": "onboarding_screen_viewed",
+                "properties": {"screen": "welcome", "context": "onboarding"},
+            },
+            {
+                "event_id": "final-skip-selection", "session_id": "final-skip-session",
+                "event_name": "onboarding_screen_viewed",
+                "properties": {"screen": "exam_selection", "context": "onboarding"},
+            },
+            {
+                "event_id": "final-skip-nothing", "session_id": "final-skip-session",
+                "event_name": "onboarding_screen_action",
+                "properties": {"screen": "exam_selection", "action": "nothing", "context": "onboarding"},
+            },
+            {
+                "event_id": "final-skip-objection", "session_id": "final-skip-session",
+                "event_name": "onboarding_screen_viewed",
+                "properties": {"screen": "exam_objection", "context": "onboarding"},
+            },
+            {
+                "event_id": "final-skip-completed", "session_id": "final-skip-session",
+                "event_name": "examinations_selection_completed",
+                "properties": {"selected_count": 0},
+            },
+        ])
+
+        report = analytics.metric2_report("30")
+        selection = next(item for item in report["screens"] if item["id"] == "exam_selection")
+        actions = {item["id"]: item for item in selection["actions"]}
+        destinations = {
+            item["screen_id"]: item for item in selection["outgoing_transitions"]
+        }
+        self.assertEqual(actions["continue"]["users"], 0)
+        self.assertEqual(actions["select_exam"]["users"], 0)
+        self.assertEqual(actions["nothing"]["users"], 1)
+        self.assertEqual(set(destinations), {"exam_objection"})
+
     def test_metric2_tracks_body_map_entry_and_both_return_results(self):
         for suffix, result_action in (
             ("selected", "return_with_selection"),
