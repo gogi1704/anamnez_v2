@@ -686,6 +686,7 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                     payload.get("show_competitor_price"),
                     payload.get("show_retail_price"),
                     payload.get("show_discount_price"),
+                    payload.get("default_name"),
                 ))
             except (ValueError, TypeError, json.JSONDecodeError, UnicodeDecodeError) as exc:
                 return self._json(422, {"detail": str(exc)})
@@ -709,6 +710,7 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                     payload.get("show_competitor_price"),
                     payload.get("show_retail_price"),
                     payload.get("show_discount_price"),
+                    payload.get("default_name"),
                 )
                 if not item:
                     return self._json(404, {"detail": "Обследование не найдено"})

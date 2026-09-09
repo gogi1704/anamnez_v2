@@ -871,6 +871,7 @@ function renderExaminations(items) {
         <div class="examination-admin-prices">${adminExaminationPrices(item)}</div>
       </div>
       <p>${escapeHtml(item.description)}</p>
+      <small><b>Название для Bitrix:</b> ${escapeHtml(item.default_name || item.name)}</small>
       <small><b>Состав:</b> ${escapeHtml(item.includes || 'Не указан')}</small>
       <small><b>Подписи цен:</b> ${escapeHtml(adminExaminationLabels(item))}</small>
       <div class="examination-card-actions">
@@ -1795,6 +1796,7 @@ async function saveExamination(event) {
   showExaminationStatus('');
   const payload = {
     name:$('#examinationName').value.trim(),
+    default_name:$('#examinationDefaultName').value.trim(),
     description:$('#examinationDescription').value.trim(),
     includes:$('#examinationIncludes').value.trim(),
     price:$('#examinationPrice').value,
@@ -1838,6 +1840,7 @@ async function manageExamination(event) {
   if (button.dataset.examinationAction === 'edit') {
     $('#examinationId').value = item.id;
     $('#examinationName').value = item.name;
+    $('#examinationDefaultName').value = item.default_name || item.name;
     $('#examinationDescription').value = item.description;
     $('#examinationIncludes').value = item.includes || '';
     $('#examinationPrice').value = item.price;

@@ -1918,6 +1918,7 @@ class OrchestratorTests(unittest.TestCase):
             False,
             True,
             False,
+            "Старое название тестового комплекса",
         )
         self.assertTrue(created["id"].startswith("exam_"))
         self.assertEqual(created["price"], 2750)
@@ -1929,6 +1930,7 @@ class OrchestratorTests(unittest.TestCase):
         self.assertEqual(created["show_competitor_price"], 0)
         self.assertEqual(created["show_retail_price"], 1)
         self.assertEqual(created["show_discount_price"], 0)
+        self.assertEqual(created["default_name"], "Старое название тестового комплекса")
         self.assertTrue(any(
             item["id"] == created["id"] for item in db.list_examinations()
         ))
@@ -1947,6 +1949,7 @@ class OrchestratorTests(unittest.TestCase):
             True,
             False,
             True,
+            "Дефолтный тестовый комплекс",
         )
         self.assertEqual(updated["name"], "Обновлённый комплекс")
         self.assertEqual(updated["price"], 3100)
@@ -1958,6 +1961,7 @@ class OrchestratorTests(unittest.TestCase):
         self.assertEqual(updated["show_competitor_price"], 1)
         self.assertEqual(updated["show_retail_price"], 0)
         self.assertEqual(updated["show_discount_price"], 1)
+        self.assertEqual(updated["default_name"], "Дефолтный тестовый комплекс")
         payload = public_onboarding(
             {"status": "exams", "selected_tests": []},
             {},
@@ -1966,6 +1970,7 @@ class OrchestratorTests(unittest.TestCase):
         self.assertTrue(any(
             item["id"] == created["id"] for item in payload["tests"]
         ))
+        self.assertTrue(all("default_name" not in item for item in payload["tests"]))
 
         self.assertTrue(db.admin_delete_examination(created["id"]))
         self.assertFalse(db.admin_delete_examination(created["id"]))
@@ -3151,6 +3156,9 @@ class OrchestratorTests(unittest.TestCase):
         persisted = {item["id"]: item for item in db.list_examinations()}
         self.assertNotIn("ferritin", persisted)
         self.assertEqual(persisted["fatigue_basic"]["name"], expected_names_and_prices["fatigue_basic"][0])
+        self.assertEqual(persisted["fatigue_basic"]["default_name"], "Хроническая усталость – базовый")
+        self.assertEqual(persisted["protein"]["default_name"], "Белковый обмен")
+        self.assertTrue(all(item["default_name"] for item in persisted.values()))
         self.assertEqual(analytics._current_examination_labels()["lipids"], expected_names_and_prices["lipids"][0])
 
         project_root = Path(__file__).resolve().parents[1]
@@ -3384,6 +3392,9 @@ class OrchestratorTests(unittest.TestCase):
             )
             order = db.create_payment_order()
             private = db.payment_order_private(order["id"])
+            frozen_items = {item["id"]: item for item in private["items"]}
+            self.assertEqual(frozen_items["fatigue_basic"]["name"], "«Энергия и бодрость» — базовый")
+            self.assertEqual(frozen_items["fatigue_basic"]["default_name"], "Хроническая усталость – базовый")
             expected = sum(
                 item["price"] for item in db.list_examinations()
                 if item["id"] in {"fatigue_basic", "lipids"}
@@ -3530,6 +3541,9 @@ class OrchestratorTests(unittest.TestCase):
         }
         with (
             patch.object(bitrix_payments, "_organization_name", return_value="ООО Пример"),
+            patch.object(db, "examination_default_names", return_value={
+                "checkup": "Дефолтное название чекапа",
+            }),
             patch.object(db, "find_upcoming_enterprise_examination", return_value={
                 "organization_name": "ООО Пример", "brigade": "Бригада 7",
                 "examination_date": "2026-09-15",
@@ -3546,7 +3560,7 @@ class OrchestratorTests(unittest.TestCase):
         self.assertEqual(payload["brigade"], "Бригада 7")
         self.assertEqual(payload["examination_date"], "2026-09-15")
         self.assertEqual(payload["items"], [
-            {"name": "Чекап", "amount_kopecks": 1500000},
+            {"name": "Дефолтное название чекапа", "amount_kopecks": 1500000},
         ])
 
     def test_examination_schedule_parses_api_row_and_filters_date_window(self):

@@ -41,6 +41,7 @@ def build_payload(order: dict, payment: dict, profile: dict) -> dict:
     )
     company_inn = str(profile.get("company_inn") or "")[:12]
     schedule = db.find_upcoming_enterprise_examination(company_inn) or {}
+    default_names = db.examination_default_names()
     return {
         "order_id": str(order["id"]),
         "provider_payment_id": str(payment["id"]),
@@ -64,7 +65,12 @@ def build_payload(order: dict, payment: dict, profile: dict) -> dict:
         "test": bool(payment.get("test")),
         "items": [
             {
-                "name": str(item.get("name") or "")[:128],
+                "name": str(
+                    default_names.get(str(item.get("id") or ""))
+                    or item.get("default_name")
+                    or item.get("name")
+                    or ""
+                )[:128],
                 "amount_kopecks": int(item.get("price") or 0) * 100,
             }
             for item in order.get("items") or []

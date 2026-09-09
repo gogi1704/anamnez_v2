@@ -283,7 +283,9 @@
           </div>
           <form id="examinationForm" class="examination-form">
             <input id="examinationId" type="hidden">
-            <label>Название<input id="examinationName" maxlength="140" placeholder="Например, Витамины и микроэлементы" required></label>
+            <label>Название в Консилиуме<input id="examinationName" maxlength="140" placeholder="Например, «Энергия и бодрость»" required></label>
+            <label>Дефолтное название для Bitrix<input id="examinationDefaultName" maxlength="140" placeholder="Например, Хроническая усталость" required></label>
+            <small class="examination-price-hint">Пользователи видят название в Консилиуме. В уведомления об оплате Bitrix всегда передаётся дефолтное название.</small>
             <label>Описание<textarea id="examinationDescription" maxlength="1200" rows="4" placeholder="Кому и для чего может быть полезен набор" required></textarea></label>
             <label>Что входит<textarea id="examinationIncludes" maxlength="1200" rows="3" placeholder="Перечислите анализы и исследования"></textarea></label>
             <div class="examination-price-fields">
@@ -486,6 +488,6 @@
       </div>
     </section>
   </div>
-  <script src="/static/dashboard.js?v=20260909-final-metric-path-v5" defer></script>
+  <script src="/static/dashboard.js?v=20260909-bitrix-default-names-v1" defer></script>
 </body>
 </html>

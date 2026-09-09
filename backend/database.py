@@ -1947,7 +1947,7 @@ def acknowledge_manager_notification(
 def list_examinations() -> list[dict]:
     with connection() as conn:
         rows = conn.execute(
-            """SELECT id, name, description, includes, price,
+            """SELECT id, name, default_name, description, includes, price,
                 competitor_price, price_without_discount,
                 competitor_label, retail_price_label, discount_price_label,
                 show_competitor_price, show_retail_price, show_discount_price,
@@ -1955,6 +1955,18 @@ def list_examinations() -> list[dict]:
             FROM examination_catalog ORDER BY created_at, name"""
         ).fetchall()
     return [dict(row) for row in rows]
+
+
+def examination_default_names() -> dict[str, str]:
+    """Return the authoritative Bitrix name for every catalog item ID."""
+    with connection() as conn:
+        rows = conn.execute(
+            "SELECT id, default_name, name FROM examination_catalog"
+        ).fetchall()
+    return {
+        str(row["id"]): str(row["default_name"] or row["name"] or "")[:140]
+        for row in rows
+    }
 
 
 def _payment_items(value: str) -> list[dict]:
@@ -2003,6 +2015,9 @@ def create_payment_order() -> dict:
         {
             "id": item_id,
             "name": str(catalog[item_id]["name"])[:128],
+            "default_name": str(
+                catalog[item_id].get("default_name") or catalog[item_id]["name"]
+            )[:128],
             "price": effective_examination_price(catalog[item_id]),
         }
         for item_id in selected_ids
@@ -2421,12 +2436,16 @@ def _validate_examination(
     competitor_label="У конкурентов", retail_price_label="Розничная цена",
     discount_price_label="С учётом вашей скидки",
     show_competitor_price=True, show_retail_price=True, show_discount_price=True,
+    default_name="",
 ) -> tuple:
     name = " ".join(str(name or "").split())[:140]
+    default_name = " ".join(str(default_name or name).split())[:140]
     description = " ".join(str(description or "").split())[:1200]
     includes = " ".join(str(includes or "").split())[:1200]
     if len(name) < 2:
         raise ValueError("Название должно содержать минимум 2 символа")
+    if len(default_name) < 2:
+        raise ValueError("Название для Bitrix должно содержать минимум 2 символа")
     if len(description) < 5:
         raise ValueError("Добавьте понятное описание обследования")
     def normalize_price(value, label: str, *, optional: bool = False) -> int:
@@ -2468,6 +2487,7 @@ def _validate_examination(
         normalize_visibility(show_competitor_price),
         normalize_visibility(show_retail_price),
         normalize_visibility(show_discount_price),
+        default_name,
     )
 
 
@@ -2477,29 +2497,30 @@ def admin_create_examination(
     competitor_label="У конкурентов", retail_price_label="Розничная цена",
     discount_price_label="С учётом вашей скидки",
     show_competitor_price=True, show_retail_price=True, show_discount_price=True,
+    default_name="",
 ) -> dict:
     validated = _validate_examination(
         name, description, includes, price, competitor_price, price_without_discount,
         competitor_label, retail_price_label, discount_price_label,
-        show_competitor_price, show_retail_price, show_discount_price,
+        show_competitor_price, show_retail_price, show_discount_price, default_name,
     )
     (
         name, description, includes, price, competitor_price, price_without_discount,
         competitor_label, retail_price_label, discount_price_label,
-        show_competitor_price, show_retail_price, show_discount_price,
+        show_competitor_price, show_retail_price, show_discount_price, default_name,
     ) = validated
     examination_id = f"exam_{secrets.token_hex(8)}"
     now = utc_now()
     with _write_lock, connection() as conn:
         conn.execute(
             """INSERT INTO examination_catalog
-            (id, name, description, includes, price, competitor_price, price_without_discount,
+            (id, name, default_name, description, includes, price, competitor_price, price_without_discount,
              competitor_label, retail_price_label, discount_price_label,
              show_competitor_price, show_retail_price, show_discount_price,
              created_at, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (
-                examination_id, name, description, includes, price,
+                examination_id, name, default_name, description, includes, price,
                 competitor_price, price_without_discount,
                 competitor_label, retail_price_label, discount_price_label,
                 show_competitor_price, show_retail_price, show_discount_price,
@@ -2519,29 +2540,40 @@ def admin_update_examination(
     competitor_label="У конкурентов", retail_price_label="Розничная цена",
     discount_price_label="С учётом вашей скидки",
     show_competitor_price=True, show_retail_price=True, show_discount_price=True,
+    default_name="",
 ) -> dict | None:
     examination_id = str(examination_id or "").strip()
+    if not str(default_name or "").strip():
+        # Preserve the existing Bitrix name for older API clients and internal
+        # callers that predate this field.
+        with connection() as conn:
+            existing = conn.execute(
+                "SELECT default_name, name FROM examination_catalog WHERE id = ?",
+                (examination_id,),
+            ).fetchone()
+        if existing:
+            default_name = existing["default_name"] or existing["name"]
     validated = _validate_examination(
         name, description, includes, price, competitor_price, price_without_discount,
         competitor_label, retail_price_label, discount_price_label,
-        show_competitor_price, show_retail_price, show_discount_price,
+        show_competitor_price, show_retail_price, show_discount_price, default_name,
     )
     (
         name, description, includes, price, competitor_price, price_without_discount,
         competitor_label, retail_price_label, discount_price_label,
-        show_competitor_price, show_retail_price, show_discount_price,
+        show_competitor_price, show_retail_price, show_discount_price, default_name,
     ) = validated
     with _write_lock, connection() as conn:
         cursor = conn.execute(
             """UPDATE examination_catalog
-            SET name = ?, description = ?, includes = ?, price = ?,
+            SET name = ?, default_name = ?, description = ?, includes = ?, price = ?,
                 competitor_price = ?, price_without_discount = ?,
                 competitor_label = ?, retail_price_label = ?, discount_price_label = ?,
                 show_competitor_price = ?, show_retail_price = ?, show_discount_price = ?,
                 updated_at = ?
             WHERE id = ?""",
             (
-                name, description, includes, price, competitor_price,
+                name, default_name, description, includes, price, competitor_price,
                 price_without_discount,
                 competitor_label, retail_price_label, discount_price_label,
                 show_competitor_price, show_retail_price, show_discount_price,
@@ -3333,6 +3365,7 @@ def init_db() -> None:
             CREATE TABLE IF NOT EXISTS examination_catalog (
                 id TEXT PRIMARY KEY,
                 name TEXT NOT NULL,
+                default_name TEXT NOT NULL DEFAULT '',
                 description TEXT NOT NULL,
                 includes TEXT NOT NULL DEFAULT '',
                 price INTEGER NOT NULL,
@@ -3574,6 +3607,7 @@ def init_db() -> None:
                 "ALTER TABLE examination_catalog ADD COLUMN price_without_discount INTEGER NOT NULL DEFAULT 0"
             )
         examination_defaults = {
+            "default_name": "TEXT NOT NULL DEFAULT ''",
             "competitor_label": "TEXT NOT NULL DEFAULT 'У конкурентов'",
             "retail_price_label": "TEXT NOT NULL DEFAULT 'Розничная цена'",
             "discount_price_label": "TEXT NOT NULL DEFAULT 'С учётом вашей скидки'",
@@ -3611,10 +3645,11 @@ def init_db() -> None:
         for examination in TEST_CATALOG:
             conn.execute(
                 """INSERT OR IGNORE INTO examination_catalog
-                (id, name, description, includes, price, created_at, updated_at)
-                VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                (id, name, default_name, description, includes, price, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
-                    examination["id"], examination["name"], examination["description"],
+                    examination["id"], examination["name"], examination["default_name"],
+                    examination["description"],
                     examination.get("includes", ""), int(examination["price"]), now, now,
                 ),
             )
@@ -3657,6 +3692,28 @@ def init_db() -> None:
             conn.execute(
                 "INSERT INTO app_migrations (migration_key, applied_at) VALUES (?, ?)",
                 (catalog_migration_key, now),
+            )
+        default_names_migration_key = "examination_default_names_2026_09_09"
+        default_names_migrated = conn.execute(
+            "SELECT 1 FROM app_migrations WHERE migration_key = ?",
+            (default_names_migration_key,),
+        ).fetchone()
+        if not default_names_migrated:
+            # Custom catalog entries keep their current visible name until an
+            # administrator explicitly sets a separate Bitrix/default name.
+            conn.execute(
+                """UPDATE examination_catalog SET default_name = name
+                WHERE TRIM(COALESCE(default_name, '')) = ''"""
+            )
+            # Core names come from the authoritative old/new-name spreadsheet.
+            for examination in TEST_CATALOG:
+                conn.execute(
+                    "UPDATE examination_catalog SET default_name = ? WHERE id = ?",
+                    (examination["default_name"], examination["id"]),
+                )
+            conn.execute(
+                "INSERT INTO app_migrations (migration_key, applied_at) VALUES (?, ?)",
+                (default_names_migration_key, now),
             )
         columns = {row[1] for row in conn.execute("PRAGMA table_info(conversations)").fetchall()}
         if "chel_id" not in columns:
