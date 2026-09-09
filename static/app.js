@@ -1483,12 +1483,28 @@ function renderPayment() {
   setOnboardingMeta('Оплата', 92);
   const selected = selectedTestDetails();
   const total = selected.reduce((sum,test) => sum + examinationEffectivePrice(test), 0);
+  const customerName = String(state.profile?.preferred_name || '').trim();
+  const nameField = `<label class="payment-email-label">ФИО <span>Обязательное поле. Нужно, чтобы идентифицировать вас на предприятии.</span><input id="paymentCustomerName" type="text" autocomplete="name" maxlength="100" placeholder="Иванов Иван Иванович" required value="${escapeAttr(customerName)}"></label>`;
   const emailField = state.publicConfig.online_payments_enabled && state.publicConfig.payment_receipt_email_required
-    ? `<label class="payment-email-label">Электронная почта для онлайн-чека <span>только при оплате онлайн</span><input id="paymentReceiptEmail" type="email" autocomplete="email" maxlength="254" placeholder="name@example.ru" required></label>` : '';
+    ? `<label class="payment-email-label">Электронная почта для онлайн-чека <span>только при оплате онлайн</span><input id="paymentReceiptEmail" type="email" autocomplete="email" maxlength="254" placeholder="name@example.ru" required value="${escapeAttr(state.paymentReceiptEmail)}"></label>` : '';
   const exitAction = state.paymentReviewSource === 'purchases'
     ? '<button type="button" class="payment-back-button" data-onboarding-action="close-payment-review">Закрыть</button>'
     : '<button type="button" class="payment-back-button" data-onboarding-action="back-to-exams">← Вернуться к обследованиям</button>';
-  $('#onboardingContent').innerHTML = `<span class="onboarding-kicker">Последний шаг</span><h1>Проверим заказ</h1><p class="onboarding-lead">Выберите, как вам будет удобнее оплатить дополнительные обследования.</p><div class="payment-stub"><span class="demo-badge">ВЫБРАННЫЕ ОБСЛЕДОВАНИЯ</span><ul class="payment-lines">${selected.map(test => `<li><span>${test.name}</span><strong>${examinationEffectivePrice(test).toLocaleString('ru')} ₽</strong></li>`).join('')}</ul><div class="payment-total"><span>Итого</span><strong>${total.toLocaleString('ru')} ₽</strong></div></div>${emailField}<div class="payment-actions"><button type="button" class="payment-online-button" data-onboarding-action="pay-online">Оплатить онлайн</button><button type="button" class="payment-at-exam-button" data-onboarding-action="pay-at-exam">Оплатить на медосмотре</button></div>${exitAction}`;
+  $('#onboardingContent').innerHTML = `<span class="onboarding-kicker">Последний шаг</span><h1>Проверим заказ</h1><p class="onboarding-lead">Выберите, как вам будет удобнее оплатить дополнительные обследования.</p><div class="payment-stub"><span class="demo-badge">ВЫБРАННЫЕ ОБСЛЕДОВАНИЯ</span><ul class="payment-lines">${selected.map(test => `<li><span>${test.name}</span><strong>${examinationEffectivePrice(test).toLocaleString('ru')} ₽</strong></li>`).join('')}</ul><div class="payment-total"><span>Итого</span><strong>${total.toLocaleString('ru')} ₽</strong></div></div><div class="payment-customer-fields">${nameField}${emailField}</div><div class="payment-actions"><button type="button" class="payment-online-button" data-onboarding-action="pay-online">Оплатить онлайн</button><button type="button" class="payment-at-exam-button" data-onboarding-action="pay-at-exam">Оплатить на медосмотре</button></div>${exitAction}`;
+}
+
+function paymentCustomerName() {
+  const input = $('#paymentCustomerName');
+  if (!input) return '';
+  const fullName = input.value.trim().replace(/\s+/g, ' ');
+  input.setCustomValidity(fullName.split(' ').filter(Boolean).length >= 2
+    ? '' : 'Введите фамилию и имя полностью');
+  if (!input.checkValidity()) {
+    input.reportValidity();
+    return '';
+  }
+  input.value = fullName;
+  return fullName;
 }
 
 function setPaymentActionsBusy(busy, activeLabel = '') {
@@ -1510,12 +1526,17 @@ async function startOnlinePayment() {
     receiptInput.reportValidity();
     return;
   }
+  const customerFullName = paymentCustomerName();
+  if (!customerFullName) return;
   const receiptEmail = receiptInput?.value?.trim() || '';
+  trackOnboardingAction('pay_online', 'payment');
+  trackEvent('funnel_action', {stage:'examinations_options',action:'pay_online'});
   setPaymentActionsBusy(true, 'online');
   try {
     const result = await api('/api/payments/yookassa/create', {
       method:'POST', body:JSON.stringify({
         receipt_email:receiptEmail,
+        customer_full_name:customerFullName,
         return_to_chat:Boolean(state.returnToChatAfterExaminations),
         payment_source:state.paymentReviewSource || 'onboarding',
       }),
@@ -1529,6 +1550,7 @@ async function startOnlinePayment() {
         returnToChat:Boolean(state.returnToChatAfterExaminations),
         source:state.paymentReviewSource || 'onboarding',
         receiptEmail,
+        customerFullName,
         savedAt:Date.now(),
       }));
       window.location.assign(url);
@@ -1865,10 +1887,15 @@ async function finishPaymentSuccess(openHistory = false) {
 }
 
 async function confirmPaymentAtExam() {
+  const customerFullName = paymentCustomerName();
+  if (!customerFullName) return;
+  trackOnboardingAction('pay_at_exam', 'payment');
+  trackEvent('funnel_action', {stage:'examinations_options',action:'pay_at_exam'});
   setPaymentActionsBusy(true, 'at_exam');
   try {
     const returnDirectlyToChat = state.returnToChatAfterExaminations;
-    state.onboarding = await api('/api/onboarding/payment', { method:'POST', body:JSON.stringify({method:'at_exam'}) });
+    state.onboarding = await api('/api/onboarding/payment', { method:'POST', body:JSON.stringify({method:'at_exam', customer_full_name:customerFullName}) });
+    state.profile = state.onboarding.profile;
     window.consiliumMetrikaGoal?.('payment_at_exam');
     window.consiliumMetrikaGoal?.('onboarding_completed');
     if (returnDirectlyToChat) return openMainApp({ skipIntro:true });
@@ -2149,8 +2176,8 @@ $('#onboardingContent').addEventListener('click', async event => {
     state.paymentReviewOrderId = '';
     await openPurchases({highlightOrderId:orderId});
   }
-  else if (action === 'pay-online') { trackOnboardingAction('pay_online', 'payment'); trackEvent('funnel_action', {stage:'examinations_options',action:'pay_online'}); startOnlinePayment(); }
-  else if (action === 'pay-at-exam') { trackOnboardingAction('pay_at_exam', 'payment'); trackEvent('funnel_action', {stage:'examinations_options',action:'pay_at_exam'}); confirmPaymentAtExam(); }
+  else if (action === 'pay-online') { startOnlinePayment(); }
+  else if (action === 'pay-at-exam') { confirmPaymentAtExam(); }
   else if (action === 'back-to-payment') await returnToOnlinePayment();
   else if (action === 'back-to-consultation-payment') await returnToConsultationPayment();
   else if (action === 'pay-consultation') await startConsultationPayment();

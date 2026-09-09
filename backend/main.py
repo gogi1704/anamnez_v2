@@ -857,9 +857,13 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                     )
                 if not yookassa.configured():
                     raise yookassa.YooKassaUnavailable("Онлайн-оплата пока не настроена")
+                customer_full_name = self._validate_payment_customer_name(
+                    payload.get("customer_full_name")
+                )
                 state = db.get_onboarding()
                 if state["status"] != "payment" or not state["selected_tests"]:
                     raise ValueError("Сначала выберите дополнительные обследования")
+                db.update_preferred_name(customer_full_name)
                 order = db.create_payment_order()
                 private_order = db.payment_order_private(order["id"])
                 if private_order.get("provider_payment_id"):
@@ -1328,9 +1332,13 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                 payment_method = str(payload.get("method", "")).strip().lower()
                 if payment_method != "at_exam":
                     raise ValueError("Онлайн-оплата временно недоступна")
+                customer_full_name = self._validate_payment_customer_name(
+                    payload.get("customer_full_name")
+                )
                 state = db.get_onboarding()
                 if state["status"] != "payment" or not state["selected_tests"]:
                     raise ValueError("Сначала выберите обследования")
+                db.update_preferred_name(customer_full_name)
                 state = db.save_onboarding(status="complete", payment_status="pay_at_exam")
                 self._track_analytics("payment_method_selected", {
                     "method": "at_exam", "selected_count": len(state.get("selected_tests", [])),
@@ -1666,6 +1674,15 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
     def _interpretation_profile_missing(profile: dict) -> list[str]:
         required = ("sex", "age", "height_cm", "weight_kg")
         return [name for name in required if profile.get(name) in (None, "")]
+
+    @staticmethod
+    def _validate_payment_customer_name(value) -> str:
+        full_name = " ".join(str(value or "").split())[:100]
+        if len(full_name) < 5 or len(full_name.split()) < 2:
+            raise ValueError("Введите фамилию и имя полностью")
+        if any(char.isdigit() for char in full_name):
+            raise ValueError("ФИО не должно содержать цифры")
+        return full_name
 
     @staticmethod
     def _validate_profile(payload: dict, required: bool = False) -> dict:

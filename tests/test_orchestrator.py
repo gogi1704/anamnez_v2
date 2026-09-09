@@ -488,6 +488,17 @@ class OrchestratorTests(unittest.TestCase):
             with self.subTest(company_inn=invalid_inn), self.assertRaises(ValueError):
                 ConsiliumHandler._validate_profile({"company_inn": invalid_inn})
 
+    def test_payment_customer_name_requires_full_name(self):
+        self.assertEqual(
+            ConsiliumHandler._validate_payment_customer_name(
+                "  Иванов   Иван Иванович "
+            ),
+            "Иванов Иван Иванович",
+        )
+        for invalid in ("", "Иван", "Иванов 123"):
+            with self.subTest(full_name=invalid), self.assertRaises(ValueError):
+                ConsiliumHandler._validate_payment_customer_name(invalid)
+
     def test_test_inn_user_is_excluded_from_every_statistics_surface(self):
         analytics.init_db()
         regular_id = "chel_stats_regular_inn"
@@ -2565,11 +2576,11 @@ class OrchestratorTests(unittest.TestCase):
         self.assertIn("url.pathname.startsWith('/auth/')", worker)
         self.assertIn("consilium-shell-v100", worker)
         self.assertIn("fetch(request)", worker)
-        self.assertIn("/static/styles.css?v=20260908-onboarding-chat-guard-v4", index)
+        self.assertIn("/static/styles.css?v=20260909-payment-full-name-v5", index)
         self.assertIn("/static/rich-text.2bf1f5fab764.css", index)
         self.assertTrue((project_root / "static" / "styles.07ffaefb4795.css").is_file())
         self.assertTrue((project_root / "static" / "rich-text.2bf1f5fab764.css").is_file())
-        self.assertIn("/static/app.js?v=20260908-onboarding-chat-guard-v4", index)
+        self.assertIn("/static/app.js?v=20260909-payment-full-name-v5", index)
         self.assertIn("/static/metrika.js?v=20260829-interpret-profile-v1", index)
         self.assertIn('id="welcomeScreen"', index)
         self.assertIn('id="welcomeNextButton"', index)

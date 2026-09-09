@@ -4477,6 +4477,25 @@ def save_profile(profile: dict) -> dict:
     return saved_profile
 
 
+def update_preferred_name(preferred_name: str) -> dict:
+    """Replace only the user's name without resetting questionnaire answers."""
+    normalized = " ".join(str(preferred_name or "").split())[:100]
+    if not normalized:
+        raise ValueError("Укажите ФИО")
+    now = utc_now()
+    with _write_lock, connection() as conn:
+        conn.execute(
+            """INSERT INTO user_profile (chel_id,preferred_name,updated_at)
+            VALUES (?,?,?)
+            ON CONFLICT(chel_id) DO UPDATE SET
+              preferred_name=excluded.preferred_name,
+              updated_at=excluded.updated_at""",
+            (current_chel_id(), normalized, now),
+        )
+        conn.commit()
+    return get_profile()
+
+
 def profile_fingerprint(profile: dict | None = None) -> str:
     """Stable cache key for profile fields that can change lab interpretation."""
     source = dict(profile or get_profile())
