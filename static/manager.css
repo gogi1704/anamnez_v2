@@ -103,6 +103,10 @@ button { cursor:pointer; }
 .manager-message.user .message-time { color:#cce1d7; }
 .message-files { display:flex; flex-wrap:wrap; gap:5px; margin-top:8px; }.message-files span,.message-files a { padding:5px 7px; border-radius:7px; background:#edf4f0; color:var(--green-dark); font-size:9px; text-decoration:none; }
 .manager-composer { margin:12px clamp(10px,3vw,34px); padding:10px 12px; border:1px solid #c8dbd1; border-radius:16px; background:white; box-shadow:0 10px 30px #214b3b12; }
+.manager-composer .manager-composer-quick-actions { justify-content:flex-start; margin-bottom:6px; }
+.manager-composer .consultation-instruction-button { padding:7px 10px; border:1px solid #b8d8ca; background:#eff8f3; color:var(--green-dark); font-size:9px; }
+.manager-composer .consultation-instruction-button:hover { border-color:var(--green); background:#e2f3eb; }
+.manager-composer .consultation-instruction-button:disabled { opacity:.55; cursor:wait; }
 .manager-composer textarea { width:100%; max-height:130px; resize:none; padding:4px; border:0; outline:none; font-size:12px; }
 .manager-composer > div { display:flex; align-items:center; justify-content:space-between; gap:10px; }.manager-composer span { color:var(--muted); font-size:8px; }
 .manager-composer button { padding:9px 15px; border:0; border-radius:10px; background:var(--green); color:white; font-size:10px; font-weight:700; }

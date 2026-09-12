@@ -1826,6 +1826,19 @@ class OrchestratorTests(unittest.TestCase):
                 conversation["id"], "Расшифровка готова", "Доктор", "doctor",
             )
             self.assertEqual(reply["metadata"]["staff_role"], "doctor")
+            with self.assertRaisesRegex(ValueError, "только врач"):
+                db.manager_send_consultation_payment_instruction(
+                    conversation["id"], "Менеджер", "manager",
+                )
+            instruction = db.manager_send_consultation_payment_instruction(
+                conversation["id"], "Доктор", "doctor",
+            )
+            self.assertEqual(
+                instruction["metadata"]["action"],
+                "consultation_payment_instruction",
+            )
+            self.assertIn("раздел «Консультации»", instruction["content"])
+            self.assertIn("1 000 ₽", instruction["content"])
             closed = db.manager_close_conversation(
                 conversation["id"], "Доктор", "doctor",
             )
@@ -2156,6 +2169,7 @@ class OrchestratorTests(unittest.TestCase):
         self.assertIn('id="profileDetails"', manager)
         self.assertIn('id="aiEnabled"', manager)
         self.assertIn('id="closeRequestButton"', manager)
+        self.assertIn('id="consultationPaymentInstructionButton"', manager)
         self.assertIn('id="managerLogin"', manager)
         self.assertIn('id="managerPassword"', manager)
         self.assertIn("/api/manager/login", manager_script)
@@ -2177,6 +2191,8 @@ class OrchestratorTests(unittest.TestCase):
         self.assertIn("state.collapsedPeople.add(chelId)", manager_script)
         self.assertIn("chel_id, диалог или обращение", manager)
         self.assertIn("/close", manager_script)
+        self.assertIn("/consultation-payment-instruction", manager_script)
+        self.assertIn("state.manager?.role === 'doctor'", manager_script)
         self.assertIn("playManagerSignal('request')", manager_script)
         self.assertIn("playManagerSignal('message')", manager_script)
         self.assertIn("previous && !item.ai_enabled", manager_script)
@@ -3489,6 +3505,11 @@ class OrchestratorTests(unittest.TestCase):
             notices = db.claim_manager_notifications("telegram")
             notice = next(item for item in notices if item["conversation_id"] == conversation["id"])
             self.assertIn("Оплачена консультация", notice["payload"]["title"])
+            self.assertEqual(notice["payload"]["action_label"], "Открыть чат пользователя")
+            self.assertIn(
+                f"manager?conversation={conversation['id']}",
+                notice["payload"]["action_url"],
+            )
         finally:
             db.set_current_chel_id(chel_id)
             db.reset_current_user()

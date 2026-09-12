@@ -2968,7 +2968,7 @@ def _manager_profile_from_value(chel_id: str) -> dict:
 
 def manager_add_reply(
     conversation_id: str, content: str, manager_name: str,
-    staff_role: str = "manager",
+    staff_role: str = "manager", message_action: str = "manager_reply",
 ) -> dict:
     content = str(content or "").strip()
     manager_name = " ".join(str(manager_name or "").split())[:80] or "Менеджер"
@@ -2976,11 +2976,13 @@ def manager_add_reply(
         raise ValueError("Ответ должен содержать от 1 до 12000 символов")
     now = utc_now()
     staff_role = _staff_role(staff_role)
+    if message_action not in {"manager_reply", "consultation_payment_instruction"}:
+        raise ValueError("Неизвестное действие сообщения")
     metadata = {
         "sender_type": "human_manager",
         "manager_name": manager_name,
         "staff_role": staff_role,
-        "action": "manager_reply",
+        "action": message_action,
     }
     with _write_lock, connection() as conn:
         conversation = conn.execute(
@@ -3004,14 +3006,41 @@ def manager_add_reply(
         conn.execute(
             """INSERT INTO manager_actions
             (conversation_id, manager_name, action, details, created_at)
-            VALUES (?, ?, 'reply', ?, ?)""",
-            (conversation_id, manager_name, json.dumps({"message_id": cursor.lastrowid}), now),
+            VALUES (?, ?, ?, ?, ?)""",
+            (
+                conversation_id, manager_name,
+                "consultation_payment_instruction"
+                if message_action == "consultation_payment_instruction" else "reply",
+                json.dumps({"message_id": cursor.lastrowid}), now,
+            ),
         )
         conn.commit()
         row = conn.execute(
             "SELECT * FROM messages WHERE id = ?", (cursor.lastrowid,),
         ).fetchone()
     return _manager_message(row)
+
+
+def manager_send_consultation_payment_instruction(
+    conversation_id: str, manager_name: str, staff_role: str = "manager",
+) -> dict:
+    """Send the canonical consultation purchase instructions from a doctor chat."""
+    if _staff_role(staff_role) != "doctor":
+        raise ValueError("Инструкцию по оплате консультации может отправить только врач")
+    content = (
+        "Как оплатить платную консультацию врача за 1 000 ₽:\n\n"
+        "1. Откройте меню ☰ в правом верхнем углу.\n"
+        "2. Выберите раздел «Консультации».\n"
+        "3. Нажмите «Оплатить консультацию · 1 000 ₽».\n"
+        "4. При необходимости укажите электронную почту для чека и завершите оплату через ЮKassa.\n\n"
+        "После подтверждения оплаты врач автоматически получит уведомление и напишет вам "
+        "в отдельном чате, чтобы согласовать удобные дату и время. Информация об оплате "
+        "сохранится в разделе «Мои покупки»."
+    )
+    return manager_add_reply(
+        conversation_id, content, manager_name, "doctor",
+        message_action="consultation_payment_instruction",
+    )
 
 
 def manager_set_ai_enabled(

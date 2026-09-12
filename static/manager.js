@@ -408,6 +408,12 @@ function renderHeader() {
     && (Boolean(conversation.human_ticket_id) || !conversation.ai_enabled);
   closeButton.classList.toggle('hidden', !closable);
   closeButton.disabled = state.busy;
+  const consultationInstruction = $('#consultationPaymentInstructionButton');
+  const canOfferConsultation = state.manager?.role === 'doctor'
+    && conversation.human_channel !== 'paid_consultation'
+    && conversation.human_status !== 'closed';
+  consultationInstruction.classList.toggle('hidden', !canOfferConsultation);
+  consultationInstruction.disabled = state.busy;
 }
 
 function messageDocuments(metadata) {
@@ -551,6 +557,30 @@ async function sendReply(event) {
   } finally { state.busy = false; }
 }
 
+async function sendConsultationPaymentInstruction() {
+  if (!state.selectedId || state.busy) return;
+  const button = $('#consultationPaymentInstructionButton');
+  state.busy = true;
+  button.disabled = true;
+  try {
+    const result = await api(
+      `/api/manager/conversations/${encodeURIComponent(state.selectedId)}/consultation-payment-instruction`,
+      {method:'POST', body:'{}'},
+    );
+    state.detail.messages.push(result.message);
+    state.detail.conversation = result.conversation;
+    renderHeader();
+    renderMessages();
+    await loadQueue();
+    toast('Инструкция по оплате отправлена пользователю');
+  } catch (error) {
+    toast(error.message, true);
+  } finally {
+    state.busy = false;
+    button.disabled = false;
+  }
+}
+
 async function closeRequest() {
   if (!state.selectedId || state.busy) return;
   const doctor = state.manager?.role === 'doctor';
@@ -619,6 +649,7 @@ $('#queueSearch').addEventListener('input', event => {
 });
 $('#aiEnabled').addEventListener('change', event => setAiMode(event.target.checked));
 $('#closeRequestButton').addEventListener('click', closeRequest);
+$('#consultationPaymentInstructionButton').addEventListener('click', sendConsultationPaymentInstruction);
 $('#managerReplyForm').addEventListener('submit', sendReply);
 $('#managerReply').addEventListener('keydown', event => {
   if (event.key === 'Enter' && !event.shiftKey) {
