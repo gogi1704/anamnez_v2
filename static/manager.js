@@ -559,6 +559,9 @@ async function sendReply(event) {
 
 async function sendConsultationPaymentInstruction() {
   if (!state.selectedId || state.busy) return;
+  if (!window.confirm(
+    'Отправить пользователю инструкцию по оплате консультации за 1 000 ₽? Сообщение сразу появится в его чате.'
+  )) return;
   const button = $('#consultationPaymentInstructionButton');
   state.busy = true;
   button.disabled = true;

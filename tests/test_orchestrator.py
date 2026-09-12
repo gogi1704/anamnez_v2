@@ -2193,6 +2193,8 @@ class OrchestratorTests(unittest.TestCase):
         self.assertIn("/close", manager_script)
         self.assertIn("/consultation-payment-instruction", manager_script)
         self.assertIn("state.manager?.role === 'doctor'", manager_script)
+        self.assertIn("Отправить пользователю инструкцию по оплате консультации", manager_script)
+        self.assertIn("if (!window.confirm(", manager_script)
         self.assertIn("playManagerSignal('request')", manager_script)
         self.assertIn("playManagerSignal('message')", manager_script)
         self.assertIn("previous && !item.ai_enabled", manager_script)
