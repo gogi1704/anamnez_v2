@@ -2153,6 +2153,57 @@ class OrchestratorTests(unittest.TestCase):
             db.ensure_user("chel_test_default")
             db.set_current_chel_id("chel_test_default")
 
+    def test_manager_can_delete_user_and_staff_messages_but_not_ai_messages(self):
+        chel_id = "chel_manager_delete_messages_1234"
+        db.ensure_user(chel_id)
+        try:
+            db.set_current_chel_id(chel_id)
+            conversation = db.create_conversation("Удаление сообщений")
+            user_message = db.add_message(
+                conversation["id"], "user", "Сообщение пользователя",
+            )
+            staff_message = db.manager_add_reply(
+                conversation["id"], "Сообщение менеджера", "Ольга",
+            )
+            ai_message = db.add_message(
+                conversation["id"], "assistant", "Ответ ИИ", "manager",
+            )
+
+            deleted_user = db.manager_delete_message(
+                conversation["id"], user_message["id"], "Ольга", "manager",
+            )
+            deleted_staff = db.manager_delete_message(
+                conversation["id"], staff_message["id"], "Ольга", "manager",
+            )
+            self.assertEqual(deleted_user["message_id"], user_message["id"])
+            self.assertEqual(deleted_staff["message_id"], staff_message["id"])
+            self.assertEqual(
+                db.list_message_deletions(conversation["id"]),
+                [user_message["id"], staff_message["id"]],
+            )
+            self.assertEqual(
+                [item["id"] for item in db.list_messages(conversation["id"])],
+                [ai_message["id"]],
+            )
+            with self.assertRaisesRegex(ValueError, "только сообщение пользователя"):
+                db.manager_delete_message(
+                    conversation["id"], ai_message["id"], "Ольга", "manager",
+                )
+            self.assertIsNone(db.manager_delete_message(
+                conversation["id"], ai_message["id"], "Доктор", "doctor",
+            ))
+            detail = db.manager_conversation_detail(conversation["id"], "manager")
+            self.assertEqual(
+                [item["action"] for item in detail["manager_actions"]].count(
+                    "delete_message"
+                ),
+                2,
+            )
+        finally:
+            db.reset_current_user()
+            db.ensure_user("chel_test_default")
+            db.set_current_chel_id("chel_test_default")
+
     def test_manager_panel_and_user_mode_indicator_exist(self):
         project_root = Path(__file__).resolve().parents[1]
         manager = (project_root / "manager.html").read_text(encoding="utf-8")
@@ -2163,6 +2214,9 @@ class OrchestratorTests(unittest.TestCase):
         app = (project_root / "static" / "app.js").read_text(encoding="utf-8")
         styles = (project_root / "static" / "styles.css").read_text(encoding="utf-8")
         index = (project_root / "index.html").read_text(encoding="utf-8")
+        self.assertIn("data-delete-message-id", manager_script)
+        self.assertIn("method:'DELETE'", manager_script)
+        self.assertIn("deleted_message_ids", app)
         dockerfile = (project_root / "Dockerfile").read_text(encoding="utf-8")
         self.assertIn('id="requestList"', manager)
         self.assertIn('id="managerMessages"', manager)
@@ -2603,7 +2657,7 @@ class OrchestratorTests(unittest.TestCase):
         self.assertIn("/static/rich-text.2bf1f5fab764.css", index)
         self.assertTrue((project_root / "static" / "styles.07ffaefb4795.css").is_file())
         self.assertTrue((project_root / "static" / "rich-text.2bf1f5fab764.css").is_file())
-        self.assertIn("/static/app.js?v=20260909-payment-full-name-v5", index)
+        self.assertIn("/static/app.js?v=20260912-message-delete-v1", index)
         self.assertIn("/static/metrika.js?v=20260829-interpret-profile-v1", index)
         self.assertIn('id="welcomeScreen"', index)
         self.assertIn('id="welcomeNextButton"', index)

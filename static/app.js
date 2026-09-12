@@ -2598,6 +2598,12 @@ async function syncConversationUpdates() {
       data.ai_enabled, data.human_status, data.human_ticket_id,
     );
     applyUnreadCounts(data.unread_counts || {});
+    for (const messageId of data.deleted_message_ids || []) {
+      const numericId = Number(messageId);
+      if (Number.isInteger(numericId) && numericId > 0) {
+        messages.querySelector(`[data-message-id="${numericId}"]`)?.remove();
+      }
+    }
     let incomingMessageReceived = false;
     for (const message of data.messages || []) {
       state.lastMessageId = Math.max(state.lastMessageId, Number(message.id || 0));

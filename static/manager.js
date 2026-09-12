@@ -440,13 +440,35 @@ function renderMessages() {
     const content = isUser
       ? `<div class="plain-message-text">${escapeHtml(message.content)}</div>`
       : richText(message.content);
-    return `<article class="manager-message ${isUser ? 'user' : isHuman ? 'human' : 'ai'}">
-      <div class="message-card"><div class="message-author"><strong>${escapeHtml(author)}</strong></div>
+    const canDelete = isUser || isHuman;
+    return `<article class="manager-message ${isUser ? 'user' : isHuman ? 'human' : 'ai'}" data-message-id="${Number(message.id)}">
+      <div class="message-card"><div class="message-author"><strong>${escapeHtml(author)}</strong>${canDelete ? `<button type="button" class="message-delete-button" data-delete-message-id="${Number(message.id)}" data-message-owner="${isUser ? 'user' : 'staff'}" aria-label="Удалить сообщение">Удалить</button>` : ''}</div>
       <div class="message-bubble">${content}${docs ? `<div class="message-files">${docs}</div>` : ''}<time class="message-time">${formatDate(message.created_at, true)}</time></div></div>
     </article>`;
   }).join('') : '<div class="queue-empty">В диалоге пока нет сообщений.</div>';
   if (nearBottom || !container.dataset.rendered) container.scrollTop = container.scrollHeight;
   container.dataset.rendered = '1';
+}
+
+async function deleteMessage(messageId, owner) {
+  if (!state.selectedId || state.busy || !Number.isInteger(messageId) || messageId <= 0) return;
+  const description = owner === 'user' ? 'сообщение пользователя' : 'ваше сообщение';
+  if (!window.confirm(`Удалить ${description}? Оно исчезнет и в чате пользователя.`)) return;
+  state.busy = true;
+  try {
+    await api(
+      `/api/manager/conversations/${encodeURIComponent(state.selectedId)}/messages/${messageId}`,
+      {method:'DELETE', body:'{}'},
+    );
+    state.detail.messages = state.detail.messages.filter(item => Number(item.id) !== messageId);
+    renderMessages();
+    await loadQueue();
+    toast('Сообщение удалено');
+  } catch (error) {
+    toast(error.message, true);
+  } finally {
+    state.busy = false;
+  }
 }
 
 function agentName(id) {
@@ -654,6 +676,11 @@ $('#aiEnabled').addEventListener('change', event => setAiMode(event.target.check
 $('#closeRequestButton').addEventListener('click', closeRequest);
 $('#consultationPaymentInstructionButton').addEventListener('click', sendConsultationPaymentInstruction);
 $('#managerReplyForm').addEventListener('submit', sendReply);
+$('#managerMessages').addEventListener('click', event => {
+  const button = event.target.closest('[data-delete-message-id]');
+  if (!button) return;
+  deleteMessage(Number(button.dataset.deleteMessageId), button.dataset.messageOwner);
+});
 $('#managerReply').addEventListener('keydown', event => {
   if (event.key === 'Enter' && !event.shiftKey) {
     event.preventDefault();

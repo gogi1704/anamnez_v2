@@ -464,6 +464,7 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                 "human_ticket_id": item.get("human_ticket_id"),
                 "human_channel": item.get("human_channel"),
                 "messages": db.list_messages_after(conversation_id, after_id),
+                "deleted_message_ids": db.list_message_deletions(conversation_id),
                 "unread_counts": db.conversation_unread_counts(),
             })
         if path.startswith("/api/conversations/"):
@@ -1875,6 +1876,24 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
 
     def do_DELETE(self) -> None:
         path = urlparse(self.path).path
+        if path.startswith("/api/manager/conversations/") and "/messages/" in path:
+            manager = self._manager_authorized()
+            if not manager:
+                return
+            suffix = path.removeprefix("/api/manager/conversations/").strip("/")
+            conversation_id, separator, message_value = suffix.partition("/messages/")
+            if not separator or not conversation_id or "/" in message_value:
+                return self._json(404, {"detail": "Маршрут панели менеджера не найден"})
+            try:
+                deleted = db.manager_delete_message(
+                    conversation_id, int(message_value), manager["display_name"],
+                    manager.get("role", "manager"),
+                )
+                if not deleted:
+                    return self._json(404, {"detail": "Сообщение не найдено"})
+                return self._json(200, deleted)
+            except (ValueError, TypeError) as exc:
+                return self._json(422, {"detail": str(exc)})
         if path.startswith("/api/admin/managers/"):
             if not self._admin_authorized():
                 return

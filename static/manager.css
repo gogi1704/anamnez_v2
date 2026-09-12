@@ -95,7 +95,9 @@ button { cursor:pointer; }
 .manager-message { display:flex; gap:9px; margin:0 0 18px; }
 .manager-message.user { justify-content:flex-end; }
 .message-card { min-width:0; max-width:min(78%,680px); }
-.message-author { margin:0 5px 5px; color:var(--muted); font-size:9px; }.message-author strong { color:var(--ink); font-size:10px; }
+.message-author { display:flex; align-items:center; justify-content:space-between; gap:10px; margin:0 5px 5px; color:var(--muted); font-size:9px; }.message-author strong { color:var(--ink); font-size:10px; }
+.message-delete-button { padding:2px 5px; border:0; background:transparent; color:#a56b6b; font-size:8px; cursor:pointer; opacity:.7; }
+.message-delete-button:hover,.message-delete-button:focus-visible { color:var(--danger); opacity:1; text-decoration:underline; }
 .message-bubble { padding:12px 14px; overflow-wrap:anywhere; border:1px solid var(--line); border-radius:4px 16px 16px; background:white; box-shadow:0 5px 16px #234b3b0b; font-size:12px; line-height:1.55; white-space:pre-wrap; }
 .manager-message.user .message-bubble { border:0; border-radius:16px 4px 16px 16px; background:var(--green); color:white; }
 .manager-message.human .message-bubble { border-color:#8dbca5; background:#edf8f2; }

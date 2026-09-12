@@ -3021,6 +3021,79 @@ def manager_add_reply(
     return _manager_message(row)
 
 
+def manager_delete_message(
+    conversation_id: str, message_id: int, manager_name: str,
+    staff_role: str = "manager",
+) -> dict | None:
+    """Delete a user or staff message and retain a sync tombstone for open clients."""
+    manager_name = " ".join(str(manager_name or "").split())[:80] or "Менеджер"
+    staff_role = _staff_role(staff_role)
+    try:
+        message_id = int(message_id)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("Некорректный идентификатор сообщения") from exc
+    if message_id <= 0:
+        raise ValueError("Некорректный идентификатор сообщения")
+    now = utc_now()
+    with _write_lock, connection() as conn:
+        conversation = conn.execute(
+            """SELECT id FROM conversations WHERE id = ?
+            AND COALESCE(human_recipient_role, 'manager') = ?""",
+            (conversation_id, staff_role),
+        ).fetchone()
+        if not conversation:
+            return None
+        row = conn.execute(
+            "SELECT * FROM messages WHERE id = ? AND conversation_id = ?",
+            (message_id, conversation_id),
+        ).fetchone()
+        if not row:
+            return None
+        message = _manager_message(row)
+        metadata = message.get("metadata") or {}
+        is_user = message.get("role") == "user"
+        is_staff = metadata.get("sender_type") == "human_manager"
+        if not (is_user or is_staff):
+            raise ValueError("Можно удалить только сообщение пользователя или сотрудника")
+        conn.execute(
+            """INSERT OR REPLACE INTO message_deletions
+            (message_id, conversation_id, deleted_at) VALUES (?, ?, ?)""",
+            (message_id, conversation_id, now),
+        )
+        conn.execute(
+            """DELETE FROM manager_notification_outbox
+            WHERE conversation_id = ? AND source_message_id = ? AND status <> 'sent'""",
+            (conversation_id, message_id),
+        )
+        conn.execute("DELETE FROM messages WHERE id = ?", (message_id,))
+        conn.execute(
+            "UPDATE conversations SET updated_at = ? WHERE id = ?",
+            (now, conversation_id),
+        )
+        conn.execute(
+            """INSERT INTO manager_actions
+            (conversation_id, manager_name, action, details, created_at)
+            VALUES (?, ?, 'delete_message', ?, ?)""",
+            (
+                conversation_id, manager_name,
+                json.dumps({
+                    "message_id": message_id,
+                    "message_role": message.get("role", ""),
+                    "sender_type": metadata.get(
+                        "sender_type", "user" if is_user else "",
+                    ),
+                }, ensure_ascii=False),
+                now,
+            ),
+        )
+        conn.commit()
+    return {
+        "conversation_id": conversation_id,
+        "message_id": message_id,
+        "deleted_at": now,
+    }
+
+
 def manager_send_consultation_payment_instruction(
     conversation_id: str, manager_name: str, staff_role: str = "manager",
 ) -> dict:
@@ -3246,6 +3319,16 @@ def init_db() -> None:
                 created_at TEXT NOT NULL,
                 FOREIGN KEY(conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
             );
+
+            CREATE TABLE IF NOT EXISTS message_deletions (
+                message_id INTEGER PRIMARY KEY,
+                conversation_id TEXT NOT NULL,
+                deleted_at TEXT NOT NULL,
+                FOREIGN KEY(conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_message_deletions_conversation
+            ON message_deletions(conversation_id, message_id);
 
             CREATE TABLE IF NOT EXISTS conversation_reads (
                 conversation_id TEXT PRIMARY KEY,
@@ -4196,6 +4279,19 @@ def list_messages_after(conversation_id: str, after_id: int = 0) -> list[dict]:
             item["metadata"] = {}
         result.append(item)
     return result
+
+
+def list_message_deletions(conversation_id: str) -> list[int]:
+    """Return deleted message IDs so an already open client can remove them."""
+    with connection() as conn:
+        rows = conn.execute(
+            """SELECT d.message_id FROM message_deletions d
+            JOIN conversations c ON c.id = d.conversation_id
+            WHERE d.conversation_id = ? AND c.chel_id = ?
+            ORDER BY d.message_id""",
+            (conversation_id, current_chel_id()),
+        ).fetchall()
+    return [int(row["message_id"]) for row in rows]
 
 
 def add_message(conversation_id: str, role: str, content: str, agent_id: str | None = None, metadata: dict | None = None) -> dict:
