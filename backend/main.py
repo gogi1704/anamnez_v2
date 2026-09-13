@@ -1,3 +1,5 @@
+import base64
+import hashlib
 import json
 import hmac
 import mimetypes
@@ -105,6 +107,18 @@ def bot_token_valid(authorization: str) -> bool:
     return admin_token_valid(authorization, settings.bot_integration_secret)
 
 
+def ikp_token_valid(authorization: str) -> bool:
+    return admin_token_valid(authorization, settings.ikp_integration_secret)
+
+
+def _ikp_access_token(source_key: str) -> str:
+    token_digest = hmac.new(
+        settings.ikp_integration_secret.encode("utf-8"),
+        f"consilium-ikp:{source_key}".encode("utf-8"), hashlib.sha256,
+    ).digest()
+    return base64.urlsafe_b64encode(token_digest).decode("ascii").rstrip("=")
+
+
 def _record_startup_event(message: str) -> None:
     line = f"[{db.utc_now()}] {message}\n"
     try:
@@ -159,7 +173,8 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
         if path == "/api/health":
             return self._json(200, {"status": "ok"})
         if path == "/api/public-config":
-            counter_id = settings.yandex_metrika_counter_id
+            self._ensure_user_context()
+            counter_id = "" if db.current_user_is_ikp() else settings.yandex_metrika_counter_id
             return self._json(200, {
                 "yandex_metrika_counter_id": counter_id if counter_id.isdigit() else "",
                 "online_payments_enabled": bool(
@@ -189,6 +204,15 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                 return self._json(422, {"detail": str(exc)})
         if path == "/favicon.ico":
             return self._send_file(STATIC_DIR / "favicon.svg", "image/svg+xml; charset=utf-8")
+        if path.startswith("/ikp/"):
+            access_token = path.removeprefix("/ikp/").strip("/")
+            self._ensure_user_context()
+            try:
+                db.record_ikp_access(access_token, db.current_chel_id())
+            except ValueError as exc:
+                return self._json(404, {"detail": str(exc)})
+            db.record_device_access(self.headers.get("User-Agent", ""))
+            return self._send_file(BASE_DIR / "index.html", "text/html; charset=utf-8")
         if path == "/api/ready":
             database_ready = False
             try:
@@ -242,6 +266,7 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
         if path in {
             "/api/admin/dashboard", "/api/admin/table", "/api/admin/ai-costs",
             "/api/admin/analytics", "/api/admin/metric2",
+            "/api/admin/ikp",
             "/api/admin/funnel-monitor", "/api/admin/funnel-monitor/preview",
         }:
             if not self._admin_authorized():
@@ -258,6 +283,8 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                     return self._json(422, {"detail": str(exc)})
             if path == "/api/admin/dashboard":
                 return self._json(200, db.admin_dashboard())
+            if path == "/api/admin/ikp":
+                return self._json(200, db.admin_ikp_report())
             query = parse_qs(parsed.query)
             if path == "/api/admin/metric2":
                 try:
@@ -477,6 +504,22 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         path = urlparse(self.path).path
+        if path == "/api/integrations/ikp/access":
+            if not ikp_token_valid(self.headers.get("Authorization", "")):
+                return self._json(401, {"detail": "Неверные данные интеграции ИКП"})
+            try:
+                payload = self._read_json(max_bytes=4_000)
+                source_key, inn, company = db.normalize_ikp_identity(
+                    payload.get("inn", ""), payload.get("company", ""),
+                )
+                access_token = _ikp_access_token(source_key)
+                link = db.provision_ikp_access(inn, company, access_token)
+                return self._json(200, {
+                    "id": link["id"], "inn": link["inn"], "company": link["company"],
+                    "url": f"{settings.public_base_url}/ikp/{link['access_token']}",
+                })
+            except (ValueError, TypeError, json.JSONDecodeError, UnicodeDecodeError) as exc:
+                return self._json(422, {"detail": str(exc)})
         if path == "/api/admin/funnel-monitor/settings":
             if not self._admin_authorized():
                 return

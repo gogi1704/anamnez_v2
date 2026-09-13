@@ -11,7 +11,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/static/dashboard.css?v=20260908-driving-analytics-v1">
+  <link rel="stylesheet" href="/static/dashboard.css?v=20260913-ikp-v1">
 </head>
 <body>
   <main class="dashboard-shell">
@@ -55,6 +55,7 @@
         <button id="analyticsTab" type="button">Воронка и поведение</button>
         <button id="metric2Tab" type="button">Метрика 2.0</button>
         <button id="monitorTab" type="button">Мониторинг в Bitrix24</button>
+        <button id="ikpTab" type="button">ИКП</button>
         <button id="managersTab" type="button">Менеджеры и врачи</button>
         <button id="examinationsTab" type="button">Дополнительные обследования</button>
         <button id="costsTab" type="button">Расходы</button>
@@ -193,6 +194,21 @@
           </aside>
         </div>
         <article class="panel monitor-preview-panel hidden" id="monitorPreviewPanel"><div class="panel-heading"><div><p class="eyebrow">Проверка до отправки</p><h2>Предпросмотр агрегатов</h2><p>Это техническое представление того, что будет передано Connector. Пользовательские данные в нём отсутствуют.</p></div></div><pre id="monitorPreview"></pre></article>
+      </section>
+
+      <section class="ikp-admin hidden" id="ikpAdminView">
+        <article class="panel">
+          <div class="panel-heading"><div><p class="eyebrow">Отдельная аудитория</p><h2>Переходы из ИКП</h2><p>Эти пользователи считаются только здесь и исключены из остальных продуктовых метрик.</p></div><span class="table-count" id="ikpGeneratedAt"></span></div>
+          <section class="ikp-summary" id="ikpSummary"></section>
+        </article>
+        <article class="panel table-panel">
+          <div class="panel-heading"><div><p class="eyebrow">По предприятиям</p><h2>Персональные ссылки</h2></div><span class="table-count" id="ikpLinkCount"></span></div>
+          <div class="table-scroll"><table><thead><tr><th>Предприятие</th><th>ИНН</th><th>Переходы</th><th>Пользователи</th><th>Активность</th><th>Последний переход</th></tr></thead><tbody id="ikpLinksTable"></tbody></table></div>
+        </article>
+        <article class="panel table-panel">
+          <div class="panel-heading"><div><p class="eyebrow">Использование сервиса</p><h2>Пользователи ИКП</h2></div><span class="table-count" id="ikpUserCount"></span></div>
+          <div class="table-scroll"><table><thead><tr><th>Предприятие</th><th>chel_id</th><th>Переходы</th><th>Старт</th><th>Диалоги</th><th>Сообщения</th><th>Последняя активность</th></tr></thead><tbody id="ikpUsersTable"></tbody></table></div>
+        </article>
       </section>
 
       <section class="costs-admin hidden" id="costsAdminView">
@@ -488,6 +504,6 @@
       </div>
     </section>
   </div>
-  <script src="/static/dashboard.js?v=20260909-bitrix-default-names-v1" defer></script>
+<script src="/static/dashboard.js?v=20260913-ikp-v1" defer></script>
 </body>
 </html>

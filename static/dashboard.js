@@ -779,6 +779,20 @@ async function loadStaff() {
   }, 'Загружаем сотрудников…');
 }
 
+async function loadIkp() {
+  const data = await adminFetch('/api/admin/ikp');
+  const summary = data.summary || {};
+  $('#ikpGeneratedAt').textContent = `Обновлено ${formatDate(data.generated_at)}`;
+  $('#ikpSummary').innerHTML = [
+    ['Ссылки',summary.links || 0],['Переходы',summary.visits || 0],
+    ['Пользователи',summary.users || 0],['Использовали сервис',summary.active_users || 0],
+  ].map(([label,value]) => `<article><strong>${Number(value).toLocaleString('ru-RU')}</strong><span>${label}</span></article>`).join('');
+  $('#ikpLinkCount').textContent = `${(data.links || []).length} ссылок`;
+  $('#ikpLinksTable').innerHTML = (data.links || []).map(item => `<tr><td><strong>${escapeHtml(item.company || 'Без названия')}</strong></td><td>${escapeHtml(item.inn || '—')}</td><td>${item.visit_count}</td><td>${item.users}</td><td>${item.conversations} диалогов · ${item.messages} сообщений</td><td>${escapeHtml(formatDate(item.last_accessed_at))}</td></tr>`).join('') || '<tr><td colspan="6">Ссылки ещё не создавались</td></tr>';
+  $('#ikpUserCount').textContent = `${(data.users || []).length} записей`;
+  $('#ikpUsersTable').innerHTML = (data.users || []).map(item => `<tr><td><strong>${escapeHtml(item.company || 'Без названия')}</strong><small>${escapeHtml(item.inn || '')}</small></td><td><code>${escapeHtml(item.chel_id)}</code></td><td>${item.visit_count}</td><td>${escapeHtml(statusNames[item.onboarding_status] || item.onboarding_status)}</td><td>${item.conversations}</td><td>${item.messages}</td><td>${escapeHtml(formatDate(item.last_seen_at))}</td></tr>`).join('') || '<tr><td colspan="7">Переходов пока нет</td></tr>';
+}
+
 async function deleteUserData(event) {
   event.preventDefault();
   const chelId = $('#userDataCleanupId').value.trim();
@@ -1626,11 +1640,12 @@ async function testFunnelMonitor(analysis = 'all', button = null) {
 }
 
 function showAdminView(view) {
-  activeAdminView = ['favorites','analytics','metric2','monitor','managers','examinations','costs'].includes(view) ? view : 'dashboard';
+  activeAdminView = ['favorites','analytics','metric2','monitor','ikp','managers','examinations','costs'].includes(view) ? view : 'dashboard';
   const favoritesVisible = activeAdminView === 'favorites';
   const analyticsVisible = activeAdminView === 'analytics';
   const metric2Visible = activeAdminView === 'metric2';
   const monitorVisible = activeAdminView === 'monitor';
+  const ikpVisible = activeAdminView === 'ikp';
   const managersVisible = activeAdminView === 'managers';
   const examinationsVisible = activeAdminView === 'examinations';
   const costsVisible = activeAdminView === 'costs';
@@ -1645,6 +1660,7 @@ function showAdminView(view) {
   $('#analyticsAdminView').classList.toggle('hidden', !analyticsVisible);
   $('#metric2AdminView').classList.toggle('hidden', !metric2Visible);
   $('#monitorAdminView').classList.toggle('hidden', !monitorVisible);
+  $('#ikpAdminView').classList.toggle('hidden', !ikpVisible);
   $('#managerAdminView').classList.toggle('hidden', !managersVisible);
   $('#examinationAdminView').classList.toggle('hidden', !examinationsVisible);
   $('#costsAdminView').classList.toggle('hidden', !costsVisible);
@@ -1653,6 +1669,7 @@ function showAdminView(view) {
   $('#analyticsTab').classList.toggle('active', analyticsVisible);
   $('#metric2Tab').classList.toggle('active', metric2Visible);
   $('#monitorTab').classList.toggle('active', monitorVisible);
+  $('#ikpTab').classList.toggle('active', ikpVisible);
   $('#managersTab').classList.toggle('active', managersVisible);
   $('#examinationsTab').classList.toggle('active', examinationsVisible);
   $('#costsTab').classList.toggle('active', costsVisible);
@@ -1674,6 +1691,7 @@ async function loadAdminViewData(view = activeAdminView, {force = false} = {}) {
   else if (view === 'analytics') request = loadAnalytics();
   else if (view === 'metric2') request = loadMetric2();
   else if (view === 'monitor') request = loadFunnelMonitor();
+  else if (view === 'ikp') request = loadIkp();
   else return;
   await request;
   loadedAdminViews.add(view);
@@ -2091,6 +2109,7 @@ $('#favoritesTab').addEventListener('click', () => showAdminView('favorites'));
 $('#analyticsTab').addEventListener('click', () => showAdminView('analytics'));
 $('#metric2Tab').addEventListener('click', () => showAdminView('metric2'));
 $('#monitorTab').addEventListener('click', () => showAdminView('monitor'));
+$('#ikpTab').addEventListener('click', () => showAdminView('ikp'));
 $('#managersTab').addEventListener('click', () => showAdminView('managers'));
 $('#examinationsTab').addEventListener('click', () => showAdminView('examinations'));
 $('#costsTab').addEventListener('click', () => showAdminView('costs'));

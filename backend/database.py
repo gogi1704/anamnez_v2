@@ -35,7 +35,16 @@ def _test_company_inn_chel_ids(conn: sqlite3.Connection) -> set[str]:
 
 def _statistics_excluded_chel_ids(conn: sqlite3.Connection) -> set[str]:
     """Return identities that must never contribute to product statistics."""
-    return {"chel_legacy", "chel_test_default"} | _test_company_inn_chel_ids(conn)
+    excluded = {"chel_legacy", "chel_test_default"} | _test_company_inn_chel_ids(conn)
+    try:
+        excluded.update(
+            str(row[0]) for row in conn.execute(
+                "SELECT DISTINCT chel_id FROM ikp_access_users"
+            ).fetchall()
+        )
+    except sqlite3.OperationalError:
+        pass
+    return excluded
 
 
 def is_test_user(chel_id: str | None = None) -> bool:
@@ -411,6 +420,121 @@ def current_device() -> dict:
 def user_exists(chel_id: str) -> bool:
     with connection() as conn:
         return bool(conn.execute("SELECT 1 FROM users WHERE chel_id = ?", (chel_id,)).fetchone())
+
+
+def normalize_ikp_identity(inn: str, company: str) -> tuple[str, str, str]:
+    normalized_inn = "".join(str(inn or "").split())
+    normalized_company = " ".join(str(company or "").split())[:300]
+    if normalized_inn:
+        if not normalized_inn.isdigit() or len(normalized_inn) not in {10, 12}:
+            raise ValueError("ИНН должен состоять из 10 или 12 цифр")
+        return f"inn:{normalized_inn}", normalized_inn, normalized_company
+    if not normalized_company:
+        raise ValueError("Укажите ИНН или название предприятия")
+    company_digest = hashlib.sha256(normalized_company.casefold().encode("utf-8")).hexdigest()
+    return f"company:{company_digest}", "", normalized_company
+
+
+def provision_ikp_access(inn: str, company: str, access_token: str) -> dict:
+    source_key, normalized_inn, normalized_company = normalize_ikp_identity(inn, company)
+    if not access_token or len(access_token) < 32:
+        raise ValueError("Некорректный токен ссылки")
+    now = utc_now()
+    with _write_lock, connection() as conn:
+        existing = conn.execute(
+            "SELECT id,created_at,access_token FROM ikp_access_links WHERE source_key=?", (source_key,),
+        ).fetchone()
+        link_id = existing["id"] if existing else str(uuid.uuid4())
+        created_at = existing["created_at"] if existing else now
+        stored_token = existing["access_token"] if existing else access_token
+        stored_hash = hashlib.sha256(stored_token.encode("utf-8")).hexdigest()
+        conn.execute(
+            """INSERT INTO ikp_access_links
+               (id,source_key,inn,company,access_token,token_hash,created_at,updated_at)
+               VALUES (?,?,?,?,?,?,?,?)
+               ON CONFLICT(source_key) DO UPDATE SET
+                 inn=excluded.inn,company=excluded.company,updated_at=excluded.updated_at""",
+            (link_id, source_key, normalized_inn, normalized_company, stored_token, stored_hash, created_at, now),
+        )
+        conn.commit()
+    return {"id": link_id, "inn": normalized_inn, "company": normalized_company, "access_token": stored_token}
+
+
+def record_ikp_access(access_token: str, chel_id: str) -> dict:
+    token_hash = hashlib.sha256(str(access_token or "").encode("utf-8")).hexdigest()
+    now = utc_now()
+    with _write_lock, connection() as conn:
+        link = conn.execute(
+            "SELECT * FROM ikp_access_links WHERE token_hash=?", (token_hash,),
+        ).fetchone()
+        if not link:
+            raise ValueError("Ссылка ИКП не найдена")
+        conn.execute(
+            """UPDATE ikp_access_links SET visit_count=visit_count+1,
+               last_accessed_at=? WHERE id=?""", (now, link["id"]),
+        )
+        conn.execute(
+            """INSERT INTO ikp_access_users
+               (link_id,chel_id,first_seen_at,last_seen_at,visit_count)
+               VALUES (?,?,?,?,1)
+               ON CONFLICT(link_id,chel_id) DO UPDATE SET
+                 last_seen_at=excluded.last_seen_at,
+                 visit_count=ikp_access_users.visit_count+1""",
+            (link["id"], chel_id, now, now),
+        )
+        conn.commit()
+    return dict(link)
+
+
+def current_user_is_ikp() -> bool:
+    with connection() as conn:
+        return bool(conn.execute(
+            "SELECT 1 FROM ikp_access_users WHERE chel_id=? LIMIT 1",
+            (current_chel_id(),),
+        ).fetchone())
+
+
+def admin_ikp_report() -> dict:
+    with connection() as conn:
+        links = [dict(row) for row in conn.execute(
+            """SELECT l.id,l.inn,l.company,l.created_at,l.updated_at,
+                      l.last_accessed_at,l.visit_count,
+                      COUNT(DISTINCT iu.chel_id) AS users,
+                      COUNT(DISTINCT CASE WHEN u.registered_at IS NOT NULL THEN iu.chel_id END) AS registered_users,
+                      COUNT(DISTINCT c.id) AS conversations,
+                      COUNT(DISTINCT m.id) AS messages
+               FROM ikp_access_links l
+               LEFT JOIN ikp_access_users iu ON iu.link_id=l.id
+               LEFT JOIN users u ON u.chel_id=iu.chel_id
+               LEFT JOIN conversations c ON c.chel_id=iu.chel_id
+               LEFT JOIN messages m ON m.conversation_id=c.id
+               GROUP BY l.id ORDER BY COALESCE(l.last_accessed_at,l.created_at) DESC"""
+        ).fetchall()]
+        users = [dict(row) for row in conn.execute(
+            """SELECT iu.link_id,l.inn,l.company,iu.chel_id,iu.first_seen_at,
+                      iu.last_seen_at,iu.visit_count,u.registered_at,
+                      COALESCE(o.status,'not_started') AS onboarding_status,
+                      COUNT(DISTINCT c.id) AS conversations,
+                      COUNT(DISTINCT m.id) AS messages
+               FROM ikp_access_users iu
+               JOIN ikp_access_links l ON l.id=iu.link_id
+               LEFT JOIN users u ON u.chel_id=iu.chel_id
+               LEFT JOIN onboarding_state o ON o.chel_id=iu.chel_id
+               LEFT JOIN conversations c ON c.chel_id=iu.chel_id
+               LEFT JOIN messages m ON m.conversation_id=c.id
+               GROUP BY iu.link_id,iu.chel_id ORDER BY iu.last_seen_at DESC LIMIT 500"""
+        ).fetchall()]
+    return {
+        "summary": {
+            "links": len(links),
+            "visits": sum(int(item["visit_count"] or 0) for item in links),
+            "users": len({item["chel_id"] for item in users}),
+            "active_users": len({item["chel_id"] for item in users if item["conversations"] or item["messages"]}),
+        },
+        "links": links,
+        "users": users,
+        "generated_at": utc_now(),
+    }
 
 
 def reset_current_user(preserve_identity: bool = False) -> None:
@@ -3246,7 +3370,7 @@ def connection():
     conn.row_factory = sqlite3.Row
     conn.create_function("CASEFOLD", 1, _sqlite_casefold, deterministic=True)
     test_company_inn_users = _test_company_inn_chel_ids(conn)
-    excluded_from_statistics = {"chel_legacy", "chel_test_default"} | test_company_inn_users
+    excluded_from_statistics = _statistics_excluded_chel_ids(conn)
     conn.create_function(
         "IS_STATS_USER", 1,
         lambda value: 0 if str(value or "") in excluded_from_statistics else 1,
@@ -3276,6 +3400,30 @@ def init_db() -> None:
                 registration_method TEXT,
                 from_manager TEXT NOT NULL DEFAULT '',
                 result_entry_at TEXT
+            );
+
+            CREATE TABLE IF NOT EXISTS ikp_access_links (
+                id TEXT PRIMARY KEY,
+                source_key TEXT NOT NULL UNIQUE,
+                inn TEXT NOT NULL DEFAULT '',
+                company TEXT NOT NULL DEFAULT '',
+                access_token TEXT NOT NULL UNIQUE,
+                token_hash TEXT NOT NULL UNIQUE,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                last_accessed_at TEXT,
+                visit_count INTEGER NOT NULL DEFAULT 0
+            );
+
+            CREATE TABLE IF NOT EXISTS ikp_access_users (
+                link_id TEXT NOT NULL,
+                chel_id TEXT NOT NULL,
+                first_seen_at TEXT NOT NULL,
+                last_seen_at TEXT NOT NULL,
+                visit_count INTEGER NOT NULL DEFAULT 1,
+                PRIMARY KEY(link_id,chel_id),
+                FOREIGN KEY(link_id) REFERENCES ikp_access_links(id) ON DELETE CASCADE,
+                FOREIGN KEY(chel_id) REFERENCES users(chel_id) ON DELETE CASCADE
             );
 
             CREATE TABLE IF NOT EXISTS user_device_stats (
@@ -3951,6 +4099,7 @@ def init_db() -> None:
 
         conn.execute("CREATE INDEX IF NOT EXISTS idx_conversations_chel_id ON conversations(chel_id, updated_at)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_users_registered_at ON users(registered_at)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_ikp_access_users_chel_id ON ikp_access_users(chel_id,last_seen_at)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_users_last_seen_at ON users(last_seen_at)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_conversations_updated_at ON conversations(updated_at)")
         conn.execute(

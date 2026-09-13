@@ -59,6 +59,11 @@ def _statistics_excluded_chel_ids() -> set[str]:
                 (TEST_COMPANY_INN,),
             ).fetchall()
         )
+        excluded.update(
+            str(row[0]) for row in main_conn.execute(
+                "SELECT DISTINCT chel_id FROM ikp_access_users"
+            ).fetchall()
+        )
     except sqlite3.Error:
         # The primary database can still be bootstrapping when analytics starts.
         pass

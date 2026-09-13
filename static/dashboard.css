@@ -574,4 +574,5 @@ tbody tr:hover { background:#f8fbf9; }
   .header-actions .button:first-child { grid-column:auto; }
 }
 .consultation-payment-analytics { margin:18px 0; padding:18px; border:1px solid #cfe1d8; border-radius:16px; background:#f5faf7; }
+.ikp-admin{display:grid;gap:18px}.ikp-admin.hidden{display:none}.ikp-summary{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px;margin-top:18px}.ikp-summary article{padding:17px;border:1px solid #d7e7df;border-radius:14px;background:#f5faf7}.ikp-summary strong,.ikp-summary span{display:block}.ikp-summary strong{color:var(--green);font-size:26px}.ikp-summary span{margin-top:4px;color:var(--muted);font-size:11px}.ikp-admin td small{display:block;margin-top:4px;color:var(--muted)}@media(max-width:760px){.ikp-summary{grid-template-columns:repeat(2,minmax(0,1fr))}}
 .consultation-payment-analytics h3 { margin:4px 0 14px; }

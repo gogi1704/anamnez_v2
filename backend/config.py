@@ -40,6 +40,7 @@ class Settings:
     ))
     analytics_enabled: bool = env_bool("ANALYTICS_ENABLED", True)
     analytics_retention_days: int = int(os.getenv("ANALYTICS_RETENTION_DAYS", "90"))
+    ikp_integration_secret: str = os.getenv("IKP_INTEGRATION_SECRET", "").strip()
     yandex_metrika_counter_id: str = os.getenv("YANDEX_METRIKA_COUNTER_ID", "").strip()
     dadata_api_key: str = os.getenv("DADATA_API_KEY", "").strip()
     dadata_suggestions_url: str = os.getenv(
