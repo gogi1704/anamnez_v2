@@ -179,6 +179,18 @@ def main() -> int:
     else:
         warnings.append("Интеграция с мессенджерами отключена: BOT_INTEGRATION_SECRET не задан")
 
+    ikp_secret = settings.ikp_integration_secret.strip()
+    if production and (
+        len(ikp_secret) < 32
+        or ikp_secret == "replace_with_shared_random_secret"
+    ):
+        errors.append(
+            "IKP_INTEGRATION_SECRET должен быть случайной строкой длиной не менее 32 символов"
+        )
+    elif ikp_secret:
+        passed.append("Секрет интеграции с ИКП задан (значение скрыто)")
+    else:
+        warnings.append("Интеграция с ИКП отключена: IKP_INTEGRATION_SECRET не задан")
     dashboard_token = settings.admin_dashboard_token.strip()
     if production and (
         len(dashboard_token) < 32
