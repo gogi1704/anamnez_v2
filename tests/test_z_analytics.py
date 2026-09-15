@@ -25,7 +25,8 @@ class AnalyticsTests(unittest.TestCase):
                 CREATE TABLE user_profile (
                     chel_id TEXT PRIMARY KEY,
                     company_inn TEXT NOT NULL DEFAULT '',
-                    driving_time TEXT NOT NULL DEFAULT ''
+                    driving_time TEXT NOT NULL DEFAULT '',
+                    tube_number TEXT NOT NULL DEFAULT ''
                 );
                 CREATE TABLE payment_orders (
                     id TEXT PRIMARY KEY, chel_id TEXT NOT NULL, status TEXT NOT NULL,
@@ -228,6 +229,70 @@ class AnalyticsTests(unittest.TestCase):
                 ("over_2h", 0, 0.0),
             ],
         )
+
+    def test_service_result_groups_are_mutually_exclusive(self):
+        conn = sqlite3.connect(settings.database_path)
+        try:
+            conn.executemany(
+                "INSERT INTO user_profile (chel_id, company_inn, tube_number) VALUES (?,?,?)",
+                [
+                    ("CHEL-BOTH", "7700000011", "TUBE-1"),
+                    ("CHEL-RESULT", "7700000012", "TUBE-2"),
+                    ("CHEL-APPLICATION", "7700000013", ""),
+                    ("CHEL-FOUND-NO-TUBE", "7700000014", ""),
+                    ("CHEL-TUBE-NO-DOCUMENTS", "7700000015", "TUBE-3"),
+                ],
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        events_by_user = {
+            "CHEL-BOTH": [
+                ("examinations_selection_completed", {"selected_count": 1}),
+                ("lab_results_found", {}),
+            ],
+            "CHEL-RESULT": [("lab_results_found", {})],
+            "CHEL-APPLICATION": [
+                ("examinations_selection_completed", {"selected_count": 2}),
+            ],
+            "CHEL-FOUND-NO-TUBE": [("lab_results_found", {})],
+            "CHEL-TUBE-NO-DOCUMENTS": [("tube_linked", {})],
+        }
+        sequence = 0
+        for chel_id, user_events in events_by_user.items():
+            payload = []
+            for event_name, properties in user_events:
+                sequence += 1
+                payload.append({
+                    "event_id": f"service-group-{sequence:04d}",
+                    "session_id": f"service-session-{chel_id.lower()}",
+                    "event_name": event_name,
+                    "properties": properties,
+                })
+            analytics.record_events(chel_id, payload)
+
+        report = analytics.service_result_report("30")
+        groups = {
+            item["key"]: item["users"]
+            for item in report["groups"]
+        }
+        self.assertEqual(report["users"], 4)
+        self.assertEqual(groups, {
+            "application_and_results": 1,
+            "results_without_application": 2,
+            "application_without_results": 1,
+        })
+        separate_report = analytics.service_result_report("30")
+        self.assertEqual(separate_report["users"], 4)
+        self.assertEqual(
+            {item["key"]: item["users"] for item in separate_report["groups"]},
+            groups,
+        )
+        with self.assertRaisesRegex(ValueError, "Дата начала"):
+            analytics.service_result_report(
+                "30", date_from="2026-09-15", date_to="2026-09-14",
+            )
 
     def test_payment_method_does_not_replace_registration_method(self):
         analytics.record_events("CHEL-METHOD", [
@@ -448,6 +513,27 @@ class AnalyticsTests(unittest.TestCase):
         self.assertEqual(welcome_actions["continue"]["percent_of_screen"], 50.0)
         self.assertEqual(screens["exam_selection"]["users"], 0)
         self.assertNotIn("chat", [item["id"] for item in report["screens"]])
+
+    def test_metric2_reports_results_preview_as_exam_selection_branch(self):
+        analytics.record_events("CHEL-METRIC-PREVIEW", [
+            {"event_id": "preview-welcome", "session_id": "preview-session", "event_name": "onboarding_screen_viewed", "properties": {"screen": "welcome", "context": "onboarding"}},
+            {"event_id": "preview-selection", "session_id": "preview-session", "event_name": "onboarding_screen_viewed", "properties": {"screen": "exam_selection", "context": "onboarding"}},
+            {"event_id": "preview-open", "session_id": "preview-session", "event_name": "onboarding_screen_action", "properties": {"screen": "exam_selection", "action": "open_results_preview", "context": "onboarding"}},
+            {"event_id": "preview-view", "session_id": "preview-session", "event_name": "onboarding_screen_viewed", "properties": {"screen": "exam_results_preview", "context": "onboarding"}},
+            {"event_id": "preview-specialist", "session_id": "preview-session", "event_name": "onboarding_screen_action", "properties": {"screen": "exam_results_preview", "action": "specialist", "context": "onboarding"}},
+            {"event_id": "preview-back", "session_id": "preview-session", "event_name": "onboarding_screen_action", "properties": {"screen": "exam_results_preview", "action": "back", "context": "onboarding"}},
+            {"event_id": "preview-selection-return", "session_id": "preview-session", "event_name": "onboarding_screen_viewed", "properties": {"screen": "exam_selection", "context": "onboarding"}},
+        ])
+
+        report = analytics.metric2_report("30")
+        screens = {item["id"]: item for item in report["screens"]}
+        preview = screens["exam_results_preview"]
+        actions = {item["id"]: item for item in preview["actions"]}
+        self.assertTrue(preview["branch"])
+        self.assertEqual(preview["parent_id"], "exam_selection")
+        self.assertEqual(preview["users"], 1)
+        self.assertEqual(actions["specialist"]["users"], 1)
+        self.assertEqual(actions["back"]["users"], 1)
 
     def test_metric2_separates_standard_and_result_link_funnels(self):
         analytics.record_events("CHEL-STANDARD-BRANCH", [

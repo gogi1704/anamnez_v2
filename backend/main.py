@@ -5,6 +5,7 @@ import hmac
 import mimetypes
 import re
 import secrets
+import socket
 import threading
 import time
 import traceback
@@ -30,6 +31,7 @@ ALLOWED_STATIC = {
     "rich-text.js", "rich-text.css", "rich-text.2bf1f5fab764.css", "dashboard.js", "dashboard.css",
     "manager.js", "manager.css", "icon-192.png", "icon-512.png",
     "icon-maskable-512.png", "apple-touch-icon.png", "favicon.svg",
+    "example-lab-result.pdf",
 }
 SERVER_ERROR_LOG = settings.log_path
 MANAGER_SESSION_COOKIE = "consilium_manager_session"
@@ -65,7 +67,7 @@ def _chat_access_allowed() -> bool:
     """Keep the standard questionnaire funnel closed until its final screen."""
     state = db.get_onboarding()
     status = str(state.get("status") or "appearance")
-    if status in {"exams", "payment"}:
+    if status in {"not_medical_exam", "exams", "payment"}:
         return False
     if status == "questionnaire":
         return False
@@ -84,7 +86,7 @@ def _chat_access_allowed() -> bool:
 def _result_entry_can_start(onboarding: dict) -> bool:
     """Do not let /result replace an already active standard questionnaire."""
     status = str(onboarding.get("status") or "appearance")
-    if status in {"questionnaire", "exams", "payment"}:
+    if status in {"questionnaire", "not_medical_exam", "exams", "payment"}:
         return False
     if status != "complete" or onboarding.get("intro_seen"):
         return True
@@ -157,6 +159,18 @@ def _record_server_error(prefix: str) -> None:
 
 class ConsiliumHTTPServer(ThreadingHTTPServer):
     daemon_threads = True
+    # HTTPServer enables SO_REUSEADDR by default. On Windows that can allow
+    # several local development servers to listen on the same port, so the
+    # browser is served by an arbitrary project. Make the Consilium port
+    # exclusive and fail loudly when another application already owns it.
+    allow_reuse_address = False
+
+    def server_bind(self) -> None:
+        if hasattr(socket, "SO_EXCLUSIVEADDRUSE"):
+            self.socket.setsockopt(
+                socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1,
+            )
+        super().server_bind()
 
     def handle_error(self, request, client_address) -> None:
         _record_server_error(f"Ошибка запроса от {client_address[0]}:{client_address[1]}")
@@ -255,10 +269,17 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
             if name not in ALLOWED_STATIC:
                 return self._json(404, {"detail": "Файл не найден"})
             mime = mimetypes.guess_type(name)[0] or "application/octet-stream"
+            content_type = (
+                f"{mime}; charset=utf-8"
+                if mime.startswith("text/") or mime in {
+                    "application/javascript", "application/json", "image/svg+xml",
+                }
+                else mime
+            )
             immutable = bool(re.search(r"\.[0-9a-f]{12}\.(?:css|js)$", name))
             return self._send_file(
                 STATIC_DIR / name,
-                f"{mime}; charset=utf-8",
+                content_type,
                 cache_control=(
                     "public, max-age=31536000, immutable" if immutable else "no-store"
                 ),
@@ -266,6 +287,7 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
         if path in {
             "/api/admin/dashboard", "/api/admin/table", "/api/admin/ai-costs",
             "/api/admin/analytics", "/api/admin/metric2",
+            "/api/admin/service-results",
             "/api/admin/ikp",
             "/api/admin/funnel-monitor", "/api/admin/funnel-monitor/preview",
         }:
@@ -286,6 +308,22 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
             if path == "/api/admin/ikp":
                 return self._json(200, db.admin_ikp_report())
             query = parse_qs(parsed.query)
+            if path == "/api/admin/service-results":
+                try:
+                    if query.get("refresh", [""])[0] == "1":
+                        analytics.refresh_reports()
+                    return self._json(200, analytics.service_result_report(
+                        query.get("period", ["30"])[0],
+                        query.get("date_from", [""])[0],
+                        query.get("date_to", [""])[0],
+                        background=True,
+                    ))
+                except analytics.ReportBuilding:
+                    return self._json(202, {"status": "building", "retry_after_ms": 750})
+                except analytics.ReportBuildFailed as exc:
+                    return self._json(503, {"detail": f"Не удалось рассчитать отчёт: {exc}"})
+                except (ValueError, TypeError) as exc:
+                    return self._json(422, {"detail": str(exc)})
             if path == "/api/admin/metric2":
                 try:
                     if query.get("refresh", [""])[0] == "1":
@@ -1148,7 +1186,12 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                 return self._json(422, {"detail": str(exc)})
         if path == "/api/profile":
             try:
-                return self._json(200, db.save_profile(self._validate_profile(self._read_json())))
+                previous_tube = str(db.get_profile().get("tube_number", "")).strip()
+                profile = db.save_profile(self._validate_profile(self._read_json()))
+                current_tube = str(profile.get("tube_number", "")).strip()
+                if current_tube and current_tube != previous_tube:
+                    self._track_analytics("tube_linked")
+                return self._json(200, profile)
             except (ValueError, TypeError) as exc:
                 return self._json(422, {"detail": str(exc)})
         if path == "/api/lab-results/interpret":
@@ -1315,20 +1358,41 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                 return self._json(422, {"detail": str(exc)})
         if path == "/api/onboarding/not-medical-exam":
             state = db.save_onboarding(
-                status="complete",
+                status="not_medical_exam",
                 selected_tests=[],
                 payment_status="not_medical_exam",
+                questionnaire_skipped=True,
                 intro_seen=False,
             )
             self._track_analytics("not_medical_exam_selected")
-            self._track_analytics("onboarding_completed", {"result": "not_medical_exam"})
+            return self._json(200, public_onboarding(
+                state, db.get_profile(), db.list_examinations(),
+            ))
+        if path == "/api/onboarding/not-medical-exam/back":
+            state = db.save_onboarding(
+                status="questionnaire", selected_tests=[], payment_status="none",
+                questionnaire_skipped=False,
+            )
+            self._track_analytics("not_medical_exam_returned")
+            return self._json(200, public_onboarding(
+                state, db.get_profile(), db.list_examinations(),
+            ))
+        if path == "/api/onboarding/not-medical-exam/continue":
+            state = db.save_onboarding(
+                status="exams", selected_tests=[], payment_status="not_medical_exam",
+                questionnaire_skipped=True,
+            )
+            self._track_analytics("not_medical_exam_services_offered")
             return self._json(200, public_onboarding(
                 state, db.get_profile(), db.list_examinations(),
             ))
         if path == "/api/onboarding/profile":
             try:
                 profile = db.save_profile(self._validate_profile(self._read_json(), required=True))
-                state = db.save_onboarding(status="exams", selected_tests=[], payment_status="none")
+                state = db.save_onboarding(
+                    status="exams", selected_tests=[], payment_status="none",
+                    questionnaire_skipped=False,
+                )
                 self._track_analytics("questionnaire_completed")
                 return self._json(200, public_onboarding(
                     state, profile, db.list_examinations(),
@@ -1397,13 +1461,9 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                 payment_method = str(payload.get("method", "")).strip().lower()
                 if payment_method != "at_exam":
                     raise ValueError("Онлайн-оплата временно недоступна")
-                customer_full_name = self._validate_payment_customer_name(
-                    payload.get("customer_full_name")
-                )
                 state = db.get_onboarding()
                 if state["status"] != "payment" or not state["selected_tests"]:
                     raise ValueError("Сначала выберите обследования")
-                db.update_preferred_name(customer_full_name)
                 state = db.save_onboarding(status="complete", payment_status="pay_at_exam")
                 self._track_analytics("payment_method_selected", {
                     "method": "at_exam", "selected_count": len(state.get("selected_tests", [])),

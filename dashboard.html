@@ -11,7 +11,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/static/dashboard.css?v=20260913-ikp-v1">
+  <link rel="stylesheet" href="/static/dashboard.css?v=20260915-metric-results-preview-v1">
 </head>
 <body>
   <main class="dashboard-shell">
@@ -53,6 +53,7 @@
         <button id="favoritesTab" type="button">★ Избранное <span class="favorites-count" id="favoritesCount">0</span></button>
         <button class="active" id="dashboardTab" type="button">Дашборд</button>
         <button id="analyticsTab" type="button">Воронка и поведение</button>
+        <button id="serviceResultsTab" type="button">Услуги и результаты</button>
         <button id="metric2Tab" type="button">Метрика 2.0</button>
         <button id="monitorTab" type="button">Мониторинг в Bitrix24</button>
         <button id="ikpTab" type="button">ИКП</button>
@@ -141,6 +142,28 @@
         <article class="panel driving-time-analytics-panel"><div class="panel-heading"><div><p class="eyebrow">Ответы пользователей</p><h2>Сколько времени проводят за рулём</h2><p>Распределение текущих сохранённых ответов пользователей, попавших в выбранный период и фильтры аналитики.</p></div><span class="table-count" id="drivingTimeAnswered">0 ответов</span></div><div class="distribution-list driving-time-distribution" id="drivingTimeDistribution"></div></article>
         <article class="panel questionnaire-analytics-panel"><div class="panel-heading"><div><p class="eyebrow">Отдельно от общей воронки</p><h2>Статистика по анкете</h2><p>В общей воронке анкета считается одним этапом. Здесь можно увидеть, на каких вопросах пользователи чаще пропускают ответ или прекращают заполнение.</p></div></div><div class="questionnaire-chart" id="analyticsQuestionsChart"></div></article>
         <article class="panel table-panel"><div class="panel-heading"><div><p class="eyebrow">Контроль качества</p><h2>Ошибки и последние события</h2></div><span class="table-count" id="analyticsErrors"></span></div><div class="table-scroll"><table><thead><tr><th>Время</th><th>Событие</th><th>chel_id</th><th>Экран</th><th>Устройство</th><th>Браузер</th></tr></thead><tbody id="analyticsRecent"></tbody></table></div><div class="table-pagination"><button id="analyticsRecentPrev" type="button">← Назад</button><span id="analyticsRecentPage">Страница 1 из 1</span><button id="analyticsRecentNext" type="button">Далее →</button></div></article>
+      </section>
+
+      <section class="service-results-admin hidden" id="serviceResultsAdminView">
+        <article class="panel service-results-analytics-panel">
+          <div class="panel-heading">
+            <div>
+              <p class="eyebrow">Связь заявки и результата</p>
+              <h2>Дополнительные услуги и результаты</h2>
+              <p>Группы не пересекаются. Заявка считается после подтверждённого выбора хотя бы одного обследования, а получение результата — сразу после привязки номера пробирки к аккаунту. Наличие найденных документов для этого показателя не требуется.</p>
+              <p>Период определяет пользователей, у которых заявка появилась или пробирка была привязана в выбранные даты. Затем наличие заявки и привязанной пробирки проверяется по всей истории пользователя.</p>
+            </div>
+            <span class="table-count" id="serviceResultsSummary">0 пользователей</span>
+          </div>
+          <div class="analytics-filters service-results-filters">
+            <label>Период<select id="serviceResultsPeriod"><option value="today">Сегодня</option><option value="7">7 дней</option><option value="30" selected>30 дней</option><option value="90">90 дней</option><option value="all">Всё время</option></select></label>
+            <label>Дата с<input id="serviceResultsDateFrom" type="date"></label>
+            <label>Дата по<input id="serviceResultsDateTo" type="date"></label>
+            <button type="button" id="serviceResultsApply">Применить</button>
+          </div>
+          <p class="analytics-date-note">Если указаны даты «с» или «по», они заменяют готовый период выше. Дата «по» включается целиком.</p>
+          <section class="service-results-groups" id="serviceResultsGroups"></section>
+        </article>
       </section>
 
       <section class="metric2-admin hidden" id="metric2AdminView">
@@ -504,6 +527,6 @@
       </div>
     </section>
   </div>
-<script src="/static/dashboard.js?v=20260913-ikp-v1" defer></script>
+<script src="/static/dashboard.js?v=20260915-metric-results-preview-v1" defer></script>
 </body>
 </html>

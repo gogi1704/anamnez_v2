@@ -463,7 +463,7 @@ class OrchestratorTests(unittest.TestCase):
         self.assertEqual(runtime["user_profile"]["weight_kg"], 62.0)
         self.assertNotIn("company_inn", runtime["user_profile"])
 
-    def test_company_inn_is_first_question_and_non_medical_route_opens_chat(self):
+    def test_company_inn_is_first_question_and_non_medical_route_offers_services(self):
         project_root = Path(__file__).resolve().parents[1]
         script = (project_root / "static" / "app.js").read_text(encoding="utf-8")
         main_source = (project_root / "backend" / "main.py").read_text(encoding="utf-8")
@@ -475,9 +475,12 @@ class OrchestratorTests(unittest.TestCase):
         self.assertIn("Я не на мед-осмотр", script)
         self.assertIn("/api/onboarding/not-medical-exam", script)
         self.assertIn('payment_status="not_medical_exam"', main_source)
-        self.assertIn("await openMainApp()", script)
-        self.assertIn("payment_status === 'not_medical_exam'", script)
-        self.assertIn("openInstallApp();", script)
+        self.assertIn("renderNotMedicalExamExplanation", script)
+        self.assertIn("/api/onboarding/not-medical-exam/back", script)
+        self.assertIn("/api/onboarding/not-medical-exam/continue", script)
+        self.assertIn("questionnaire_skipped", script)
+        self.assertIn('status="not_medical_exam"', main_source)
+        self.assertNotIn('"onboarding_completed", {"result": "not_medical_exam"}', main_source)
 
         valid = ConsiliumHandler._validate_profile({"company_inn": "7707083893"})
         self.assertEqual(valid["company_inn"], "7707083893")
@@ -1690,6 +1693,18 @@ class OrchestratorTests(unittest.TestCase):
         inn_actions = {item["id"] for item in screens["question_company_inn"]["actions"]}
         notes_actions = {item["id"] for item in screens["question_notes"]["actions"]}
         self.assertEqual(inn_actions, {"answer", "not_medical_exam"})
+        self.assertEqual(
+            next(item for item in screens["question_company_inn"]["actions"] if item["id"] == "not_medical_exam")["target"],
+            "not_medical_exam_info",
+        )
+        self.assertEqual(
+            {item["id"] for item in screens["not_medical_exam_info"]["actions"]},
+            {"back", "continue"},
+        )
+        self.assertEqual(
+            next(item for item in screens["not_medical_exam_info"]["actions"] if item["id"] == "continue")["target"],
+            "exam_selection_no_questionnaire",
+        )
         self.assertIn("skip", notes_actions)
         self.assertIn("open_body_map", notes_actions)
         body_map = screens["question_body_map"]
@@ -2651,13 +2666,13 @@ class OrchestratorTests(unittest.TestCase):
         self.assertIn("controllerchange", script)
         self.assertIn("url.pathname.startsWith('/api/')", worker)
         self.assertIn("url.pathname.startsWith('/auth/')", worker)
-        self.assertIn("consilium-shell-v100", worker)
+        self.assertIn("consilium-shell-v106", worker)
         self.assertIn("fetch(request)", worker)
-        self.assertIn("/static/styles.css?v=20260909-payment-full-name-v5", index)
+        self.assertIn("/static/styles.css?v=20260915-metric-results-preview-v1", index)
         self.assertIn("/static/rich-text.2bf1f5fab764.css", index)
         self.assertTrue((project_root / "static" / "styles.07ffaefb4795.css").is_file())
         self.assertTrue((project_root / "static" / "rich-text.2bf1f5fab764.css").is_file())
-        self.assertIn("/static/app.js?v=20260912-message-delete-v1", index)
+        self.assertIn("/static/app.js?v=20260915-metric-results-preview-v1", index)
         self.assertIn("/static/metrika.js?v=20260829-interpret-profile-v1", index)
         self.assertIn('id="welcomeScreen"', index)
         self.assertIn('id="welcomeNextButton"', index)
@@ -2679,6 +2694,12 @@ class OrchestratorTests(unittest.TestCase):
         self.assertIn("['demo_paid','paid_online','pay_at_exam'].includes(state.onboarding.payment_status)", script)
         self.assertIn("Оплатить онлайн", script)
         self.assertIn("Оплатить на медосмотре", script)
+        self.assertIn("только при оплате онлайн — нужно, чтобы идентифицировать вас на предприятии", script)
+        at_exam_handler = script.split("async function confirmPaymentAtExam()", 1)[1].split(
+            "function renderExamCompletion()", 1,
+        )[0]
+        self.assertNotIn("paymentCustomerName()", at_exam_handler)
+        self.assertNotIn("customer_full_name", at_exam_handler)
         self.assertIn("/api/payments/yookassa/create", script)
         self.assertIn("/api/purchases", script)
         self.assertIn("data-purchase-action=\"delete\"", script)
@@ -2694,6 +2715,13 @@ class OrchestratorTests(unittest.TestCase):
         self.assertIn('id="purchasesModal"', index)
         self.assertIn("PAYMENT_PENDING_ORDER_KEY", script)
         self.assertIn("/abandon", script)
+        self.assertIn('id="serviceResultsTab"', dashboard_html)
+        self.assertIn('id="serviceResultsAdminView"', dashboard_html)
+        self.assertIn('id="serviceResultsDateFrom"', dashboard_html)
+        self.assertIn('id="serviceResultsDateTo"', dashboard_html)
+        self.assertIn("/api/admin/service-results", dashboard_script)
+        self.assertIn("classList.toggle('show-ikp', ikpVisible)", dashboard_script)
+        self.assertIn(".dashboard.show-ikp >", dashboard_styles)
         self.assertIn("if (!state.publicConfig.online_payments_enabled)", script)
         self.assertIn("trackEvent('payment_completed'", script)
         self.assertIn("for (let attempt = 0; attempt < 8; attempt += 1)", script)
@@ -3039,7 +3067,7 @@ class OrchestratorTests(unittest.TestCase):
         self.assertIn("function renderRequiredStandardOnboarding()", script)
         self.assertIn("if (!allowIncompleteOnboarding && renderRequiredStandardOnboarding()) return false", script)
         self.assertIn("state.returnToChatAfterExaminations && state.onboarding.intro_seen", script)
-        self.assertIn("['questionnaire','exams','payment'].includes(onboarding.status)", script)
+        self.assertIn("['questionnaire','not_medical_exam','exams','payment'].includes(onboarding.status)", script)
         self.assertIn("allowIncompleteOnboarding:true", script)
         self.assertIn("if not _chat_access_allowed():", main_source)
         self.assertIn('if path == "/api/result-entry/start":', main_source)
@@ -3052,6 +3080,8 @@ class OrchestratorTests(unittest.TestCase):
         try:
             db.set_current_chel_id(chel_id)
             db.save_onboarding(status="questionnaire", intro_seen=False)
+            self.assertFalse(_chat_access_allowed())
+            db.save_onboarding(status="not_medical_exam", intro_seen=False)
             self.assertFalse(_chat_access_allowed())
             db.save_onboarding(status="exams", intro_seen=False)
             self.assertFalse(_chat_access_allowed())
@@ -3085,6 +3115,7 @@ class OrchestratorTests(unittest.TestCase):
     def test_result_link_cannot_replace_an_active_standard_funnel(self):
         self.assertTrue(_result_entry_can_start({"status": "appearance"}))
         self.assertFalse(_result_entry_can_start({"status": "questionnaire"}))
+        self.assertFalse(_result_entry_can_start({"status": "not_medical_exam"}))
         self.assertFalse(_result_entry_can_start({"status": "exams"}))
         self.assertFalse(_result_entry_can_start({"status": "payment"}))
         self.assertFalse(_result_entry_can_start({
@@ -3360,12 +3391,22 @@ class OrchestratorTests(unittest.TestCase):
         self.assertIn("state.onboarding.featured_test_ids || []", script)
         self.assertIn("Во время медосмотра у вас в любом случае возьмут кровь", script)
         self.assertIn("После результатов — рекомендации медицинского ИИ", script)
+        self.assertIn("Что вы получите →", script)
+        self.assertIn("function renderExamResultsPreview()", script)
+        self.assertIn("Пример результатов анализов", script)
+        self.assertIn("EXAM_RESULTS_PREVIEW_INTERPRETATION", script)
+        self.assertNotIn("fetch('/static/lab-preview.json", script)
+        self.assertTrue((project_root / "static" / "example-lab-result.pdf").is_file())
+        self.assertIn("Получить расшифровку специалиста", script)
+        self.assertIn('data-onboarding-action="close-results-preview"', script)
         self.assertIn("exam-selection-benefits", script)
         self.assertIn(".exam-blood-note", styles)
         self.assertIn(".exam-ai-note", styles)
+        self.assertIn(".exam-results-preview", styles)
         self.assertIn("Во время медосмотра", dashboard)
         self.assertIn("Дополнительные обследования для вас", dashboard)
         self.assertIn("metric2-mock-checkbox", dashboard)
+        self.assertIn("metric2-mock-inline-action", dashboard)
 
     def test_recommended_examination_gets_discount_and_competitor_price_is_public(self):
         catalog = [{

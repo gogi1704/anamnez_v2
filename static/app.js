@@ -625,7 +625,7 @@ function resultDocumentsMarkup(items) {
   const documents = normalizeLabDocuments(items);
   return `<div class="result-document-list">${documents.map((item, index) => `
     <a class="result-document" href="${escapeAttr(item.url)}" target="_blank" rel="noopener noreferrer">
-      <i aria-hidden="true">▤</i><span><strong>${escapeHtml(item.title || `Результаты анализов · документ ${index + 1}`)}</strong><small>Открыть документ</small></span><b aria-hidden="true">→</b>
+      <i aria-hidden="true">▤</i><span><strong>${escapeHtml(item.title || `Результаты анализов · документ ${index + 1}`)}</strong><small>Открыть оригинальный документ</small></span><b aria-hidden="true">→</b>
     </a>`).join('')}</div>`;
 }
 
@@ -743,7 +743,7 @@ async function enterResultFlow({explicit = false} = {}) {
   state.profile = onboarding.profile || await api('/api/profile');
   applyFontSize(onboarding.font_size || 'extra');
   if (
-    ['questionnaire','exams','payment'].includes(onboarding.status)
+    ['questionnaire','not_medical_exam','exams','payment'].includes(onboarding.status)
     || (onboarding.status === 'complete' && !onboarding.intro_seen
       && (onboarding.payment_status === 'skipped' || onboarding.selected_tests?.length))
   ) {
@@ -1229,11 +1229,50 @@ async function skipMedicalExam() {
     trackOnboardingAction('not_medical_exam', 'question_company_inn');
     state.onboarding = await api('/api/onboarding/not-medical-exam', { method:'POST', body:'{}' });
     state.profile = state.onboarding.profile;
-    await openMainApp();
+    renderNotMedicalExamExplanation();
   } catch (error) {
     if (button) button.disabled = false;
     showOnboardingError(error.message);
   }
+}
+
+function renderNotMedicalExamExplanation() {
+  trackOnboardingScreen('not_medical_exam_info');
+  setOnboardingMeta('Анкета', 8);
+  $('#onboardingContent').innerHTML = `
+    <span class="onboarding-kicker">Перед продолжением</span>
+    <h1>Анкета — важная часть медосмотра</h1>
+    <p class="onboarding-lead">Ответы помогают подготовиться к осмотру и подобрать актуальные для вас дополнительные обследования.</p>
+    <div class="not-medical-exam-info">
+      <strong>Если вы нажали эту кнопку только потому, что не знаете ИНН</strong>
+      <p>Лучше уточните ИНН у работодателя и вернитесь к анкете. Так рекомендации будут учитывать ваши ответы.</p>
+    </div>
+    <p class="onboarding-lead">Если вы действительно не проходите медосмотр, можно продолжить без анкеты и выбрать дополнительные услуги из общего списка.</p>
+    <div class="onboarding-actions">
+      <button type="button" class="onboarding-back" data-onboarding-action="not-medical-exam-back">Вернуться</button>
+      <button type="button" class="onboarding-next" data-onboarding-action="not-medical-exam-continue">Продолжить</button>
+    </div>`;
+}
+
+async function returnFromNotMedicalExam() {
+  try {
+    trackOnboardingAction('back', 'not_medical_exam_info');
+    state.onboarding = await api('/api/onboarding/not-medical-exam/back', {method:'POST', body:'{}'});
+    state.profile = state.onboarding.profile;
+    state.onboardingStep = 0;
+    renderQuestion();
+  } catch (error) { showOnboardingError(error.message); }
+}
+
+async function continueFromNotMedicalExam() {
+  try {
+    trackOnboardingAction('continue', 'not_medical_exam_info');
+    state.onboarding = await api('/api/onboarding/not-medical-exam/continue', {method:'POST', body:'{}'});
+    state.profile = state.onboarding.profile;
+    state.selectedTests = new Set();
+    trackEvent('examinations_opened', {screen:'examinations', source:'not_medical_exam'});
+    renderExamSelection();
+  } catch (error) { showOnboardingError(error.message); }
 }
 
 const EXAMINATION_AUDIENCES = {
@@ -1338,6 +1377,67 @@ function renderExamCatalogInfo() {
     </div>`;
 }
 
+const EXAM_RESULTS_PREVIEW_INTERPRETATION = `
+### 1. Короткий общий вывод
+
+Уровень **СА 125 находится в пределах референса лаборатории**. По представленному результату срочных отклонений нет.
+
+### 2. Что в пределах референсов
+
+- **СА 125 — 10,20 Ед/мл**
+- Референс лаборатории: **< 34,53 Ед/мл**
+
+Показатель не повышен.
+
+### 3. Отклонения и их возможное значение
+
+Отклонений в документе не выявлено. Возраст 42 года и женский пол важны для контекста применения СА 125. Расчётный ИМТ — **23,7 кг/м²**, что не меняет интерпретацию этого результата.
+
+### 4. Связи и ограничения интерпретации
+
+СА 125 — неспецифический маркер. Его обычно оценивают вместе с жалобами, осмотром, УЗИ и динамикой предыдущих результатов. Нормальный СА 125 сам по себе **не исключает заболевания яичников и не используется как самостоятельное подтверждение отсутствия онкологического процесса**. Анализ также не является универсальным скринингом рака яичников у женщин без симптомов и факторов высокого риска.
+
+В документе представлен только один показатель. Сведений о причине назначения, беременности, менструальном цикле, гинекологических заболеваниях, лекарствах и предыдущих значениях нет, поэтому оценить клинический контекст и динамику невозможно.
+
+### 5. Что обсудить со специалистом и когда
+
+- Если анализ был назначен профилактически и жалоб нет, результат можно обсудить с врачом **в плановом порядке**; сам по себе он не требует срочных действий.
+- Если СА 125 исследовали из-за образования по УЗИ, стойкого вздутия или увеличения живота, тазовой боли, необычных кровянистых выделений либо для наблюдения за уже известным заболеванием, необходимо продолжить обследование по плану гинеколога: нормальный маркер его не отменяет.
+- Срочного обращения именно из-за данного лабораторного значения не требуется.
+`.trim();
+
+function renderExamResultsPreview() {
+  trackEvent('exam_results_preview_viewed', {screen:examSelectionAnalyticsScreen()});
+  trackOnboardingScreen('exam_results_preview');
+  setOnboardingMeta('После результатов', 80);
+  $('#onboardingContent').innerHTML = `
+    <div class="exam-results-preview">
+      <button type="button" class="exam-results-preview-back" data-onboarding-action="close-results-preview">← Вернуться к обследованиям</button>
+      <span class="onboarding-kicker">После получения результатов</span>
+      <h1>Всё необходимое — в личном кабинете</h1>
+      <p class="onboarding-lead">Здесь появятся оригиналы анализов, понятная ИИ-расшифровка и возможность бесплатно передать документы специалисту.</p>
+      <section class="exam-results-sample" aria-label="Пример результатов анализов">
+        <header><span aria-hidden="true">▤</span><div><strong>Оригинальный результат анализов</strong><small>Один общий пример документа для всех пользователей</small></div><b>PDF</b></header>
+        <div class="exam-results-document-preview">
+          <div><i>▤</i><span><strong>Документ лаборатории</strong><small>Так выглядит оригинальный файл с результатами</small></span></div>
+          <a href="/static/example-lab-result.pdf" target="_blank" rel="noopener noreferrer">Открыть пример документа →</a>
+        </div>
+      </section>
+      <section class="exam-results-ai-preview">
+        <span class="exam-results-section-label">Реальная ИИ-расшифровка этого документа</span>
+        <small class="exam-results-preview-context">Для примера использована демонстрационная анкета: женщина, 42 года, рост 168 см, вес 67 кг.</small>
+        ${labInterpretationMarkup(EXAM_RESULTS_PREVIEW_INTERPRETATION, {document_id:'sample'})}
+      </section>
+      <section class="exam-results-specialist-preview">
+        <div><span aria-hidden="true">♙</span><div><strong>Проверка медицинским специалистом</strong><p>После появления ваших результатов их можно бесплатно передать специалисту. Ответ придёт в этот же чат.</p></div></div>
+        <button type="button" data-onboarding-action="preview-specialist-analysis">Получить расшифровку специалиста</button>
+        <p class="exam-results-specialist-status hidden" id="examResultsSpecialistStatus" role="status">Эта возможность откроется после привязки пробирки и появления ваших результатов.</p>
+      </section>
+      <button type="button" class="exam-results-preview-bottom-back" data-onboarding-action="close-results-preview">← Вернуться к выбору обследований</button>
+    </div>`;
+  $('#onboarding').scrollTop = 0;
+}
+
 const EXAMINATION_UPGRADE_PAIRS = {
   fatigue_basic:'fatigue_extended',
   weight_basic:'weight_extended',
@@ -1366,8 +1466,14 @@ function selectExamination(id) {
   return { changed:true, removing };
 }
 
+function examSelectionAnalyticsScreen() {
+  return state.onboarding?.questionnaire_skipped
+    ? 'exam_selection_no_questionnaire'
+    : 'exam_selection';
+}
+
 function renderExamSelection(scrollPosition = null) {
-  trackOnboardingScreen('exam_selection');
+  trackOnboardingScreen(examSelectionAnalyticsScreen());
   normalizeSelectedTestPairs();
   setOnboardingMeta('Обследования', 80);
   const recommended = new Set(state.onboarding.recommended_test_ids || []);
@@ -1388,7 +1494,15 @@ function renderExamSelection(scrollPosition = null) {
   }).join('');
   const total = state.onboarding.tests.filter(test => state.selectedTests.has(test.id)).reduce((sum,test) => sum + examinationEffectivePrice(test), 0);
   const copy = state.onboarding.examination_recommendation_copy || {};
-  $('#onboardingContent').innerHTML = `<span class="onboarding-kicker">После анкеты</span><h1>${escapeHtml(copy.title || 'Дополнительные обследования для вас')}</h1><p class="onboarding-lead">${escapeHtml(copy.description || 'Рекомендации отмечены по ответам анкеты и не являются назначением.')}</p><div class="exam-selection-benefits"><div class="exam-blood-note"><span aria-hidden="true">🩸</span><p>Во время медосмотра у вас в любом случае возьмут кровь на общий анализ — за счёт работодателя. Дополнительные чек-апы делаются из той же пробы, без нового укола.</p></div><div class="exam-ai-note"><span aria-hidden="true">🩺</span><p><strong>После результатов — рекомендации медицинского ИИ и чат с врачом прямо в личном кабинете.</strong></p></div></div><div class="exam-list">${cards}</div><div class="exam-total"><span>Выбрано: ${state.selectedTests.size}</span><strong>${total.toLocaleString('ru')} ₽</strong></div><div class="onboarding-actions"><button type="button" class="onboarding-back" data-onboarding-action="exam-offer">Назад</button><button type="button" class="onboarding-next" data-onboarding-action="continue-payment" ${state.selectedTests.size ? '' : 'disabled'}>Далее</button></div><button type="button" class="exam-skip" data-onboarding-action="review-exam-skip">Ничего не выбирать</button>`;
+  const questionnaireSkipped = Boolean(state.onboarding.questionnaire_skipped);
+  const selectionHeader = questionnaireSkipped
+    ? `<span class="onboarding-kicker">Дополнительные услуги</span><h1>Выберите дополнительные обследования</h1><p class="onboarding-lead">Анкета не заполнена, поэтому подбор не персонализирован. Выберите нужные обследования из общего списка.</p>`
+    : `<span class="onboarding-kicker">После анкеты</span><h1>${escapeHtml(copy.title || 'Дополнительные обследования для вас')}</h1><p class="onboarding-lead">${escapeHtml(copy.description || 'Рекомендации отмечены по ответам анкеты и не являются назначением.')}</p>`;
+  const resultsBenefit = `<div class="exam-ai-note"><span aria-hidden="true">🩺</span><div><p><strong>После результатов — рекомендации медицинского ИИ и чат с врачом прямо в личном кабинете.</strong></p><button type="button" data-onboarding-action="open-results-preview">Что вы получите →</button></div></div>`;
+  const selectionBenefits = questionnaireSkipped
+    ? `<div class="exam-selection-benefits"><div class="exam-blood-note"><span aria-hidden="true">＋</span><p>Состав и стоимость указаны в каждой карточке. Вы можете выбрать один или несколько подходящих вариантов.</p></div>${resultsBenefit}</div>`
+    : `<div class="exam-selection-benefits"><div class="exam-blood-note"><span aria-hidden="true">🩸</span><p>Во время медосмотра у вас в любом случае возьмут кровь на общий анализ — за счёт работодателя. Дополнительные чек-апы делаются из той же пробы, без нового укола.</p></div>${resultsBenefit}</div>`;
+  $('#onboardingContent').innerHTML = `${selectionHeader}${selectionBenefits}<div class="exam-list">${cards}</div><div class="exam-total"><span>Выбрано: ${state.selectedTests.size}</span><strong>${total.toLocaleString('ru')} ₽</strong></div><div class="onboarding-actions"><button type="button" class="onboarding-back" data-onboarding-action="exam-offer">Назад</button><button type="button" class="onboarding-next" data-onboarding-action="continue-payment" ${state.selectedTests.size ? '' : 'disabled'}>Далее</button></div><button type="button" class="exam-skip" data-onboarding-action="review-exam-skip">Ничего не выбирать</button>`;
   if (scrollPosition) {
     const examList = $('#onboardingContent .exam-list');
     const onboarding = $('#onboarding');
@@ -1435,7 +1549,7 @@ async function submitExamSelection(skip = false) {
     }
     // Count Continue only after the server has accepted a non-empty selection.
     // Otherwise a failed request looks like a real transition in Metric 2.0.
-    trackOnboardingAction('continue', 'exam_selection');
+    trackOnboardingAction('continue', examSelectionAnalyticsScreen());
     renderPayment();
   } catch (error) { showOnboardingError(error.message); }
 }
@@ -1484,7 +1598,7 @@ function renderPayment() {
   const selected = selectedTestDetails();
   const total = selected.reduce((sum,test) => sum + examinationEffectivePrice(test), 0);
   const customerName = String(state.profile?.preferred_name || '').trim();
-  const nameField = `<label class="payment-email-label">ФИО <span>Обязательное поле. Нужно, чтобы идентифицировать вас на предприятии.</span><input id="paymentCustomerName" type="text" autocomplete="name" maxlength="100" placeholder="Иванов Иван Иванович" required value="${escapeAttr(customerName)}"></label>`;
+  const nameField = `<label class="payment-email-label">ФИО <span>только при оплате онлайн — нужно, чтобы идентифицировать вас на предприятии</span><input id="paymentCustomerName" type="text" autocomplete="name" maxlength="100" placeholder="Иванов Иван Иванович" value="${escapeAttr(customerName)}"></label>`;
   const emailField = state.publicConfig.online_payments_enabled && state.publicConfig.payment_receipt_email_required
     ? `<label class="payment-email-label">Электронная почта для онлайн-чека <span>только при оплате онлайн</span><input id="paymentReceiptEmail" type="email" autocomplete="email" maxlength="254" placeholder="name@example.ru" required value="${escapeAttr(state.paymentReceiptEmail)}"></label>` : '';
   const exitAction = state.paymentReviewSource === 'purchases'
@@ -1496,6 +1610,7 @@ function renderPayment() {
 function paymentCustomerName() {
   const input = $('#paymentCustomerName');
   if (!input) return '';
+  input.required = true;
   const fullName = input.value.trim().replace(/\s+/g, ' ');
   input.setCustomValidity(fullName.split(' ').filter(Boolean).length >= 2
     ? '' : 'Введите фамилию и имя полностью');
@@ -1887,14 +2002,12 @@ async function finishPaymentSuccess(openHistory = false) {
 }
 
 async function confirmPaymentAtExam() {
-  const customerFullName = paymentCustomerName();
-  if (!customerFullName) return;
   trackOnboardingAction('pay_at_exam', 'payment');
   trackEvent('funnel_action', {stage:'examinations_options',action:'pay_at_exam'});
   setPaymentActionsBusy(true, 'at_exam');
   try {
     const returnDirectlyToChat = state.returnToChatAfterExaminations;
-    state.onboarding = await api('/api/onboarding/payment', { method:'POST', body:JSON.stringify({method:'at_exam', customer_full_name:customerFullName}) });
+    state.onboarding = await api('/api/onboarding/payment', { method:'POST', body:JSON.stringify({method:'at_exam'}) });
     state.profile = state.onboarding.profile;
     window.consiliumMetrikaGoal?.('payment_at_exam');
     window.consiliumMetrikaGoal?.('onboarding_completed');
@@ -2056,6 +2169,7 @@ async function loadOnboarding({ openCompletedMessengerAccount = false, initialOn
   $('#onboarding').classList.remove('hidden');
   $('#appShell').classList.add('hidden');
   if (state.onboarding.status === 'appearance') renderAppearance();
+  else if (state.onboarding.status === 'not_medical_exam') renderNotMedicalExamExplanation();
   else if (state.onboarding.status === 'payment') renderPayment();
   else if (state.onboarding.status === 'exams') renderExamSelection();
   else renderQuestion();
@@ -2075,6 +2189,7 @@ function renderRequiredStandardOnboarding() {
     if (onboarding.payment_status === 'skipped') renderExamSkipCompletion();
     else renderExamCompletion();
   } else if (onboarding.status === 'appearance') renderAppearance();
+  else if (onboarding.status === 'not_medical_exam') renderNotMedicalExamExplanation();
   else if (onboarding.status === 'payment') renderPayment();
   else if (onboarding.status === 'exams') renderExamSelection();
   else renderQuestion();
@@ -2089,7 +2204,7 @@ async function openMainApp({ skipIntro = false, allowIncompleteOnboarding = fals
   if (!state.mainInitialized) await initMainApp();
   trackEvent('chat_opened', { screen:'chat' });
   if (!skipIntro && !state.onboarding?.intro_seen) {
-    installAfterCapabilities = state.onboarding?.payment_status === 'not_medical_exam';
+    installAfterCapabilities = false;
     requestAnimationFrame(openCapabilities);
   }
   else scheduleInstallOffer();
@@ -2150,21 +2265,42 @@ $('#onboardingContent').addEventListener('click', async event => {
       recommended:(state.onboarding.recommended_test_ids || []).includes(id),
       selected_count:state.selectedTests.size,
     });
-    if (!selection.removing) trackOnboardingAction('select_exam', 'exam_selection');
+    if (!selection.removing) trackOnboardingAction('select_exam', examSelectionAnalyticsScreen());
     renderExamSelection(scrollPosition);
     return;
   }
   const action = event.target.closest('[data-onboarding-action]')?.dataset.onboardingAction;
   if (!action) return;
   if (action === 'next') nextQuestion();
+  else if (action === 'not-medical-exam-back') await returnFromNotMedicalExam();
+  else if (action === 'not-medical-exam-continue') await continueFromNotMedicalExam();
   else if (action === 'back') { const question = activeOnboardingQuestions()[state.onboardingStep]; try { captureQuestionAnswer({trackAction:false}); } catch {} trackOnboardingAction('back', `question_${question.key}`); trackEvent('question_back', { step_number:state.onboardingStep + 1 }); state.onboardingStep -= 1; renderQuestion(); }
   else if (action === 'question-body-map') { openQuestionnaireBodyMap(); }
   else if (action === 'question-back') { if (state.returnToChatAfterExaminations) editProfileFromChatExamFlow(); else { state.onboardingStep = activeOnboardingQuestions().length - 1; renderQuestion(); } }
   else if (action === 'open-exam-catalog-info') { trackOnboardingAction('catalog_info', 'exam_selection'); renderExamCatalogInfo(); }
   else if (action === 'close-exam-catalog-info') { trackOnboardingAction('back', 'exam_catalog'); renderExamSelection(); }
-  else if (action === 'start-exams') { const sourceScreen = currentOnboardingAnalyticsScreen; const afterObjection = sourceScreen === 'exam_objection'; trackOnboardingAction(sourceScreen === 'exam_catalog' ? 'choose' : afterObjection ? 'choose' : 'view_options', sourceScreen); trackEvent('funnel_action', {stage:'examinations_offer',action:afterObjection ? 'choose_after_objection' : 'view_options'}); trackEvent('examinations_opened', { screen:'examinations' }); renderExamSelection(); }
-  else if (action === 'exam-offer') { trackOnboardingAction('back', 'exam_selection'); trackEvent('funnel_action', {stage:'examinations_options',action:'options_back'}); if (state.returnToChatAfterExaminations) { state.selectedTests = new Set(state.onboarding?.selected_tests || []); renderCurrentExamSelectionSummary(); } else { state.onboardingStep = activeOnboardingQuestions().length - 1; renderQuestion(); } }
-  else if (action === 'review-exam-skip') { const fromOptions = Boolean($('#onboardingContent .exam-list')); trackOnboardingAction(fromOptions ? 'nothing' : 'skip', fromOptions ? 'exam_selection' : 'exam_offer'); trackEvent('funnel_action', {stage:fromOptions ? 'examinations_options' : 'examinations_offer',action:fromOptions ? 'nothing_selected' : 'skip'}); trackEvent('examinations_skip_clicked', { selected_count:state.selectedTests.size }); renderExamSkipConfirmation(); }
+  else if (action === 'open-results-preview') {
+    state.examResultsPreviewScroll = {
+      examList:$('#onboardingContent .exam-list')?.scrollTop || 0,
+      onboarding:$('#onboarding').scrollTop || 0,
+    };
+    renderExamResultsPreview();
+  }
+  else if (action === 'close-results-preview') {
+    trackEvent('exam_results_preview_closed', {screen:examSelectionAnalyticsScreen()});
+    trackOnboardingAction('back', 'exam_results_preview');
+    const scrollPosition = state.examResultsPreviewScroll || null;
+    state.examResultsPreviewScroll = null;
+    renderExamSelection(scrollPosition);
+  }
+  else if (action === 'preview-specialist-analysis') {
+    trackEvent('exam_results_preview_specialist_clicked', {screen:examSelectionAnalyticsScreen()});
+    trackOnboardingAction('specialist', 'exam_results_preview');
+    $('#examResultsSpecialistStatus')?.classList.remove('hidden');
+  }
+  else if (action === 'start-exams') { const sourceScreen = currentOnboardingAnalyticsScreen; const afterObjection = sourceScreen === 'exam_objection'; const actionId = sourceScreen === 'exam_catalog' ? 'choose' : afterObjection && state.onboarding?.questionnaire_skipped ? 'choose_no_questionnaire' : afterObjection ? 'choose' : 'view_options'; trackOnboardingAction(actionId, sourceScreen); trackEvent('funnel_action', {stage:'examinations_offer',action:afterObjection ? 'choose_after_objection' : 'view_options'}); trackEvent('examinations_opened', { screen:'examinations' }); renderExamSelection(); }
+  else if (action === 'exam-offer') { const skippedQuestionnaire = Boolean(state.onboarding?.questionnaire_skipped); trackOnboardingAction('back', examSelectionAnalyticsScreen()); trackEvent('funnel_action', {stage:'examinations_options',action:skippedQuestionnaire ? 'options_back_non_medical' : 'options_back'}); if (state.returnToChatAfterExaminations) { state.selectedTests = new Set(state.onboarding?.selected_tests || []); renderCurrentExamSelectionSummary(); } else if (skippedQuestionnaire) { renderNotMedicalExamExplanation(); } else { state.onboardingStep = activeOnboardingQuestions().length - 1; renderQuestion(); } }
+  else if (action === 'review-exam-skip') { const fromOptions = Boolean($('#onboardingContent .exam-list')); trackOnboardingAction(fromOptions ? 'nothing' : 'skip', fromOptions ? examSelectionAnalyticsScreen() : 'exam_offer'); trackEvent('funnel_action', {stage:fromOptions ? 'examinations_options' : 'examinations_offer',action:fromOptions ? 'nothing_selected' : 'skip'}); trackEvent('examinations_skip_clicked', { selected_count:state.selectedTests.size }); renderExamSkipConfirmation(); }
   else if (action === 'confirm-skip-exams') { trackOnboardingAction('refuse', 'exam_objection'); trackEvent('funnel_action', {stage:'examinations_offer',action:'refuse'}); trackEvent('examinations_skipped', { screen:'examinations_skip' }); submitExamSelection(true); }
   else if (action === 'continue-payment') { submitExamSelection(false); }
   else if (action === 'back-to-exams') { trackOnboardingAction('back', 'payment'); renderExamSelection(); }
@@ -3424,7 +3560,7 @@ function labDocumentsMarkup(items, placement = 'modal', interactive = true) {
   const cards = documents.map((document, index) => `
     <article class="lab-document-card">
       <a href="${escapeAttr(document.url)}" target="_blank" rel="noopener noreferrer">
-        <i>▤</i><span><strong>${escapeHtml(document.title || `Документ ${index + 1}`)}</strong><small>Открыть оригинал</small></span>
+        <i>▤</i><span><strong>${escapeHtml(document.title || `Документ ${index + 1}`)}</strong><small>Открыть оригинальный документ</small></span>
       </a>
       ${interactive ? `<div class="lab-document-actions">
         <button type="button" data-lab-interpret="${escapeAttr(document.id)}">ИИ-расшифровка</button>

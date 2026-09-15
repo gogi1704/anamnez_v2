@@ -85,7 +85,9 @@ ALLOWED_EVENTS = {
     "messenger_auth_completed", "messenger_auth_failed", "appearance_viewed",
     "appearance_completed", "questionnaire_started", "question_viewed",
     "question_answered", "question_skipped", "question_back", "question_validation_error",
-    "questionnaire_completed", "not_medical_exam_selected", "examinations_offer_viewed",
+    "questionnaire_completed", "not_medical_exam_selected", "not_medical_exam_returned",
+    "not_medical_exam_services_offered", "examinations_offer_viewed",
+    "exam_results_preview_viewed", "exam_results_preview_closed", "exam_results_preview_specialist_clicked",
     "examinations_opened", "examination_selected", "examination_deselected",
     "examinations_skip_clicked", "examinations_objection_viewed", "examinations_skip_recovered",
     "examinations_skipped", "examinations_selection_completed", "examination_selection_confirmed", "payment_viewed",
@@ -101,7 +103,7 @@ ALLOWED_EVENTS = {
     "app_installed", "app_opened", "chat_opened", "conversation_created", "message_sent",
     "first_message_sent", "ai_response_completed", "ai_response_error", "council_started",
     "council_completed", "council_error", "human_requested", "human_channel_selected",
-    "manager_joined", "human_request_closed", "lab_results_requested", "lab_results_found",
+    "manager_joined", "human_request_closed", "tube_linked", "lab_results_requested", "lab_results_found",
     "lab_results_processing", "lab_results_not_found", "lab_results_error",
     "lab_interpretation_started", "lab_interpretation_completed",
     "lab_interpretation_error", "lab_interpretation_profile_requested",
@@ -292,7 +294,11 @@ def _metric2_screen_definitions() -> list[dict]:
         if index:
             actions.append({"id": "back", "label": "Назад", "target": previous_target, "legacy": []})
         if key == "company_inn":
-            actions.append({"id": "not_medical_exam", "label": "Я не на мед-осмотр", "target_label": "Переход в сервис", "terminal_outcome": True, "legacy": [_metric2_spec("not_medical_exam_selected")]})
+            actions.append({
+                "id": "not_medical_exam", "label": "Я не на мед-осмотр",
+                "target": "not_medical_exam_info",
+                "legacy": [_metric2_spec("not_medical_exam_selected")],
+            })
         screens.append({
             "id": f"question_{key}", "title": title, "stage": f"Анкета · {index + 1}/{len(METRIC2_QUESTIONS)}",
             "kind": f"question_{kind}", "question_key": key,
@@ -300,6 +306,30 @@ def _metric2_screen_definitions() -> list[dict]:
             "legacy_reach": [_metric2_spec("question_viewed", question_key=key)],
             "actions": actions,
         })
+        if key == "company_inn":
+            screens.append({
+                "id": "not_medical_exam_info",
+                "title": "Продолжение без анкеты",
+                "stage": "Анкета · ответвление",
+                "kind": "not_medical_exam_info",
+                "description": "Объяснение важности анкеты и предложение уточнить ИНН перед продолжением.",
+                "parent_id": "question_company_inn",
+                "branch": True,
+                "preserve_observed_edges": True,
+                "legacy_reach": [_metric2_spec("not_medical_exam_selected")],
+                "actions": [
+                    {
+                        "id": "back", "label": "Вернуться",
+                        "target": "question_company_inn",
+                        "legacy": [_metric2_spec("not_medical_exam_returned")],
+                    },
+                    {
+                        "id": "continue", "label": "Продолжить",
+                        "target": "exam_selection_no_questionnaire",
+                        "legacy": [_metric2_spec("not_medical_exam_services_offered")],
+                    },
+                ],
+            })
     screens.append({
         "id": "question_body_map", "title": "Карта тела", "stage": "Анкета · ответвление",
         "kind": "questionnaire_body_map", "description": "Уточнение жалобы на интерактивной карте тела.",
@@ -333,6 +363,11 @@ def _metric2_screen_definitions() -> list[dict]:
                     "implied_by_final_actions": ["continue"],
                 },
                 {
+                    "id": "open_results_preview", "label": "Что вы получите",
+                    "target": "exam_results_preview", "interaction": True,
+                    "legacy": [_metric2_spec("exam_results_preview_viewed")],
+                },
+                {
                     "id": "continue", "label": "Далее", "target": "payment",
                     "legacy": [_metric2_spec(
                         "examinations_selection_completed", min_selected_count=1,
@@ -343,12 +378,65 @@ def _metric2_screen_definitions() -> list[dict]:
             ],
         },
         {
+            "id": "exam_results_preview",
+            "title": "Что вы получите после результатов",
+            "stage": "Обследования · ответвление",
+            "kind": "exam_results_preview",
+            "description": "Пример оригинального PDF, ИИ-расшифровки и бесплатной расшифровки специалистом.",
+            "parent_id": "exam_selection",
+            "branch": True,
+            "preserve_observed_edges": True,
+            "legacy_reach": [_metric2_spec("exam_results_preview_viewed")],
+            "actions": [
+                {
+                    "id": "specialist", "label": "Расшифровка специалистом",
+                    "interaction": True,
+                    "legacy": [_metric2_spec("exam_results_preview_specialist_clicked")],
+                },
+                {
+                    "id": "back", "label": "Вернуться к обследованиям",
+                    "target": "exam_selection",
+                    "legacy": [_metric2_spec("exam_results_preview_closed")],
+                },
+            ],
+        },
+        {
+            "id": "exam_selection_no_questionnaire",
+            "title": "Выбор услуг без анкеты",
+            "stage": "Обследования · без анкеты",
+            "kind": "exam_selection_no_questionnaire",
+            "description": "Общий список дополнительных обследований без персональных рекомендаций.",
+            "parent_id": "not_medical_exam_info",
+            "branch": True,
+            "preserve_observed_edges": True,
+            "legacy_reach": [],
+            "actions": [
+                {
+                    "id": "select_exam", "label": "Выбрали хотя бы один набор",
+                    "legacy": [], "implied_by_final_actions": ["continue"],
+                },
+                {
+                    "id": "continue", "label": "Далее", "target": "payment",
+                    "legacy": [],
+                },
+                {
+                    "id": "back", "label": "Назад", "target": "not_medical_exam_info",
+                    "legacy": [_metric2_spec("funnel_action", action="options_back_non_medical")],
+                },
+                {
+                    "id": "nothing", "label": "Ничего не выбирать",
+                    "target": "exam_objection", "legacy": [],
+                },
+            ],
+        },
+        {
             "id": "exam_objection", "title": "Отработка возражения", "stage": "Обследования · ответвление",
             "kind": "exam_objection", "description": "Показывается после попытки отказаться.",
             "parent_id": "exam_selection", "branch": True,
             "legacy_reach": [_metric2_spec("examinations_objection_viewed")],
             "actions": [
                 {"id": "choose", "label": "Выбрать обследования", "target": "exam_selection", "legacy": [_metric2_spec("funnel_action", action="choose_after_objection")]},
+                {"id": "choose_no_questionnaire", "label": "Выбрать без анкеты", "target": "exam_selection_no_questionnaire", "legacy": []},
                 {"id": "refuse", "label": "Всё равно отказаться", "target": "completion_skipped", "legacy": [_metric2_spec("funnel_action", action="refuse")]},
             ],
         },
@@ -985,6 +1073,131 @@ def _driving_time_statistics(eligible_users: set[str]) -> dict:
     }
 
 
+def _service_result_statistics(eligible_users: set[str]) -> dict:
+    """Split the selected cohort by request and a tube linked to the account."""
+    with connection() as analytics_conn:
+        application_users = {
+            str(row[0]) for row in analytics_conn.execute(
+                "SELECT DISTINCT chel_id FROM analytics_events "
+                "WHERE IS_STATS_USER(chel_id) = 1 "
+                "AND event_name='examinations_selection_completed' "
+                "AND CAST(COALESCE(json_extract(properties,'$.selected_count'),0) AS INTEGER) > 0"
+            ).fetchall()
+        }
+    tube_users: set[str] = set()
+    main_conn = None
+    try:
+        main_conn = sqlite3.connect(settings.database_path, timeout=5)
+        profile_columns = {
+            str(row[1])
+            for row in main_conn.execute("PRAGMA table_info(user_profile)").fetchall()
+        }
+        if "tube_number" in profile_columns:
+            tube_users = {
+                str(row[0]) for row in main_conn.execute(
+                    "SELECT chel_id FROM user_profile "
+                    "WHERE TRIM(COALESCE(tube_number,'')) <> '' "
+                    "AND chel_id NOT IN ('chel_legacy','chel_test_default') "
+                    "AND TRIM(COALESCE(company_inn,'')) <> ?",
+                    (TEST_COMPANY_INN,),
+                ).fetchall()
+            }
+    except sqlite3.Error:
+        tube_users = set()
+    finally:
+        if main_conn is not None:
+            main_conn.close()
+
+    applications = application_users & eligible_users
+    results = tube_users & eligible_users
+    groups = [
+        {
+            "key": "application_and_results",
+            "label": "Оставили заявку и получили результаты",
+            "users": len(applications & results),
+            "description": "Выбрали дополнительные услуги и привязали номер пробирки к аккаунту.",
+        },
+        {
+            "key": "results_without_application",
+            "label": "Получили результаты без заявки",
+            "users": len(results - applications),
+            "description": "Не выбирали дополнительные услуги, но привязали номер пробирки к аккаунту.",
+        },
+        {
+            "key": "application_without_results",
+            "label": "Оставили заявку, но не получили результаты",
+            "users": len(applications - results),
+            "description": "Выбрали дополнительные услуги, но ещё не привязали номер пробирки к аккаунту.",
+        },
+    ]
+    relevant_users = applications | results
+    for group in groups:
+        group["percent"] = round(group["users"] / len(relevant_users) * 100, 1) if relevant_users else 0.0
+    return {
+        "users": len(relevant_users),
+        "applications": len(applications),
+        "results": len(results),
+        "groups": groups,
+    }
+
+
+def _tube_users_updated_in_period(
+    period: str, date_from: str = "", date_to: str = "",
+) -> set[str]:
+    """Include linked tubes even when the user has not searched for documents."""
+    date_from = str(date_from or "").strip()
+    date_to = str(date_to or "").strip()
+    try:
+        from_date = datetime.strptime(date_from, "%Y-%m-%d").replace(tzinfo=REPORT_TIMEZONE) if date_from else None
+        to_date = datetime.strptime(date_to, "%Y-%m-%d").replace(tzinfo=REPORT_TIMEZONE) if date_to else None
+    except ValueError as exc:
+        raise ValueError("Дата должна быть указана в формате ГГГГ-ММ-ДД") from exc
+    if from_date and to_date and from_date > to_date:
+        raise ValueError("Дата начала периода не может быть позже даты окончания")
+
+    clauses = [
+        "TRIM(COALESCE(tube_number,'')) <> ''",
+        "chel_id NOT IN ('chel_legacy','chel_test_default')",
+        "TRIM(COALESCE(company_inn,'')) <> ?",
+    ]
+    params: list = [TEST_COMPANY_INN]
+    main_conn = None
+    try:
+        main_conn = sqlite3.connect(settings.database_path, timeout=5)
+        columns = {
+            str(row[1]) for row in main_conn.execute(
+                "PRAGMA table_info(user_profile)"
+            ).fetchall()
+        }
+        if "tube_number" not in columns:
+            return set()
+        if from_date or to_date:
+            if "updated_at" not in columns:
+                return set()
+            if from_date:
+                clauses.append("updated_at >= ?")
+                params.append(from_date.astimezone(timezone.utc).isoformat())
+            if to_date:
+                clauses.append("updated_at < ?")
+                params.append((to_date + timedelta(days=1)).astimezone(timezone.utc).isoformat())
+        elif period != "all":
+            if "updated_at" not in columns:
+                return set()
+            clauses.append("updated_at >= ?")
+            params.append(_period_start(period))
+        return {
+            str(row[0]) for row in main_conn.execute(
+                "SELECT chel_id FROM user_profile WHERE " + " AND ".join(clauses),
+                params,
+            ).fetchall()
+        }
+    except sqlite3.Error:
+        return set()
+    finally:
+        if main_conn is not None:
+            main_conn.close()
+
+
 def _cache_report_result(cache_key: tuple, result: dict) -> dict:
     now = time.monotonic()
     with _report_cache_lock:
@@ -1203,12 +1416,12 @@ def _admin_report_uncached(
         operating_systems = grouped("e.operating_system")
         browsers = grouped("e.browser")
         sources = grouped("COALESCE(NULLIF(e.source,''),s.entry_source)")
-        driving_time_eligible_users = {
+        eligible_users = {
             str(row[0]) for row in conn.execute(
                 "SELECT DISTINCT e.chel_id" + join + where, params,
             ).fetchall()
         }
-        driving_time = _driving_time_statistics(driving_time_eligible_users)
+        driving_time = _driving_time_statistics(eligible_users)
         payment_eligible_users = None
         if device or method or source:
             payment_eligible_users = {
@@ -1333,6 +1546,46 @@ def admin_report(
             period, device, method, source, recent_page, recent_limit,
             date_from, date_to,
         ), background=background,
+    )
+
+
+def _service_result_report_uncached(
+    period: str = "30", date_from: str = "", date_to: str = "",
+) -> dict:
+    """Return the request/result groups for their own date-filtered panel."""
+    where, params = _filters(period, "", "", "", date_from, date_to)
+    join = " FROM analytics_events e LEFT JOIN analytics_sessions s ON s.session_id=e.session_id "
+    qualifying = (" AND " if where else " WHERE ") + (
+        "(e.event_name IN ('tube_linked','lab_results_found') OR "
+        "(e.event_name='examinations_selection_completed' AND "
+        "CAST(COALESCE(json_extract(e.properties,'$.selected_count'),0) AS INTEGER) > 0))"
+    )
+    with connection() as conn:
+        eligible_users = {
+            str(row[0]) for row in conn.execute(
+                "SELECT DISTINCT e.chel_id" + join + where + qualifying, params,
+            ).fetchall()
+        }
+    eligible_users.update(
+        _tube_users_updated_in_period(period, date_from, date_to)
+    )
+    report = _service_result_statistics(eligible_users)
+    report.update({
+        "generated_at": _now(), "period": period,
+        "date_from": date_from, "date_to": date_to,
+    })
+    return report
+
+
+def service_result_report(
+    period: str = "30", date_from: str = "", date_to: str = "", *,
+    background: bool = False,
+) -> dict:
+    arguments = (str(period), str(date_from), str(date_to))
+    return _cached_report(
+        "service_results", arguments,
+        lambda: _service_result_report_uncached(period, date_from, date_to),
+        background=background,
     )
 
 

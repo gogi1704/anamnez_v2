@@ -3616,6 +3616,7 @@ def init_db() -> None:
                 status TEXT NOT NULL DEFAULT 'questionnaire',
                 selected_tests TEXT NOT NULL DEFAULT '[]',
                 payment_status TEXT NOT NULL DEFAULT 'none',
+                questionnaire_skipped INTEGER NOT NULL DEFAULT 0,
                 intro_seen INTEGER NOT NULL DEFAULT 0,
                 font_size TEXT NOT NULL DEFAULT 'extra',
                 updated_at TEXT NOT NULL,
@@ -4068,6 +4069,7 @@ def init_db() -> None:
                     status TEXT NOT NULL DEFAULT 'questionnaire',
                     selected_tests TEXT NOT NULL DEFAULT '[]',
                     payment_status TEXT NOT NULL DEFAULT 'none',
+                    questionnaire_skipped INTEGER NOT NULL DEFAULT 0,
                     intro_seen INTEGER NOT NULL DEFAULT 0,
                     font_size TEXT NOT NULL DEFAULT 'standard',
                     updated_at TEXT NOT NULL,
@@ -4076,8 +4078,8 @@ def init_db() -> None:
             )
             conn.execute(
                 """INSERT INTO onboarding_state
-                (chel_id, status, selected_tests, payment_status, intro_seen, font_size, updated_at)
-                SELECT 'chel_legacy', status, selected_tests, payment_status, intro_seen, font_size, updated_at
+                (chel_id, status, selected_tests, payment_status, questionnaire_skipped, intro_seen, font_size, updated_at)
+                SELECT 'chel_legacy', status, selected_tests, payment_status, 0, intro_seen, font_size, updated_at
                 FROM onboarding_state_legacy WHERE id = 1"""
             )
             conn.execute("DROP TABLE onboarding_state_legacy")
@@ -4086,6 +4088,8 @@ def init_db() -> None:
             conn.execute("ALTER TABLE onboarding_state ADD COLUMN intro_seen INTEGER NOT NULL DEFAULT 0")
         if "font_size" not in onboarding_columns:
             conn.execute("ALTER TABLE onboarding_state ADD COLUMN font_size TEXT NOT NULL DEFAULT 'standard'")
+        if "questionnaire_skipped" not in onboarding_columns:
+            conn.execute("ALTER TABLE onboarding_state ADD COLUMN questionnaire_skipped INTEGER NOT NULL DEFAULT 0")
 
         payment_columns = {row[1] for row in conn.execute("PRAGMA table_info(payment_orders)").fetchall()}
         if "hidden_at" not in payment_columns:
@@ -5131,13 +5135,14 @@ def get_onboarding() -> dict:
             (current_chel_id(),),
         ).fetchone()
     if not row:
-        return {"status": "appearance", "selected_tests": [], "payment_status": "none", "intro_seen": False, "font_size": "extra", "updated_at": None}
+        return {"status": "appearance", "selected_tests": [], "payment_status": "none", "questionnaire_skipped": False, "intro_seen": False, "font_size": "extra", "updated_at": None}
     result = dict(row)
     try:
         result["selected_tests"] = json.loads(result["selected_tests"] or "[]")
     except json.JSONDecodeError:
         result["selected_tests"] = []
     result["intro_seen"] = bool(result.get("intro_seen"))
+    result["questionnaire_skipped"] = bool(result.get("questionnaire_skipped"))
     if result.get("font_size") not in {"standard", "large", "extra"}:
         result["font_size"] = "standard"
     return result
@@ -5146,22 +5151,25 @@ def get_onboarding() -> dict:
 def save_onboarding(
     *, status: str, selected_tests: list[str] | None = None,
     payment_status: str | None = None, intro_seen: bool | None = None,
-    font_size: str | None = None,
+    font_size: str | None = None, questionnaire_skipped: bool | None = None,
 ) -> dict:
     current = get_onboarding()
     selected = current["selected_tests"] if selected_tests is None else selected_tests
     payment = current["payment_status"] if payment_status is None else payment_status
     seen = current.get("intro_seen", False) if intro_seen is None else intro_seen
     size = current.get("font_size", "extra") if font_size is None else font_size
+    skipped = current.get("questionnaire_skipped", False) if questionnaire_skipped is None else questionnaire_skipped
     if size not in {"standard", "large", "extra"}:
         raise ValueError("Некорректный размер текста")
     with _write_lock, connection() as conn:
         conn.execute(
-            """INSERT INTO onboarding_state (chel_id, status, selected_tests, payment_status, intro_seen, font_size, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT(chel_id) DO UPDATE SET status=excluded.status,
+            """INSERT INTO onboarding_state (chel_id, status, selected_tests, payment_status, questionnaire_skipped, intro_seen, font_size, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(chel_id) DO UPDATE SET status=excluded.status,
             selected_tests=excluded.selected_tests, payment_status=excluded.payment_status,
-            intro_seen=excluded.intro_seen, font_size=excluded.font_size, updated_at=excluded.updated_at""",
-            (current_chel_id(), status, json.dumps(selected, ensure_ascii=False), payment, int(bool(seen)), size, utc_now()),
+            questionnaire_skipped=excluded.questionnaire_skipped, intro_seen=excluded.intro_seen,
+            font_size=excluded.font_size, updated_at=excluded.updated_at""",
+            (current_chel_id(), status, json.dumps(selected, ensure_ascii=False), payment,
+             int(bool(skipped)), int(bool(seen)), size, utc_now()),
         )
         conn.commit()
     return get_onboarding()
