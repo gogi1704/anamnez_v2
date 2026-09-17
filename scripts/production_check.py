@@ -155,6 +155,14 @@ def main() -> int:
     else:
         warnings.append("Яндекс Метрика отключена: YANDEX_METRIKA_COUNTER_ID не задан")
 
+    marketer_metrika_id = settings.yandex_metrika_marketer_counter_id
+    if marketer_metrika_id and not (marketer_metrika_id.isdigit() and 5 <= len(marketer_metrika_id) <= 12):
+        errors.append("YANDEX_METRIKA_MARKETER_COUNTER_ID должен содержать от 5 до 12 цифр")
+    elif marketer_metrika_id:
+        passed.append("Отдельный счётчик Метрики для ветки маркетолога настроен")
+    else:
+        warnings.append("Отдельный счётчик для ветки маркетолога не задан: используется общий YANDEX_METRIKA_COUNTER_ID")
+
     if settings.dadata_api_key:
         dadata_url = urlparse(settings.dadata_suggestions_url)
         if dadata_url.scheme != "https" or not dadata_url.netloc:

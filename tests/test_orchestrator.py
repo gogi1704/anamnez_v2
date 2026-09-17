@@ -2666,14 +2666,14 @@ class OrchestratorTests(unittest.TestCase):
         self.assertIn("controllerchange", script)
         self.assertIn("url.pathname.startsWith('/api/')", worker)
         self.assertIn("url.pathname.startsWith('/auth/')", worker)
-        self.assertIn("consilium-shell-v106", worker)
+        self.assertIn("consilium-shell-v107", worker)
         self.assertIn("fetch(request)", worker)
-        self.assertIn("/static/styles.css?v=20260915-metric-results-preview-v1", index)
+        self.assertIn("/static/styles.css?v=20260916-experiments-v1", index)
         self.assertIn("/static/rich-text.2bf1f5fab764.css", index)
         self.assertTrue((project_root / "static" / "styles.07ffaefb4795.css").is_file())
         self.assertTrue((project_root / "static" / "rich-text.2bf1f5fab764.css").is_file())
-        self.assertIn("/static/app.js?v=20260915-metric-results-preview-v1", index)
-        self.assertIn("/static/metrika.js?v=20260829-interpret-profile-v1", index)
+        self.assertIn("/static/app.js?v=20260916-experiments-v1", index)
+        self.assertIn("/static/metrika.js?v=20260916-experiments-v1", index)
         self.assertIn('id="welcomeScreen"', index)
         self.assertIn('id="welcomeNextButton"', index)
         self.assertIn("Плановый медосмотр", index)
@@ -2756,7 +2756,7 @@ class OrchestratorTests(unittest.TestCase):
         main = (project_root / "backend" / "main.py").read_text(encoding="utf-8")
         config = (project_root / "backend" / "config.py").read_text(encoding="utf-8")
 
-        self.assertIn('src="/static/metrika.js?v=20260829-interpret-profile-v1"', index)
+        self.assertIn('src="/static/metrika.js?v=20260916-experiments-v1"', index)
         self.assertIn('YANDEX_METRIKA_COUNTER_ID', config)
         self.assertIn('path == "/api/public-config"', main)
         self.assertIn('"metrika.js"', main)
@@ -2796,7 +2796,7 @@ class OrchestratorTests(unittest.TestCase):
         self.assertNotIn("UserID", metrika)
         self.assertNotIn("userParams", metrika)
         self.assertNotIn("chel_id", metrika)
-        self.assertIn("window.consiliumMetrikaGoal?.(goal)", app)
+        self.assertIn("window.consiliumMetrikaGoal?.(goal, {", app)
 
     def test_persisted_replies_are_deduplicated_by_server_message_id(self):
         project_root = Path(__file__).resolve().parents[1]

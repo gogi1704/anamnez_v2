@@ -76,8 +76,31 @@ def _statistics_excluded_chel_ids() -> set[str]:
 def _is_test_user(chel_id: str) -> bool:
     return str(chel_id or "") in _statistics_excluded_chel_ids()
 
+
+def _experiment_cohort_chel_ids(variant: str) -> set[str]:
+    """Load chel_ids assigned to a given variant of the active A/B experiment."""
+    main_conn = None
+    try:
+        main_conn = sqlite3.connect(settings.database_path, timeout=5)
+        experiment_key = main_conn.execute(
+            "SELECT experiment_key FROM experiment_settings WHERE id = 1"
+        ).fetchone()
+        if not experiment_key:
+            return set()
+        return {
+            str(row[0]) for row in main_conn.execute(
+                "SELECT chel_id FROM experiment_assignments WHERE experiment_key=? AND variant=?",
+                (experiment_key[0], variant),
+            ).fetchall()
+        }
+    except sqlite3.Error:
+        return set()
+    finally:
+        if main_conn is not None:
+            main_conn.close()
+
 ALLOWED_EVENTS = {
-    "landing_viewed", "welcome_viewed", "welcome_continued", "auth_gate_viewed",
+    "landing_viewed", "experiment_assigned", "welcome_viewed", "welcome_continued", "auth_gate_viewed",
     "registration_method_selected", "anonymous_warning_viewed", "anonymous_warning_cancelled",
     "registration_completed", "registration_failed", "messenger_auth_started", "funnel_action",
     "onboarding_screen_viewed", "onboarding_screen_action",
@@ -120,6 +143,7 @@ ALLOWED_PROPERTIES = {
     "app_mode", "page_version", "connection_type", "conversation_count",
     "document_count", "cached", "reason", "font_size", "stage", "action",
     "selection_id", "exam_name", "context", "linked_count",
+    "experiment_key", "experiment_variant", "funnel_version",
 }
 
 FUNNEL_BREAKDOWNS = {
@@ -1602,14 +1626,24 @@ def _metric2_report_uncached(
     false incomplete edge ``C -> D``.
     """
     flow = str(flow or "standard").strip().lower()
-    if flow not in {"standard", "result"}:
+    if flow not in {"standard", "result", "experiment"}:
         raise ValueError("Неизвестная ветка Метрики 2.0")
+    # The marketer funnel (experiment) reuses the standard screens — only the
+    # cohort of users differs — until a divergent path is actually built.
+    screen_flow = "result" if flow == "result" else "standard"
     expected_context = "result" if flow == "result" else "onboarding"
     where, params = _filters(period, device, method, source, date_from, date_to)
+    if flow == "experiment":
+        cohort_ids = sorted(_experiment_cohort_chel_ids("marketer"))
+        if cohort_ids:
+            where += " AND e.chel_id IN (" + ",".join("?" for _ in cohort_ids) + ")"
+            params.extend(cohort_ids)
+        else:
+            where += " AND 0"
     join = " FROM analytics_events e LEFT JOIN analytics_sessions s ON s.session_id=e.session_id "
     definitions = [
         definition for definition in _metric2_screen_definitions()
-        if ("result" if definition.get("flow") == "result" else "standard") == flow
+        if ("result" if definition.get("flow") == "result" else "standard") == screen_flow
     ]
     relevant_events = {"onboarding_screen_viewed", "onboarding_screen_action"}
     for definition in definitions:
@@ -1825,7 +1859,7 @@ def _metric2_report_uncached(
         # valid payments. Enrich the route from paid examination orders and only
         # attach the outcome to users whose final choice was online payment.
         exam_payment_outcomes: dict[str, tuple[str, str]] = {}
-        if flow == "standard":
+        if flow in ("standard", "experiment"):
             main_conn = None
             try:
                 payment_start, payment_end = _payment_date_bounds(
@@ -2114,7 +2148,11 @@ def _metric2_report_uncached(
     return {
         "generated_at": _now(), "period": period, "date_from": date_from, "date_to": date_to,
         "flow": flow,
-        "flow_label": "Получение результатов" if flow == "result" else "Обычный путь",
+        "flow_label": (
+            "Получение результатов" if flow == "result"
+            else "Воронка маркетолога" if flow == "experiment"
+            else "Обычный путь"
+        ),
         "summary": {
             "start_users": start_users,
             "screens": len(result_screens),

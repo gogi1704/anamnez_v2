@@ -113,6 +113,19 @@ def ikp_token_valid(authorization: str) -> bool:
     return admin_token_valid(authorization, settings.ikp_integration_secret)
 
 
+def resolve_metrika_counter_id(variant: str, main_counter: str, marketer_counter: str) -> str:
+    """Route each session to its own Metrika counter for a clean per-branch dashboard.
+
+    Falls back to the shared/main counter whenever the marketer counter is not
+    configured, so leaving the new env var empty behaves exactly as before.
+    """
+    main_counter = str(main_counter or "")
+    marketer_counter = str(marketer_counter or "")
+    if variant == "marketer" and marketer_counter.isdigit():
+        return marketer_counter
+    return main_counter
+
+
 def _ikp_access_token(source_key: str) -> str:
     token_digest = hmac.new(
         settings.ikp_integration_secret.encode("utf-8"),
@@ -188,9 +201,20 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
             return self._json(200, {"status": "ok"})
         if path == "/api/public-config":
             self._ensure_user_context()
-            counter_id = "" if db.current_user_is_ikp() else settings.yandex_metrika_counter_id
+            preview_variant = parse_qs(parsed.query).get("preview_funnel", [""])[0]
+            experiment = (
+                db.experiment_preview_assignment(preview_variant)
+                if preview_variant in ("marketer", "control")
+                else db.current_experiment_assignment()
+            )
+            counter_id = "" if db.current_user_is_ikp() else resolve_metrika_counter_id(
+                experiment.get("variant", ""),
+                settings.yandex_metrika_counter_id,
+                settings.yandex_metrika_marketer_counter_id,
+            )
             return self._json(200, {
                 "yandex_metrika_counter_id": counter_id if counter_id.isdigit() else "",
+                "experiment": experiment,
                 "online_payments_enabled": bool(
                     settings.online_payments_enabled and yookassa.configured()
                 ),
@@ -288,6 +312,7 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
             "/api/admin/dashboard", "/api/admin/table", "/api/admin/ai-costs",
             "/api/admin/analytics", "/api/admin/metric2",
             "/api/admin/service-results",
+            "/api/admin/experiments",
             "/api/admin/ikp",
             "/api/admin/funnel-monitor", "/api/admin/funnel-monitor/preview",
         }:
@@ -322,6 +347,16 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                     return self._json(202, {"status": "building", "retry_after_ms": 750})
                 except analytics.ReportBuildFailed as exc:
                     return self._json(503, {"detail": f"Не удалось рассчитать отчёт: {exc}"})
+                except (ValueError, TypeError) as exc:
+                    return self._json(422, {"detail": str(exc)})
+            if path == "/api/admin/experiments":
+                query = parse_qs(parsed.query)
+                try:
+                    report = db.admin_experiment_report(query.get("period", ["30"])[0])
+                    report["yandex_marketer_counter_configured"] = bool(
+                        settings.yandex_metrika_marketer_counter_id.isdigit()
+                    )
+                    return self._json(200, report)
                 except (ValueError, TypeError) as exc:
                     return self._json(422, {"detail": str(exc)})
             if path == "/api/admin/metric2":
@@ -1193,6 +1228,16 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                     self._track_analytics("tube_linked")
                 return self._json(200, profile)
             except (ValueError, TypeError) as exc:
+                return self._json(422, {"detail": str(exc)})
+        if path == "/api/admin/experiments/settings":
+            if not self._admin_authorized():
+                return
+            try:
+                payload = self._read_json(max_bytes=16_000)
+                return self._json(200, {
+                    "settings": db.admin_update_experiment_settings(payload),
+                })
+            except (ValueError, TypeError, json.JSONDecodeError, UnicodeDecodeError) as exc:
                 return self._json(422, {"detail": str(exc)})
         if path == "/api/lab-results/interpret":
             missing_profile = self._interpretation_profile_missing(db.get_profile())
@@ -2164,11 +2209,15 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
             self.send_header("X-Frame-Options", "DENY")
         self.send_header("Referrer-Policy", "same-origin")
         self.send_header("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+        metrika_configured = (
+            settings.yandex_metrika_counter_id.isdigit()
+            or settings.yandex_metrika_marketer_counter_id.isdigit()
+        )
         metrika_sources = (
             " https://mc.yandex.ru https://mc.yandex.com https://mc.webvisor.com "
             "https://mc.webvisor.org https://yastatic.net wss://mc.yandex.ru "
             "wss://mc.yandex.com wss://mc.webvisor.com wss://mc.webvisor.org"
-            if settings.yandex_metrika_counter_id.isdigit() else ""
+            if metrika_configured else ""
         )
         metrika_frame_ancestors = (
             "'self' https://metrika.yandex.ru https://metrika.yandex.by "
@@ -2184,7 +2233,7 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
             "https://metr.yandex.com.tr https://metr.yandex.kz "
             "https://metrika.ya.ru https://metrica.ya.ru "
             "https://webvisor.com https://*.webvisor.com"
-            if allow_metrika_frame and settings.yandex_metrika_counter_id.isdigit()
+            if allow_metrika_frame and metrika_configured
             else "'none'"
         )
         metrika_frames = (
@@ -2192,7 +2241,7 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
             "https://mc.webvisor.com https://mc.webvisor.org; "
             "frame-src blob: https://mc.yandex.ru https://mc.yandex.com "
             "https://mc.webvisor.com https://mc.webvisor.org;"
-            if settings.yandex_metrika_counter_id.isdigit() else ""
+            if metrika_configured else ""
         )
         self.send_header(
             "Content-Security-Policy",

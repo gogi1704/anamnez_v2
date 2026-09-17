@@ -87,6 +87,263 @@ FUNNEL_MONITOR_DEFAULTS = {
     "alert_threshold_pp": 10.0,
 }
 
+EXPERIMENT_DEFAULTS = {
+    "enabled": False,
+    "experiment_key": "marketer_funnel_2026",
+    "name": "Воронка маркетолога",
+    "marketer_percent": 25,
+    "control_version": "main_v1",
+    "marketer_version": "marketer_v1",
+    "yandex_enabled": True,
+    "yandex_goal_prefix": "consilium_marketer",
+    "assignment_counter": 0,
+}
+
+
+def admin_experiment_settings() -> dict:
+    """Return the singleton A/B experiment configuration."""
+    with connection() as conn:
+        row = conn.execute(
+            "SELECT * FROM experiment_settings WHERE id = 1"
+        ).fetchone()
+    result = {**EXPERIMENT_DEFAULTS, **(dict(row) if row else {})}
+    result["enabled"] = bool(result.get("enabled"))
+    result["yandex_enabled"] = bool(result.get("yandex_enabled"))
+    result["marketer_percent"] = int(result.get("marketer_percent") or 0)
+    result["assignment_counter"] = int(result.get("assignment_counter") or 0)
+    return result
+
+
+def admin_update_experiment_settings(payload: dict) -> dict:
+    """Validate and persist the active A/B experiment settings."""
+    if not isinstance(payload, dict):
+        raise ValueError("Ожидается объект настроек эксперимента")
+    current = admin_experiment_settings()
+    for key in ("enabled", "yandex_enabled"):
+        if key in payload:
+            if not isinstance(payload[key], bool):
+                raise ValueError(f"{key} должен быть true или false")
+            current[key] = payload[key]
+    experiment_key = str(payload.get("experiment_key", current["experiment_key"])).strip().lower()
+    if not re.fullmatch(r"[a-z0-9][a-z0-9_-]{2,49}", experiment_key):
+        raise ValueError("Ключ эксперимента: 3–50 латинских букв, цифр, _ или -")
+    name = " ".join(str(payload.get("name", current["name"])).split())
+    if not 3 <= len(name) <= 100:
+        raise ValueError("Название эксперимента должно содержать от 3 до 100 символов")
+    versions = {}
+    for key in ("control_version", "marketer_version"):
+        value = str(payload.get(key, current[key])).strip().lower()
+        if not re.fullmatch(r"[a-z0-9][a-z0-9_.-]{1,39}", value):
+            raise ValueError("Версия воронки должна содержать 2–40 латинских символов")
+        versions[key] = value
+    goal_prefix = str(payload.get("yandex_goal_prefix", current["yandex_goal_prefix"])).strip().lower()
+    if not re.fullmatch(r"[a-z][a-z0-9_-]{2,39}", goal_prefix):
+        raise ValueError("Префикс цели Метрики: 3–40 латинских букв, цифр, _ или -")
+    try:
+        marketer_percent = int(payload.get("marketer_percent", current["marketer_percent"]))
+    except (TypeError, ValueError):
+        raise ValueError("Доля маркетинговой ветки должна быть целым числом") from None
+    if marketer_percent not in (0, 25, 50, 75, 100):
+        raise ValueError("Доля маркетинговой ветки: только 0, 25, 50, 75 или 100%")
+    # Смена ключа эксперимента — это новый эксперимент, счётчик распределения стартует заново.
+    assignment_counter = 0 if experiment_key != current["experiment_key"] else current["assignment_counter"]
+    now = utc_now()
+    with _write_lock, connection() as conn:
+        conn.execute(
+            """INSERT INTO experiment_settings
+               (id,enabled,experiment_key,name,marketer_percent,control_version,
+                marketer_version,yandex_enabled,yandex_goal_prefix,assignment_counter,updated_at)
+               VALUES (1,?,?,?,?,?,?,?,?,?,?)
+               ON CONFLICT(id) DO UPDATE SET
+                enabled=excluded.enabled,experiment_key=excluded.experiment_key,
+                name=excluded.name,marketer_percent=excluded.marketer_percent,
+                control_version=excluded.control_version,
+                marketer_version=excluded.marketer_version,
+                yandex_enabled=excluded.yandex_enabled,
+                yandex_goal_prefix=excluded.yandex_goal_prefix,
+                assignment_counter=excluded.assignment_counter,
+                updated_at=excluded.updated_at""",
+            (
+                int(current["enabled"]), experiment_key, name, marketer_percent,
+                versions["control_version"], versions["marketer_version"],
+                int(current["yandex_enabled"]), goal_prefix, assignment_counter, now,
+            ),
+        )
+        conn.commit()
+    return admin_experiment_settings()
+
+
+def current_experiment_assignment() -> dict:
+    """Return a stable server-side assignment for the current user.
+
+    New users are assigned in strict round-robin order (e.g. exactly every
+    4th user for marketer_percent=25), via an accumulator that carries the
+    remainder between assignments — not a random/hash sample.
+    """
+    config = admin_experiment_settings()
+    if not config["enabled"]:
+        return {
+            "enabled": False, "key": config["experiment_key"],
+            "name": config["name"], "variant": "off", "version": "",
+            "marketer_percent": config["marketer_percent"],
+            "yandex_enabled": config["yandex_enabled"],
+            "yandex_goal_prefix": config["yandex_goal_prefix"],
+        }
+    chel_id = current_chel_id()
+    key = config["experiment_key"]
+    with _write_lock, connection() as conn:
+        row = conn.execute(
+            "SELECT variant,version,assigned_at FROM experiment_assignments "
+            "WHERE experiment_key=? AND chel_id=?",
+            (key, chel_id),
+        ).fetchone()
+        if row:
+            variant, version, assigned_at = row["variant"], row["version"], row["assigned_at"]
+        else:
+            counter_row = conn.execute(
+                "SELECT assignment_counter FROM experiment_settings WHERE id=1"
+            ).fetchone()
+            accumulator = int(counter_row["assignment_counter"] or 0) + config["marketer_percent"]
+            if accumulator >= 100:
+                variant = "marketer"
+                accumulator -= 100
+            else:
+                variant = "control"
+            conn.execute(
+                "UPDATE experiment_settings SET assignment_counter=? WHERE id=1",
+                (accumulator,),
+            )
+            version = (
+                config["marketer_version"] if variant == "marketer"
+                else config["control_version"]
+            )
+            assigned_at = utc_now()
+            conn.execute(
+                """INSERT INTO experiment_assignments
+                   (experiment_key,chel_id,variant,version,assigned_at)
+                   VALUES (?,?,?,?,?)""",
+                (key, chel_id, variant, version, assigned_at),
+            )
+            conn.commit()
+    return {
+        "enabled": True, "key": key, "name": config["name"],
+        "variant": variant, "version": version,
+        "assigned_at": assigned_at,
+        "marketer_percent": config["marketer_percent"],
+        "yandex_enabled": config["yandex_enabled"],
+        "yandex_goal_prefix": config["yandex_goal_prefix"],
+    }
+
+
+def experiment_preview_assignment(variant: str) -> dict:
+    """Force a specific experiment variant for a demo/QA link.
+
+    Never touches experiment_assignments, so opening the link repeatedly
+    cannot skew the real A/B split or the admin report's cohort counts.
+    """
+    config = admin_experiment_settings()
+    variant = variant if variant in ("control", "marketer") else "control"
+    version = config["marketer_version"] if variant == "marketer" else config["control_version"]
+    return {
+        "enabled": True, "key": config["experiment_key"], "name": config["name"],
+        "variant": variant, "version": version, "preview": True,
+        "marketer_percent": config["marketer_percent"],
+        "yandex_enabled": config["yandex_enabled"],
+        "yandex_goal_prefix": config["yandex_goal_prefix"],
+    }
+
+
+def admin_experiment_report(period: str = "30") -> dict:
+    """Build a privacy-safe A/B summary for the active experiment cohort."""
+    config = admin_experiment_settings()
+    if period not in {"today", "7", "30", "90", "all"}:
+        raise ValueError("Неизвестный период")
+    cutoff = None
+    if period != "all":
+        days = 1 if period == "today" else int(period)
+        local_now = datetime.now(timezone(timedelta(hours=3)))
+        local_start = local_now.replace(hour=0, minute=0, second=0, microsecond=0)
+        if days > 1:
+            local_start -= timedelta(days=days - 1)
+        cutoff = local_start.astimezone(timezone.utc).isoformat()
+    with connection() as conn:
+        clauses = ["experiment_key=?", "IS_STATS_USER(chel_id)=1"]
+        params: list[object] = [config["experiment_key"]]
+        if cutoff:
+            clauses.append("assigned_at>=?")
+            params.append(cutoff)
+        rows = conn.execute(
+            "SELECT chel_id,variant,version,assigned_at FROM experiment_assignments WHERE "
+            + " AND ".join(clauses), params,
+        ).fetchall()
+    cohort = {str(row["chel_id"]): dict(row) for row in rows}
+    stage_events = {
+        "assigned": {"experiment_assigned"},
+        "questionnaire": {"questionnaire_completed"},
+        "application": {"examinations_selection_completed"},
+        "online_payment": {"payment_created", "payment_redirected"},
+        "payment_success": {"payment_succeeded"},
+        "completed": {"onboarding_completed"},
+    }
+    reached = {
+        variant: {stage: set() for stage in stage_events}
+        for variant in ("control", "marketer")
+    }
+    # Assignment itself is authoritative even if the browser blocks analytics.
+    for chel_id, item in cohort.items():
+        reached[item["variant"]]["assigned"].add(chel_id)
+    if cohort and settings.analytics_database_path.exists():
+        analytics_conn = sqlite3.connect(settings.analytics_database_path, timeout=5)
+        analytics_conn.row_factory = sqlite3.Row
+        try:
+            placeholders = ",".join("?" for _ in cohort)
+            wanted = sorted(set().union(*stage_events.values()))
+            event_placeholders = ",".join("?" for _ in wanted)
+            event_rows = analytics_conn.execute(
+                f"SELECT chel_id,event_name,properties,received_at FROM analytics_events "
+                f"WHERE chel_id IN ({placeholders}) AND event_name IN ({event_placeholders})",
+                [*cohort.keys(), *wanted],
+            ).fetchall()
+            for row in event_rows:
+                chel_id = str(row["chel_id"])
+                assignment = cohort.get(chel_id)
+                if not assignment or str(row["received_at"] or "") < assignment["assigned_at"]:
+                    continue
+                try:
+                    properties = json.loads(row["properties"] or "{}")
+                except (json.JSONDecodeError, TypeError):
+                    properties = {}
+                event_name = str(row["event_name"])
+                if event_name == "examinations_selection_completed" and int(properties.get("selected_count") or 0) < 1:
+                    continue
+                for stage, events in stage_events.items():
+                    if event_name in events:
+                        reached[assignment["variant"]][stage].add(chel_id)
+        finally:
+            analytics_conn.close()
+    labels = {
+        "assigned": "Получили вариант", "questionnaire": "Завершили анкету",
+        "application": "Выбрали обследования", "online_payment": "Начали онлайн-оплату",
+        "payment_success": "Успешно оплатили", "completed": "Завершили стартовый путь",
+    }
+    variants = []
+    for variant, label in (("control", "Контрольная воронка"), ("marketer", "Воронка маркетолога")):
+        assigned = len(reached[variant]["assigned"])
+        variants.append({
+            "variant": variant, "label": label,
+            "version": config[f"{variant}_version"] if variant == "marketer" else config["control_version"],
+            "users": assigned,
+            "stages": [{
+                "key": stage, "label": labels[stage], "users": len(users),
+                "percent": round(len(users) / assigned * 100, 1) if assigned else 0.0,
+            } for stage, users in reached[variant].items()],
+        })
+    return {
+        "generated_at": utc_now(), "period": period, "settings": config,
+        "total_users": len(cohort), "variants": variants,
+        "yandex_goal": f"{config['yandex_goal_prefix']}_event",
+    }
+
 
 def admin_funnel_monitor_settings() -> dict:
     """Return the singleton daily funnel-monitor configuration."""
@@ -3671,6 +3928,36 @@ def init_db() -> None:
             INSERT OR IGNORE INTO funnel_monitor_settings (id,updated_at)
             VALUES (1,CURRENT_TIMESTAMP);
 
+            CREATE TABLE IF NOT EXISTS experiment_settings (
+                id INTEGER PRIMARY KEY CHECK(id = 1),
+                enabled INTEGER NOT NULL DEFAULT 0,
+                experiment_key TEXT NOT NULL DEFAULT 'marketer_funnel_2026',
+                name TEXT NOT NULL DEFAULT 'Воронка маркетолога',
+                marketer_percent INTEGER NOT NULL DEFAULT 25,
+                control_version TEXT NOT NULL DEFAULT 'main_v1',
+                marketer_version TEXT NOT NULL DEFAULT 'marketer_v1',
+                yandex_enabled INTEGER NOT NULL DEFAULT 1,
+                yandex_goal_prefix TEXT NOT NULL DEFAULT 'consilium_marketer',
+                assignment_counter INTEGER NOT NULL DEFAULT 0,
+                updated_at TEXT NOT NULL
+            );
+
+            INSERT OR IGNORE INTO experiment_settings (id,updated_at)
+            VALUES (1,CURRENT_TIMESTAMP);
+
+            CREATE TABLE IF NOT EXISTS experiment_assignments (
+                experiment_key TEXT NOT NULL,
+                chel_id TEXT NOT NULL,
+                variant TEXT NOT NULL CHECK(variant IN ('control','marketer')),
+                version TEXT NOT NULL,
+                assigned_at TEXT NOT NULL,
+                PRIMARY KEY(experiment_key,chel_id),
+                FOREIGN KEY(chel_id) REFERENCES users(chel_id) ON DELETE CASCADE
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_experiment_assignments_variant_time
+            ON experiment_assignments(experiment_key,variant,assigned_at);
+
             CREATE TABLE IF NOT EXISTS payment_orders (
                 id TEXT PRIMARY KEY,
                 chel_id TEXT NOT NULL,
@@ -3844,6 +4131,13 @@ def init_db() -> None:
             """
         )
         now = utc_now()
+        experiment_settings_columns = {
+            row[1] for row in conn.execute("PRAGMA table_info(experiment_settings)").fetchall()
+        }
+        if "assignment_counter" not in experiment_settings_columns:
+            conn.execute(
+                "ALTER TABLE experiment_settings ADD COLUMN assignment_counter INTEGER NOT NULL DEFAULT 0"
+            )
         users_columns = {row[1] for row in conn.execute("PRAGMA table_info(users)").fetchall()}
         registration_columns_added = False
         if "registered_at" not in users_columns:

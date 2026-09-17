@@ -169,6 +169,21 @@ function writeAnalyticsQueue(queue) {
   try { localStorage.setItem(ANALYTICS_QUEUE_KEY, JSON.stringify(queue.slice(-200))); } catch {}
 }
 
+function experimentAnalyticsProperties() {
+  const experiment = state.publicConfig?.experiment;
+  if (!experiment?.enabled || !['control','marketer'].includes(experiment.variant)) return {};
+  return {
+    experiment_key:String(experiment.key || ''),
+    experiment_variant:String(experiment.variant || ''),
+    funnel_version:String(experiment.version || ''),
+  };
+}
+
+function isMarketerFunnel() {
+  return state.publicConfig?.experiment?.enabled
+    && state.publicConfig.experiment.variant === 'marketer';
+}
+
 function trackEvent(eventName, properties = {}) {
   const queue = readAnalyticsQueue();
   queue.push({
@@ -176,7 +191,7 @@ function trackEvent(eventName, properties = {}) {
     session_id:analyticsSessionId,
     event_name:eventName,
     client_at:new Date().toISOString(),
-    properties:{...analyticsAttribution(),...properties},
+    properties:{...analyticsAttribution(),...experimentAnalyticsProperties(),...properties},
   });
   writeAnalyticsQueue(queue);
   clearTimeout(analyticsFlushTimer);
@@ -206,10 +221,14 @@ function trackOnboardingAction(action, screen = currentOnboardingAnalyticsScreen
 
 function trackMetrikaGoal(eventName, properties = {}) {
   const fixedGoals = {
+    experiment_assigned:'experiment_assigned',
     welcome_continued:'welcome_continue', appearance_completed:'font_size_selected',
     questionnaire_started:'questionnaire_started', questionnaire_completed:'questionnaire_completed',
     examinations_offer_viewed:'exam_offer_viewed', examinations_opened:'exam_options_opened',
     examinations_selection_completed:'exam_selection_completed', onboarding_completed:'onboarding_completed',
+    payment_viewed:'payment_viewed', payment_redirected:'payment_redirected',
+    payment_succeeded:'payment_succeeded', payment_canceled:'payment_canceled',
+    payment_pending:'payment_pending', completion_viewed:'completion_viewed',
     capabilities_viewed:'capabilities_viewed', chat_opened:'chat_opened',
     first_message_sent:'first_message_sent', human_requested:'human_requested',
     install_clicked:'install_clicked',
@@ -224,7 +243,10 @@ function trackMetrikaGoal(eventName, properties = {}) {
     if (method === 'online') goal = 'payment_online';
     if (method === 'at_exam') goal = 'payment_at_exam';
   }
-  if (goal) window.consiliumMetrikaGoal?.(goal);
+  if (goal) window.consiliumMetrikaGoal?.(goal, {
+    screen:String(properties.screen || currentOnboardingAnalyticsScreen || '').slice(0,80),
+    action:String(properties.action || '').slice(0,80),
+  });
 }
 
 async function flushAnalytics({ beacon = false } = {}) {
@@ -4474,7 +4496,17 @@ async function init() {
   trackEvent('landing_viewed', {screen:'entry'});
   trackEvent('app_opened', {app_mode:isInstalledApp() ? 'standalone' : 'browser'});
   try {
-    state.publicConfig = await api('/api/public-config');
+    const previewFunnel = new URLSearchParams(location.search).get('preview_funnel');
+    const publicConfigPath = ['marketer','control'].includes(previewFunnel)
+      ? `/api/public-config?preview_funnel=${previewFunnel}` : '/api/public-config';
+    state.publicConfig = await api(publicConfigPath);
+    const experiment = state.publicConfig?.experiment;
+    document.documentElement.dataset.experimentVariant = experiment?.enabled
+      ? String(experiment.variant || 'control') : 'off';
+    document.body.classList.toggle('experiment-marketer',isMarketerFunnel());
+    if (experiment?.enabled) {
+      trackEvent('experiment_assigned', {screen:'entry'});
+    }
     const identity = await api('/api/me');
     state.identity = identity;
     consumeCompletedMessengerLink(identity);

@@ -1376,20 +1376,31 @@ function renderMetric2(data) {
       : screen),
   };
   latestMetric2Data = data;
-  metric2ActiveFlow = data.flow === 'result' ? 'result' : 'standard';
+  metric2ActiveFlow = ['result','experiment'].includes(data.flow) ? data.flow : 'standard';
   const resultFlow = metric2ActiveFlow === 'result';
-  $('#metric2StandardFlow').classList.toggle('active', !resultFlow);
-  $('#metric2StandardFlow').setAttribute('aria-selected', String(!resultFlow));
+  const experimentFlow = metric2ActiveFlow === 'experiment';
+  $('#metric2StandardFlow').classList.toggle('active', !resultFlow && !experimentFlow);
+  $('#metric2StandardFlow').setAttribute('aria-selected', String(!resultFlow && !experimentFlow));
   $('#metric2ResultFlow').classList.toggle('active', resultFlow);
   $('#metric2ResultFlow').setAttribute('aria-selected', String(resultFlow));
-  $('#metric2FlowEyebrow').textContent = resultFlow ? 'Ссылка /result' : 'Обычная ссылка';
-  $('#metric2FlowTitle').textContent = resultFlow ? 'Получение результатов анализов' : 'Анкета и выбор обследований';
+  $('#metric2ExperimentFlow').classList.toggle('active', experimentFlow);
+  $('#metric2ExperimentFlow').setAttribute('aria-selected', String(experimentFlow));
+  $('#metric2ExperimentNote').classList.toggle('hidden', !experimentFlow);
+  if (experimentFlow) {
+    const link = `${location.origin}/?preview_funnel=marketer`;
+    $('#metric2ExperimentLink').textContent = link;
+    $('#metric2ExperimentLink').dataset.link = link;
+  }
+  $('#metric2FlowEyebrow').textContent = resultFlow ? 'Ссылка /result' : experimentFlow ? 'Вариант эксперимента' : 'Обычная ссылка';
+  $('#metric2FlowTitle').textContent = resultFlow ? 'Получение результатов анализов' : experimentFlow ? 'Воронка маркетолога' : 'Анкета и выбор обследований';
   $('#metric2FlowDescription').textContent = resultFlow
     ? 'Отдельная воронка для пользователей, которые пришли по специальной ссылке за результатами. Обычное анкетирование сюда не входит.'
+    : experimentFlow
+    ? 'Путь пользователей, которым назначен вариант «маркетолог» в A/B-эксперименте. Экраны пока совпадают с обычной воронкой — здесь будет видно, когда появятся отличия.'
     : 'Основная воронка новых пользователей: приветствие, регистрация, анкета, обследования и завершение. Переходы по ссылке /result сюда не входят.';
   const summary = $('#metric2Summary');
   summary.innerHTML = [
-    [resultFlow ? 'Пришли по пути result' : 'На первом экране',data.summary?.start_users || 0,'100% — база этой ветки'],
+    [resultFlow ? 'Пришли по пути result' : experimentFlow ? 'Попали в вариант «маркетолог»' : 'На первом экране',data.summary?.start_users || 0,'100% — база этой ветки'],
     [resultFlow ? 'Получили результат пути' : 'Дошли до завершения',data.summary?.reached_completion || 0,'уникальных пользователей'],
   ].map(([label,value,note]) => `<article class="analytics-metric"><span>${label}</span><strong>${Number(value).toLocaleString('ru-RU')}</strong><small>${note}</small></article>`).join('');
   const root = $('#metric2Flow');
@@ -1449,7 +1460,7 @@ function renderMetric2(data) {
     stats.innerHTML = `<span class="metric2-stage">${visualBranch ? 'Ответвление · ' : ''}${escapeHtml(screen.stage || '')}</span>${quality}<h3>${escapeHtml(screen.title)}</h3><div class="metric2-reach"><strong>${Number(screen.percent_of_start || 0).toLocaleString('ru-RU')}%</strong><span>от первого экрана</span></div><p><b>${Number(screen.users || 0).toLocaleString('ru-RU')}</b> пользователей · ${comparison}</p>${dropoff}<div class="metric2-reach-track"><i style="width:${Math.min(100,Number(screen.percent_of_start || 0))}%"></i></div><button type="button" data-metric2-screen="${escapeHtml(screen.id)}">Открыть экран и всю статистику →</button>`;
     item.append(sequence,open,stats); root.append(item);
   }
-  if (!(data.screens || []).length) root.innerHTML = `<p class="form-error">Пока нет данных по ветке «${resultFlow ? 'Ссылка result' : 'Обычная ссылка'}»</p>`;
+  if (!(data.screens || []).length) root.innerHTML = `<p class="form-error">Пока нет данных по ветке «${resultFlow ? 'Ссылка result' : experimentFlow ? 'Эксперимент' : 'Обычная ссылка'}»</p>`;
   fillAnalyticsSelect('#metric2Device',data.filter_options?.devices || [],'Все устройства');
   fillAnalyticsSelect('#metric2Method',data.filter_options?.methods || [],'Все способы');
   fillAnalyticsSelect('#metric2Source',data.filter_options?.sources || [],'Все источники');
@@ -1555,7 +1566,7 @@ function closeMetric2Modal() {
 }
 
 async function loadMetric2(flow = metric2ActiveFlow) {
-  metric2ActiveFlow = flow === 'result' ? 'result' : 'standard';
+  metric2ActiveFlow = ['result','experiment'].includes(flow) ? flow : 'standard';
   closeMetric2Modal();
   return withPanelLoading('#metric2AdminView', async () => {
     const params = new URLSearchParams({period:$('#metric2Period').value,flow:metric2ActiveFlow});
@@ -1567,7 +1578,8 @@ async function loadMetric2(flow = metric2ActiveFlow) {
     const requestedFlow = metric2ActiveFlow;
     const report = await adminReportFetch(`/api/admin/metric2?${params}`);
     if (requestedFlow === metric2ActiveFlow) renderMetric2(report);
-  }, metric2ActiveFlow === 'result' ? 'Строим путь получения результатов…' : 'Строим обычный стартовый путь…');
+  }, metric2ActiveFlow === 'result' ? 'Строим путь получения результатов…'
+    : metric2ActiveFlow === 'experiment' ? 'Строим путь воронки маркетолога…' : 'Строим обычный стартовый путь…');
 }
 
 async function loadFavoriteSources() {
@@ -1667,6 +1679,77 @@ async function previewFunnelMonitor() {
   showMonitorStatus('Предпросмотр сформирован. Данные ещё не отправлены.');
 }
 
+function showExperimentStatus(message = '', error = false) {
+  const node = $('#experimentStatus');
+  node.textContent = message;
+  node.classList.toggle('error', error);
+}
+
+function fillExperimentSettings(item = {}) {
+  $('#experimentEnabled').checked = Boolean(item.enabled);
+  $('#experimentName').value = item.name || '';
+  $('#experimentKey').value = item.experiment_key || '';
+  $('#experimentPercent').value = Number(item.marketer_percent ?? 25);
+  $('#experimentControlVersion').value = item.control_version || 'main_v1';
+  $('#experimentMarketerVersion').value = item.marketer_version || 'marketer_v1';
+  $('#experimentYandexEnabled').checked = Boolean(item.yandex_enabled);
+  $('#experimentYandexPrefix').value = item.yandex_goal_prefix || 'consilium_marketer';
+  $('#experimentState').textContent = item.enabled ? 'Запущен' : 'Выключен';
+  $('#experimentState').classList.toggle('active',Boolean(item.enabled));
+}
+
+function renderExperimentReport(data) {
+  fillExperimentSettings(data.settings || {});
+  $('#experimentYandexGoal').textContent = data.yandex_goal || 'consilium_marketer_event';
+  $('#experimentCounterStatus').textContent = data.yandex_marketer_counter_configured
+    ? 'Ветка «маркетолог» также пишется в отдельный счётчик Метрики (YANDEX_METRIKA_MARKETER_COUNTER_ID настроен на сервере).'
+    : 'Отдельный счётчик для ветки «маркетолог» не настроен — обе ветки пишутся в общий счётчик, отличить их можно только параметром experiment.variant.';
+  const variants = Object.fromEntries((data.variants || []).map(item => [item.variant,item]));
+  $('#experimentSummary').innerHTML = `
+    <article><span>Всего участников</span><strong>${Number(data.total_users || 0).toLocaleString('ru-RU')}</strong><small>назначены за выбранный период</small></article>
+    <article><span>Основная воронка</span><strong>${Number(variants.control?.users || 0).toLocaleString('ru-RU')}</strong><small>${escapeHtml(variants.control?.version || '')}</small></article>
+    <article><span>Воронка маркетолога</span><strong>${Number(variants.marketer?.users || 0).toLocaleString('ru-RU')}</strong><small>${escapeHtml(variants.marketer?.version || '')}</small></article>`;
+  $('#experimentVariants').innerHTML = (data.variants || []).map(variant => `
+    <section class="experiment-variant">
+      <header><div><b>${escapeHtml(variant.label)}</b><small>${escapeHtml(variant.version)}</small></div><strong>${Number(variant.users || 0).toLocaleString('ru-RU')} чел.</strong></header>
+      ${(variant.stages || []).map(stage => `<div class="experiment-stage"><b>${escapeHtml(stage.label)}</b><strong>${Number(stage.users || 0).toLocaleString('ru-RU')}</strong><small>${Number(stage.percent || 0).toLocaleString('ru-RU')}% от назначенных</small><span class="experiment-stage-track"><i style="width:${Math.min(100,Number(stage.percent || 0))}%"></i></span></div>`).join('')}
+    </section>`).join('');
+}
+
+async function loadExperiments() {
+  return withPanelLoading('#experimentsAdminView', async () => {
+    const period = $('#experimentPeriod').value || '30';
+    const data = await adminFetch(`/api/admin/experiments?period=${encodeURIComponent(period)}`);
+    renderExperimentReport(data);
+  }, 'Считаем показатели эксперимента…');
+}
+
+async function saveExperiment(event) {
+  event?.preventDefault();
+  showExperimentStatus('Сохраняем…');
+  try {
+    const result = await adminFetch('/api/admin/experiments/settings',undefined,{
+      method:'POST',body:JSON.stringify({
+        enabled:$('#experimentEnabled').checked,
+        name:$('#experimentName').value.trim(),
+        experiment_key:$('#experimentKey').value.trim(),
+        marketer_percent:Number($('#experimentPercent').value),
+        control_version:$('#experimentControlVersion').value.trim(),
+        marketer_version:$('#experimentMarketerVersion').value.trim(),
+        yandex_enabled:$('#experimentYandexEnabled').checked,
+        yandex_goal_prefix:$('#experimentYandexPrefix').value.trim(),
+      }),
+    });
+    fillExperimentSettings(result.settings || {});
+    loadedAdminViews.delete('experiments');
+    await loadExperiments();
+    loadedAdminViews.add('experiments');
+    showExperimentStatus('Настройки сохранены. Уже назначенные пользователи сохранят свой вариант.');
+  } catch (error) {
+    showExperimentStatus(error.message,true);
+  }
+}
+
 async function testFunnelMonitor(analysis = 'all', button = null) {
   const previousText = button?.textContent;
   if (button) { button.disabled = true; button.textContent = 'Отправляем…'; }
@@ -1682,10 +1765,11 @@ async function testFunnelMonitor(analysis = 'all', button = null) {
 }
 
 function showAdminView(view) {
-  activeAdminView = ['favorites','analytics','service_results','metric2','monitor','ikp','managers','examinations','costs'].includes(view) ? view : 'dashboard';
+  activeAdminView = ['favorites','analytics','service_results','experiments','metric2','monitor','ikp','managers','examinations','costs'].includes(view) ? view : 'dashboard';
   const favoritesVisible = activeAdminView === 'favorites';
   const analyticsVisible = activeAdminView === 'analytics';
   const serviceResultsVisible = activeAdminView === 'service_results';
+  const experimentsVisible = activeAdminView === 'experiments';
   const metric2Visible = activeAdminView === 'metric2';
   const monitorVisible = activeAdminView === 'monitor';
   const ikpVisible = activeAdminView === 'ikp';
@@ -1697,6 +1781,7 @@ function showAdminView(view) {
   $('#dashboard').classList.toggle('show-costs', costsVisible);
   $('#dashboard').classList.toggle('show-analytics', analyticsVisible);
   $('#dashboard').classList.toggle('show-service-results', serviceResultsVisible);
+  $('#dashboard').classList.toggle('show-experiments', experimentsVisible);
   $('#dashboard').classList.toggle('show-metric2', metric2Visible);
   $('#dashboard').classList.toggle('show-monitor', monitorVisible);
   $('#dashboard').classList.toggle('show-ikp', ikpVisible);
@@ -1704,6 +1789,7 @@ function showAdminView(view) {
   $('#favoritesAdminView').classList.toggle('hidden', !favoritesVisible);
   $('#analyticsAdminView').classList.toggle('hidden', !analyticsVisible);
   $('#serviceResultsAdminView').classList.toggle('hidden', !serviceResultsVisible);
+  $('#experimentsAdminView').classList.toggle('hidden', !experimentsVisible);
   $('#metric2AdminView').classList.toggle('hidden', !metric2Visible);
   $('#monitorAdminView').classList.toggle('hidden', !monitorVisible);
   $('#ikpAdminView').classList.toggle('hidden', !ikpVisible);
@@ -1714,6 +1800,7 @@ function showAdminView(view) {
   $('#favoritesTab').classList.toggle('active', favoritesVisible);
   $('#analyticsTab').classList.toggle('active', analyticsVisible);
   $('#serviceResultsTab').classList.toggle('active', serviceResultsVisible);
+  $('#experimentsTab').classList.toggle('active', experimentsVisible);
   $('#metric2Tab').classList.toggle('active', metric2Visible);
   $('#monitorTab').classList.toggle('active', monitorVisible);
   $('#ikpTab').classList.toggle('active', ikpVisible);
@@ -1737,6 +1824,7 @@ async function loadAdminViewData(view = activeAdminView, {force = false} = {}) {
   else if (view === 'costs') request = loadCosts();
   else if (view === 'analytics') request = loadAnalytics();
   else if (view === 'service_results') request = loadServiceResults();
+  else if (view === 'experiments') request = loadExperiments();
   else if (view === 'metric2') request = loadMetric2();
   else if (view === 'monitor') request = loadFunnelMonitor();
   else if (view === 'ikp') request = loadIkp();
@@ -2156,12 +2244,15 @@ $('#dashboardTab').addEventListener('click', () => showAdminView('dashboard'));
 $('#favoritesTab').addEventListener('click', () => showAdminView('favorites'));
 $('#analyticsTab').addEventListener('click', () => showAdminView('analytics'));
 $('#serviceResultsTab').addEventListener('click', () => showAdminView('service_results'));
+$('#experimentsTab').addEventListener('click', () => showAdminView('experiments'));
 $('#metric2Tab').addEventListener('click', () => showAdminView('metric2'));
 $('#monitorTab').addEventListener('click', () => showAdminView('monitor'));
 $('#ikpTab').addEventListener('click', () => showAdminView('ikp'));
 $('#managersTab').addEventListener('click', () => showAdminView('managers'));
 $('#examinationsTab').addEventListener('click', () => showAdminView('examinations'));
 $('#costsTab').addEventListener('click', () => showAdminView('costs'));
+$('#experimentForm').addEventListener('submit', event => saveExperiment(event));
+$('#experimentPeriod').addEventListener('change', () => loadExperiments().catch(showDashboardError));
 $('#monitorForm').addEventListener('submit', event => saveFunnelMonitor(event).catch(() => {}));
 $('#monitorPreviewButton').addEventListener('click', () => previewFunnelMonitor().catch(error => showMonitorStatus(error.message,true)));
 document.querySelectorAll('[data-monitor-analysis]').forEach(button => button.addEventListener('click', () => {
@@ -2173,6 +2264,19 @@ $('#metric2StandardFlow').addEventListener('click', () => {
 });
 $('#metric2ResultFlow').addEventListener('click', () => {
   if (metric2ActiveFlow !== 'result') loadMetric2('result').catch(showDashboardError);
+});
+$('#metric2ExperimentFlow').addEventListener('click', () => {
+  if (metric2ActiveFlow !== 'experiment') loadMetric2('experiment').catch(showDashboardError);
+});
+$('#metric2ExperimentLinkCopy').addEventListener('click', async () => {
+  const link = $('#metric2ExperimentLink').dataset.link || '';
+  const button = $('#metric2ExperimentLinkCopy');
+  try {
+    await navigator.clipboard.writeText(link);
+    const previousText = button.textContent;
+    button.textContent = 'Скопировано';
+    setTimeout(() => { button.textContent = previousText; }, 1500);
+  } catch {}
 });
 $('#metric2Flow').addEventListener('click', event => {
   const target = event.target.closest('[data-metric2-screen]');
@@ -2259,4 +2363,5 @@ for (const selector of ['#usersDateFrom','#usersDateTo']) {
 
 Object.keys(tableStates).forEach(bindTableControls);
 decorateFavoriteSources();
+setUserPeriod('today');
 loadDashboard();

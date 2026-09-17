@@ -2,15 +2,17 @@
   'use strict';
 
   const safeGoals = new Set([
-    'welcome_continue', 'registration_max', 'registration_telegram',
+    'experiment_assigned', 'welcome_continue', 'registration_max', 'registration_telegram',
     'registration_anonymous', 'font_size_selected', 'questionnaire_started',
     'questionnaire_completed', 'exam_offer_viewed', 'exam_options_opened',
-    'exam_selection_completed', 'payment_online', 'payment_at_exam',
-    'onboarding_completed', 'capabilities_viewed', 'chat_opened',
+    'exam_selection_completed', 'payment_viewed', 'payment_online', 'payment_at_exam',
+    'payment_redirected', 'payment_succeeded', 'payment_canceled', 'payment_pending',
+    'onboarding_completed', 'completion_viewed', 'capabilities_viewed', 'chat_opened',
     'first_message_sent', 'human_requested', 'install_clicked',
   ]);
   let counterId = null;
   let counterReady = false;
+  let experiment = null;
   const pendingGoals = [];
 
   function markElements(root, selector, className) {
@@ -42,13 +44,32 @@
     ].forEach(selector => markElements(root, selector, 'ym-show-content'));
   }
 
-  function sendGoal(goal) {
+  function safeExperimentParams(goal, details = {}) {
+    if (!experiment?.enabled || !['control','marketer'].includes(experiment.variant)) return null;
+    return {
+      experiment: {
+        key:String(experiment.key || '').slice(0,50),
+        variant:String(experiment.variant || '').slice(0,20),
+        version:String(experiment.version || '').slice(0,40),
+        event:String(goal || '').slice(0,80),
+        screen:String(details.screen || '').slice(0,80),
+        action:String(details.action || '').slice(0,80),
+      },
+    };
+  }
+
+  function sendGoal(goal, details = {}) {
     if (!safeGoals.has(goal)) return;
     if (!counterReady || !counterId || typeof window.ym !== 'function') {
-      if (!pendingGoals.includes(goal)) pendingGoals.push(goal);
+      pendingGoals.push({goal,details});
       return;
     }
     window.ym(counterId, 'reachGoal', goal);
+    const params = safeExperimentParams(goal, details);
+    const prefix = String(experiment?.yandex_goal_prefix || 'consilium_marketer');
+    if (params && experiment?.yandex_enabled && /^[a-z][a-z0-9_-]{2,39}$/.test(prefix)) {
+      window.ym(counterId, 'reachGoal', `${prefix}_event`, params);
+    }
   }
 
   window.consiliumMetrikaGoal = sendGoal;
@@ -82,7 +103,12 @@
         });
         window.ym(counterId, 'hit', `${location.origin}${location.pathname}`);
         counterReady = true;
-        while (pendingGoals.length) sendGoal(pendingGoals.shift());
+        const experimentParams = safeExperimentParams('visit');
+        if (experimentParams) window.ym(counterId, 'params', experimentParams);
+        while (pendingGoals.length) {
+          const pending = pendingGoals.shift();
+          sendGoal(pending.goal, pending.details);
+        }
       };
     document.head.append(script);
   }
@@ -93,6 +119,8 @@
       const rawId = String(config.yandex_metrika_counter_id || '');
       if (!/^\d{5,12}$/.test(rawId)) return;
       counterId = Number(rawId);
+      experiment = config.experiment && typeof config.experiment === 'object'
+        ? config.experiment : null;
       loadCounter();
     })
     .catch(() => {});

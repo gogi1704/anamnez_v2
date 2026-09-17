@@ -560,6 +560,47 @@ class AnalyticsTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "ветка"):
             analytics.metric2_report("30", flow="unknown")
 
+    def test_metric2_experiment_flow_scopes_to_marketer_cohort(self):
+        main_conn = sqlite3.connect(settings.database_path)
+        try:
+            main_conn.executescript("""
+                CREATE TABLE experiment_settings (
+                    id INTEGER PRIMARY KEY, experiment_key TEXT NOT NULL
+                );
+                INSERT INTO experiment_settings (id, experiment_key) VALUES (1, 'marketer_funnel_2026');
+                CREATE TABLE experiment_assignments (
+                    experiment_key TEXT NOT NULL, chel_id TEXT NOT NULL, variant TEXT NOT NULL
+                );
+            """)
+            main_conn.executemany(
+                "INSERT INTO experiment_assignments (experiment_key,chel_id,variant) VALUES (?,?,?)",
+                [
+                    ("marketer_funnel_2026", "CHEL-MARKETER-BRANCH", "marketer"),
+                    ("marketer_funnel_2026", "CHEL-CONTROL-BRANCH", "control"),
+                ],
+            )
+            main_conn.commit()
+        finally:
+            main_conn.close()
+
+        analytics.record_events("CHEL-MARKETER-BRANCH", [
+            {"event_id": "exp-marketer-welcome", "session_id": "exp-marketer-session", "event_name": "onboarding_screen_viewed", "properties": {"screen": "welcome", "context": "onboarding"}},
+            {"event_id": "exp-marketer-register", "session_id": "exp-marketer-session", "event_name": "onboarding_screen_viewed", "properties": {"screen": "registration", "previous_screen": "welcome", "context": "onboarding"}},
+        ])
+        analytics.record_events("CHEL-CONTROL-BRANCH", [
+            {"event_id": "exp-control-welcome", "session_id": "exp-control-session", "event_name": "onboarding_screen_viewed", "properties": {"screen": "welcome", "context": "onboarding"}},
+        ])
+
+        report = analytics.metric2_report("30", flow="experiment")
+        self.assertEqual(report["flow"], "experiment")
+        self.assertEqual(report["flow_label"], "Воронка маркетолога")
+        self.assertEqual(report["summary"]["start_users"], 1)
+        self.assertIn("welcome", {item["id"] for item in report["screens"]})
+        self.assertNotIn("result_welcome", {item["id"] for item in report["screens"]})
+
+        standard = analytics.metric2_report("30", flow="standard")
+        self.assertEqual(standard["summary"]["start_users"], 2)
+
     def test_metric2_builds_unique_paths_and_ignores_repeated_views(self):
         analytics.record_events("CHEL-METRIC-PATH-ONE", [
             {"event_id": "path-one-welcome", "session_id": "path-session-one", "event_name": "onboarding_screen_viewed", "properties": {"screen": "welcome", "context": "onboarding"}},
