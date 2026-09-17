@@ -58,9 +58,11 @@ def create_payment(order: dict, return_url: str, receipt_email: str = "") -> dic
         "capture": True,
         "confirmation": {"type": "redirect", "return_url": return_url},
         "description": (
-            f"Консультация врача, заказ {order['id'][-12:]}"
+            # Same last-8-uppercase format as the "Мои покупки" order number in app.js,
+            # so the number the customer sees in YooKassa matches ours exactly.
+            f"Консультация врача, заказ {order['id'][-8:].upper()}"
             if order.get("order_type") == "consultation"
-            else f"Дополнительные обследования, заказ {order['id'][-12:]}"
+            else f"Дополнительные обследования, заказ {order['id'][-8:].upper()}"
         ),
         "metadata": {"order_id": order["id"]},
     }
