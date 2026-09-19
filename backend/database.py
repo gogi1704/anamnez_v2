@@ -4248,6 +4248,45 @@ def init_db() -> None:
                 "INSERT INTO app_migrations (migration_key, applied_at) VALUES (?, ?)",
                 (catalog_migration_key, now),
             )
+        contract_catalog_migration_key = "examination_catalog_2026_09_17"
+        contract_catalog_migrated = conn.execute(
+            "SELECT 1 FROM app_migrations WHERE migration_key = ?",
+            (contract_catalog_migration_key,),
+        ).fetchone()
+        if not contract_catalog_migrated:
+            # "Приложение к договору от 17.09.2026" is now authoritative: the
+            # extended fatigue/weight complexes drop cortisol and cost less,
+            # and cortisol is no longer sold as a standalone item.
+            for examination in TEST_CATALOG:
+                conn.execute(
+                    """UPDATE examination_catalog
+                    SET name = ?, description = ?, includes = ?, price = ?, updated_at = ?
+                    WHERE id = ?""",
+                    (
+                        examination["name"], examination["description"],
+                        examination.get("includes", ""), int(examination["price"]),
+                        now, examination["id"],
+                    ),
+                )
+            conn.execute("DELETE FROM examination_catalog WHERE id = 'cortisol'")
+            for state_row in conn.execute(
+                "SELECT chel_id, selected_tests FROM onboarding_state"
+            ).fetchall():
+                try:
+                    selected_tests = json.loads(state_row["selected_tests"] or "[]")
+                except (json.JSONDecodeError, TypeError):
+                    selected_tests = []
+                if not isinstance(selected_tests, list) or "cortisol" not in selected_tests:
+                    continue
+                selected_tests = [item for item in selected_tests if item != "cortisol"]
+                conn.execute(
+                    "UPDATE onboarding_state SET selected_tests = ?, updated_at = ? WHERE chel_id = ?",
+                    (json.dumps(selected_tests, ensure_ascii=False), now, state_row["chel_id"]),
+                )
+            conn.execute(
+                "INSERT INTO app_migrations (migration_key, applied_at) VALUES (?, ?)",
+                (contract_catalog_migration_key, now),
+            )
         default_names_migration_key = "examination_default_names_2026_09_09"
         default_names_migrated = conn.execute(
             "SELECT 1 FROM app_migrations WHERE migration_key = ?",

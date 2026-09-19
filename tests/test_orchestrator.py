@@ -3180,7 +3180,7 @@ class OrchestratorTests(unittest.TestCase):
         state = db.save_onboarding(status="complete", intro_seen=True)
         self.assertTrue(state["intro_seen"])
         self.assertEqual(state["font_size"], "large")
-        self.assertEqual(len(TEST_CATALOG), 21)
+        self.assertEqual(len(TEST_CATALOG), 20)
         self.assertIn("fatigue_basic", recommend_test_ids(profile))
         self.assertIn("fatigue_extended", recommend_test_ids(profile))
         self.assertIn("weight_basic", recommend_test_ids(profile))
@@ -3222,12 +3222,12 @@ class OrchestratorTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "driving_time"):
             ConsiliumHandler._validate_profile({"driving_time": "all_day"})
 
-    def test_checkup_catalog_matches_2026_08_31_spreadsheet_everywhere(self):
+    def test_checkup_catalog_matches_2026_09_17_contract_everywhere(self):
         expected_names_and_prices = {
             "fatigue_basic": ("«Энергия и бодрость» — базовый", 3500),
-            "fatigue_extended": ("«Энергия и бодрость» — расширенный", 6500),
+            "fatigue_extended": ("«Энергия и бодрость» — расширенный", 5700),
             "weight_basic": ("«Контроль веса» — базовый", 4000),
-            "weight_extended": ("«Контроль веса» — расширенный", 6500),
+            "weight_extended": ("«Контроль веса» — расширенный", 5700),
             "hair_loss": ("«Здоровые волосы и кожа»", 3000),
             "lipids": ("«Здоровье сердца и сосудов»", 1500),
             "liver_basic": ("«Здоровье печени и поджелудочной железы» — базовый", 2000),
@@ -3244,7 +3244,6 @@ class OrchestratorTests(unittest.TestCase):
             "ca125": ("«Женский онкоскрининг: яичники и шейка матки»", 1300),
             "ca153": ("«Онкоскрининг молочной железы»", 1300),
             "ca199": ("«Онкоскрининг ЖКТ и поджелудочной железы»", 1300),
-            "cortisol": ("«Диагностика стресса»", 1000),
         }
         catalog = {item["id"]: item for item in TEST_CATALOG}
         self.assertEqual(
@@ -3252,12 +3251,16 @@ class OrchestratorTests(unittest.TestCase):
             expected_names_and_prices,
         )
         self.assertNotIn("ferritin", catalog)
+        self.assertNotIn("cortisol", catalog)
+        self.assertNotIn("кортизол", catalog["fatigue_extended"]["includes"].lower())
+        self.assertNotIn("кортизол", catalog["weight_extended"]["includes"].lower())
         self.assertIn("Прогестерон", catalog["female_hormones"]["includes"])
         self.assertEqual(catalog["lipids"]["includes"], "Триглицериды, ЛПВП, ЛПНП")
         self.assertIn("аутоиммунный тиреоидит", catalog["thyroid"]["description"])
 
         persisted = {item["id"]: item for item in db.list_examinations()}
         self.assertNotIn("ferritin", persisted)
+        self.assertNotIn("cortisol", persisted)
         self.assertEqual(persisted["fatigue_basic"]["name"], expected_names_and_prices["fatigue_basic"][0])
         self.assertEqual(persisted["fatigue_basic"]["default_name"], "Хроническая усталость – базовый")
         self.assertEqual(persisted["protein"]["default_name"], "Белковый обмен")
@@ -3269,9 +3272,13 @@ class OrchestratorTests(unittest.TestCase):
         app = (project_root / "static" / "app.js").read_text(encoding="utf-8")
         dashboard = (project_root / "static" / "dashboard.js").read_text(encoding="utf-8")
         self.assertIn("examination_catalog_2026_08_31", database_source)
+        self.assertIn("examination_catalog_2026_09_17", database_source)
         self.assertIn("DELETE FROM examination_catalog WHERE id = 'ferritin'", database_source)
+        self.assertIn("DELETE FROM examination_catalog WHERE id = 'cortisol'", database_source)
         self.assertIn("catalog_labels.get(exam_id)", (project_root / "backend" / "analytics.py").read_text(encoding="utf-8"))
         self.assertNotIn("ferritin:", app)
+        self.assertNotIn("cortisol:", app)
+        self.assertNotIn("cortisol:", dashboard)
         self.assertNotIn("ferritin:", dashboard)
 
     def test_extended_examinations_replace_matching_basic_complexes(self):
@@ -3363,7 +3370,6 @@ class OrchestratorTests(unittest.TestCase):
             ({"blood_pressure": "high"}, "lipids", "давлении или работе сердца"),
             ({"notes": "сильно выпадают волосы"}, "hair_loss", "жалобы на волосы или кожу"),
             ({"notes": "беспокоит живот"}, "liver_basic", "жалобы со стороны пищеварения"),
-            ({"notes": "не могу уснуть из-за стресса"}, "cortisol", "стресс, тревогу или проблемы со сном"),
         )
         for profile, expected_first, expected_copy in dynamic_cases:
             featured = featured_test_ids(profile)
@@ -3372,6 +3378,17 @@ class OrchestratorTests(unittest.TestCase):
             self.assertIn(expected_copy, copy["description"])
             self.assertIn("ниже", copy["description"].lower())
             self.assertNotIn("выше", copy["description"].lower())
+
+        # Cortisol was removed as a standalone checkup, so a stress/sleep
+        # complaint no longer has a dedicated keyword route — it now falls
+        # back to the generic free-text-complaint recommendation.
+        stress_profile = {"notes": "не могу уснуть из-за стресса"}
+        self.assertEqual(
+            featured_test_ids(stress_profile), ["inflammation", "lipids", "vitamin_d"],
+        )
+        self.assertNotIn("cortisol", featured_test_ids(stress_profile))
+        stress_copy = examination_recommendation_copy(stress_profile)
+        self.assertIn("ниже", stress_copy["description"].lower())
         payload = public_onboarding(
             {"selected_tests": []},
             {"sex": "male", "fatigue": "no", "joint_pain": "no", "notes": "нет жалоб"},
