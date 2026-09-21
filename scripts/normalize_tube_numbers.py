@@ -56,8 +56,12 @@ def main() -> int:
                 original = item["from"]
                 normalized = item["to"]
                 conn.execute(
-                    "UPDATE user_profile SET tube_number=?, updated_at=? WHERE chel_id=?",
-                    (normalized, now, chel_id),
+                    """UPDATE user_profile
+                    SET tube_number=?,
+                        tube_linked_at=CASE WHEN ?='' THEN NULL ELSE tube_linked_at END,
+                        updated_at=?
+                    WHERE chel_id=?""",
+                    (normalized, normalized, now, chel_id),
                 )
                 if "lab_result_value_estimates" in tables:
                     conn.execute(

@@ -250,9 +250,10 @@ class AnalyticsTests(unittest.TestCase):
         events_by_user = {
             "CHEL-BOTH": [
                 ("examinations_selection_completed", {"selected_count": 1}),
+                ("tube_linked", {}),
                 ("lab_results_found", {}),
             ],
-            "CHEL-RESULT": [("lab_results_found", {})],
+            "CHEL-RESULT": [("tube_linked", {}), ("lab_results_found", {})],
             "CHEL-APPLICATION": [
                 ("examinations_selection_completed", {"selected_count": 2}),
             ],
@@ -289,6 +290,34 @@ class AnalyticsTests(unittest.TestCase):
             {item["key"]: item["users"] for item in separate_report["groups"]},
             groups,
         )
+        application_date_report = analytics.service_result_report(
+            "30", date_basis="application",
+        )
+        self.assertEqual(application_date_report["date_basis"], "application")
+        self.assertEqual(application_date_report["users"], 2)
+        self.assertEqual(
+            {item["key"]: item["users"] for item in application_date_report["groups"]},
+            {
+                "application_and_results": 1,
+                "results_without_application": 0,
+                "application_without_results": 1,
+            },
+        )
+        result_date_report = analytics.service_result_report(
+            "30", date_basis="result",
+        )
+        self.assertEqual(result_date_report["date_basis"], "result")
+        self.assertEqual(result_date_report["users"], 3)
+        self.assertEqual(
+            {item["key"]: item["users"] for item in result_date_report["groups"]},
+            {
+                "application_and_results": 1,
+                "results_without_application": 2,
+                "application_without_results": 0,
+            },
+        )
+        with self.assertRaisesRegex(ValueError, "вариант фильтра"):
+            analytics.service_result_report("30", date_basis="unknown")
         with self.assertRaisesRegex(ValueError, "Дата начала"):
             analytics.service_result_report(
                 "30", date_from="2026-09-15", date_to="2026-09-14",

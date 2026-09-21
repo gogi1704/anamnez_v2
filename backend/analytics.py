@@ -1354,19 +1354,20 @@ def _tube_users_updated_in_period(
         }
         if "tube_number" not in columns:
             return set()
+        linked_at_column = "tube_linked_at" if "tube_linked_at" in columns else "updated_at"
         if from_date or to_date:
-            if "updated_at" not in columns:
+            if linked_at_column not in columns:
                 return set()
             if from_date:
-                clauses.append("updated_at >= ?")
+                clauses.append(f"{linked_at_column} >= ?")
                 params.append(from_date.astimezone(timezone.utc).isoformat())
             if to_date:
-                clauses.append("updated_at < ?")
+                clauses.append(f"{linked_at_column} < ?")
                 params.append((to_date + timedelta(days=1)).astimezone(timezone.utc).isoformat())
         elif period != "all":
-            if "updated_at" not in columns:
+            if linked_at_column not in columns:
                 return set()
-            clauses.append("updated_at >= ?")
+            clauses.append(f"{linked_at_column} >= ?")
             params.append(_period_start(period))
         return {
             str(row[0]) for row in main_conn.execute(
@@ -1734,40 +1735,55 @@ def admin_report(
 
 def _service_result_report_uncached(
     period: str = "30", date_from: str = "", date_to: str = "",
+    date_basis: str = "any",
 ) -> dict:
     """Return the request/result groups for their own date-filtered panel."""
+    date_basis = str(date_basis or "any").strip().lower()
+    if date_basis not in {"any", "application", "result"}:
+        raise ValueError("Неизвестный вариант фильтра даты")
     where, params = _filters(period, "", "", "", date_from, date_to)
     join = " FROM analytics_events e LEFT JOIN analytics_sessions s ON s.session_id=e.session_id "
-    qualifying = (" AND " if where else " WHERE ") + (
-        "(e.event_name IN ('tube_linked','lab_results_found') OR "
+    application_condition = (
         "(e.event_name='examinations_selection_completed' AND "
-        "CAST(COALESCE(json_extract(e.properties,'$.selected_count'),0) AS INTEGER) > 0))"
+        "CAST(COALESCE(json_extract(e.properties,'$.selected_count'),0) AS INTEGER) > 0)"
     )
+    result_condition = "e.event_name IN ('tube_linked','lab_results_found')"
+    tube_link_condition = "e.event_name='tube_linked'"
+    date_conditions = {
+        "any": f"({result_condition} OR {application_condition})",
+        "application": application_condition,
+        "result": tube_link_condition,
+    }
+    qualifying = (" AND " if where else " WHERE ") + date_conditions[date_basis]
     with connection() as conn:
         eligible_users = {
             str(row[0]) for row in conn.execute(
                 "SELECT DISTINCT e.chel_id" + join + where + qualifying, params,
             ).fetchall()
         }
-    eligible_users.update(
-        _tube_users_updated_in_period(period, date_from, date_to)
-    )
+    if date_basis in {"any", "result"}:
+        eligible_users.update(
+            _tube_users_updated_in_period(period, date_from, date_to)
+        )
     report = _service_result_statistics(eligible_users)
     report.update({
         "generated_at": _now(), "period": period,
-        "date_from": date_from, "date_to": date_to,
+        "date_from": date_from, "date_to": date_to, "date_basis": date_basis,
     })
     return report
 
 
 def service_result_report(
-    period: str = "30", date_from: str = "", date_to: str = "", *,
+    period: str = "30", date_from: str = "", date_to: str = "",
+    date_basis: str = "any", *,
     background: bool = False,
 ) -> dict:
-    arguments = (str(period), str(date_from), str(date_to))
+    arguments = (str(period), str(date_from), str(date_to), str(date_basis))
     return _cached_report(
         "service_results", arguments,
-        lambda: _service_result_report_uncached(period, date_from, date_to),
+        lambda: _service_result_report_uncached(
+            period, date_from, date_to, date_basis,
+        ),
         background=background,
     )
 

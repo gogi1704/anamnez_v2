@@ -3988,6 +3988,7 @@ def init_db() -> None:
                 joint_pain TEXT NOT NULL DEFAULT 'unknown',
                 fatigue TEXT NOT NULL DEFAULT 'unknown',
                 tube_number TEXT NOT NULL DEFAULT '',
+                tube_linked_at TEXT,
                 notes TEXT NOT NULL DEFAULT '',
                 updated_at TEXT NOT NULL,
                 FOREIGN KEY(chel_id) REFERENCES users(chel_id) ON DELETE CASCADE
@@ -4522,6 +4523,7 @@ def init_db() -> None:
                     driving_time TEXT NOT NULL DEFAULT 'unknown',
                     dark_in_eyes TEXT NOT NULL DEFAULT 'unknown', joint_pain TEXT NOT NULL DEFAULT 'unknown',
                     fatigue TEXT NOT NULL DEFAULT 'unknown', tube_number TEXT NOT NULL DEFAULT '',
+                    tube_linked_at TEXT,
                     notes TEXT NOT NULL DEFAULT '', updated_at TEXT NOT NULL,
                     FOREIGN KEY(chel_id) REFERENCES users(chel_id) ON DELETE CASCADE
                 )"""
@@ -4543,6 +4545,13 @@ def init_db() -> None:
                 conn.execute(f"ALTER TABLE user_profile ADD COLUMN {name} TEXT NOT NULL DEFAULT 'unknown'")
         if "tube_number" not in profile_columns:
             conn.execute("ALTER TABLE user_profile ADD COLUMN tube_number TEXT NOT NULL DEFAULT ''")
+        if "tube_linked_at" not in profile_columns:
+            conn.execute("ALTER TABLE user_profile ADD COLUMN tube_linked_at TEXT")
+            conn.execute(
+                """UPDATE user_profile SET tube_linked_at=updated_at
+                WHERE TRIM(COALESCE(tube_number,'')) <> ''
+                  AND tube_linked_at IS NULL"""
+            )
         if "company_inn" not in profile_columns:
             conn.execute("ALTER TABLE user_profile ADD COLUMN company_inn TEXT NOT NULL DEFAULT ''")
 
@@ -5246,6 +5255,7 @@ def get_profile() -> dict:
             "alcohol": "unknown", "activity": "unknown", "blood_pressure": "unknown",
             "blood_sugar": "unknown", "dark_in_eyes": "unknown", "joint_pain": "unknown",
             "driving_time": "unknown", "fatigue": "unknown", "tube_number": "",
+            "tube_linked_at": None,
             "updated_at": None,
         }
     result = dict(row)
@@ -5259,6 +5269,7 @@ def get_profile() -> dict:
 
 def save_profile(profile: dict) -> dict:
     now = utc_now()
+    tube_number = str(profile.get("tube_number", ""))[:80]
     values = (
         str(profile.get("preferred_name", ""))[:100], str(profile.get("company_inn", ""))[:12], profile.get("age"),
         str(profile.get("sex", ""))[:30], profile.get("height_cm"), profile.get("weight_kg"),
@@ -5272,14 +5283,14 @@ def save_profile(profile: dict) -> dict:
         str(profile.get("driving_time", "unknown"))[:30],
         str(profile.get("dark_in_eyes", "unknown"))[:30], str(profile.get("joint_pain", "unknown"))[:30],
         str(profile.get("fatigue", "unknown"))[:30],
-        str(profile.get("tube_number", ""))[:80],
+        tube_number, now if tube_number else None,
         str(profile.get("notes", ""))[:1000], now,
     )
     with _write_lock, connection() as conn:
         conn.execute(
             """INSERT INTO user_profile
-            (chel_id, preferred_name, company_inn, age, sex, height_cm, weight_kg, pregnancy, conditions, medications, allergies, smoking, alcohol, activity, blood_pressure, blood_sugar, driving_time, dark_in_eyes, joint_pain, fatigue, tube_number, notes, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            (chel_id, preferred_name, company_inn, age, sex, height_cm, weight_kg, pregnancy, conditions, medications, allergies, smoking, alcohol, activity, blood_pressure, blood_sugar, driving_time, dark_in_eyes, joint_pain, fatigue, tube_number, tube_linked_at, notes, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(chel_id) DO UPDATE SET preferred_name=excluded.preferred_name, company_inn=excluded.company_inn, age=excluded.age,
             sex=excluded.sex, height_cm=excluded.height_cm, weight_kg=excluded.weight_kg,
             pregnancy=excluded.pregnancy, conditions=excluded.conditions, medications=excluded.medications,
@@ -5287,7 +5298,14 @@ def save_profile(profile: dict) -> dict:
             activity=excluded.activity, blood_pressure=excluded.blood_pressure, blood_sugar=excluded.blood_sugar,
             driving_time=excluded.driving_time,
             dark_in_eyes=excluded.dark_in_eyes, joint_pain=excluded.joint_pain, fatigue=excluded.fatigue,
-            tube_number=excluded.tube_number, notes=excluded.notes, updated_at=excluded.updated_at""",
+            tube_number=excluded.tube_number,
+            tube_linked_at=CASE
+              WHEN excluded.tube_number='' THEN NULL
+              WHEN user_profile.tube_number=excluded.tube_number
+                THEN COALESCE(user_profile.tube_linked_at, excluded.tube_linked_at)
+              ELSE excluded.tube_linked_at
+            END,
+            notes=excluded.notes, updated_at=excluded.updated_at""",
             (current_chel_id(), *values),
         )
         conn.commit()
@@ -5324,7 +5342,7 @@ def update_preferred_name(preferred_name: str) -> dict:
 def profile_fingerprint(profile: dict | None = None) -> str:
     """Stable cache key for profile fields that can change lab interpretation."""
     source = dict(profile or get_profile())
-    for key in ("chel_id", "company_inn", "tube_number", "updated_at"):
+    for key in ("chel_id", "company_inn", "tube_number", "tube_linked_at", "updated_at"):
         source.pop(key, None)
     payload = json.dumps(source, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()

@@ -11,7 +11,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/static/dashboard.css?v=20260921-service-result-ocr-v2">
+  <link rel="stylesheet" href="/static/dashboard.css?v=20260921-service-results-date-basis-v1">
 </head>
 <body>
   <main class="dashboard-shell">
@@ -152,18 +152,19 @@
               <p class="eyebrow">Связь заявки и результата</p>
               <h2>Дополнительные услуги и результаты</h2>
               <p>Группы не пересекаются. Заявка считается после подтверждённого выбора хотя бы одного обследования, а получение результата — сразу после привязки номера пробирки к аккаунту. Наличие найденных документов для этого показателя не требуется.</p>
-              <p>Период определяет пользователей, у которых заявка появилась или пробирка была привязана в выбранные даты. Затем наличие заявки и привязанной пробирки проверяется по всей истории пользователя.</p>
+              <p>Событие, по дате которого формируется период, выбирается отдельным фильтром ниже. По умолчанию учитывается появление заявки или привязка пробирки. Затем наличие заявки и привязанной пробирки проверяется по всей истории пользователя.</p>
               <p>Для заявок без результатов сумма рассчитывается по последнему сохранённому составу и актуальному прайсу. Для пользователей с результатами показывается оценка по распознанному составу PDF; она не является бухгалтерской выручкой.</p>
             </div>
             <span class="table-count" id="serviceResultsSummary">0 пользователей</span>
           </div>
           <div class="analytics-filters service-results-filters">
+            <label>Фильтровать даты по<select id="serviceResultsDateBasis"><option value="any" selected>Заявке или результату</option><option value="application">Дате заявки</option><option value="result">Дате получения результата</option></select></label>
             <label>Период<select id="serviceResultsPeriod"><option value="today" selected>Сегодня</option><option value="7">7 дней</option><option value="30">30 дней</option><option value="90">90 дней</option><option value="all">Всё время</option></select></label>
             <label>Дата с<input id="serviceResultsDateFrom" type="date"></label>
             <label>Дата по<input id="serviceResultsDateTo" type="date"></label>
             <button type="button" id="serviceResultsApply">Применить</button>
           </div>
-          <p class="analytics-date-note">Если указаны даты «с» или «по», они заменяют готовый период выше. Дата «по» включается целиком.</p>
+          <p class="analytics-date-note" id="serviceResultsDateNote">По умолчанию в выборку входят пользователи, у которых в период появилась заявка или была привязана пробирка. Если указаны даты «с» или «по», они заменяют готовый период. Дата «по» включается целиком.</p>
           <section class="service-results-groups" id="serviceResultsGroups"></section>
         </article>
       </section>
@@ -584,6 +585,6 @@
       </div>
     </section>
   </div>
-<script src="/static/dashboard.js?v=20260921-service-result-ocr-v2" defer></script>
+<script src="/static/dashboard.js?v=20260921-service-results-date-basis-v1" defer></script>
 </body>
 </html>

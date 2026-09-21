@@ -1250,12 +1250,23 @@ async function loadAnalytics() {
 async function loadServiceResults() {
   return withPanelLoading('#serviceResultsAdminView', async () => {
     const params = new URLSearchParams({period:$('#serviceResultsPeriod').value});
+    params.set('date_basis', $('#serviceResultsDateBasis').value || 'any');
     appendDateRange(params, '#serviceResultsDateFrom', '#serviceResultsDateTo');
     params.set('refresh','1');
     renderServiceResultAnalytics(
       await adminReportFetch(`/api/admin/service-results?${params}`),
     );
   }, 'Сопоставляем заявки и результаты…');
+}
+
+function updateServiceResultsDateNote() {
+  const basis = $('#serviceResultsDateBasis').value;
+  const descriptions = {
+    application:'В выборку входят пользователи, которые оставили заявку в выбранный период. Наличие результата проверяется по всей истории пользователя.',
+    result:'В выборку входят пользователи, которые получили результат — привязали пробирку — в выбранный период. Наличие заявки проверяется по всей истории пользователя.',
+    any:'По умолчанию в выборку входят пользователи, у которых в период появилась заявка или была привязана пробирка.',
+  };
+  $('#serviceResultsDateNote').textContent = `${descriptions[basis] || descriptions.any} Если указаны даты «с» или «по», они заменяют готовый период. Дата «по» включается целиком.`;
 }
 
 function appendDateRange(params, fromSelector, toSelector) {
@@ -2361,6 +2372,7 @@ $('#analyticsApply').addEventListener('click', () => {
 $('#serviceResultsApply').addEventListener('click', () => {
   loadServiceResults().catch(showDashboardError);
 });
+$('#serviceResultsDateBasis').addEventListener('change', updateServiceResultsDateNote);
 $('#funnelFromStart').addEventListener('click', () => {
   analyticsFunnelMode = 'start';
   renderAnalyticsFunnel(latestAnalyticsData?.funnel || []);

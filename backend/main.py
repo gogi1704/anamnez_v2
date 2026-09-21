@@ -347,6 +347,7 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                         query.get("period", ["30"])[0],
                         query.get("date_from", [""])[0],
                         query.get("date_to", [""])[0],
+                        query.get("date_basis", ["any"])[0],
                         background=True,
                     ))
                 except analytics.ReportBuilding:
