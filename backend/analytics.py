@@ -1108,7 +1108,52 @@ def _service_result_statistics(eligible_users: set[str]) -> dict:
                 "AND CAST(COALESCE(json_extract(properties,'$.selected_count'),0) AS INTEGER) > 0"
             ).fetchall()
         }
+        selection_rows = analytics_conn.execute(
+            """SELECT rowid, chel_id, event_name, properties
+            FROM analytics_events
+            WHERE IS_STATS_USER(chel_id) = 1
+              AND event_name IN ('examinations_selection_completed','examination_selection_confirmed')
+            ORDER BY received_at, rowid"""
+        ).fetchall()
+    latest_selections: dict[str, dict] = {}
+    parsed_selection_rows = []
+    for row in selection_rows:
+        try:
+            properties = json.loads(row["properties"] or "{}")
+        except (json.JSONDecodeError, TypeError):
+            properties = {}
+        item = {
+            "chel_id": str(row["chel_id"] or ""),
+            "event_name": str(row["event_name"] or ""),
+            "properties": properties if isinstance(properties, dict) else {},
+        }
+        parsed_selection_rows.append(item)
+        if item["event_name"] == "examinations_selection_completed":
+            try:
+                selected_count = int(item["properties"].get("selected_count") or 0)
+            except (TypeError, ValueError):
+                selected_count = 0
+            if selected_count > 0:
+                latest_selections[item["chel_id"]] = item
+    selected_ids_by_user: dict[str, set[str]] = {
+        chel_id: set() for chel_id in latest_selections
+    }
+    for item in parsed_selection_rows:
+        if item["event_name"] != "examination_selection_confirmed":
+            continue
+        latest = latest_selections.get(item["chel_id"])
+        if not latest:
+            continue
+        selection_id = str(latest["properties"].get("selection_id") or "")
+        if not selection_id or str(item["properties"].get("selection_id") or "") != selection_id:
+            continue
+        exam_id = str(item["properties"].get("exam_id") or "").strip()
+        if exam_id:
+            selected_ids_by_user[item["chel_id"]].add(exam_id)
     tube_users: set[str] = set()
+    catalog_prices: dict[str, int] = {}
+    catalog_labels: dict[str, str] = {}
+    result_estimates: dict[str, dict] = {}
     main_conn = None
     try:
         main_conn = sqlite3.connect(settings.database_path, timeout=5)
@@ -1126,6 +1171,37 @@ def _service_result_statistics(eligible_users: set[str]) -> dict:
                     (TEST_COMPANY_INN,),
                 ).fetchall()
             }
+        existing_tables = {
+            str(row[0]) for row in main_conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            ).fetchall()
+        }
+        if "examination_catalog" in existing_tables:
+            for row in main_conn.execute(
+                "SELECT id, name, price FROM examination_catalog"
+            ).fetchall():
+                exam_id = str(row[0])
+                catalog_labels[exam_id] = str(row[1] or exam_id)
+                catalog_prices[exam_id] = max(0, int(row[2] or 0))
+        if "lab_result_value_estimates" in existing_tables:
+            for row in main_conn.execute(
+                "SELECT chel_id,status,estimated_amount,confidence,"
+                "matched_exam_ids,ocr_document_count "
+                "FROM lab_result_value_estimates"
+            ).fetchall():
+                try:
+                    matched_exam_ids = json.loads(row[4] or "[]")
+                except (json.JSONDecodeError, TypeError):
+                    matched_exam_ids = []
+                if not isinstance(matched_exam_ids, list):
+                    matched_exam_ids = []
+                result_estimates[str(row[0])] = {
+                    "status": str(row[1] or ""),
+                    "amount": max(0, int(row[2] or 0)),
+                    "confidence": max(0.0, min(float(row[3] or 0), 1.0)),
+                    "matched_exam_ids": matched_exam_ids,
+                    "ocr_document_count": max(0, int(row[5] or 0)),
+                }
     except sqlite3.Error:
         tube_users = set()
     finally:
@@ -1134,24 +1210,107 @@ def _service_result_statistics(eligible_users: set[str]) -> dict:
 
     applications = application_users & eligible_users
     results = tube_users & eligible_users
+
+    def amount_summary(users: set[str], *, from_results: bool) -> dict:
+        if from_results:
+            matched_by_user = {
+                chel_id: {
+                    str(exam_id) for exam_id in result_estimates.get(chel_id, {}).get("matched_exam_ids", [])
+                    if str(exam_id) in catalog_prices
+                }
+                for chel_id in users
+                if result_estimates.get(chel_id, {}).get("status") in {"ready", "partial"}
+            }
+            matched_by_user = {
+                chel_id: exam_ids for chel_id, exam_ids in matched_by_user.items() if exam_ids
+            }
+            amounts = {
+                chel_id: sum(catalog_prices[exam_id] for exam_id in exam_ids)
+                for chel_id, exam_ids in matched_by_user.items()
+            }
+            confidences = [
+                float(result_estimates[chel_id].get("confidence") or 0)
+                for chel_id in amounts
+            ]
+            ocr_users = sum(
+                int(result_estimates[chel_id].get("ocr_document_count") or 0) > 0
+                for chel_id in amounts
+            )
+            exam_ids_by_user = matched_by_user
+            summary = {
+                "estimated_amount": sum(amounts.values()),
+                "amount_kind": "estimated",
+                "priced_users": len(amounts),
+                "unpriced_users": len(users) - len(amounts),
+                "average_confidence": round(sum(confidences) / len(confidences) * 100, 1)
+                if confidences else 0.0,
+                "ocr_users": ocr_users,
+            }
+        else:
+            exam_ids_by_user = {
+                chel_id: {
+                    exam_id for exam_id in selected_ids_by_user.get(chel_id, set())
+                    if exam_id in catalog_prices
+                }
+                for chel_id in users
+            }
+            exam_ids_by_user = {
+                chel_id: exam_ids for chel_id, exam_ids in exam_ids_by_user.items() if exam_ids
+            }
+            amounts = {
+                chel_id: sum(catalog_prices[exam_id] for exam_id in exam_ids)
+                for chel_id, exam_ids in exam_ids_by_user.items()
+            }
+            summary = {
+                "estimated_amount": sum(amounts.values()),
+                "amount_kind": "current_price",
+                "priced_users": len(amounts),
+                "unpriced_users": len(users) - len(amounts),
+                "average_confidence": 100.0 if amounts else 0.0,
+                "ocr_users": 0,
+            }
+        exam_counts = Counter(
+            exam_id for exam_ids in exam_ids_by_user.values() for exam_id in exam_ids
+        )
+        summary["breakdown"] = [
+            {
+                "exam_id": exam_id,
+                "label": catalog_labels.get(exam_id, exam_id),
+                "users": count,
+                "price": catalog_prices.get(exam_id, 0),
+                "amount": catalog_prices.get(exam_id, 0) * count,
+            }
+            for exam_id, count in sorted(
+                exam_counts.items(),
+                key=lambda item: (-item[1], catalog_labels.get(item[0], item[0])),
+            )
+        ]
+        return summary
+
+    application_and_results = applications & results
+    results_without_application = results - applications
+    application_without_results = applications - results
     groups = [
         {
             "key": "application_and_results",
             "label": "Оставили заявку и получили результаты",
-            "users": len(applications & results),
+            "users": len(application_and_results),
             "description": "Выбрали дополнительные услуги и привязали номер пробирки к аккаунту.",
+            **amount_summary(application_and_results, from_results=True),
         },
         {
             "key": "results_without_application",
             "label": "Получили результаты без заявки",
-            "users": len(results - applications),
+            "users": len(results_without_application),
             "description": "Не выбирали дополнительные услуги, но привязали номер пробирки к аккаунту.",
+            **amount_summary(results_without_application, from_results=True),
         },
         {
             "key": "application_without_results",
             "label": "Оставили заявку, но не получили результаты",
-            "users": len(applications - results),
+            "users": len(application_without_results),
             "description": "Выбрали дополнительные услуги, но ещё не привязали номер пробирки к аккаунту.",
+            **amount_summary(application_without_results, from_results=False),
         },
     ]
     relevant_users = applications | results

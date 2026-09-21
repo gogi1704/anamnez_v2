@@ -177,3 +177,65 @@ def lookup_lab_results(med_id_value: object) -> LabResult:
             result,
         )
     return result
+
+
+def lookup_many_lab_results(med_id_values: list[object]) -> dict[str, LabResult]:
+    """Read the result sheet once for a backfill batch of tube numbers."""
+    normalized = []
+    for value in med_id_values:
+        try:
+            med_id = normalize_med_id(value)
+        except ValueError:
+            continue
+        if med_id not in normalized:
+            normalized.append(med_id)
+    if not normalized:
+        return {}
+    if not settings.lab_results_enabled:
+        raise LabResultsUnavailable("Получение результатов временно отключено")
+    credentials_path = Path(settings.after_tests_google_credentials)
+    if not credentials_path.is_file():
+        raise LabResultsUnavailable("Не найден ключ доступа к after_tests_db")
+    try:
+        import gspread
+
+        client = gspread.service_account(filename=str(credentials_path))
+        http_client = getattr(client, "http_client", None)
+        if hasattr(http_client, "set_timeout"):
+            http_client.set_timeout(settings.google_sheets_timeout_seconds)
+        values = _worksheet(client).get_all_values()
+    except LabResultsUnavailable:
+        raise
+    except Exception as exc:
+        raise LabResultsUnavailable("Не удалось подключиться к after_tests_db") from exc
+    if not values:
+        return {med_id: LabResult(med_id, "not_found") for med_id in normalized}
+    headers = [_normalized_header(value) for value in values[0]]
+    try:
+        med_id_index = headers.index("med_id")
+    except ValueError as exc:
+        raise LabResultsUnavailable("В таблице результатов отсутствует колонка med_id") from exc
+    result_candidates = ("results", "result", "result_url", "results_url", "ссылка", "ссылки")
+    result_index = next((headers.index(name) for name in result_candidates if name in headers), None)
+    if result_index is None:
+        raise LabResultsUnavailable("В таблице результатов отсутствует колонка results")
+    requested = {med_id.casefold(): med_id for med_id in normalized}
+    found: dict[str, LabResult] = {}
+    for row in values[1:]:
+        if med_id_index >= len(row):
+            continue
+        try:
+            row_med_id = normalize_med_id(row[med_id_index])
+        except ValueError:
+            continue
+        requested_med_id = requested.get(row_med_id.casefold())
+        if not requested_med_id:
+            continue
+        urls = extract_urls(row[result_index] if result_index < len(row) else "")
+        found[requested_med_id] = LabResult(
+            requested_med_id, "found" if urls else "processing", urls,
+        )
+    return {
+        med_id: found.get(med_id, LabResult(med_id, "not_found"))
+        for med_id in normalized
+    }

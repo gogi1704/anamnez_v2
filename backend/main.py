@@ -19,6 +19,7 @@ from . import analytics, company_suggestions, database as db, examination_schedu
 from .config import BASE_DIR, settings
 from .llm import LLMNotConfigured
 from .lab_results import LabResultsUnavailable, lookup_lab_results
+from .lab_result_valuation import schedule_estimate as schedule_lab_result_value_estimate
 from . import bitrix_payments, yookassa
 from .orchestrator import orchestrator
 from .onboarding import normalize_examination_selection, public_onboarding
@@ -151,6 +152,11 @@ def _refresh_due_lab_result_notifications() -> None:
             result = lookup_lab_results(subscription["med_id"]).to_dict()
             documents = result.get("documents") if result.get("status") == "found" else []
             if documents:
+                schedule_lab_result_value_estimate(
+                    str(subscription.get("chel_id") or ""),
+                    str(subscription.get("med_id") or ""),
+                    list(documents),
+                )
                 db.complete_lab_result_subscription_check(
                     subscription["id"], documents, settings.public_base_url,
                 )
@@ -1361,6 +1367,11 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
             try:
                 lab_result = lookup_lab_results(tube_number).to_dict()
                 result_status = str(lab_result.get("status") or "not_found")
+                if result_status == "found":
+                    schedule_lab_result_value_estimate(
+                        db.current_chel_id(), tube_number,
+                        list(lab_result.get("documents") or []),
+                    )
                 event_name = _lab_result_analytics_event(result_status)
                 self._track_analytics(event_name, {
                     "result": result_status,

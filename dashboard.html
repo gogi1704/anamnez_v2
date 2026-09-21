@@ -11,7 +11,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/static/dashboard.css?v=20260916-experiments-v1">
+  <link rel="stylesheet" href="/static/dashboard.css?v=20260921-service-result-ocr-v2">
 </head>
 <body>
   <main class="dashboard-shell">
@@ -153,6 +153,7 @@
               <h2>Дополнительные услуги и результаты</h2>
               <p>Группы не пересекаются. Заявка считается после подтверждённого выбора хотя бы одного обследования, а получение результата — сразу после привязки номера пробирки к аккаунту. Наличие найденных документов для этого показателя не требуется.</p>
               <p>Период определяет пользователей, у которых заявка появилась или пробирка была привязана в выбранные даты. Затем наличие заявки и привязанной пробирки проверяется по всей истории пользователя.</p>
+              <p>Для заявок без результатов сумма рассчитывается по последнему сохранённому составу и актуальному прайсу. Для пользователей с результатами показывается оценка по распознанному составу PDF; она не является бухгалтерской выручкой.</p>
             </div>
             <span class="table-count" id="serviceResultsSummary">0 пользователей</span>
           </div>
@@ -583,6 +584,6 @@
       </div>
     </section>
   </div>
-<script src="/static/dashboard.js?v=20260916-experiments-v1" defer></script>
+<script src="/static/dashboard.js?v=20260921-service-result-ocr-v2" defer></script>
 </body>
 </html>

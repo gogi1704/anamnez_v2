@@ -2350,6 +2350,108 @@ def examination_default_names() -> dict[str, str]:
     }
 
 
+def get_lab_result_value_estimate(chel_id: str) -> dict | None:
+    with connection() as conn:
+        row = conn.execute(
+            "SELECT * FROM lab_result_value_estimates WHERE chel_id = ?",
+            (str(chel_id or "").strip(),),
+        ).fetchone()
+    if not row:
+        return None
+    result = dict(row)
+    for key in ("matched_exam_ids", "recognized_analytes"):
+        try:
+            value = json.loads(result.get(key) or "[]")
+        except json.JSONDecodeError:
+            value = []
+        result[key] = value if isinstance(value, list) else []
+    return result
+
+
+def list_lab_result_value_estimates(chel_ids: set[str]) -> dict[str, dict]:
+    normalized = sorted({str(item or "").strip() for item in chel_ids if str(item or "").strip()})
+    if not normalized:
+        return {}
+    rows: list = []
+    with connection() as conn:
+        for offset in range(0, len(normalized), 500):
+            chunk = normalized[offset:offset + 500]
+            placeholders = ",".join("?" for _ in chunk)
+            rows.extend(conn.execute(
+                f"SELECT * FROM lab_result_value_estimates WHERE chel_id IN ({placeholders})",
+                chunk,
+            ).fetchall())
+    result = {}
+    for row in rows:
+        item = dict(row)
+        for key in ("matched_exam_ids", "recognized_analytes"):
+            try:
+                value = json.loads(item.get(key) or "[]")
+            except json.JSONDecodeError:
+                value = []
+            item[key] = value if isinstance(value, list) else []
+        result[str(item["chel_id"])] = item
+    return result
+
+
+def save_lab_result_value_estimate(chel_id: str, payload: dict) -> dict:
+    normalized_chel_id = str(chel_id or "").strip()
+    if not normalized_chel_id:
+        raise ValueError("Не указан пользователь оценки результатов")
+    with _write_lock, connection() as conn:
+        conn.execute(
+            """INSERT INTO lab_result_value_estimates
+            (chel_id,med_id,document_fingerprint,status,estimated_amount,confidence,
+             document_count,analyzed_document_count,ocr_document_count,matched_exam_ids,
+             recognized_analytes,error,updated_at)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
+            ON CONFLICT(chel_id) DO UPDATE SET
+                med_id=excluded.med_id,
+                document_fingerprint=excluded.document_fingerprint,
+                status=excluded.status,
+                estimated_amount=excluded.estimated_amount,
+                confidence=excluded.confidence,
+                document_count=excluded.document_count,
+                analyzed_document_count=excluded.analyzed_document_count,
+                ocr_document_count=excluded.ocr_document_count,
+                matched_exam_ids=excluded.matched_exam_ids,
+                recognized_analytes=excluded.recognized_analytes,
+                error=excluded.error,
+                updated_at=excluded.updated_at""",
+            (
+                normalized_chel_id,
+                str(payload.get("med_id") or "")[:80],
+                str(payload.get("document_fingerprint") or "")[:128],
+                str(payload.get("status") or "pending")[:32],
+                max(0, int(payload.get("estimated_amount") or 0)),
+                max(0.0, min(float(payload.get("confidence") or 0), 1.0)),
+                max(0, int(payload.get("document_count") or 0)),
+                max(0, int(payload.get("analyzed_document_count") or 0)),
+                max(0, int(payload.get("ocr_document_count") or 0)),
+                json.dumps(payload.get("matched_exam_ids") or [], ensure_ascii=False),
+                json.dumps(payload.get("recognized_analytes") or [], ensure_ascii=False),
+                str(payload.get("error") or "")[:500],
+                utc_now(),
+            ),
+        )
+        conn.commit()
+    return get_lab_result_value_estimate(normalized_chel_id) or {}
+
+
+def list_linked_user_tubes() -> list[dict]:
+    with connection() as conn:
+        rows = conn.execute(
+            """SELECT chel_id, tube_number FROM user_profile
+            WHERE TRIM(COALESCE(tube_number,'')) <> ''
+              AND chel_id NOT IN ('chel_legacy','chel_test_default')
+            ORDER BY chel_id"""
+        ).fetchall()
+    return [
+        {"chel_id": str(row["chel_id"]), "med_id": str(row["tube_number"])}
+        for row in rows
+    ]
+
+
 def _payment_items(value: str) -> list[dict]:
     try:
         items = json.loads(value or "[]")
@@ -3997,6 +4099,23 @@ def init_db() -> None:
                 PRIMARY KEY(source_sheet_id, source_row_id)
             );
 
+            CREATE TABLE IF NOT EXISTS lab_result_value_estimates (
+                chel_id TEXT PRIMARY KEY,
+                med_id TEXT NOT NULL DEFAULT '',
+                document_fingerprint TEXT NOT NULL DEFAULT '',
+                status TEXT NOT NULL DEFAULT 'pending',
+                estimated_amount INTEGER NOT NULL DEFAULT 0,
+                confidence REAL NOT NULL DEFAULT 0,
+                document_count INTEGER NOT NULL DEFAULT 0,
+                analyzed_document_count INTEGER NOT NULL DEFAULT 0,
+                ocr_document_count INTEGER NOT NULL DEFAULT 0,
+                matched_exam_ids TEXT NOT NULL DEFAULT '[]',
+                recognized_analytes TEXT NOT NULL DEFAULT '[]',
+                error TEXT NOT NULL DEFAULT '',
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY(chel_id) REFERENCES users(chel_id) ON DELETE CASCADE
+            );
+
             CREATE TABLE IF NOT EXISTS external_identities (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 provider TEXT NOT NULL,
@@ -4346,6 +4465,17 @@ def init_db() -> None:
         if "last_checked_at" not in result_subscription_columns:
             conn.execute("ALTER TABLE lab_result_subscriptions ADD COLUMN last_checked_at TEXT")
 
+        valuation_columns = {
+            row[1] for row in conn.execute(
+                "PRAGMA table_info(lab_result_value_estimates)"
+            ).fetchall()
+        }
+        if "ocr_document_count" not in valuation_columns:
+            conn.execute(
+                "ALTER TABLE lab_result_value_estimates "
+                "ADD COLUMN ocr_document_count INTEGER NOT NULL DEFAULT 0"
+            )
+
         memory_columns = {row[1] for row in conn.execute("PRAGMA table_info(memories)").fetchall()}
         if "chel_id" not in memory_columns:
             conn.execute("ALTER TABLE memories ADD COLUMN chel_id TEXT NOT NULL DEFAULT 'chel_legacy'")
@@ -4517,6 +4647,10 @@ def init_db() -> None:
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_enterprise_schedule_inn_date "
             "ON enterprise_examination_schedule(inn, status, examination_date)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_lab_result_value_estimates_status "
+            "ON lab_result_value_estimates(status, updated_at)"
         )
 
         # Preserve tickets created by earlier versions without rewriting messages.

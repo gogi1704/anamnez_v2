@@ -1059,9 +1059,39 @@ function renderServiceResultAnalytics(data = {}) {
     label.textContent = item.label || item.key || '';
     const share = document.createElement('em');
     share.textContent = `${Number(item.percent || 0).toLocaleString('ru-RU')}% от этих пользователей`;
+    const amount = document.createElement('span');
+    amount.className = 'service-results-amount';
+    amount.textContent = `${item.amount_kind === 'estimated' ? 'Оценка по PDF' : 'По актуальному прайсу'}: ${Number(item.estimated_amount || 0).toLocaleString('ru-RU')} ₽`;
+    const coverage = document.createElement('small');
+    coverage.className = 'service-results-coverage';
+    const pricedUsers = Number(item.priced_users || 0);
+    const unpricedUsers = Number(item.unpriced_users || 0);
+    coverage.textContent = item.amount_kind === 'estimated'
+      ? `Распознано: ${pricedUsers} из ${Number(item.users || 0)}${pricedUsers ? ` · уверенность ${Number(item.average_confidence || 0).toLocaleString('ru-RU')}%` : ''}${Number(item.ocr_users || 0) ? ` · OCR: ${Number(item.ocr_users).toLocaleString('ru-RU')}` : ''}${unpricedUsers ? ' · остальные документы ещё обрабатываются или не распознаны' : ''}`
+      : `Рассчитано заявок: ${pricedUsers} из ${Number(item.users || 0)}${unpricedUsers ? ' · для части старых заявок состав не сохранился' : ''}`;
     const description = document.createElement('small');
     description.textContent = item.description || '';
-    card.append(count, label, share, description);
+    card.append(count, label, share, amount, coverage, description);
+    const breakdownItems = Array.isArray(item.breakdown) ? item.breakdown : [];
+    if (breakdownItems.length) {
+      const details = document.createElement('details');
+      details.className = 'service-results-breakdown';
+      const summary = document.createElement('summary');
+      summary.textContent = 'Показать детализацию';
+      details.append(summary);
+      for (const breakdown of breakdownItems) {
+        const row = document.createElement('span');
+        const title = document.createElement('b');
+        title.textContent = breakdown.label || breakdown.exam_id || 'Чек-ап';
+        const users = document.createElement('small');
+        users.textContent = `${Number(breakdown.users || 0).toLocaleString('ru-RU')} чел. × ${Number(breakdown.price || 0).toLocaleString('ru-RU')} ₽`;
+        const value = document.createElement('strong');
+        value.textContent = `${Number(breakdown.amount || 0).toLocaleString('ru-RU')} ₽`;
+        row.append(title, users, value);
+        details.append(row);
+      }
+      card.append(details);
+    }
     root.append(card);
   }
   if (!(data.groups || []).length) root.textContent = 'Пока нет данных';

@@ -24,6 +24,10 @@ from backend.config import settings  # noqa: E402
 from backend.lab_results import (  # noqa: E402
     LabResult, extract_urls, lab_result_documents, normalize_med_id,
 )
+from backend.lab_result_valuation import (  # noqa: E402
+    estimate_catalog_value, extract_pdf_text, extract_pdf_text_with_ocr,
+    recognized_analytes,
+)
 from backend.llm import LLMService  # noqa: E402
 from backend.main import ConsiliumHandler, _chat_access_allowed, _lab_result_analytics_event, _result_entry_can_start, admin_token_valid  # noqa: E402
 from backend.orchestrator import ConversationOrchestrator  # noqa: E402
@@ -828,6 +832,65 @@ class OrchestratorTests(unittest.TestCase):
         )
         self.assertIn("export=download", documents[1]["analysis_url"])
         self.assertNotEqual(documents[0]["id"], documents[1]["id"])
+
+    def test_lab_result_pdf_value_estimate_uses_actual_catalog_price(self):
+        text = "Триглицериды ЛПВП ЛПНП"
+        self.assertEqual(
+            recognized_analytes(text), {"triglycerides", "hdl", "ldl"},
+        )
+        estimate = estimate_catalog_value([text], [{
+            "id": "lipids", "includes": "Триглицериды, ЛПВП, ЛПНП", "price": 2300,
+        }])
+        self.assertEqual(estimate["estimated_amount"], 2300)
+        self.assertEqual(estimate["matched_exam_ids"], ["lipids"])
+        self.assertEqual(estimate["confidence"], 1.0)
+
+    def test_lab_result_value_does_not_double_count_nested_basic_package(self):
+        text = (
+            "Ферритин Железо ТТГ АЛТ АСТ Общий белок "
+            "Т3 свободный Т4 свободный С-реактивный белок Эстрадиол"
+        )
+        estimate = estimate_catalog_value([text], [
+            {
+                "id": "fatigue_basic",
+                "includes": "Ферритин, железо, ТТГ",
+                "price": 3500,
+            },
+            {
+                "id": "fatigue_extended",
+                "includes": (
+                    "Ферритин, железо, ТТГ, АЛТ, АСТ, общий белок, "
+                    "св Т3, св Т4, С-РБ. Ж: эстрадиол. М: тестостерон"
+                ),
+                "price": 5700,
+            },
+        ])
+        self.assertEqual(estimate["matched_exam_ids"], ["fatigue_extended"])
+        self.assertEqual(estimate["estimated_amount"], 5700)
+
+    def test_example_lab_pdf_has_extractable_ca125_text(self):
+        source = Path(__file__).resolve().parents[1] / "static" / "example-lab-result.pdf"
+        text = extract_pdf_text(source.read_bytes())
+        self.assertIn("ca125", recognized_analytes(text))
+
+    def test_lab_pdf_uses_limited_ocr_when_text_layer_is_empty(self):
+        def fake_run(command, **kwargs):
+            if "pdftoppm" in str(command[0]):
+                Path(f"{command[-1]}-1.png").write_bytes(b"png")
+                return SimpleNamespace(stdout=b"", stderr=b"")
+            return SimpleNamespace(
+                stdout="СА 125 10,20 Ед/мл".encode("utf-8"), stderr=b"",
+            )
+
+        with patch("backend.lab_result_valuation.extract_pdf_text", return_value=""), \
+             patch("backend.lab_result_valuation.shutil.which", side_effect=lambda name: name), \
+             patch("backend.lab_result_valuation.subprocess.run", side_effect=fake_run) as run:
+            text, used_ocr = extract_pdf_text_with_ocr(b"%PDF-test")
+        self.assertTrue(used_ocr)
+        self.assertIn("ca125", recognized_analytes(text))
+        pdftoppm_command = run.call_args_list[0].args[0]
+        self.assertIn("8", pdftoppm_command)
+        self.assertIn("150", pdftoppm_command)
 
     def test_lab_result_analytics_event_matches_actual_lookup_status(self):
         self.assertEqual(_lab_result_analytics_event("found"), "lab_results_found")
@@ -2666,13 +2729,13 @@ class OrchestratorTests(unittest.TestCase):
         self.assertIn("controllerchange", script)
         self.assertIn("url.pathname.startsWith('/api/')", worker)
         self.assertIn("url.pathname.startsWith('/auth/')", worker)
-        self.assertIn("consilium-shell-v107", worker)
+        self.assertIn("consilium-shell-v109", worker)
         self.assertIn("fetch(request)", worker)
-        self.assertIn("/static/styles.css?v=20260916-experiments-v1", index)
+        self.assertIn("/static/styles.css?v=20260921-service-result-ocr-v2", index)
         self.assertIn("/static/rich-text.2bf1f5fab764.css", index)
         self.assertTrue((project_root / "static" / "styles.07ffaefb4795.css").is_file())
         self.assertTrue((project_root / "static" / "rich-text.2bf1f5fab764.css").is_file())
-        self.assertIn("/static/app.js?v=20260916-experiments-v1", index)
+        self.assertIn("/static/app.js?v=20260921-service-result-ocr-v2", index)
         self.assertIn("/static/metrika.js?v=20260916-experiments-v1", index)
         self.assertIn('id="welcomeScreen"', index)
         self.assertIn('id="welcomeNextButton"', index)

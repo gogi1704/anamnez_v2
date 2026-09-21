@@ -4,7 +4,8 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ca-certificates \
+    && apt-get install -y --no-install-recommends \
+       ca-certificates poppler-utils tesseract-ocr tesseract-ocr-eng tesseract-ocr-rus \
     && update-ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 

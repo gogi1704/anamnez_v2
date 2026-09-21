@@ -294,6 +294,55 @@ class AnalyticsTests(unittest.TestCase):
                 "30", date_from="2026-09-15", date_to="2026-09-14",
             )
 
+    def test_service_result_groups_include_current_price_and_pdf_estimates(self):
+        conn = sqlite3.connect(settings.database_path)
+        try:
+            conn.executescript("""
+                CREATE TABLE examination_catalog (id TEXT PRIMARY KEY, name TEXT NOT NULL, price INTEGER NOT NULL);
+                CREATE TABLE lab_result_value_estimates (
+                    chel_id TEXT PRIMARY KEY, status TEXT NOT NULL,
+                    estimated_amount INTEGER NOT NULL, confidence REAL NOT NULL,
+                    matched_exam_ids TEXT NOT NULL DEFAULT '[]',
+                    ocr_document_count INTEGER NOT NULL DEFAULT 0
+                );
+            """)
+            conn.executemany(
+                "INSERT INTO user_profile (chel_id, company_inn, tube_number) VALUES (?,?,?)",
+                [
+                    ("CHEL-PRICE-APP", "7700000021", ""),
+                    ("CHEL-PRICE-RESULT", "7700000022", "TUBE-22"),
+                ],
+            )
+            conn.execute("INSERT INTO examination_catalog (id,name,price) VALUES ('lipids','Липидный обмен',2300)")
+            conn.execute(
+                "INSERT INTO lab_result_value_estimates VALUES (?,?,?,?,?,?)",
+                ("CHEL-PRICE-RESULT", "ready", 4100, 0.8, '["lipids"]', 1),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+        analytics.record_events("CHEL-PRICE-APP", [
+            {"event_id": "price-app-complete", "session_id": "price-app-session", "event_name": "examinations_selection_completed", "properties": {"selected_count": 1, "selection_id": "selection-price-app"}},
+            {"event_id": "price-app-item", "session_id": "price-app-session", "event_name": "examination_selection_confirmed", "properties": {"selection_id": "selection-price-app", "exam_id": "lipids"}},
+        ])
+        analytics.record_events("CHEL-PRICE-RESULT", [{
+            "event_id": "price-result-tube", "session_id": "price-result-session",
+            "event_name": "tube_linked", "properties": {},
+        }])
+
+        report = analytics.service_result_report("30")
+        groups = {item["key"]: item for item in report["groups"]}
+        self.assertEqual(groups["application_without_results"]["estimated_amount"], 2300)
+        self.assertEqual(groups["application_without_results"]["amount_kind"], "current_price")
+        self.assertEqual(groups["results_without_application"]["estimated_amount"], 2300)
+        self.assertEqual(groups["results_without_application"]["amount_kind"], "estimated")
+        self.assertEqual(groups["results_without_application"]["average_confidence"], 80.0)
+        self.assertEqual(groups["results_without_application"]["ocr_users"], 1)
+        self.assertEqual(groups["results_without_application"]["breakdown"], [{
+            "exam_id": "lipids", "label": "Липидный обмен", "users": 1,
+            "price": 2300, "amount": 2300,
+        }])
+
     def test_payment_method_does_not_replace_registration_method(self):
         analytics.record_events("CHEL-METHOD", [
             {
