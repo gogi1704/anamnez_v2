@@ -1925,6 +1925,11 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
         ):
             raise ValueError("ИНН должен состоять из 10 или 12 цифр")
 
+        raw_tube_number = str(payload.get("tube_number", "")).strip()
+        tube_number = db.normalize_tube_number(raw_tube_number)
+        if raw_tube_number and not tube_number:
+            raise ValueError("Номер пробирки должен состоять только из цифр")
+
         result = {
             "preferred_name": " ".join(str(payload.get("preferred_name", "")).split())[:100],
             "company_inn": company_inn, "age": age, "sex": sex,
@@ -1937,7 +1942,7 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
             "joint_pain": joint_pain, "fatigue": fatigue,
             "conditions": lines("conditions"), "medications": lines("medications"),
             "allergies": lines("allergies"),
-            "tube_number": " ".join(str(payload.get("tube_number", "")).split())[:80],
+            "tube_number": tube_number,
             "notes": str(payload.get("notes", "")).strip()[:1000],
         }
         if required:

@@ -19,6 +19,29 @@ _current_chel_id: ContextVar[str] = ContextVar("current_chel_id", default="chel_
 TEST_COMPANY_INN = "123123"
 
 
+def normalize_tube_number(value: object) -> str:
+    """Return the numeric laboratory identifier or an empty value.
+
+    Historical profiles may contain a one-letter laboratory prefix (for
+    example ``B4433354`` or ``С 607408``).  Those prefixes and visual
+    separators are safe to remove.  Free-form answers and internal IDs must
+    not be converted into plausible-looking tube numbers merely because they
+    happen to contain a few digits.
+    """
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    if re.fullmatch(r"[0-9\s-]+", raw):
+        return re.sub(r"[^0-9]", "", raw)[:80]
+    prefixed = re.fullmatch(
+        r"[A-Za-zА-Яа-яЁё]\s*[-–—]?\s*([0-9][0-9\s-]*)",
+        raw,
+    )
+    if prefixed:
+        return re.sub(r"[^0-9]", "", prefixed.group(1))[:80]
+    return ""
+
+
 def _test_company_inn_chel_ids(conn: sqlite3.Connection) -> set[str]:
     """Return identities that use the dedicated testing INN."""
     try:

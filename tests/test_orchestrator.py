@@ -454,11 +454,11 @@ class OrchestratorTests(unittest.TestCase):
             "preferred_name": "Анна", "company_inn": "7707083893", "age": 34, "sex": "female", "height_cm": 168,
             "weight_kg": 62, "pregnancy": "no", "conditions": ["Астма"],
             "medications": ["Назначенный ингалятор"], "allergies": ["Пенициллин"],
-            "smoking": "never", "tube_number": "LAB-2026-0042", "notes": "",
+            "smoking": "never", "tube_number": "20260042", "notes": "",
         })
         self.assertEqual(profile["age"], 34)
         self.assertEqual(profile["allergies"], ["Пенициллин"])
-        self.assertEqual(profile["tube_number"], "LAB-2026-0042")
+        self.assertEqual(profile["tube_number"], "20260042")
         self.assertEqual(profile["company_inn"], "7707083893")
 
         fake = FakeLLM()
@@ -494,6 +494,22 @@ class OrchestratorTests(unittest.TestCase):
         for invalid_inn in ("123", "123122", "123124", "1231234", "123456789"):
             with self.subTest(company_inn=invalid_inn), self.assertRaises(ValueError):
                 ConsiliumHandler._validate_profile({"company_inn": invalid_inn})
+
+    def test_tube_number_is_normalized_to_digits(self):
+        for raw, expected in (
+            ("382181", "382181"),
+            ("B4433354", "4433354"),
+            ("С 607408", "607408"),
+            ("123 456", "123456"),
+        ):
+            with self.subTest(tube_number=raw):
+                self.assertEqual(
+                    ConsiliumHandler._validate_profile({"tube_number": raw})["tube_number"],
+                    expected,
+                )
+        for invalid in ("Не знаю", "Анализы не сдавала", "chel_4bd581e60103683c73f34bd1366ea606"):
+            with self.subTest(tube_number=invalid), self.assertRaises(ValueError):
+                ConsiliumHandler._validate_profile({"tube_number": invalid})
 
     def test_payment_customer_name_requires_full_name(self):
         self.assertEqual(
@@ -2729,13 +2745,13 @@ class OrchestratorTests(unittest.TestCase):
         self.assertIn("controllerchange", script)
         self.assertIn("url.pathname.startsWith('/api/')", worker)
         self.assertIn("url.pathname.startsWith('/auth/')", worker)
-        self.assertIn("consilium-shell-v109", worker)
+        self.assertIn("consilium-shell-v110", worker)
         self.assertIn("fetch(request)", worker)
-        self.assertIn("/static/styles.css?v=20260921-service-result-ocr-v2", index)
+        self.assertIn("/static/styles.css?v=20260921-tube-number-digits-v1", index)
         self.assertIn("/static/rich-text.2bf1f5fab764.css", index)
         self.assertTrue((project_root / "static" / "styles.07ffaefb4795.css").is_file())
         self.assertTrue((project_root / "static" / "rich-text.2bf1f5fab764.css").is_file())
-        self.assertIn("/static/app.js?v=20260921-service-result-ocr-v2", index)
+        self.assertIn("/static/app.js?v=20260921-tube-number-digits-v1", index)
         self.assertIn("/static/metrika.js?v=20260916-experiments-v1", index)
         self.assertIn('id="welcomeScreen"', index)
         self.assertIn('id="welcomeNextButton"', index)

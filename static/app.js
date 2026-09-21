@@ -619,7 +619,7 @@ function renderResultTube() {
     <span class="onboarding-kicker">Поиск результатов</span>
     <h1>Введите номер пробирки</h1>
     <p class="onboarding-lead">Он указан на вашей наклейке или был сообщён бригадой на медицинском осмотре.</p>
-    <label class="result-tube-field"><span>Номер пробирки</span><input id="resultTubeInput" type="text" maxlength="80" autocomplete="off" value="${escapeAttr(saved)}" placeholder="Например, 123456"></label>
+    <label class="result-tube-field"><span>Номер пробирки</span><input id="resultTubeInput" type="text" maxlength="80" inputmode="numeric" pattern="[0-9]*" autocomplete="off" value="${escapeAttr(saved)}" placeholder="Например, 123456"></label>
     <p class="result-inline-error hidden" id="resultTubeError" role="alert"></p>
     <div class="onboarding-actions"><button type="button" class="onboarding-next" data-result-action="save-tube">Продолжить</button></div>`);
   requestAnimationFrame(() => $('#resultTubeInput')?.focus());
@@ -711,9 +711,17 @@ function renderResultNotification() {
     <div class="onboarding-actions"><button type="button" class="onboarding-next" data-result-action="open-chat">Перейти в чат</button></div>`);
 }
 
+function normalizeTubeNumber(value) {
+  const raw = String(value || '').trim();
+  if (/^[0-9\s-]+$/.test(raw)) return raw.replace(/\D/g, '').slice(0, 80);
+  const prefixed = raw.match(/^[A-Za-zА-Яа-яЁё]\s*[-–—]?\s*([0-9][0-9\s-]*)$/u);
+  return prefixed ? prefixed[1].replace(/\D/g, '').slice(0, 80) : '';
+}
+
 async function saveResultTube() {
   const input = $('#resultTubeInput');
-  const tubeNumber = input?.value.trim() || '';
+  const tubeNumber = normalizeTubeNumber(input?.value);
+  if (input) input.value = tubeNumber;
   if (!tubeNumber) {
     $('#resultTubeError').textContent = 'Введите номер пробирки';
     $('#resultTubeError').classList.remove('hidden');
@@ -3430,7 +3438,7 @@ async function saveProfile() {
     fatigue: $('#profileFatigue').value, joint_pain: $('#profileJoints').value,
     dark_in_eyes: state.profile?.dark_in_eyes || 'unknown',
     medications: profileLines('#profileMedications'), allergies: profileLines('#profileAllergies'),
-    tube_number: $('#profileTubeNumber').value.trim(),
+    tube_number: normalizeTubeNumber($('#profileTubeNumber').value),
     notes: $('#profileNotes').value.trim(),
   };
   try {
@@ -3499,7 +3507,9 @@ function changeLabTube() {
 }
 
 async function saveLabTube() {
-  const tubeNumber = $('#labTubeInput').value.trim();
+  const tubeInput = $('#labTubeInput');
+  const tubeNumber = normalizeTubeNumber(tubeInput.value);
+  tubeInput.value = tubeNumber;
   if (!tubeNumber) {
     $('#labTubeError').classList.remove('hidden');
     $('#labTubeInput').focus();
