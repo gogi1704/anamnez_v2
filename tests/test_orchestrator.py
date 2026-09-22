@@ -2915,7 +2915,7 @@ class OrchestratorTests(unittest.TestCase):
             online_click.index("sendMarketerMetrikaGoal('klick_online'"),
             online_click.index("startOnlinePayment()"),
         )
-        self.assertIn("YANDEX_METRIKA_MARKETER_COUNTER_ID=111524472", production_env)
+        self.assertIn("YANDEX_METRIKA_MARKETER_COUNTER_ID=112754652", production_env)
 
     def test_persisted_replies_are_deduplicated_by_server_message_id(self):
         project_root = Path(__file__).resolve().parents[1]
