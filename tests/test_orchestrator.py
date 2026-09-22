@@ -33,7 +33,8 @@ from backend.main import ConsiliumHandler, _chat_access_allowed, _lab_result_ana
 from backend.orchestrator import ConversationOrchestrator  # noqa: E402
 from backend.onboarding import (  # noqa: E402
     EXAMINATION_UPGRADE_PAIRS, TEST_CATALOG, effective_examination_price, examination_recommendation_copy,
-    featured_test_ids, normalize_examination_selection, public_onboarding, recommend_test_ids,
+    featured_test_ids, gender_incompatible_test_ids, normalize_examination_selection, public_onboarding,
+    recommend_test_ids,
 )
 from backend.prompts import ORCHESTRATOR_PROMPT, PROFILES  # noqa: E402
 from backend.schemas import AgentResult, RouteDecision, normalize_context  # noqa: E402
@@ -2745,14 +2746,14 @@ class OrchestratorTests(unittest.TestCase):
         self.assertIn("controllerchange", script)
         self.assertIn("url.pathname.startsWith('/api/')", worker)
         self.assertIn("url.pathname.startsWith('/auth/')", worker)
-        self.assertIn("consilium-shell-v110", worker)
+        self.assertIn("consilium-shell-v112", worker)
         self.assertIn("fetch(request)", worker)
-        self.assertIn("/static/styles.css?v=20260921-tube-number-digits-v1", index)
+        self.assertIn("/static/styles.css?v=20260922-checkup-reoffer-diagnostics-v1", index)
         self.assertIn("/static/rich-text.2bf1f5fab764.css", index)
         self.assertTrue((project_root / "static" / "styles.07ffaefb4795.css").is_file())
         self.assertTrue((project_root / "static" / "rich-text.2bf1f5fab764.css").is_file())
-        self.assertIn("/static/app.js?v=20260921-tube-number-digits-v1", index)
-        self.assertIn("/static/metrika.js?v=20260916-experiments-v1", index)
+        self.assertIn("/static/app.js?v=20260922-checkup-reoffer-diagnostics-v1", index)
+        self.assertIn("/static/metrika.js?v=20260922-marketer-goals-v1", index)
         self.assertIn('id="welcomeScreen"', index)
         self.assertIn('id="welcomeNextButton"', index)
         self.assertIn("Плановый медосмотр", index)
@@ -2835,7 +2836,7 @@ class OrchestratorTests(unittest.TestCase):
         main = (project_root / "backend" / "main.py").read_text(encoding="utf-8")
         config = (project_root / "backend" / "config.py").read_text(encoding="utf-8")
 
-        self.assertIn('src="/static/metrika.js?v=20260916-experiments-v1"', index)
+        self.assertIn('src="/static/metrika.js?v=20260922-marketer-goals-v1"', index)
         self.assertIn('YANDEX_METRIKA_COUNTER_ID', config)
         self.assertIn('path == "/api/public-config"', main)
         self.assertIn('"metrika.js"', main)
@@ -2876,6 +2877,45 @@ class OrchestratorTests(unittest.TestCase):
         self.assertNotIn("userParams", metrika)
         self.assertNotIn("chel_id", metrika)
         self.assertIn("window.consiliumMetrikaGoal?.(goal, {", app)
+
+    def test_marketer_questionnaire_goals_only_use_dedicated_counter(self):
+        project_root = Path(__file__).resolve().parents[1]
+        app = (project_root / "static" / "app.js").read_text(encoding="utf-8")
+        metrika = (project_root / "static" / "metrika.js").read_text(encoding="utf-8")
+        main = (project_root / "backend" / "main.py").read_text(encoding="utf-8")
+        production_env = (project_root / ".env.production.example").read_text(encoding="utf-8")
+
+        for step in range(1, 20):
+            self.assertIn(f"'step_{step}'", metrika)
+        for goal in (
+            "personal", "personal_kabinet", "personal_proverka", "klick_online",
+            "offline", "otkaz_1", "otkaz_2",
+        ):
+            self.assertIn(f"'{goal}'", metrika)
+
+        self.assertIn("yandex_metrika_marketer_counter_active", main)
+        self.assertIn("function hasDedicatedMarketerMetrika()", app)
+        self.assertIn("yandex_metrika_marketer_counter_active === true", app)
+        self.assertIn("if (!hasDedicatedMarketerMetrika()", app)
+        self.assertIn("screen === previousScreen", app)
+        self.assertIn("onboardingQuestions.findIndex", app)
+        self.assertIn("goal = `step_${questionIndex + 1}`", app)
+        self.assertIn("exam_selection:'personal'", app)
+        self.assertIn("exam_results_preview:'personal_kabinet'", app)
+        self.assertIn("payment:'personal_proverka'", app)
+        self.assertIn("exam_objection:'otkaz_1'", app)
+        self.assertIn("completion_skipped:'otkaz_2'", app)
+        self.assertIn("payment_status === 'pay_at_exam'", app)
+        self.assertIn("goal = 'offline'", app)
+        self.assertIn("sendMarketerMetrikaGoal('klick_online'", app)
+        online_click = app.split("else if (action === 'pay-online')", 1)[1].split(
+            "else if (action === 'pay-at-exam')", 1,
+        )[0]
+        self.assertLess(
+            online_click.index("sendMarketerMetrikaGoal('klick_online'"),
+            online_click.index("startOnlinePayment()"),
+        )
+        self.assertIn("YANDEX_METRIKA_MARKETER_COUNTER_ID=111524472", production_env)
 
     def test_persisted_replies_are_deduplicated_by_server_message_id(self):
         project_root = Path(__file__).resolve().parents[1]
@@ -3417,6 +3457,33 @@ class OrchestratorTests(unittest.TestCase):
                 "sex": "male", "fatigue": "yes", "height_cm": 180, "weight_kg": 78,
             }),
         )
+
+    def test_opposite_gender_examinations_are_marked_and_sorted_last(self):
+        self.assertEqual(
+            gender_incompatible_test_ids({"sex": "male"}),
+            ["female_hormones", "ca125", "ca153"],
+        )
+        self.assertEqual(
+            gender_incompatible_test_ids({"sex": "female"}),
+            ["male_health"],
+        )
+        self.assertEqual(gender_incompatible_test_ids({}), [])
+
+        payload = public_onboarding(
+            {"selected_tests": []}, {"sex": "male"}, TEST_CATALOG,
+        )
+        self.assertEqual(
+            payload["gender_incompatible_test_ids"],
+            ["female_hormones", "ca125", "ca153"],
+        )
+
+        project_root = Path(__file__).resolve().parents[1]
+        script = (project_root / "static" / "app.js").read_text(encoding="utf-8")
+        styles = (project_root / "static" / "styles.css").read_text(encoding="utf-8")
+        self.assertIn("genderIncompatible.has(left.id)", script)
+        self.assertIn("gender_incompatible_test_ids || []", script)
+        self.assertIn("Можно посоветовать близким", script)
+        self.assertIn(".gender-alternative-badge", styles)
 
     def test_featured_examinations_follow_personalization_mockup(self):
         self.assertEqual(

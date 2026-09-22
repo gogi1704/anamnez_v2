@@ -1316,6 +1316,7 @@ function metric2PreviewMarkup(screen, large = false) {
   else if (kind === 'warning') content = `<div class="metric2-mock-modal"><span class="metric2-mock-close">×</span><span class="metric2-mock-icon">!</span><b>Продолжить без мессенджера?</b><p>Данные будут связаны только с этим браузером.</p><ul><li>после очистки cookies доступ может потеряться;</li><li>на другом телефоне или компьютере история не откроется;</li><li>восстановить анонимный профиль служба поддержки не сможет.</li></ul><p class="metric2-mock-note">Мессенджер можно будет привязать позже без повторного заполнения анкеты.</p><div class="metric2-mock-actions">${action('Назад',true)}${action('Понимаю, продолжить')}</div></div>`;
   else if (kind === 'appearance') content = `<small>ПЕРЕД НАЧАЛОМ</small><b>Какой размер текста вам удобен?</b><p>Вы увидите изменение сразу. Позже размер можно поменять через меню функций.</p><span class="metric2-mock-choice"><b>Аа &nbsp; Обычный</b><small>Чуть крупнее базового интерфейса</small></span><span class="metric2-mock-choice"><b>Аа &nbsp; Крупный</b><small>Комфортно для большинства экранов</small></span><span class="metric2-mock-choice selected"><b>Аа &nbsp; Очень крупный</b><small>Максимальная читаемость</small></span>${action('Продолжить')}`;
   else if (kind === 'not_medical_exam_info') content = `<small>ПЕРЕД ПРОДОЛЖЕНИЕМ</small><b>Анкета — важная часть медосмотра</b><p>Ответы помогают подготовиться к осмотру и подобрать актуальные для вас дополнительные обследования.</p><span class="metric2-mock-info"><b>Если вы нажали эту кнопку только потому, что не знаете ИНН</b><small>Лучше уточните ИНН у работодателя и вернитесь к анкете. Так рекомендации будут учитывать ваши ответы.</small></span><p>Если вы действительно не проходите медосмотр, можно продолжить без анкеты и выбрать дополнительные услуги из общего списка.</p><div class="metric2-mock-actions">${action('Вернуться',true)}${action('Продолжить')}</div>`;
+  else if (kind === 'reoffer_message') content = `<small>ЗАВТРА МЕДОСМОТР</small><b>Дополнительные чек-апы без нового укола</b><p>Во время осмотра можно сдать дополнительные чек-апы из той же пробы крови — без отдельного визита.</p><p>После готовности результаты появятся в Консилиуме: с ИИ-расшифровкой и возможностью бесплатно передать их медицинскому специалисту.</p>${action('Выбрать чек-апы →')}`;
   else if (kind === 'questionnaire_body_map') content = `<div class="metric2-mock-modal"><span class="metric2-mock-close">×</span><span class="metric2-mock-icon">◉</span><b>Интерактивная карта тела</b><p>Пользователь проходит три понятных этапа и возвращается к вопросу о жалобах.</p><span class="metric2-mock-info"><b>1. Выберите область тела</b><small>Нажмите на нужную область на изображении</small></span><span class="metric2-mock-info"><b>2. Укажите ощущение</b><small>Выберите наиболее подходящий вариант</small></span><span class="metric2-mock-info"><b>3. Добавьте подробности</b><small>Уточните интенсивность и особенности симптома</small></span>${action('Сохранить отметку')}${action('Закрыть')}</div>`;
   else if (kind.startsWith('question_')) {
     const index = metric2QuestionContent.findIndex(item => item.key === screen.question_key);
@@ -1417,33 +1418,43 @@ function renderMetric2(data) {
       : screen),
   };
   latestMetric2Data = data;
-  metric2ActiveFlow = ['result','experiment'].includes(data.flow) ? data.flow : 'standard';
+  metric2ActiveFlow = ['result','experiment','reoffer'].includes(data.flow) ? data.flow : 'standard';
   const resultFlow = metric2ActiveFlow === 'result';
   const experimentFlow = metric2ActiveFlow === 'experiment';
-  $('#metric2StandardFlow').classList.toggle('active', !resultFlow && !experimentFlow);
-  $('#metric2StandardFlow').setAttribute('aria-selected', String(!resultFlow && !experimentFlow));
+  const reofferFlow = metric2ActiveFlow === 'reoffer';
+  $('#metric2StandardFlow').classList.toggle('active', !resultFlow && !experimentFlow && !reofferFlow);
+  $('#metric2StandardFlow').setAttribute('aria-selected', String(!resultFlow && !experimentFlow && !reofferFlow));
   $('#metric2ResultFlow').classList.toggle('active', resultFlow);
   $('#metric2ResultFlow').setAttribute('aria-selected', String(resultFlow));
   $('#metric2ExperimentFlow').classList.toggle('active', experimentFlow);
   $('#metric2ExperimentFlow').setAttribute('aria-selected', String(experimentFlow));
+  $('#metric2ReofferFlow').classList.toggle('active', reofferFlow);
+  $('#metric2ReofferFlow').setAttribute('aria-selected', String(reofferFlow));
   $('#metric2ExperimentNote').classList.toggle('hidden', !experimentFlow);
+  $('#metric2ReofferDiagnostics').classList.toggle('hidden', !reofferFlow);
   if (experimentFlow) {
     const link = `${location.origin}/?preview_funnel=marketer`;
     $('#metric2ExperimentLink').textContent = link;
     $('#metric2ExperimentLink').dataset.link = link;
   }
-  $('#metric2FlowEyebrow').textContent = resultFlow ? 'Ссылка /result' : experimentFlow ? 'Вариант эксперимента' : 'Обычная ссылка';
-  $('#metric2FlowTitle').textContent = resultFlow ? 'Получение результатов анализов' : experimentFlow ? 'Воронка маркетолога' : 'Анкета и выбор обследований';
+  $('#metric2FlowEyebrow').textContent = resultFlow ? 'Ссылка /result' : experimentFlow ? 'Вариант эксперимента' : reofferFlow ? 'Повторное предложение' : 'Обычная ссылка';
+  $('#metric2FlowTitle').textContent = resultFlow ? 'Получение результатов анализов' : experimentFlow ? 'Воронка маркетолога' : reofferFlow ? 'Напоминание перед медосмотром' : 'Анкета и выбор обследований';
   $('#metric2FlowDescription').textContent = resultFlow
     ? 'Отдельная воронка для пользователей, которые пришли по специальной ссылке за результатами. Обычное анкетирование сюда не входит.'
     : experimentFlow
     ? 'Путь пользователей, которым назначен вариант «маркетолог» в A/B-эксперименте. Экраны пока совпадают с обычной воронкой — здесь будет видно, когда появятся отличия.'
+    : reofferFlow
+    ? 'Путь основного варианта: от сообщения за день до медосмотра до выбора обследований и финального решения. Вариант «маркетолог» сюда не входит.'
     : 'Основная воронка новых пользователей: приветствие, регистрация, анкета, обследования и завершение. Переходы по ссылке /result сюда не входят.';
   const summary = $('#metric2Summary');
   summary.innerHTML = [
-    [resultFlow ? 'Пришли по пути result' : experimentFlow ? 'Попали в вариант «маркетолог»' : 'На первом экране',data.summary?.start_users || 0,'100% — база этой ветки'],
+    [resultFlow ? 'Пришли по пути result' : experimentFlow ? 'Попали в вариант «маркетолог»' : reofferFlow ? 'Получили повторное предложение' : 'На первом экране',data.summary?.start_users || 0,'100% — база этой ветки'],
     [resultFlow ? 'Получили результат пути' : 'Дошли до завершения',data.summary?.reached_completion || 0,'уникальных пользователей'],
   ].map(([label,value,note]) => `<article class="analytics-metric"><span>${label}</span><strong>${Number(value).toLocaleString('ru-RU')}</strong><small>${note}</small></article>`).join('');
+  if (reofferFlow) {
+    const reoffer = data.summary?.reoffer || {};
+    summary.innerHTML += (reoffer.duration_buckets || []).map(item => `<article class="analytics-metric"><span>${escapeHtml(item.label)}</span><strong>${Number(item.users || 0).toLocaleString('ru-RU')}</strong><small>активное время на экране предложения</small></article>`).join('');
+  }
   const root = $('#metric2Flow');
   root.replaceChildren();
   const titleById = Object.fromEntries((data.screens || []).map(item => [item.id,item.title]));
@@ -1607,7 +1618,7 @@ function closeMetric2Modal() {
 }
 
 async function loadMetric2(flow = metric2ActiveFlow) {
-  metric2ActiveFlow = ['result','experiment'].includes(flow) ? flow : 'standard';
+  metric2ActiveFlow = ['result','experiment','reoffer'].includes(flow) ? flow : 'standard';
   closeMetric2Modal();
   return withPanelLoading('#metric2AdminView', async () => {
     const params = new URLSearchParams({period:$('#metric2Period').value,flow:metric2ActiveFlow});
@@ -1618,9 +1629,87 @@ async function loadMetric2(flow = metric2ActiveFlow) {
     params.set('refresh','1');
     const requestedFlow = metric2ActiveFlow;
     const report = await adminReportFetch(`/api/admin/metric2?${params}`);
-    if (requestedFlow === metric2ActiveFlow) renderMetric2(report);
+    if (requestedFlow === metric2ActiveFlow) {
+      renderMetric2(report);
+      if (requestedFlow === 'reoffer') await loadCheckupReofferDiagnostics();
+    }
   }, metric2ActiveFlow === 'result' ? 'Строим путь получения результатов…'
-    : metric2ActiveFlow === 'experiment' ? 'Строим путь воронки маркетолога…' : 'Строим обычный стартовый путь…');
+    : metric2ActiveFlow === 'experiment' ? 'Строим путь воронки маркетолога…'
+    : metric2ActiveFlow === 'reoffer' ? 'Строим путь повторного предложения…' : 'Строим обычный стартовый путь…');
+}
+
+function showReofferDiagnosticStatus(message, error = false) {
+  const status = $('#reofferDiagnosticStatus');
+  status.textContent = message;
+  status.classList.toggle('error', error);
+  status.classList.toggle('hidden', !message);
+}
+
+function renderCheckupReofferDiagnostics(data) {
+  const settings = data.settings || {};
+  const schedule = data.schedule || {};
+  const candidates = data.candidates || {};
+  const outbox = data.outbox || {};
+  const linked = data.linked_messengers || {};
+  $('#reofferEnabled').checked = Boolean(settings.enabled);
+  const checks = Object.values(data.checks || {});
+  const healthy = checks.length > 0 && checks.every(Boolean);
+  const badge = $('#reofferHealthBadge');
+  badge.className = `reoffer-health-badge ${healthy ? 'good' : settings.enabled ? 'error' : ''}`;
+  badge.textContent = healthy ? 'Система работает' : settings.enabled ? 'Нужна проверка' : 'Отправка выключена';
+  const pending = Number(outbox.pending || 0) + Number(outbox.delivering || 0);
+  const messengerText = [
+    linked.telegram ? `Telegram: ${Number(linked.telegram).toLocaleString('ru-RU')}` : '',
+    linked.max ? `MAX: ${Number(linked.max).toLocaleString('ru-RU')}` : '',
+  ].filter(Boolean).join(' · ') || 'нет привязанных аккаунтов';
+  const cards = [
+    ['Режим', settings.enabled ? 'Включено' : 'Выключено', settings.updated_at ? `изменено ${formatDate(settings.updated_at)}` : 'настройка по умолчанию'],
+    ['График chelovekgrafik', `${Number(schedule.rows || 0).toLocaleString('ru-RU')} строк`, `${Number(schedule.inns || 0).toLocaleString('ru-RU')} ИНН · синхронизация ${formatDate(schedule.last_synced_at)}`],
+    ['Ближайшая отправка', `${Number(data.pending_today || 0).toLocaleString('ru-RU')} пользователей`, `медосмотр ${data.tomorrow || 'завтра'} · до исключений ${Number(data.due_tomorrow || 0).toLocaleString('ru-RU')}`],
+    ['Запланировано на завтра', `${Number(data.scheduled_tomorrow || 0).toLocaleString('ru-RU')} пользователей`, `медосмотр ${data.day_after_tomorrow || 'послезавтра'} · уже исключены выбравшие и оплатившие`],
+    ['Кандидаты 30+ секунд', Number(candidates.eligible || 0).toLocaleString('ru-RU'), `30–120: ${Number(candidates.between_30_120 || 0).toLocaleString('ru-RU')} · более 120: ${Number(candidates.over_120 || 0).toLocaleString('ru-RU')}`],
+    ['Отправлено', Number(data.sent_total || 0).toLocaleString('ru-RU'), `последняя отправка ${formatDate(data.last_sent_at)}`],
+    ['Очередь мессенджеров', pending.toLocaleString('ru-RU'), `повторных ошибок: ${Number(outbox.errors || 0).toLocaleString('ru-RU')} · исчерпано попыток: ${Number(outbox.exhausted || 0).toLocaleString('ru-RU')}`],
+    ['Привязанные мессенджеры', Number(Object.values(linked).reduce((sum,value) => sum + Number(value || 0),0)).toLocaleString('ru-RU'), messengerText],
+    ['Диапазон графика', schedule.first_date || '—', schedule.last_date ? `по ${schedule.last_date}` : 'данных пока нет'],
+  ];
+  $('#reofferDiagnosticGrid').innerHTML = cards.map(([label,value,note]) => `<article class="reoffer-diagnostic-item"><span>${escapeHtml(label)}</span><strong>${escapeHtml(value)}</strong><small>${escapeHtml(note)}</small></article>`).join('');
+}
+
+async function loadCheckupReofferDiagnostics() {
+  const data = await adminFetch('/api/admin/checkup-reoffers');
+  renderCheckupReofferDiagnostics(data);
+  return data;
+}
+
+async function saveCheckupReofferSettings() {
+  const enabled = $('#reofferEnabled').checked;
+  await adminFetch('/api/admin/checkup-reoffers/settings', undefined, {
+    method:'POST', body:JSON.stringify({enabled}),
+  });
+  showReofferDiagnosticStatus(enabled ? 'Автоматические напоминания включены.' : 'Автоматические напоминания выключены.');
+  await loadCheckupReofferDiagnostics();
+}
+
+async function checkExaminationSchedule() {
+  showReofferDiagnosticStatus('Проверяем доступность chelovekgrafik и обновляем график…');
+  const data = await adminFetch('/api/admin/checkup-reoffers/check-schedule', undefined, {
+    method:'POST', body:'{}',
+  });
+  showReofferDiagnosticStatus(`chelovekgrafik доступен: получено ${Number(data.sync?.rows || 0).toLocaleString('ru-RU')} строк из ${Number(data.sync?.sheets || 0).toLocaleString('ru-RU')} таблиц.`);
+  await loadCheckupReofferDiagnostics();
+}
+
+async function sendCheckupReofferTest() {
+  const identifier = $('#reofferTestIdentifier').value.trim();
+  if (!identifier) throw new Error('Укажите chel_id или ИНН пользователя');
+  if (!window.confirm(`Отправить тестовое сообщение пользователю ${identifier}?`)) return;
+  const data = await adminFetch('/api/admin/checkup-reoffers/test-send', undefined, {
+    method:'POST', body:JSON.stringify({identifier}),
+  });
+  const providers = (data.messenger_providers || []).join(', ') || 'нет — сообщение создано только в чате';
+  showReofferDiagnosticStatus(`Тест отправлен: чат создан, мессенджеры: ${providers}.`);
+  await loadCheckupReofferDiagnostics();
 }
 
 async function loadFavoriteSources() {
@@ -2371,6 +2460,24 @@ $('#analyticsApply').addEventListener('click', () => {
 });
 $('#serviceResultsApply').addEventListener('click', () => {
   loadServiceResults().catch(showDashboardError);
+});
+$('#metric2ReofferFlow').addEventListener('click', () => {
+  if (metric2ActiveFlow !== 'reoffer') loadMetric2('reoffer').catch(showDashboardError);
+});
+$('#reofferRefreshDiagnostics').addEventListener('click', () => {
+  showReofferDiagnosticStatus('Проверяем систему…');
+  loadCheckupReofferDiagnostics()
+    .then(() => showReofferDiagnosticStatus('Диагностика обновлена.'))
+    .catch(error => showReofferDiagnosticStatus(error.message, true));
+});
+$('#reofferSaveSettings').addEventListener('click', () => {
+  saveCheckupReofferSettings().catch(error => showReofferDiagnosticStatus(error.message, true));
+});
+$('#reofferCheckSchedule').addEventListener('click', () => {
+  checkExaminationSchedule().catch(error => showReofferDiagnosticStatus(error.message, true));
+});
+$('#reofferTestSend').addEventListener('click', () => {
+  sendCheckupReofferTest().catch(error => showReofferDiagnosticStatus(error.message, true));
 });
 $('#serviceResultsDateBasis').addEventListener('change', updateServiceResultsDateNote);
 $('#funnelFromStart').addEventListener('click', () => {

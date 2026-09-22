@@ -196,7 +196,7 @@ class ExperimentTests(unittest.TestCase):
 class MetrikaCounterRoutingTests(unittest.TestCase):
     def test_marketer_variant_uses_dedicated_counter_when_configured(self):
         self.assertEqual(
-            resolve_metrika_counter_id("marketer", "111111", "222222"), "222222",
+            resolve_metrika_counter_id("marketer", "111111", "111524472"), "111524472",
         )
 
     def test_control_variant_always_uses_main_counter(self):

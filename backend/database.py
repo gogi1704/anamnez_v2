@@ -1133,6 +1133,29 @@ def get_session_chel_id(session_value: str) -> str | None:
     return session["chel_id"]
 
 
+def create_linked_user_session(chel_id: str) -> dict:
+    """Create a browser session for a user reached through an opaque service link."""
+    now = datetime.now(timezone.utc)
+    expires = now + timedelta(days=settings.session_ttl_days)
+    session_value = secrets.token_urlsafe(32)
+    with _write_lock, connection() as conn:
+        linked = conn.execute(
+            """SELECT 1 FROM external_identities
+            WHERE chel_id=? AND access_status='active' LIMIT 1""",
+            (str(chel_id),),
+        ).fetchone()
+        if not linked:
+            raise ValueError("Для входа по ссылке сначала привяжите мессенджер")
+        conn.execute(
+            """INSERT INTO user_sessions
+            (session_hash,chel_id,created_at,last_seen_at,expires_at)
+            VALUES (?,?,?,?,?)""",
+            (_token_hash(session_value), str(chel_id), now.isoformat(), now.isoformat(), expires.isoformat()),
+        )
+        conn.commit()
+    return {"session": session_value, "chel_id": str(chel_id), "expires_at": expires.isoformat()}
+
+
 def current_external_identity() -> dict | None:
     with connection() as conn:
         row = conn.execute(
@@ -4249,6 +4272,71 @@ def init_db() -> None:
                 FOREIGN KEY(chel_id) REFERENCES users(chel_id) ON DELETE CASCADE
             );
 
+            CREATE TABLE IF NOT EXISTS checkup_reoffer_candidates (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                chel_id TEXT NOT NULL,
+                journey_id TEXT NOT NULL,
+                company_inn TEXT NOT NULL DEFAULT '',
+                active_seconds INTEGER NOT NULL DEFAULT 0,
+                duration_bucket TEXT NOT NULL DEFAULT 'under_30',
+                experiment_variant TEXT NOT NULL DEFAULT '',
+                first_seen_at TEXT NOT NULL,
+                last_seen_at TEXT NOT NULL,
+                UNIQUE(chel_id, journey_id),
+                FOREIGN KEY(chel_id) REFERENCES users(chel_id) ON DELETE CASCADE
+            );
+
+            CREATE TABLE IF NOT EXISTS checkup_reoffers (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                chel_id TEXT NOT NULL,
+                candidate_id INTEGER NOT NULL,
+                company_inn TEXT NOT NULL,
+                examination_date TEXT NOT NULL,
+                active_seconds INTEGER NOT NULL,
+                duration_bucket TEXT NOT NULL,
+                access_token TEXT NOT NULL UNIQUE,
+                conversation_id TEXT NOT NULL DEFAULT '',
+                message_id INTEGER NOT NULL DEFAULT 0,
+                status TEXT NOT NULL DEFAULT 'pending',
+                exclusion_reason TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL,
+                sent_at TEXT,
+                opened_at TEXT,
+                clicked_at TEXT,
+                is_test INTEGER NOT NULL DEFAULT 0,
+                UNIQUE(chel_id, examination_date),
+                FOREIGN KEY(chel_id) REFERENCES users(chel_id) ON DELETE CASCADE,
+                FOREIGN KEY(candidate_id) REFERENCES checkup_reoffer_candidates(id) ON DELETE CASCADE
+            );
+
+            CREATE TABLE IF NOT EXISTS user_notification_outbox (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                reoffer_id INTEGER NOT NULL,
+                chel_id TEXT NOT NULL,
+                provider TEXT NOT NULL,
+                recipient_id TEXT NOT NULL,
+                event_type TEXT NOT NULL,
+                payload TEXT NOT NULL DEFAULT '{}',
+                status TEXT NOT NULL DEFAULT 'pending',
+                attempts INTEGER NOT NULL DEFAULT 0,
+                lease_token TEXT,
+                leased_at TEXT,
+                next_attempt_at TEXT,
+                sent_at TEXT,
+                last_error TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                UNIQUE(reoffer_id, provider),
+                FOREIGN KEY(reoffer_id) REFERENCES checkup_reoffers(id) ON DELETE CASCADE,
+                FOREIGN KEY(chel_id) REFERENCES users(chel_id) ON DELETE CASCADE
+            );
+
+            CREATE TABLE IF NOT EXISTS checkup_reoffer_settings (
+                id INTEGER PRIMARY KEY CHECK(id = 1),
+                enabled INTEGER NOT NULL DEFAULT 1,
+                updated_at TEXT NOT NULL
+            );
+
             CREATE TABLE IF NOT EXISTS ai_usage (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 chel_id TEXT NOT NULL DEFAULT '',
@@ -4274,6 +4362,17 @@ def init_db() -> None:
             """
         )
         now = utc_now()
+        conn.execute(
+            "INSERT OR IGNORE INTO checkup_reoffer_settings (id,enabled,updated_at) VALUES (1,1,?)",
+            (now,),
+        )
+        reoffer_columns = {
+            item[1] for item in conn.execute("PRAGMA table_info(checkup_reoffers)").fetchall()
+        }
+        if "is_test" not in reoffer_columns:
+            conn.execute(
+                "ALTER TABLE checkup_reoffers ADD COLUMN is_test INTEGER NOT NULL DEFAULT 0"
+            )
         experiment_settings_columns = {
             row[1] for row in conn.execute("PRAGMA table_info(experiment_settings)").fetchall()
         }
@@ -4681,6 +4780,18 @@ def init_db() -> None:
             "ON enterprise_examination_schedule(inn, status, examination_date)"
         )
         conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_checkup_reoffer_candidates_due "
+            "ON checkup_reoffer_candidates(duration_bucket, last_seen_at)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_checkup_reoffers_status_date "
+            "ON checkup_reoffers(status, examination_date)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_user_notification_outbox_delivery "
+            "ON user_notification_outbox(provider, status, next_attempt_at)"
+        )
+        conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_lab_result_value_estimates_status "
             "ON lab_result_value_estimates(status, updated_at)"
         )
@@ -4792,6 +4903,502 @@ def find_upcoming_enterprise_examination(
         "examination_date": str(nearest["examination_date"]),
         "brigade": ", ".join(brigades),
     }
+
+
+def admin_checkup_reoffer_settings() -> dict:
+    with connection() as conn:
+        row = conn.execute(
+            "SELECT enabled,updated_at FROM checkup_reoffer_settings WHERE id=1"
+        ).fetchone()
+    return {
+        "enabled": bool(row["enabled"]) if row else True,
+        "updated_at": str(row["updated_at"] or "") if row else "",
+    }
+
+
+def admin_update_checkup_reoffer_settings(enabled: bool) -> dict:
+    now = utc_now()
+    with _write_lock, connection() as conn:
+        conn.execute(
+            """INSERT INTO checkup_reoffer_settings (id,enabled,updated_at)
+            VALUES (1,?,?) ON CONFLICT(id) DO UPDATE SET
+            enabled=excluded.enabled,updated_at=excluded.updated_at""",
+            (1 if enabled else 0, now),
+        )
+        conn.commit()
+    return {"enabled": bool(enabled), "updated_at": now}
+
+
+def admin_checkup_reoffer_diagnostics(reference_date: date | None = None) -> dict:
+    """Return operational counters without exposing user or medical data."""
+    today = reference_date or date.today()
+    tomorrow = (today + timedelta(days=1)).isoformat()
+    day_after_tomorrow = (today + timedelta(days=2)).isoformat()
+    with connection() as conn:
+        schedule = conn.execute(
+            """SELECT COUNT(*) rows_count,COUNT(DISTINCT inn) inns_count,
+            MIN(examination_date) first_date,MAX(examination_date) last_date,
+            MAX(synced_at) last_synced_at FROM enterprise_examination_schedule
+            WHERE status='active'"""
+        ).fetchone()
+        tomorrow_schedule = conn.execute(
+            """SELECT COUNT(*) rows_count,COUNT(DISTINCT inn) inns_count
+            FROM enterprise_examination_schedule
+            WHERE status='active' AND examination_date=?""",
+            (tomorrow,),
+        ).fetchone()
+        candidates = conn.execute(
+            """SELECT
+              COUNT(DISTINCT CASE WHEN active_seconds<30 THEN chel_id END) under_30,
+              COUNT(DISTINCT CASE WHEN active_seconds>=30 AND active_seconds<=120 THEN chel_id END) between_30_120,
+              COUNT(DISTINCT CASE WHEN active_seconds>120 THEN chel_id END) over_120,
+              COUNT(DISTINCT CASE WHEN active_seconds>=30 THEN chel_id END) eligible
+            FROM checkup_reoffer_candidates
+            WHERE experiment_variant NOT IN ('marketer','diagnostic')"""
+        ).fetchone()
+        due = conn.execute(
+            """SELECT COUNT(DISTINCT c.chel_id) count
+            FROM checkup_reoffer_candidates c
+            WHERE c.active_seconds>=30
+              AND c.experiment_variant NOT IN ('marketer','diagnostic')
+              AND EXISTS (SELECT 1 FROM enterprise_examination_schedule s
+                WHERE s.inn=c.company_inn AND s.status='active' AND s.examination_date=?)""",
+            (tomorrow,),
+        ).fetchone()
+
+        def planned_count(examination_date: str) -> int:
+            rows = conn.execute(
+                """SELECT c.chel_id FROM checkup_reoffer_candidates c
+                WHERE c.active_seconds>=30
+                  AND c.experiment_variant NOT IN ('marketer','diagnostic')
+                  AND EXISTS (SELECT 1 FROM enterprise_examination_schedule s
+                    WHERE s.inn=c.company_inn AND s.status='active'
+                      AND s.examination_date=?)
+                GROUP BY c.chel_id""",
+                (examination_date,),
+            ).fetchall()
+            planned = 0
+            for candidate in rows:
+                chel_id = str(candidate["chel_id"])
+                if conn.execute(
+                    "SELECT 1 FROM checkup_reoffers WHERE chel_id=? AND examination_date=?",
+                    (chel_id, examination_date),
+                ).fetchone():
+                    continue
+                onboarding = conn.execute(
+                    "SELECT status,selected_tests,payment_status FROM onboarding_state WHERE chel_id=?",
+                    (chel_id,),
+                ).fetchone()
+                try:
+                    selected = json.loads(onboarding["selected_tests"] or "[]") if onboarding else []
+                except json.JSONDecodeError:
+                    selected = []
+                if (
+                    onboarding and onboarding["status"] == "complete" and selected
+                    and onboarding["payment_status"] != "skipped"
+                ):
+                    continue
+                if conn.execute(
+                    """SELECT 1 FROM payment_orders WHERE chel_id=? AND paid=1
+                    AND order_type='examinations' LIMIT 1""",
+                    (chel_id,),
+                ).fetchone():
+                    continue
+                planned += 1
+            return planned
+
+        pending_today = planned_count(tomorrow)
+        scheduled_tomorrow = planned_count(day_after_tomorrow)
+        sent = conn.execute(
+            """SELECT COUNT(*) count,MAX(sent_at) last_sent_at FROM checkup_reoffers
+            WHERE is_test=0"""
+        ).fetchone()
+        outbox_rows = conn.execute(
+            """SELECT status,COUNT(*) count FROM user_notification_outbox
+            GROUP BY status"""
+        ).fetchall()
+        outbox_errors = conn.execute(
+            """SELECT COUNT(*) errors,
+            SUM(CASE WHEN attempts>=100 AND status<>'sent' THEN 1 ELSE 0 END) exhausted
+            FROM user_notification_outbox WHERE last_error<>''"""
+        ).fetchone()
+        linked = conn.execute(
+            """SELECT provider,COUNT(DISTINCT chel_id) count FROM external_identities
+            WHERE access_status='active' AND provider IN ('telegram','max') GROUP BY provider"""
+        ).fetchall()
+    last_synced_at = schedule["last_synced_at"]
+    schedule_fresh = False
+    if last_synced_at:
+        try:
+            synced_at = datetime.fromisoformat(str(last_synced_at))
+            if synced_at.tzinfo is None:
+                synced_at = synced_at.replace(tzinfo=timezone.utc)
+            schedule_fresh = (
+                datetime.now(timezone.utc) - synced_at.astimezone(timezone.utc)
+            ) <= timedelta(hours=36)
+        except ValueError:
+            schedule_fresh = False
+    return {
+        "date": today.isoformat(),
+        "tomorrow": tomorrow,
+        "day_after_tomorrow": day_after_tomorrow,
+        "schedule": {
+            "rows": int(schedule["rows_count"] or 0),
+            "inns": int(schedule["inns_count"] or 0),
+            "first_date": schedule["first_date"],
+            "last_date": schedule["last_date"],
+            "last_synced_at": schedule["last_synced_at"],
+            "fresh": schedule_fresh,
+            "tomorrow_rows": int(tomorrow_schedule["rows_count"] or 0),
+            "tomorrow_inns": int(tomorrow_schedule["inns_count"] or 0),
+        },
+        "candidates": {key: int(candidates[key] or 0) for key in (
+            "under_30", "between_30_120", "over_120", "eligible"
+        )},
+        "due_tomorrow": int(due["count"] or 0),
+        "pending_today": pending_today,
+        "scheduled_tomorrow": scheduled_tomorrow,
+        "sent_total": int(sent["count"] or 0),
+        "last_sent_at": sent["last_sent_at"],
+        "outbox": {
+            **{str(row["status"]): int(row["count"]) for row in outbox_rows},
+            "errors": int(outbox_errors["errors"] or 0),
+            "exhausted": int(outbox_errors["exhausted"] or 0),
+        },
+        "linked_messengers": {
+            str(row["provider"]): int(row["count"]) for row in linked
+        },
+    }
+
+
+CHECKUP_REOFFER_MESSAGE = (
+    "Завтра у вас медосмотр. Во время осмотра можно сдать дополнительные "
+    "чек-апы из той же пробы крови — без нового укола и отдельного визита.\n\n"
+    "После готовности результаты появятся в Консилиуме: вы получите понятную "
+    "ИИ-расшифровку и сможете бесплатно передать результаты медицинскому специалисту.\n\n"
+    "Возможно, вы захотите добавить чек-апы к завтрашнему осмотру."
+)
+
+CHECKUP_REOFFER_TEST_MESSAGE = (
+    "Тестовое уведомление системы повторного предложения.\n\n"
+    + CHECKUP_REOFFER_MESSAGE
+)
+
+
+def queue_test_checkup_reoffer(identifier: str, public_url: str) -> dict:
+    """Send the real chat/messenger payload to one explicitly selected user."""
+    target = str(identifier or "").strip()
+    if not target:
+        raise ValueError("Укажите chel_id или ИНН пользователя")
+    normalized_inn = re.sub(r"\D", "", target)
+    with _write_lock, connection() as conn:
+        user = conn.execute("SELECT chel_id FROM users WHERE chel_id=?", (target,)).fetchone()
+        if not user and len(normalized_inn) in {10, 12}:
+            matches = conn.execute(
+                """SELECT p.chel_id FROM user_profile p JOIN users u ON u.chel_id=p.chel_id
+                WHERE p.company_inn=? ORDER BY u.last_seen_at DESC""",
+                (normalized_inn,),
+            ).fetchall()
+            if len(matches) > 1:
+                raise ValueError(
+                    f"По ИНН найдено пользователей: {len(matches)}. Укажите точный chel_id"
+                )
+            user = matches[0] if matches else None
+        if not user:
+            raise ValueError("Пользователь не найден")
+        chel_id = str(user["chel_id"])
+        profile = conn.execute(
+            "SELECT company_inn FROM user_profile WHERE chel_id=?", (chel_id,),
+        ).fetchone()
+        company_inn = re.sub(r"\D", "", str(profile["company_inn"] or "")) if profile else ""
+        now = utc_now()
+        diagnostic_key = f"diagnostic-{uuid.uuid4().hex}"
+        candidate_cursor = conn.execute(
+            """INSERT INTO checkup_reoffer_candidates
+            (chel_id,journey_id,company_inn,active_seconds,duration_bucket,
+             experiment_variant,first_seen_at,last_seen_at)
+            VALUES (?,?,?,30,'30_to_120','diagnostic',?,?)""",
+            (chel_id, diagnostic_key, company_inn, now, now),
+        )
+        token = secrets.token_urlsafe(32)
+        reoffer_cursor = conn.execute(
+            """INSERT INTO checkup_reoffers
+            (chel_id,candidate_id,company_inn,examination_date,active_seconds,
+             duration_bucket,access_token,status,created_at,is_test)
+            VALUES (?,?,?, ?,30,'30_to_120',?,'queued',?,1)""",
+            (chel_id, int(candidate_cursor.lastrowid), company_inn, diagnostic_key, token, now),
+        )
+        reoffer_id = int(reoffer_cursor.lastrowid)
+        action_url = f"{str(public_url or '').rstrip('/')}/?checkup_reoffer={token}"
+        conversation = conn.execute(
+            "SELECT id FROM conversations WHERE chel_id=? AND status='active' ORDER BY updated_at DESC LIMIT 1",
+            (chel_id,),
+        ).fetchone()
+        conversation_id = str(conversation["id"]) if conversation else str(uuid.uuid4())
+        if not conversation:
+            conn.execute(
+                """INSERT INTO conversations (id,chel_id,title,created_at,updated_at)
+                VALUES (?,?,?,?,?)""",
+                (conversation_id, chel_id, "Дополнительные обследования", now, now),
+            )
+            conn.execute(
+                "INSERT INTO conversation_reads (conversation_id,last_read_message_id,read_at) VALUES (?,0,?)",
+                (conversation_id, now),
+            )
+        metadata = {
+            "action": "checkup_reoffer", "reoffer_id": reoffer_id,
+            "access_token": token, "action_label": "Проверить кнопку →",
+            "action_url": action_url, "diagnostic": True,
+        }
+        message_cursor = conn.execute(
+            """INSERT INTO messages
+            (conversation_id,role,agent_id,content,metadata,created_at)
+            VALUES (?,'assistant','manager',?,?,?)""",
+            (
+                conversation_id, CHECKUP_REOFFER_TEST_MESSAGE,
+                json.dumps(metadata, ensure_ascii=False), now,
+            ),
+        )
+        message_id = int(message_cursor.lastrowid)
+        conn.execute("UPDATE conversations SET updated_at=? WHERE id=?", (now, conversation_id))
+        conn.execute(
+            """UPDATE checkup_reoffers SET conversation_id=?,message_id=?,status='sent',sent_at=?
+            WHERE id=?""",
+            (conversation_id, message_id, now, reoffer_id),
+        )
+        identities = conn.execute(
+            """SELECT provider,provider_user_id FROM external_identities
+            WHERE chel_id=? AND access_status='active' AND provider IN ('telegram','max')""",
+            (chel_id,),
+        ).fetchall()
+        payload = json.dumps({
+            "title": "Тест повторного предложения",
+            "body": CHECKUP_REOFFER_TEST_MESSAGE,
+            "kind": "checkup_reoffer", "diagnostic": True,
+            "action_url": action_url, "action_label": "Проверить кнопку",
+            "reoffer_id": reoffer_id,
+        }, ensure_ascii=False)
+        providers: list[str] = []
+        for identity in identities:
+            recipient = str(identity["provider_user_id"] or "").strip()
+            if not recipient:
+                continue
+            provider = str(identity["provider"])
+            conn.execute(
+                """INSERT INTO user_notification_outbox
+                (reoffer_id,chel_id,provider,recipient_id,event_type,payload,status,
+                 attempts,created_at,updated_at)
+                VALUES (?,?,?,?,?,?,'pending',0,?,?)""",
+                (
+                    reoffer_id, chel_id, provider, recipient,
+                    "checkup_reoffer_test", payload, now, now,
+                ),
+            )
+            providers.append(provider)
+        conn.commit()
+    return {
+        "status": "queued", "reoffer_id": reoffer_id, "chel_id": chel_id,
+        "conversation_id": conversation_id, "chat_message_id": message_id,
+        "messenger_providers": providers, "action_url": action_url,
+    }
+
+
+def save_checkup_reoffer_dwell(journey_id: str, active_seconds: int) -> dict:
+    """Persist active, visible time on the ordinary check-up selection screen."""
+    journey_id = str(journey_id or "").strip()[:100]
+    if not journey_id:
+        raise ValueError("Не указан идентификатор посещения")
+    seconds = max(0, min(24 * 60 * 60, int(active_seconds or 0)))
+    assignment = current_experiment_assignment()
+    variant = str(assignment.get("variant") or "off")
+    if variant == "marketer":
+        return {"status": "excluded", "reason": "marketer"}
+    profile = get_profile()
+    company_inn = re.sub(r"\D", "", str(profile.get("company_inn") or ""))
+    bucket = "over_120" if seconds > 120 else "30_to_120" if seconds >= 30 else "under_30"
+    now = utc_now()
+    with _write_lock, connection() as conn:
+        conn.execute(
+            """INSERT INTO checkup_reoffer_candidates
+            (chel_id,journey_id,company_inn,active_seconds,duration_bucket,
+             experiment_variant,first_seen_at,last_seen_at)
+            VALUES (?,?,?,?,?,?,?,?)
+            ON CONFLICT(chel_id,journey_id) DO UPDATE SET
+              company_inn=excluded.company_inn,
+              active_seconds=MAX(checkup_reoffer_candidates.active_seconds,excluded.active_seconds),
+              duration_bucket=CASE
+                WHEN MAX(checkup_reoffer_candidates.active_seconds,excluded.active_seconds)>120 THEN 'over_120'
+                WHEN MAX(checkup_reoffer_candidates.active_seconds,excluded.active_seconds)>=30 THEN '30_to_120'
+                ELSE 'under_30' END,
+              experiment_variant=excluded.experiment_variant,
+              last_seen_at=excluded.last_seen_at""",
+            (
+                current_chel_id(), journey_id, company_inn, seconds, bucket,
+                variant, now, now,
+            ),
+        )
+        row = conn.execute(
+            "SELECT * FROM checkup_reoffer_candidates WHERE chel_id=? AND journey_id=?",
+            (current_chel_id(), journey_id),
+        ).fetchone()
+        conn.commit()
+    return {"status": "ok", **dict(row)}
+
+
+def queue_due_checkup_reoffers(examination_date: date, public_url: str) -> list[dict]:
+    """Create chat messages and messenger jobs for eligible users exactly once."""
+    exam_day = examination_date.isoformat()
+    now = utc_now()
+    base_url = str(public_url or "").rstrip("/")
+    queued: list[dict] = []
+    with _write_lock, connection() as conn:
+        candidates = conn.execute(
+            """SELECT c.* FROM checkup_reoffer_candidates c
+            JOIN (
+              SELECT chel_id,MAX(active_seconds) max_seconds,MAX(last_seen_at) last_seen
+              FROM checkup_reoffer_candidates
+              WHERE active_seconds>=30
+                AND experiment_variant NOT IN ('marketer','diagnostic')
+              GROUP BY chel_id
+            ) best ON best.chel_id=c.chel_id AND best.max_seconds=c.active_seconds
+            WHERE c.active_seconds>=30
+              AND c.experiment_variant NOT IN ('marketer','diagnostic')
+              AND EXISTS (
+                SELECT 1 FROM enterprise_examination_schedule s
+                WHERE s.inn=c.company_inn AND s.status='active' AND s.examination_date=?
+              )
+            GROUP BY c.chel_id ORDER BY c.last_seen_at DESC""",
+            (exam_day,),
+        ).fetchall()
+        for candidate in candidates:
+            chel_id = str(candidate["chel_id"])
+            existing = conn.execute(
+                "SELECT id FROM checkup_reoffers WHERE chel_id=? AND examination_date=?",
+                (chel_id, exam_day),
+            ).fetchone()
+            if existing:
+                continue
+            onboarding = conn.execute(
+                "SELECT status,selected_tests,payment_status FROM onboarding_state WHERE chel_id=?",
+                (chel_id,),
+            ).fetchone()
+            try:
+                selected = json.loads(onboarding["selected_tests"] or "[]") if onboarding else []
+            except json.JSONDecodeError:
+                selected = []
+            reached_completion = bool(
+                onboarding and onboarding["status"] == "complete" and selected
+                and onboarding["payment_status"] != "skipped"
+            )
+            paid = bool(conn.execute(
+                """SELECT 1 FROM payment_orders WHERE chel_id=? AND paid=1
+                AND order_type='examinations' LIMIT 1""",
+                (chel_id,),
+            ).fetchone())
+            if reached_completion or paid:
+                continue
+            token = secrets.token_urlsafe(32)
+            cursor = conn.execute(
+                """INSERT INTO checkup_reoffers
+                (chel_id,candidate_id,company_inn,examination_date,active_seconds,
+                 duration_bucket,access_token,status,created_at)
+                VALUES (?,?,?,?,?,?,?,'queued',?)""",
+                (
+                    chel_id, candidate["id"], candidate["company_inn"], exam_day,
+                    candidate["active_seconds"], candidate["duration_bucket"], token, now,
+                ),
+            )
+            reoffer_id = int(cursor.lastrowid)
+            action_url = f"{base_url}/?checkup_reoffer={token}"
+            conversation = conn.execute(
+                "SELECT id FROM conversations WHERE chel_id=? AND status='active' ORDER BY updated_at DESC LIMIT 1",
+                (chel_id,),
+            ).fetchone()
+            conversation_id = str(conversation["id"]) if conversation else str(uuid.uuid4())
+            if not conversation:
+                conn.execute(
+                    """INSERT INTO conversations
+                    (id,chel_id,title,created_at,updated_at) VALUES (?,?,?,?,?)""",
+                    (conversation_id, chel_id, "Дополнительные обследования", now, now),
+                )
+                conn.execute(
+                    "INSERT INTO conversation_reads (conversation_id,last_read_message_id,read_at) VALUES (?,0,?)",
+                    (conversation_id, now),
+                )
+            metadata = {
+                "action": "checkup_reoffer", "reoffer_id": reoffer_id,
+                "access_token": token, "action_label": "Выбрать чек-апы →",
+                "action_url": action_url, "examination_date": exam_day,
+            }
+            message_cursor = conn.execute(
+                """INSERT INTO messages
+                (conversation_id,role,agent_id,content,metadata,created_at)
+                VALUES (?,'assistant','manager',?,?,?)""",
+                (conversation_id, CHECKUP_REOFFER_MESSAGE, json.dumps(metadata, ensure_ascii=False), now),
+            )
+            message_id = int(message_cursor.lastrowid)
+            conn.execute("UPDATE conversations SET updated_at=? WHERE id=?", (now, conversation_id))
+            conn.execute(
+                """UPDATE checkup_reoffers SET conversation_id=?,message_id=?,status='sent',
+                sent_at=? WHERE id=?""",
+                (conversation_id, message_id, now, reoffer_id),
+            )
+            identities = conn.execute(
+                """SELECT provider,provider_user_id FROM external_identities
+                WHERE chel_id=? AND access_status='active' AND provider IN ('telegram','max')""",
+                (chel_id,),
+            ).fetchall()
+            payload = json.dumps({
+                "title": "Завтра медосмотр",
+                "body": CHECKUP_REOFFER_MESSAGE,
+                "kind": "checkup_reoffer",
+                "action_url": action_url,
+                "action_label": "Выбрать чек-апы",
+                "reoffer_id": reoffer_id,
+            }, ensure_ascii=False)
+            for identity in identities:
+                recipient = str(identity["provider_user_id"] or "").strip()
+                if not recipient:
+                    continue
+                conn.execute(
+                    """INSERT OR IGNORE INTO user_notification_outbox
+                    (reoffer_id,chel_id,provider,recipient_id,event_type,payload,status,
+                     attempts,created_at,updated_at)
+                    VALUES (?,?,?,?,?,?,'pending',0,?,?)""",
+                    (
+                        reoffer_id, chel_id, identity["provider"], recipient,
+                        "checkup_reoffer", payload, now, now,
+                    ),
+                )
+            queued.append({
+                "id": reoffer_id, "chel_id": chel_id,
+                "active_seconds": int(candidate["active_seconds"]),
+                "duration_bucket": str(candidate["duration_bucket"]),
+                "examination_date": exam_day,
+                "messenger_count": len(identities),
+            })
+        conn.commit()
+    return queued
+
+
+def open_checkup_reoffer(access_token: str) -> dict:
+    token = str(access_token or "").strip()
+    with _write_lock, connection() as conn:
+        row = conn.execute(
+            "SELECT * FROM checkup_reoffers WHERE access_token=?",
+            (token,),
+        ).fetchone()
+        if not row:
+            raise ValueError("Предложение не найдено")
+        now = utc_now()
+        first_click = not bool(row["clicked_at"])
+        conn.execute(
+            """UPDATE checkup_reoffers SET opened_at=COALESCE(opened_at,?),
+            clicked_at=COALESCE(clicked_at,?) WHERE id=?""",
+            (now, now, row["id"]),
+        )
+        conn.commit()
+    return {**dict(row), "first_click": first_click}
 
 
 def create_conversation(title: str = "Новый диалог") -> dict:
@@ -5632,6 +6239,84 @@ def acknowledge_user_result_notification(
                     SET status = 'notified', notified_at = ?, updated_at = ? WHERE id = ?""",
                     (now, now, row["subscription_id"]),
                 )
+        conn.commit()
+    return bool(cursor.rowcount)
+
+
+USER_NOTIFICATION_ID_OFFSET = 1_000_000_000
+
+
+def user_notification_details(notification_id: int) -> dict | None:
+    with connection() as conn:
+        row = conn.execute(
+            """SELECT o.chel_id,o.provider,o.event_type,o.reoffer_id,r.duration_bucket,r.is_test
+            FROM user_notification_outbox o
+            LEFT JOIN checkup_reoffers r ON r.id=o.reoffer_id WHERE o.id=?""",
+            (int(notification_id),),
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def claim_user_notifications(provider: str, limit: int = 20) -> list[dict]:
+    """Claim generic user-facing messenger notifications for an existing bot."""
+    provider = str(provider or "").strip().lower()
+    if provider not in {"telegram", "max"}:
+        raise ValueError("Неизвестный мессенджер")
+    limit = max(1, min(50, int(limit)))
+    now = datetime.now(timezone.utc)
+    stale_before = (now - timedelta(minutes=2)).isoformat()
+    result: list[dict] = []
+    with _write_lock, connection() as conn:
+        rows = conn.execute(
+            """SELECT id,recipient_id,event_type,payload,attempts FROM user_notification_outbox
+            WHERE provider=? AND attempts<100
+              AND (next_attempt_at IS NULL OR next_attempt_at<=?)
+              AND (status='pending' OR (status='delivering' AND leased_at<?))
+            ORDER BY id LIMIT ?""",
+            (provider, now.isoformat(), stale_before, limit),
+        ).fetchall()
+        for row in rows:
+            lease_token = secrets.token_urlsafe(18)
+            conn.execute(
+                """UPDATE user_notification_outbox SET status='delivering',lease_token=?,
+                leased_at=?,attempts=attempts+1,updated_at=? WHERE id=?""",
+                (lease_token, now.isoformat(), now.isoformat(), row["id"]),
+            )
+            item = dict(row)
+            item["id"] = -(USER_NOTIFICATION_ID_OFFSET + int(row["id"]))
+            item["conversation_id"] = ""
+            item["lease_token"] = lease_token
+            item["payload"] = json.loads(item["payload"] or "{}")
+            result.append(item)
+        conn.commit()
+    return result
+
+
+def acknowledge_user_notification(
+    notification_id: int, lease_token: str, success: bool, error: str = "",
+) -> bool:
+    now_dt = datetime.now(timezone.utc)
+    now = now_dt.isoformat()
+    with _write_lock, connection() as conn:
+        row = conn.execute(
+            """SELECT attempts FROM user_notification_outbox
+            WHERE id=? AND lease_token=? AND status='delivering'""",
+            (int(notification_id), str(lease_token or "")),
+        ).fetchone()
+        if not row:
+            return False
+        retry_delay = min(3600, 5 * (2 ** min(int(row["attempts"]), 10)))
+        next_attempt_at = None if success else (now_dt + timedelta(seconds=retry_delay)).isoformat()
+        cursor = conn.execute(
+            """UPDATE user_notification_outbox SET status=?,sent_at=?,last_error=?,
+            next_attempt_at=?,lease_token=NULL,leased_at=NULL,updated_at=?
+            WHERE id=? AND lease_token=? AND status='delivering'""",
+            (
+                "sent" if success else "pending", now if success else None,
+                str(error or "")[:500], next_attempt_at, now,
+                int(notification_id), str(lease_token or ""),
+            ),
+        )
         conn.commit()
     return bool(cursor.rowcount)
 

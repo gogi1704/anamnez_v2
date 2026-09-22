@@ -41,6 +41,7 @@ const state = {
   resultFlowDocuments: [],
   miniProfilePurpose: 'interpretation',
   pendingLabAction: null,
+  checkupReoffer: null,
 };
 
 const $ = selector => document.querySelector(selector);
@@ -67,6 +68,10 @@ let analyticsFlushTimer = null;
 let analyticsSending = false;
 let questionShownAt = 0;
 let currentOnboardingAnalyticsScreen = '';
+let checkupDwellTimer = null;
+let checkupDwellLastTick = 0;
+let checkupDwellSeconds = 0;
+let checkupDwellLastReported = -1;
 
 const ANALYTICS_QUEUE_KEY = 'consilium_analytics_queue_v1';
 const ANALYTICS_SESSION_KEY = 'consilium_analytics_session_v1';
@@ -97,7 +102,11 @@ const analyticsSessionId = getAnalyticsSession();
 function analyticsAttribution() {
   const params = new URLSearchParams(location.search);
   return {
-    source: isResultEntryUrl()
+    source: state.checkupReoffer?.test
+      ? 'diagnostic'
+      : state.checkupReoffer?.active
+      ? 'checkup_reoffer'
+      : isResultEntryUrl()
       ? 'result'
       : params.get('splitter_source') || params.get('utm_source') || params.get('source') || '',
     campaign: params.get('utm_campaign') || '',
@@ -184,6 +193,44 @@ function isMarketerFunnel() {
     && state.publicConfig.experiment.variant === 'marketer';
 }
 
+function hasDedicatedMarketerMetrika() {
+  return isMarketerFunnel()
+    && state.publicConfig?.yandex_metrika_marketer_counter_active === true;
+}
+
+const MARKETER_SCREEN_GOALS = Object.freeze({
+  exam_selection:'personal',
+  exam_results_preview:'personal_kabinet',
+  payment:'personal_proverka',
+  exam_objection:'otkaz_1',
+  completion_skipped:'otkaz_2',
+});
+
+function sendMarketerMetrikaGoal(goal, details = {}) {
+  if (!hasDedicatedMarketerMetrika() || onboardingAnalyticsContext() !== 'onboarding') return;
+  window.consiliumMetrikaGoal?.(goal, details);
+}
+
+function queueMarketerScreenGoal(screen, previousScreen = '') {
+  // Re-rendering the current screen (for example after selecting a check-up)
+  // is not a transition and must not create another Yandex goal.
+  if (!screen || screen === previousScreen || !hasDedicatedMarketerMetrika()) return;
+  let goal = MARKETER_SCREEN_GOALS[screen] || '';
+  if (screen.startsWith('question_')) {
+    const questionKey = screen.slice('question_'.length);
+    const questionIndex = onboardingQuestions.findIndex(question => question.key === questionKey);
+    if (questionIndex >= 0) goal = `step_${questionIndex + 1}`;
+  } else if (screen === 'completion' && state.onboarding?.payment_status === 'pay_at_exam') {
+    goal = 'offline';
+  }
+  if (!goal) return;
+  requestAnimationFrame(() => requestAnimationFrame(() => {
+    if (currentOnboardingAnalyticsScreen !== screen) return;
+    if ($('#onboarding')?.classList.contains('hidden')) return;
+    sendMarketerMetrikaGoal(goal, {screen});
+  }));
+}
+
 function trackEvent(eventName, properties = {}) {
   const queue = readAnalyticsQueue();
   queue.push({
@@ -201,7 +248,81 @@ function trackEvent(eventName, properties = {}) {
 
 function onboardingAnalyticsContext() {
   if (state.resultFlowActive) return 'result';
+  if (state.checkupReoffer?.test) return 'chat';
+  if (state.checkupReoffer?.active) return 'reoffer';
   return state.returnToChatAfterExaminations ? 'chat' : 'onboarding';
+}
+
+const CHECKUP_DWELL_KEY = 'consilium_checkup_dwell_v1';
+
+function checkupDwellJourney() {
+  return `${analyticsSessionId}:exam_selection`;
+}
+
+function readCheckupDwell() {
+  try {
+    const saved = JSON.parse(sessionStorage.getItem(CHECKUP_DWELL_KEY) || '{}');
+    return saved.journeyId === checkupDwellJourney() ? Math.max(0, Number(saved.seconds || 0)) : 0;
+  } catch { return 0; }
+}
+
+function saveCheckupDwell() {
+  try {
+    sessionStorage.setItem(CHECKUP_DWELL_KEY, JSON.stringify({
+      journeyId:checkupDwellJourney(), seconds:Math.floor(checkupDwellSeconds),
+    }));
+  } catch {}
+}
+
+function reportCheckupDwell({beacon = false, force = false} = {}) {
+  if (isMarketerFunnel() || state.checkupReoffer?.active) return;
+  const seconds = Math.floor(checkupDwellSeconds);
+  if (!force && seconds === checkupDwellLastReported) return;
+  checkupDwellLastReported = seconds;
+  const payload = JSON.stringify({journey_id:checkupDwellJourney(), active_seconds:seconds});
+  if (beacon && navigator.sendBeacon) {
+    navigator.sendBeacon('/api/checkup-reoffer/dwell', new Blob([payload], {type:'application/json'}));
+    return;
+  }
+  fetch('/api/checkup-reoffer/dwell', {
+    method:'POST', keepalive:true, headers:{'Content-Type':'application/json'}, body:payload,
+  }).catch(() => {});
+}
+
+function tickCheckupDwell() {
+  const now = performance.now();
+  if (document.visibilityState === 'visible' && document.hasFocus()) {
+    const elapsed = checkupDwellLastTick ? Math.min(2, (now - checkupDwellLastTick) / 1000) : 0;
+    checkupDwellSeconds += Math.max(0, elapsed);
+    saveCheckupDwell();
+    const seconds = Math.floor(checkupDwellSeconds);
+    if (
+      (seconds >= 30 && checkupDwellLastReported < 30)
+      || (seconds > 120 && checkupDwellLastReported <= 120)
+      || (seconds > 0 && seconds % 30 === 0)
+    ) {
+      reportCheckupDwell();
+    }
+  }
+  checkupDwellLastTick = now;
+}
+
+function startCheckupDwell() {
+  if (isMarketerFunnel() || onboardingAnalyticsContext() !== 'onboarding') return;
+  if (checkupDwellTimer) return;
+  checkupDwellSeconds = readCheckupDwell();
+  checkupDwellLastTick = performance.now();
+  reportCheckupDwell({force:true});
+  checkupDwellTimer = setInterval(tickCheckupDwell, 1000);
+}
+
+function stopCheckupDwell({beacon = false} = {}) {
+  if (!checkupDwellTimer) return;
+  tickCheckupDwell();
+  clearInterval(checkupDwellTimer);
+  checkupDwellTimer = null;
+  checkupDwellLastTick = 0;
+  reportCheckupDwell({beacon, force:true});
 }
 
 function trackOnboardingScreen(screen) {
@@ -210,6 +331,9 @@ function trackOnboardingScreen(screen) {
   trackEvent('onboarding_screen_viewed', {
     screen, previous_screen:previousScreen, context:onboardingAnalyticsContext(),
   });
+  queueMarketerScreenGoal(screen, previousScreen);
+  if (screen === 'exam_selection') startCheckupDwell();
+  else stopCheckupDwell();
 }
 
 function trackOnboardingAction(action, screen = currentOnboardingAnalyticsScreen) {
@@ -814,6 +938,19 @@ function hasCompletedQuestionnaire(onboarding) {
 }
 
 async function enterKnownUser() {
+  const entryParams = new URLSearchParams(location.search);
+  const reofferToken = entryParams.get('checkup_reoffer');
+  if (reofferToken) {
+    await openCheckupReoffer(reofferToken, {render:!entryParams.get('payment_return')});
+    if (entryParams.get('payment_return') && !(await handlePaymentReturn())) {
+      $('#welcomeScreen').classList.add('hidden');
+      $('#authGate').classList.add('hidden');
+      $('#appShell').classList.add('hidden');
+      $('#onboarding').classList.remove('hidden');
+      renderExamSelection();
+    }
+    return;
+  }
   const onboarding = await api('/api/onboarding');
   if (hasCompletedQuestionnaire(onboarding)) {
     localStorage.setItem(WELCOME_SEEN_KEY, '1');
@@ -830,6 +967,47 @@ async function enterKnownUser() {
     return;
   }
   showWelcome(startApplication);
+}
+
+async function openCheckupReoffer(token, {render = true} = {}) {
+  const result = await api('/api/checkup-reoffer/open', {
+    method:'POST', body:JSON.stringify({token}),
+  });
+  state.identity = await api('/api/me');
+  updateMessengerLinkMenu();
+  state.publicConfig = await api('/api/public-config');
+  const experiment = state.publicConfig?.experiment;
+  document.documentElement.dataset.experimentVariant = experiment?.enabled
+    ? String(experiment.variant || 'control') : 'off';
+  document.body.classList.toggle('experiment-marketer', isMarketerFunnel());
+  state.checkupReoffer = {
+    active:true, test:Boolean(result.test), id:Number(result.reoffer_id || 0),
+    token:String(result.token || token),
+  };
+  const reofferUrl = new URL(location.href);
+  reofferUrl.searchParams.set('checkup_reoffer', state.checkupReoffer.token);
+  history.replaceState({}, '', reofferUrl);
+  state.resultFlowActive = false;
+  state.returnToChatAfterExaminations = false;
+  state.onboarding = result.onboarding;
+  state.profile = result.onboarding.profile;
+  seedOnboardingAnswers(state.profile);
+  state.selectedTests = new Set(result.onboarding.selected_tests || []);
+  trackOnboardingScreen('reoffer_message');
+  if (!render) return;
+  $('#welcomeScreen').classList.add('hidden');
+  $('#authGate').classList.add('hidden');
+  $('#appShell').classList.add('hidden');
+  $('#onboarding').classList.remove('hidden');
+  renderExamSelection();
+}
+
+function clearCheckupReoffer() {
+  if (!state.checkupReoffer?.active) return;
+  state.checkupReoffer = null;
+  const url = new URL(location.href);
+  url.searchParams.delete('checkup_reoffer');
+  history.replaceState({}, '', url);
 }
 
 function showAuthGate() {
@@ -1367,9 +1545,11 @@ function examinationPriceMarkup(test, recommended = false) {
     : '';
 }
 
-function sortExaminationsForUser(tests, recommended, featuredIds = []) {
+function sortExaminationsForUser(tests, recommended, featuredIds = [], genderIncompatible = new Set()) {
   const featuredOrder = new Map(featuredIds.map((id, index) => [id, index]));
   return [...tests].sort((left, right) => {
+    const genderOrder = Number(genderIncompatible.has(left.id)) - Number(genderIncompatible.has(right.id));
+    if (genderOrder) return genderOrder;
     const leftFeatured = featuredOrder.has(left.id);
     const rightFeatured = featuredOrder.has(right.id);
     if (leftFeatured !== rightFeatured) return rightFeatured - leftFeatured;
@@ -1386,11 +1566,13 @@ function renderExamCatalogInfo() {
   trackOnboardingScreen('exam_catalog');
   setOnboardingMeta('Описание чек-апов', 76);
   const recommended = new Set(state.onboarding?.recommended_test_ids || []);
+  const genderIncompatible = new Set(state.onboarding?.gender_incompatible_test_ids || []);
   const tests = sortExaminationsForUser(
-    state.onboarding?.tests || [], recommended, state.onboarding?.featured_test_ids || [],
+    state.onboarding?.tests || [], recommended, state.onboarding?.featured_test_ids || [], genderIncompatible,
   );
   const cards = tests.map(test => `
     <article class="exam-info-card">
+      ${genderIncompatible.has(test.id) ? '<small class="gender-alternative-badge">Можно посоветовать близким</small>' : ''}
       <header><strong>${escapeHtml(test.name)}</strong>${examinationPriceMarkup(test, recommended.has(test.id))}</header>
       <p><span>Кому подходит</span>${escapeHtml(EXAMINATION_AUDIENCES[test.id] || test.description || 'Тем, кто хочет получить больше информации о состоянии здоровья.')}</p>
       <p><span>Для чего</span>${escapeHtml(test.description || 'Для дополнительной оценки показателей здоровья.')}</p>
@@ -1506,8 +1688,9 @@ function renderExamSelection(scrollPosition = null) {
   normalizeSelectedTestPairs();
   setOnboardingMeta('Обследования', 80);
   const recommended = new Set(state.onboarding.recommended_test_ids || []);
+  const genderIncompatible = new Set(state.onboarding.gender_incompatible_test_ids || []);
   const sortedTests = sortExaminationsForUser(
-    state.onboarding.tests, recommended, state.onboarding.featured_test_ids || [],
+    state.onboarding.tests, recommended, state.onboarding.featured_test_ids || [], genderIncompatible,
   );
   const cards = sortedTests.map(test => {
     const selected = state.selectedTests.has(test.id);
@@ -1519,7 +1702,7 @@ function renderExamSelection(scrollPosition = null) {
     const disabledNote = disabled
       ? `<small class="exam-upgrade-note">Уже входит в «${escapeHtml(extended?.name || 'Расширенный комплекс')}»</small>`
       : '';
-    return `<label class="exam-card ${selected ? 'selected' : ''} ${disabled ? 'disabled-by-upgrade' : ''}" data-test-card="${test.id}" ${disabled ? 'aria-disabled="true"' : ''}><input type="checkbox" ${selected ? 'checked' : ''} ${disabled ? 'disabled' : ''}><span class="exam-check">✓</span>${recommended.has(test.id) ? '<small class="recommended-badge">Актуально для вас</small>' : ''}<span class="exam-card-top"><strong>${escapeHtml(test.name)}</strong>${examinationPriceMarkup(test, recommended.has(test.id))}</span><small>${escapeHtml(test.description)}</small><em>${escapeHtml(test.includes)}</em>${disabledNote}</label>`;
+    return `<label class="exam-card ${selected ? 'selected' : ''} ${disabled ? 'disabled-by-upgrade' : ''}" data-test-card="${test.id}" ${disabled ? 'aria-disabled="true"' : ''}><input type="checkbox" ${selected ? 'checked' : ''} ${disabled ? 'disabled' : ''}><span class="exam-check">✓</span>${recommended.has(test.id) ? '<small class="recommended-badge">Актуально для вас</small>' : ''}${genderIncompatible.has(test.id) ? '<small class="gender-alternative-badge">Можно посоветовать близким</small>' : ''}<span class="exam-card-top"><strong>${escapeHtml(test.name)}</strong>${examinationPriceMarkup(test, recommended.has(test.id))}</span><small>${escapeHtml(test.description)}</small><em>${escapeHtml(test.includes)}</em>${disabledNote}</label>`;
   }).join('');
   const total = state.onboarding.tests.filter(test => state.selectedTests.has(test.id)).reduce((sum,test) => sum + examinationEffectivePrice(test), 0);
   const copy = state.onboarding.examination_recommendation_copy || {};
@@ -2023,6 +2206,7 @@ async function finishPaymentSuccess(openHistory = false) {
   if (!state.onboarding?.intro_seen) {
     state.onboarding = await api('/api/onboarding/intro-seen', {method:'POST', body:'{}'});
   }
+  clearCheckupReoffer();
   await openMainApp({skipIntro:true});
   if (openHistory) await openPurchases({highlightOrderId:orderId});
   state.paymentReviewSource = '';
@@ -2150,6 +2334,7 @@ async function finishExamOnboarding(installApp = false) {
       state.onboarding = await api('/api/onboarding/intro-seen', { method:'POST', body:'{}' });
     }
     if (!installApp) localStorage.setItem(INSTALL_DISMISSED_KEY, String(Date.now()));
+    clearCheckupReoffer();
     await openMainApp({ skipIntro:true });
     if (installApp) openInstallApp();
   } catch (error) {
@@ -2341,7 +2526,10 @@ $('#onboardingContent').addEventListener('click', async event => {
     state.paymentReviewOrderId = '';
     await openPurchases({highlightOrderId:orderId});
   }
-  else if (action === 'pay-online') { startOnlinePayment(); }
+  else if (action === 'pay-online') {
+    sendMarketerMetrikaGoal('klick_online', {screen:'payment', action:'click'});
+    startOnlinePayment();
+  }
   else if (action === 'pay-at-exam') { confirmPaymentAtExam(); }
   else if (action === 'back-to-payment') await returnToOnlinePayment();
   else if (action === 'back-to-consultation-payment') await returnToConsultationPayment();
@@ -2492,9 +2680,12 @@ function addMessage(sender, text, agentId = state.active, urgent = false, create
   const assistantContent = labInterpretation
     ? labInterpretationMarkup(text, metadata)
     : formatAssistantText(text);
+  const reofferAction = sender === 'agent' && metadata.action === 'checkup_reoffer'
+    ? `<button type="button" class="message-checkup-reoffer" data-checkup-reoffer="${escapeAttr(metadata.access_token || '')}">${escapeHtml(metadata.action_label || 'Выбрать чек-апы →')}</button>`
+    : '';
   wrapper.innerHTML = sender === 'user'
     ? `<div class="bubble user-bubble">${attachmentBadges}<p>${escapeHtml(text)}</p><span>${time}</span></div>`
-    : `<div class="message-avatar">${humanManager ? (metadata.staff_role === 'doctor' ? 'В' : 'Ч') : agent.initials}</div><div><div class="message-author"><strong>${humanManager ? escapeHtml(metadata.manager_name || humanRole) : agent.name}</strong><span>${humanManager ? humanRole : agent.role}</span>${cached}</div><div class="bubble agent-bubble">${assistantContent}${labDocuments}<span>${time}</span></div></div>`;
+    : `<div class="message-avatar">${humanManager ? (metadata.staff_role === 'doctor' ? 'В' : 'Ч') : agent.initials}</div><div><div class="message-author"><strong>${humanManager ? escapeHtml(metadata.manager_name || humanRole) : agent.name}</strong><span>${humanManager ? humanRole : agent.role}</span>${cached}</div><div class="bubble agent-bubble">${assistantContent}${labDocuments}${reofferAction}<span>${time}</span></div></div>`;
   messages.appendChild(wrapper);
   scrollChatToBottom();
   return wrapper;
@@ -4397,6 +4588,16 @@ $('#changeLabTubeButton').addEventListener('click', changeLabTube);
 $('#fetchLabResultsButton').addEventListener('click', fetchLabResults);
 $('#requestLabResultNotificationButton').addEventListener('click', requestLabResultNotification);
 function handleLabInterpretClick(event) {
+  const reofferButton = event.target.closest('[data-checkup-reoffer]');
+  if (reofferButton) {
+    reofferButton.disabled = true;
+    openCheckupReoffer(reofferButton.dataset.checkupReoffer)
+      .catch(error => {
+        reofferButton.disabled = false;
+        window.alert(error.message);
+      });
+    return;
+  }
   const button = event.target.closest('[data-lab-interpret]');
   if (button) interpretLabResults(button.dataset.labInterpret, button);
   const specialistButton = event.target.closest('[data-lab-specialist]');
@@ -4535,6 +4736,10 @@ async function init() {
       await enterResultFlow({explicit:resultEntryRequested && !pendingResultFlow});
       return;
     }
+    if (entryParams.get('checkup_reoffer') && !messengerLoginRequired) {
+      await enterKnownUser();
+      return;
+    }
     if (identity.authenticated) {
       localStorage.removeItem(ANONYMOUS_ACCESS_KEY);
       if (forceWelcomePreview) showWelcome(startApplication);
@@ -4563,6 +4768,15 @@ window.addEventListener('unhandledrejection', () => trackEvent('javascript_error
 window.addEventListener('load', () => {
   const navigation = performance.getEntriesByType?.('navigation')?.[0];
   if (navigation) trackEvent('performance_measured', {duration_ms:Math.round(navigation.duration),screen:'page_load'});
+});
+window.addEventListener('pagehide', () => stopCheckupDwell({beacon:true}));
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'hidden' && checkupDwellTimer) {
+    tickCheckupDwell();
+    reportCheckupDwell({beacon:true, force:true});
+  } else if (document.visibilityState === 'visible' && checkupDwellTimer) {
+    checkupDwellLastTick = performance.now();
+  }
 });
 setInterval(syncConversationUpdates, 3000);
 document.addEventListener('pointerdown', unlockUserSound, {once:true});

@@ -131,6 +131,9 @@ ALLOWED_EVENTS = {
     "lab_interpretation_started", "lab_interpretation_completed",
     "lab_interpretation_error", "lab_interpretation_profile_requested",
     "lab_interpretation_profile_completed", "lab_results_notification_requested", "result_entry_started",
+    "checkup_reoffer_candidate", "checkup_reoffer_sent",
+    "checkup_reoffer_messenger_queued", "checkup_reoffer_messenger_delivered",
+    "checkup_reoffer_clicked",
     "api_error", "javascript_error", "performance_measured",
 }
 REGISTRATION_METHODS = {"anonymous", "max", "telegram", "result"}
@@ -144,6 +147,7 @@ ALLOWED_PROPERTIES = {
     "document_count", "cached", "reason", "font_size", "stage", "action",
     "selection_id", "exam_name", "context", "linked_count",
     "experiment_key", "experiment_variant", "funnel_version",
+    "reoffer_id", "duration_bucket", "active_seconds", "examination_date", "provider_count",
 }
 
 FUNNEL_BREAKDOWNS = {
@@ -606,6 +610,45 @@ def _metric2_screen_definitions() -> list[dict]:
             "actions": [{"id": "open_chat", "label": "Перейти в чат", "target_label": "Чат", "terminal_outcome": True, "legacy": []}],
         },
     ])
+    standard_by_id = {
+        item["id"]: item for item in screens if not item.get("flow")
+    }
+    reoffer_screens = [{
+        "id": "reoffer_message", "title": "Повторное предложение",
+        "stage": "Напоминание · за день до медосмотра", "kind": "reoffer_message",
+        "description": "Сообщение в чате и привязанных мессенджерах с кнопкой выбора чек-апов.",
+        "root": True, "flow": "reoffer",
+        "legacy_reach": [_metric2_spec("checkup_reoffer_sent")],
+        "actions": [
+            {
+                "id": "open_checkups", "label": "Выбрать чек-апы",
+                "target": "exam_selection", "legacy": [_metric2_spec("checkup_reoffer_clicked")],
+            },
+            {
+                "id": "messenger_queued", "label": "Поставлено в очередь Telegram / MAX",
+                "interaction": True, "legacy": [_metric2_spec("checkup_reoffer_messenger_queued")],
+            },
+            {
+                "id": "messenger_delivered", "label": "Доставлено в Telegram / MAX",
+                "interaction": True, "legacy": [_metric2_spec("checkup_reoffer_messenger_delivered")],
+            },
+        ],
+    }]
+    for screen_id in (
+        "exam_selection", "exam_results_preview", "exam_objection", "payment",
+        "payment_processing", "payment_success", "payment_result", "payment_unavailable",
+        "completion", "completion_skipped",
+    ):
+        if screen_id not in standard_by_id:
+            continue
+        item = json.loads(json.dumps(standard_by_id[screen_id], ensure_ascii=False))
+        item["flow"] = "reoffer"
+        item.pop("root", None)
+        if screen_id == "exam_selection":
+            item["parent_id"] = "reoffer_message"
+            item["description"] = "Экран выбора, открытый из повторного предложения."
+        reoffer_screens.append(item)
+    screens.extend(reoffer_screens)
     return screens
 
 
@@ -1801,12 +1844,12 @@ def _metric2_report_uncached(
     false incomplete edge ``C -> D``.
     """
     flow = str(flow or "standard").strip().lower()
-    if flow not in {"standard", "result", "experiment"}:
+    if flow not in {"standard", "result", "experiment", "reoffer"}:
         raise ValueError("Неизвестная ветка Метрики 2.0")
     # The marketer funnel (experiment) reuses the standard screens — only the
     # cohort of users differs — until a divergent path is actually built.
-    screen_flow = "result" if flow == "result" else "standard"
-    expected_context = "result" if flow == "result" else "onboarding"
+    screen_flow = flow if flow in {"result", "reoffer"} else "standard"
+    expected_context = "result" if flow == "result" else "reoffer" if flow == "reoffer" else "onboarding"
     where, params = _filters(period, device, method, source, date_from, date_to)
     if flow == "experiment":
         cohort_ids = sorted(_experiment_cohort_chel_ids("marketer"))
@@ -1818,7 +1861,11 @@ def _metric2_report_uncached(
     join = " FROM analytics_events e LEFT JOIN analytics_sessions s ON s.session_id=e.session_id "
     definitions = [
         definition for definition in _metric2_screen_definitions()
-        if ("result" if definition.get("flow") == "result" else "standard") == screen_flow
+        if (
+            "result" if definition.get("flow") == "result"
+            else "reoffer" if definition.get("flow") == "reoffer"
+            else "standard"
+        ) == screen_flow
     ]
     relevant_events = {"onboarding_screen_viewed", "onboarding_screen_action"}
     for definition in definitions:
@@ -1827,6 +1874,8 @@ def _metric2_report_uncached(
         )
         for action in definition.get("actions", []):
             relevant_events.update(spec["event"] for spec in action.get("legacy", []))
+    if flow == "reoffer":
+        relevant_events.add("checkup_reoffer_candidate")
     relevant_events = sorted(relevant_events)
     event_filter = " AND e.event_name IN (" + ",".join("?" for _ in relevant_events) + ")"
     with connection() as conn:
@@ -2034,7 +2083,7 @@ def _metric2_report_uncached(
         # valid payments. Enrich the route from paid examination orders and only
         # attach the outcome to users whose final choice was online payment.
         exam_payment_outcomes: dict[str, tuple[str, str]] = {}
-        if flow in ("standard", "experiment"):
+        if flow in ("standard", "experiment", "reoffer"):
             main_conn = None
             try:
                 payment_start, payment_end = _payment_date_bounds(
@@ -2304,6 +2353,61 @@ def _metric2_report_uncached(
             if not definition.get("branch"):
                 previous_main_id = screen_id
 
+        reoffer_summary = {}
+        if flow == "reoffer":
+            bucket_labels = {
+                "under_30": "До 30 секунд",
+                "30_to_120": "30–120 секунд",
+                "over_120": "Более 120 секунд",
+            }
+            reoffer_summary = {
+                "duration_buckets": [
+                    {
+                        "id": bucket, "label": label,
+                        "users": len(users_for([_metric2_spec(
+                            "checkup_reoffer_candidate", duration_bucket=bucket,
+                        )])),
+                    }
+                    for bucket, label in bucket_labels.items()
+                ],
+                "sent_users": len(users_for([_metric2_spec("checkup_reoffer_sent")])),
+                "messenger_queued_users": len(users_for([
+                    _metric2_spec("checkup_reoffer_messenger_queued")
+                ])),
+                "messenger_delivered_users": len(users_for([
+                    _metric2_spec("checkup_reoffer_messenger_delivered")
+                ])),
+                "clicked_users": len(users_for([_metric2_spec("checkup_reoffer_clicked")])),
+            }
+            main_conn = None
+            try:
+                range_start, range_end = _payment_date_bounds(period, date_from, date_to)
+                clauses = ["experiment_variant NOT IN ('marketer','diagnostic')"]
+                dwell_params: list[Any] = []
+                if range_start:
+                    clauses.append("last_seen_at>=?")
+                    dwell_params.append(range_start)
+                if range_end:
+                    clauses.append("last_seen_at<?")
+                    dwell_params.append(range_end)
+                main_conn = sqlite3.connect(settings.database_path, timeout=5)
+                dwell_rows = main_conn.execute(
+                    "SELECT chel_id,MAX(active_seconds) FROM checkup_reoffer_candidates WHERE "
+                    + " AND ".join(clauses) + " GROUP BY chel_id",
+                    dwell_params,
+                ).fetchall()
+                counts = {"under_30": 0, "30_to_120": 0, "over_120": 0}
+                for _, seconds in dwell_rows:
+                    value = int(seconds or 0)
+                    bucket = "over_120" if value > 120 else "30_to_120" if value >= 30 else "under_30"
+                    counts[bucket] += 1
+                for item in reoffer_summary["duration_buckets"]:
+                    item["users"] = counts[item["id"]]
+            except sqlite3.Error:
+                pass
+            finally:
+                if main_conn is not None:
+                    main_conn.close()
         filter_options = {
             "devices": [row[0] for row in conn.execute(
                 "SELECT DISTINCT device_type FROM analytics_events "
@@ -2326,6 +2430,7 @@ def _metric2_report_uncached(
         "flow_label": (
             "Получение результатов" if flow == "result"
             else "Воронка маркетолога" if flow == "experiment"
+            else "Повторное предложение" if flow == "reoffer"
             else "Обычный путь"
         ),
         "summary": {
@@ -2338,6 +2443,7 @@ def _metric2_report_uncached(
                 ))
             ),
             "unique_transitions": sum(len(users) for users in edge_users.values()),
+            "reoffer": reoffer_summary,
         },
         "screens": result_screens,
         "filter_options": filter_options,

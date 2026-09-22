@@ -71,6 +71,26 @@ EXAMINATION_UPGRADE_PAIRS = {
 }
 
 
+# Stable catalog IDs keep these rules valid when administrators rename cards.
+# Incompatible check-ups remain available, but the client shows them last.
+EXAMINATION_GENDER_AUDIENCES = {
+    "female_hormones": "female",
+    "ca125": "female",
+    "ca153": "female",
+    "male_health": "male",
+}
+
+
+def gender_incompatible_test_ids(profile: dict) -> list[str]:
+    sex = str(profile.get("sex") or "").strip().lower()
+    if sex not in {"female", "male"}:
+        return []
+    return [
+        test_id for test_id, audience in EXAMINATION_GENDER_AUDIENCES.items()
+        if audience != sex
+    ]
+
+
 def normalize_examination_selection(selected_ids) -> list[str]:
     """Make extended complexes replace their corresponding basic complexes."""
     selected = list(dict.fromkeys(str(item) for item in (selected_ids or [])))
@@ -229,6 +249,9 @@ def public_onboarding(
         "profile": profile,
         "tests": public_catalog,
         "recommended_test_ids": recommended_ids,
+        "gender_incompatible_test_ids": [
+            item for item in gender_incompatible_test_ids(profile) if item in available_ids
+        ],
         "featured_test_ids": [item for item in featured_test_ids(profile) if item in available_ids],
         "examination_recommendation_copy": examination_recommendation_copy(profile),
     }

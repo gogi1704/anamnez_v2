@@ -15,7 +15,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, quote, urlparse
 
-from . import analytics, company_suggestions, database as db, examination_schedule, funnel_monitor, splitter_tracking
+from . import analytics, checkup_reoffers, company_suggestions, database as db, examination_schedule, funnel_monitor, splitter_tracking
 from .config import BASE_DIR, settings
 from .llm import LLMNotConfigured
 from .lab_results import LabResultsUnavailable, lookup_lab_results
@@ -218,8 +218,14 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                 settings.yandex_metrika_counter_id,
                 settings.yandex_metrika_marketer_counter_id,
             )
+            dedicated_marketer_counter = bool(
+                experiment.get("variant") == "marketer"
+                and settings.yandex_metrika_marketer_counter_id.isdigit()
+                and counter_id == settings.yandex_metrika_marketer_counter_id
+            )
             return self._json(200, {
                 "yandex_metrika_counter_id": counter_id if counter_id.isdigit() else "",
+                "yandex_metrika_marketer_counter_active": dedicated_marketer_counter,
                 "experiment": experiment,
                 "online_payments_enabled": bool(
                     settings.online_payments_enabled and yookassa.configured()
@@ -235,9 +241,14 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                 provider = query.get("provider", [""])[0]
                 limit = max(1, min(50, int(query.get("limit", ["20"])[0])))
                 _refresh_due_lab_result_notifications()
-                user_notifications = db.claim_user_result_notifications(
+                user_notifications = db.claim_user_notifications(
                     provider, min(5, limit),
                 )
+                remaining = limit - len(user_notifications)
+                if remaining > 0:
+                    user_notifications += db.claim_user_result_notifications(
+                        provider, min(5, remaining),
+                    )
                 manager_notifications = db.claim_manager_notifications(
                     provider, max(1, limit - len(user_notifications)),
                 ) if len(user_notifications) < limit else []
@@ -321,6 +332,7 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
             "/api/admin/experiments",
             "/api/admin/ikp",
             "/api/admin/funnel-monitor", "/api/admin/funnel-monitor/preview",
+            "/api/admin/checkup-reoffers",
         }:
             if not self._admin_authorized():
                 return
@@ -334,6 +346,20 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                     return self._json(200, funnel_monitor.build_report())
                 except (ValueError, TypeError) as exc:
                     return self._json(422, {"detail": str(exc)})
+            if path == "/api/admin/checkup-reoffers":
+                diagnostics = db.admin_checkup_reoffer_diagnostics()
+                diagnostics["schedule_configured"] = examination_schedule.configured()
+                diagnostics["public_url_configured"] = bool(settings.public_base_url)
+                diagnostics["settings"] = db.admin_checkup_reoffer_settings()
+                diagnostics["checks"] = {
+                    "enabled": diagnostics["settings"]["enabled"],
+                    "chelovekgrafik_configured": diagnostics["schedule_configured"],
+                    "schedule_has_rows": diagnostics["schedule"]["rows"] > 0,
+                    "schedule_is_fresh": diagnostics["schedule"]["fresh"],
+                    "public_url_configured": diagnostics["public_url_configured"],
+                    "outbox_without_failures": diagnostics["outbox"].get("exhausted", 0) == 0,
+                }
+                return self._json(200, diagnostics)
             if path == "/api/admin/dashboard":
                 return self._json(200, db.admin_dashboard())
             if path == "/api/admin/ikp":
@@ -628,6 +654,42 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                 return self._json(422, {"detail": str(exc)})
             except funnel_monitor.FunnelMonitorUnavailable as exc:
                 return self._json(503, {"detail": str(exc)})
+        if path == "/api/admin/checkup-reoffers/settings":
+            if not self._admin_authorized():
+                return
+            try:
+                payload = self._read_json(max_bytes=4_000)
+                if not isinstance(payload.get("enabled"), bool):
+                    raise ValueError("Параметр enabled должен быть логическим")
+                return self._json(200, {
+                    "settings": db.admin_update_checkup_reoffer_settings(payload["enabled"]),
+                })
+            except (ValueError, TypeError, json.JSONDecodeError, UnicodeDecodeError) as exc:
+                return self._json(422, {"detail": str(exc)})
+        if path == "/api/admin/checkup-reoffers/check-schedule":
+            if not self._admin_authorized():
+                return
+            try:
+                result = examination_schedule.sync_now()
+                diagnostics = db.admin_checkup_reoffer_diagnostics()
+                return self._json(200, {"sync": result, "diagnostics": diagnostics})
+            except examination_schedule.ExaminationScheduleUnavailable as exc:
+                return self._json(503, {"detail": str(exc)})
+            except Exception:
+                return self._json(503, {
+                    "detail": "Сервис chelovekgrafik вернул неожиданный ответ",
+                })
+        if path == "/api/admin/checkup-reoffers/test-send":
+            if not self._admin_authorized():
+                return
+            try:
+                payload = self._read_json(max_bytes=4_000)
+                result = db.queue_test_checkup_reoffer(
+                    payload.get("identifier", ""), settings.public_base_url,
+                )
+                return self._json(202, result)
+            except (ValueError, TypeError, json.JSONDecodeError, UnicodeDecodeError) as exc:
+                return self._json(422, {"detail": str(exc)})
         if path == "/api/splitter/event":
             try:
                 payload = self._read_json(max_bytes=4_000)
@@ -715,7 +777,28 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                 payload = self._read_json()
                 if not isinstance(payload.get("success"), bool):
                     raise ValueError("success должен быть true или false")
-                if notification_id < 0:
+                if notification_id <= -db.USER_NOTIFICATION_ID_OFFSET:
+                    generic_id = abs(notification_id) - db.USER_NOTIFICATION_ID_OFFSET
+                    notification = db.user_notification_details(generic_id)
+                    acknowledged = db.acknowledge_user_notification(
+                        generic_id,
+                        str(payload.get("lease_token", "")), payload["success"],
+                        str(payload.get("error", "")),
+                    )
+                    if (acknowledged and payload["success"] and notification
+                            and not notification.get("is_test")):
+                        analytics.record_server_event(
+                            notification["chel_id"], "checkup_reoffer_messenger_delivered",
+                            {
+                                "screen": "reoffer_message", "context": "reoffer",
+                                "source": "checkup_reoffer",
+                                "provider": notification.get("provider", ""),
+                                "reoffer_id": notification.get("reoffer_id", 0),
+                                "duration_bucket": notification.get("duration_bucket", ""),
+                            },
+                            session_id=f"reoffer-{notification.get('reoffer_id', 0)}",
+                        )
+                elif notification_id < 0:
                     acknowledged = db.acknowledge_user_result_notification(
                         abs(notification_id), str(payload.get("lease_token", "")),
                         payload["success"], str(payload.get("error", "")),
@@ -1135,6 +1218,50 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                 return self._json(202, result)
             except (ValueError, TypeError, json.JSONDecodeError, UnicodeDecodeError):
                 return self._json(202, {"accepted": 0, "duplicates": 0})
+        if path == "/api/checkup-reoffer/dwell":
+            try:
+                payload = self._read_json(max_bytes=4_000)
+                result = db.save_checkup_reoffer_dwell(
+                    payload.get("journey_id", ""), payload.get("active_seconds", 0),
+                )
+                if result.get("status") == "ok":
+                    self._track_analytics("checkup_reoffer_candidate", {
+                        "screen": "exam_selection", "context": "onboarding",
+                        "source": "checkup_reoffer_timer",
+                        "active_seconds": result.get("active_seconds", 0),
+                        "duration_bucket": result.get("duration_bucket", "under_30"),
+                    })
+                return self._json(200, result)
+            except (ValueError, TypeError, json.JSONDecodeError, UnicodeDecodeError) as exc:
+                return self._json(422, {"detail": str(exc)})
+        if path == "/api/checkup-reoffer/open":
+            try:
+                payload = self._read_json(max_bytes=4_000)
+                result = db.open_checkup_reoffer(payload.get("token", ""))
+                if db.current_chel_id() != result.get("chel_id"):
+                    login = db.create_linked_user_session(result.get("chel_id", ""))
+                    db.set_current_chel_id(login["chel_id"])
+                    self._user_session_to_set = login["session"]
+                    self._identity_cookie_required = False
+                if result.get("first_click") and not result.get("is_test"):
+                    properties = {
+                        "screen": "reoffer_message", "action": "open_checkups",
+                        "context": "reoffer", "source": "checkup_reoffer",
+                        "reoffer_id": result.get("id", 0),
+                        "duration_bucket": result.get("duration_bucket", ""),
+                    }
+                    self._track_analytics("checkup_reoffer_clicked", properties)
+                    self._track_analytics("onboarding_screen_action", properties)
+                return self._json(200, {
+                    "status": "ok", "reoffer_id": result.get("id", 0),
+                    "token": result.get("access_token", ""),
+                    "test": bool(result.get("is_test")),
+                    "onboarding": public_onboarding(
+                        db.get_onboarding(), db.get_profile(), db.list_examinations(),
+                    ),
+                })
+            except (ValueError, TypeError, json.JSONDecodeError, UnicodeDecodeError) as exc:
+                return self._json(422, {"detail": str(exc)})
         if path == "/api/register-choice":
             try:
                 payload = self._read_json()
@@ -2115,6 +2242,7 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
         self._send_identity_cookie()
+        self._send_pending_user_session_cookie()
         self._send_cleared_user_session_cookie()
         self._send_manager_cookie()
         self.end_headers()
@@ -2175,6 +2303,11 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
         if settings.cookie_secure or self.headers.get("X-Forwarded-Proto", "").lower() == "https":
             parts.append("Secure")
         self.send_header("Set-Cookie", "; ".join(parts))
+
+    def _send_pending_user_session_cookie(self) -> None:
+        token = getattr(self, "_user_session_to_set", "")
+        if token:
+            self._send_session_cookie(token)
 
     def _send_identity_cookie(self) -> None:
         if not getattr(self, "_identity_cookie_required", False):
@@ -2284,6 +2417,7 @@ def serve() -> None:
     analytics.cleanup_old_events()
     _record_startup_event("База данных готова")
     schedule_stop = examination_schedule.start_background_sync(_record_startup_event)
+    reoffer_stop = checkup_reoffers.start_background_scheduler(_record_startup_event)
     funnel_monitor_stop = funnel_monitor.start_background_monitor(_record_startup_event)
     server = ConsiliumHTTPServer((settings.host, settings.port), ConsiliumHandler)
     _record_startup_event(f"Порт {settings.port} открыт")
@@ -2303,6 +2437,7 @@ def serve() -> None:
         pass
     finally:
         schedule_stop.set()
+        reoffer_stop.set()
         funnel_monitor_stop.set()
         _record_startup_event("Остановка сервера")
         server.server_close()

@@ -9,6 +9,11 @@
     'payment_redirected', 'payment_succeeded', 'payment_canceled', 'payment_pending',
     'onboarding_completed', 'completion_viewed', 'capabilities_viewed', 'chat_opened',
     'first_message_sent', 'human_requested', 'install_clicked',
+    'step_1', 'step_2', 'step_3', 'step_4', 'step_5', 'step_6', 'step_7',
+    'step_8', 'step_9', 'step_10', 'step_11', 'step_12', 'step_13',
+    'step_14', 'step_15', 'step_16', 'step_17', 'step_18', 'step_19',
+    'personal', 'personal_kabinet', 'personal_proverka', 'klick_online',
+    'offline', 'otkaz_1', 'otkaz_2',
   ]);
   let counterId = null;
   let counterReady = false;
