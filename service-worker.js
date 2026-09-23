@@ -1,5 +1,5 @@
-const CACHE_NAME = 'consilium-shell-v112';
-const ASSET_VERSION = '20260922-checkup-reoffer-diagnostics-v1';
+const CACHE_NAME = 'consilium-shell-v113';
+const ASSET_VERSION = '20260923-result-messenger-first-v1';
 const APP_SHELL = [
   '/',
   '/manifest.webmanifest',

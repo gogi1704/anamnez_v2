@@ -620,8 +620,10 @@ class AnalyticsTests(unittest.TestCase):
         ])
         analytics.record_events("CHEL-RESULT-BRANCH", [
             {"event_id": "branch-result-welcome", "session_id": "branch-result-session", "event_name": "onboarding_screen_viewed", "properties": {"screen": "result_welcome", "context": "result"}},
-            {"event_id": "branch-result-tube", "session_id": "branch-result-session", "event_name": "onboarding_screen_viewed", "properties": {"screen": "result_tube", "previous_screen": "result_welcome", "context": "result"}},
-            {"event_id": "branch-result-found", "session_id": "branch-result-session", "event_name": "onboarding_screen_viewed", "properties": {"screen": "result_found", "previous_screen": "result_tube", "context": "result"}},
+            {"event_id": "branch-result-messenger", "session_id": "branch-result-session", "event_name": "onboarding_screen_viewed", "properties": {"screen": "result_messenger", "previous_screen": "result_welcome", "context": "result"}},
+            {"event_id": "branch-result-tube", "session_id": "branch-result-session", "event_name": "onboarding_screen_viewed", "properties": {"screen": "result_tube", "previous_screen": "result_messenger", "context": "result"}},
+            {"event_id": "branch-result-search", "session_id": "branch-result-session", "event_name": "onboarding_screen_viewed", "properties": {"screen": "result_search", "previous_screen": "result_tube", "context": "result"}},
+            {"event_id": "branch-result-found", "session_id": "branch-result-session", "event_name": "onboarding_screen_viewed", "properties": {"screen": "result_found", "previous_screen": "result_search", "context": "result"}},
         ])
 
         standard = analytics.metric2_report("30", flow="standard")
@@ -633,6 +635,9 @@ class AnalyticsTests(unittest.TestCase):
         self.assertEqual(result["flow"], "result")
         self.assertEqual(result["summary"]["start_users"], 1)
         self.assertIn("result_welcome", {item["id"] for item in result["screens"]})
+        self.assertIn("result_messenger", {item["id"] for item in result["screens"]})
+        self.assertIn("result_tube", {item["id"] for item in result["screens"]})
+        self.assertIn("result_search", {item["id"] for item in result["screens"]})
         self.assertNotIn("welcome", {item["id"] for item in result["screens"]})
         self.assertEqual(result["summary"]["reached_completion"], 1)
         with self.assertRaisesRegex(ValueError, "ветка"):

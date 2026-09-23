@@ -738,7 +738,7 @@ function renderResultWelcome() {
 function renderResultTube() {
   const saved = state.profile?.tube_number || readResultFlow()?.tubeNumber || '';
   writeResultFlow('tube', {tubeNumber:saved});
-  showResultScreen('result_tube', 'Номер пробирки', 32, `
+  showResultScreen('result_tube', 'Номер пробирки', 54, `
     <div class="result-flow-icon" aria-hidden="true">№</div>
     <span class="onboarding-kicker">Поиск результатов</span>
     <h1>Введите номер пробирки</h1>
@@ -753,17 +753,17 @@ function renderResultMessenger() {
   const linked = linkedMessengerProviders().size > 0;
   if (linked) state.messengerLinkJustCompleted = '';
   writeResultFlow('messenger');
-  showResultScreen('result_messenger', 'Сохранение доступа', 54, `
+  showResultScreen('result_messenger', 'Вход', 32, `
     <div class="result-flow-icon" aria-hidden="true">↗</div>
-    <span class="onboarding-kicker">Рекомендуем</span>
-    <h1>${linked ? 'Мессенджер привязан' : 'Не потеряйте результаты'}</h1>
+    <span class="onboarding-kicker">Сохраните доступ</span>
+    <h1>${linked ? 'Вход выполнен' : 'Войдите через мессенджер'}</h1>
     <p class="onboarding-lead">${linked
-      ? 'Ваш профиль можно будет открыть с другого устройства. Теперь найдём документы по номеру пробирки.'
-      : 'Привяжите Telegram или MAX: так профиль не потеряется после очистки браузера, а результаты, расшифровка и консультация останутся доступны на любом устройстве.'}</p>
+      ? 'Ваш профиль опознан. Теперь можно перейти к поиску по номеру пробирки.'
+      : 'Войдите через Telegram или MAX перед поиском пробирки. Так мы сохраним найденные документы, расшифровку и историю обращений.'}</p>
     <ul class="result-benefits"><li>доступ к документам с телефона и компьютера;</li><li>история расшифровок и консультаций в одном профиле;</li><li>возможность получить уведомление, когда результаты будут готовы.</li></ul>
     <div class="result-flow-actions">
-      ${linked ? '' : '<button type="button" class="result-link-button" data-result-action="link-messenger">Привязать мессенджер</button>'}
-      <button type="button" class="onboarding-next" data-result-action="search">${linked ? 'Найти результаты' : 'Продолжить без привязки'}</button>
+      ${linked ? '' : '<button type="button" class="result-link-button" data-result-action="link-messenger">Войти через мессенджер</button>'}
+      <button type="button" class="onboarding-next" data-result-action="continue-to-tube">${linked ? 'Перейти к номеру пробирки' : 'Продолжить без входа'}</button>
     </div>`);
 }
 
@@ -856,9 +856,9 @@ async function saveResultTube() {
   button.disabled = true;
   try {
     state.profile = await api('/api/profile', {method:'POST', body:JSON.stringify(profilePayloadWithTube(tubeNumber))});
-    writeResultFlow('messenger', {tubeNumber});
+    writeResultFlow('search', {tubeNumber});
     trackResultAction('continue', 'result_tube');
-    renderResultMessenger();
+    await searchResultDocuments();
   } catch (error) {
     $('#resultTubeError').textContent = error.message;
     $('#resultTubeError').classList.remove('hidden');
@@ -920,8 +920,17 @@ async function enterResultFlow({explicit = false} = {}) {
   state.resultFlowActive = true;
   const saved = readResultFlow();
   if (explicit || !saved) return renderResultWelcome();
+  if (saved.stage === 'messenger') {
+    if (state.identity?.authenticated || linkedMessengerProviders().size) {
+      if (state.messengerLinkJustCompleted) {
+        trackResultAction('authenticated', 'result_messenger');
+      }
+      currentOnboardingAnalyticsScreen = 'result_messenger';
+      return renderResultTube();
+    }
+    return renderResultMessenger();
+  }
   if (saved.stage === 'tube') return renderResultTube();
-  if (saved.stage === 'messenger') return renderResultMessenger();
   if (saved.stage === 'not_found') {
     if (saved.pendingNotification && linkedMessengerProviders().size) return requestResultNotification();
     return renderResultNotFound();
@@ -1083,13 +1092,20 @@ function openMessengerLinkModal({ source = 'menu', justLinked = '' } = {}) {
   success.classList.toggle('hidden', !justLinked);
   success.textContent = justLinked ? `Готово — ${messengerName(justLinked)} привязан к вашему профилю.` : '';
   const specialist = source === 'lab_specialist';
+  const resultFlow = source === 'result_flow';
+  $('#messengerLinkTitle').textContent = resultFlow
+    ? 'Войти через мессенджер'
+    : 'Привязать мессенджер';
   $('#messengerLinkDescription').textContent = specialist
     ? 'Привяжите Telegram или MAX, чтобы не потерять доступ к диалогу и увидеть ответ врача на любом устройстве.'
+    : resultFlow
+      ? 'Войдите через Telegram или MAX, чтобы сохранить найденные результаты и открывать их с других устройств.'
     : linkedMessengerProviders().size
       ? 'Добавьте ещё один способ входа или проверьте уже подключённые мессенджеры.'
       : 'Сохраните доступ к анкете, выбранным обследованиям, результатам и расшифровкам на любом устройстве.';
   $('#messengerLinkLater').textContent = specialist
     ? 'Продолжить без привязки'
+    : resultFlow ? 'Продолжить без входа'
     : justLinked ? 'Готово' : 'Не сейчас';
   $('#messengerLinkModal').dataset.source = source;
   $('#messengerLinkModal').classList.remove('hidden');
@@ -2434,16 +2450,24 @@ $('#onboardingContent').addEventListener('click', async event => {
   const resultAction = event.target.closest('[data-result-action]')?.dataset.resultAction;
   if (resultAction) {
     if (resultAction === 'begin') {
-      trackResultAction('continue', 'result_welcome');
-      renderResultTube();
+      const identified = Boolean(
+        state.identity?.authenticated || linkedMessengerProviders().size,
+      );
+      trackResultAction(identified ? 'continue_identified' : 'continue', 'result_welcome');
+      if (identified) renderResultTube();
+      else renderResultMessenger();
     }
     else if (resultAction === 'save-tube') await saveResultTube();
     else if (resultAction === 'link-messenger') {
       trackResultAction('link_messenger', 'result_messenger');
       openMessengerLinkModal({source:'result_flow'});
     }
-    else if (resultAction === 'search' || resultAction === 'retry-search') {
-      trackResultAction(resultAction === 'search' ? 'continue' : 'retry', currentOnboardingAnalyticsScreen);
+    else if (resultAction === 'continue-to-tube') {
+      trackResultAction('continue', 'result_messenger');
+      renderResultTube();
+    }
+    else if (resultAction === 'retry-search') {
+      trackResultAction('retry', currentOnboardingAnalyticsScreen);
       await searchResultDocuments();
     }
     else if (resultAction === 'notify') await requestResultNotification();
