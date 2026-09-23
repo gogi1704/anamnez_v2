@@ -113,6 +113,8 @@ class CheckupReofferTests(unittest.TestCase):
         screens = {item["id"]: item for item in report["screens"]}
         self.assertEqual(screens["reoffer_message"]["users"], 1)
         self.assertEqual(screens["exam_selection"]["users"], 1)
+        action_ids = {item["id"] for item in screens["reoffer_message"]["actions"]}
+        self.assertEqual(action_ids, {"open_checkups"})
 
     def test_admin_can_disable_scheduler_without_restart(self):
         updated = db.admin_update_checkup_reoffer_settings(False)
@@ -145,6 +147,54 @@ class CheckupReofferTests(unittest.TestCase):
         diagnostics = db.admin_checkup_reoffer_diagnostics()
         self.assertEqual(diagnostics["sent_total"], 0)
         self.assertEqual(diagnostics["candidates"]["eligible"], 0)
+
+    def test_max_notification_uses_chat_id_and_skips_identity_without_it(self):
+        now = db.utc_now()
+        with db.connection() as conn:
+            conn.execute(
+                """INSERT INTO external_identities
+                (provider,provider_user_id,chat_id,chel_id,access_status,created_at,last_login_at)
+                VALUES ('max','max-user','700003',?,'active',?,?)""",
+                (db.current_chel_id(), now, now),
+            )
+            conn.execute(
+                """INSERT INTO external_identities
+                (provider,provider_user_id,chel_id,access_status,created_at,last_login_at)
+                VALUES ('max','max-user-without-chat',?,'active',?,?)""",
+                (db.current_chel_id(), now, now),
+            )
+            conn.commit()
+        result = db.queue_test_checkup_reoffer(
+            db.current_chel_id(), "https://example.test",
+        )
+        self.assertEqual(result["messenger_providers"], ["max"])
+        notifications = db.claim_user_notifications("max")
+        self.assertEqual(notifications[0]["recipient_id"], "700003")
+
+    def test_permanent_missing_chat_error_is_not_retried(self):
+        now = db.utc_now()
+        with db.connection() as conn:
+            conn.execute(
+                """INSERT INTO external_identities
+                (provider,provider_user_id,chel_id,access_status,created_at,last_login_at)
+                VALUES ('telegram','777',?,'active',?,?)""",
+                (db.current_chel_id(), now, now),
+            )
+            conn.commit()
+        db.queue_test_checkup_reoffer(db.current_chel_id(), "https://example.test")
+        notification = db.claim_user_notifications("telegram")[0]
+        notification_id = abs(notification["id"]) - db.USER_NOTIFICATION_ID_OFFSET
+        self.assertTrue(db.acknowledge_user_notification(
+            notification_id, notification["lease_token"], False,
+            "API 404: chat.not.found",
+        ))
+        self.assertEqual(db.claim_user_notifications("telegram"), [])
+        with db.connection() as conn:
+            status = conn.execute(
+                "SELECT status FROM user_notification_outbox WHERE id=?",
+                (notification_id,),
+            ).fetchone()[0]
+        self.assertEqual(status, "failed")
 
     def test_diagnostics_show_tomorrows_planned_sends_after_exclusions(self):
         db.save_checkup_reoffer_dwell("journey-12345678", 75)

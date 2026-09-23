@@ -1791,6 +1791,7 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
             login = db.create_messenger_login(
                 provider=str(payload.get("provider", "")),
                 provider_user_id=payload.get("provider_user_id", ""),
+                chat_id=payload.get("chat_id", ""),
                 intent_token=str(payload.get("intent_token", "")),
                 legacy_chel_id=payload.get("legacy_chel_id"),
                 from_manager=str(payload.get("from_manager", "")),

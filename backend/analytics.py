@@ -624,14 +624,6 @@ def _metric2_screen_definitions() -> list[dict]:
                 "id": "open_checkups", "label": "Выбрать чек-апы",
                 "target": "exam_selection", "legacy": [_metric2_spec("checkup_reoffer_clicked")],
             },
-            {
-                "id": "messenger_queued", "label": "Поставлено в очередь Telegram / MAX",
-                "interaction": True, "legacy": [_metric2_spec("checkup_reoffer_messenger_queued")],
-            },
-            {
-                "id": "messenger_delivered", "label": "Доставлено в Telegram / MAX",
-                "interaction": True, "legacy": [_metric2_spec("checkup_reoffer_messenger_delivered")],
-            },
         ],
     }]
     for screen_id in (
@@ -2371,12 +2363,6 @@ def _metric2_report_uncached(
                     for bucket, label in bucket_labels.items()
                 ],
                 "sent_users": len(users_for([_metric2_spec("checkup_reoffer_sent")])),
-                "messenger_queued_users": len(users_for([
-                    _metric2_spec("checkup_reoffer_messenger_queued")
-                ])),
-                "messenger_delivered_users": len(users_for([
-                    _metric2_spec("checkup_reoffer_messenger_delivered")
-                ])),
                 "clicked_users": len(users_for([_metric2_spec("checkup_reoffer_clicked")])),
             }
             main_conn = None

@@ -916,6 +916,14 @@ def _messenger_provider(value: str) -> str:
     return provider
 
 
+def _external_identity_recipient(identity) -> str:
+    """Return the actual private-chat destination for a linked messenger."""
+    provider = str(identity["provider"] or "").strip().lower()
+    if provider == "max":
+        return str(identity["chat_id"] or "").strip()
+    return str(identity["provider_user_id"] or "").strip()
+
+
 def create_auth_intent(provider: str) -> dict:
     """Create a short-lived token that lets a messenger bind the current browser user."""
     provider = _messenger_provider(provider)
@@ -948,6 +956,7 @@ def create_auth_intent(provider: str) -> dict:
 def create_messenger_login(
     provider: str,
     provider_user_id: str | int,
+    chat_id: str | int = "",
     intent_token: str = "",
     legacy_chel_id: int | None = None,
     from_manager: str = "",
@@ -957,6 +966,11 @@ def create_messenger_login(
     external_id = str(provider_user_id or "").strip()
     if not external_id or len(external_id) > 128:
         raise ValueError("Не указан идентификатор пользователя мессенджера")
+    recipient_chat_id = str(chat_id or "").strip()
+    if len(recipient_chat_id) > 128:
+        raise ValueError("Некорректный идентификатор чата мессенджера")
+    if recipient_chat_id and not re.fullmatch(r"-?\d+", recipient_chat_id):
+        raise ValueError("Некорректный идентификатор чата мессенджера")
     if legacy_chel_id is not None and int(legacy_chel_id) <= 0:
         raise ValueError("chel_id должен быть положительным числом")
 
@@ -988,8 +1002,10 @@ def create_messenger_login(
                 raise PermissionError("Доступ к Консилиуму для этого пользователя не активен")
             chel_id = identity["chel_id"]
             conn.execute(
-                "UPDATE external_identities SET last_login_at = ? WHERE id = ?",
-                (now.isoformat(), identity["id"]),
+                """UPDATE external_identities
+                SET last_login_at = ?, chat_id = CASE WHEN ? <> '' THEN ? ELSE chat_id END
+                WHERE id = ?""",
+                (now.isoformat(), recipient_chat_id, recipient_chat_id, identity["id"]),
             )
         else:
             if intent:
@@ -1018,10 +1034,11 @@ def create_messenger_login(
             )
             conn.execute(
                 """INSERT INTO external_identities
-                (provider, provider_user_id, chel_id, legacy_chel_id, access_status, created_at, last_login_at)
-                VALUES (?, ?, ?, ?, 'active', ?, ?)""",
+                (provider, provider_user_id, chat_id, chel_id, legacy_chel_id,
+                 access_status, created_at, last_login_at)
+                VALUES (?, ?, ?, ?, ?, 'active', ?, ?)""",
                 (
-                    provider, external_id, chel_id, legacy_chel_id,
+                    provider, external_id, recipient_chat_id, chel_id, legacy_chel_id,
                     now.isoformat(), now.isoformat(),
                 ),
             )
@@ -4167,6 +4184,7 @@ def init_db() -> None:
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 provider TEXT NOT NULL,
                 provider_user_id TEXT NOT NULL,
+                chat_id TEXT NOT NULL DEFAULT '',
                 chel_id TEXT NOT NULL,
                 legacy_chel_id INTEGER,
                 access_status TEXT NOT NULL DEFAULT 'active',
@@ -4576,6 +4594,13 @@ def init_db() -> None:
                 conn.execute(f"ALTER TABLE staff_users ADD COLUMN {name} INTEGER NOT NULL DEFAULT 1")
         if "role" not in staff_columns:
             conn.execute("ALTER TABLE staff_users ADD COLUMN role TEXT NOT NULL DEFAULT 'manager'")
+        identity_columns = {
+            row[1] for row in conn.execute("PRAGMA table_info(external_identities)").fetchall()
+        }
+        if "chat_id" not in identity_columns:
+            conn.execute(
+                "ALTER TABLE external_identities ADD COLUMN chat_id TEXT NOT NULL DEFAULT ''"
+            )
         outbox_columns = {row[1] for row in conn.execute("PRAGMA table_info(manager_notification_outbox)").fetchall()}
         if "next_attempt_at" not in outbox_columns:
             conn.execute("ALTER TABLE manager_notification_outbox ADD COLUMN next_attempt_at TEXT")
@@ -5167,7 +5192,7 @@ def queue_test_checkup_reoffer(identifier: str, public_url: str) -> dict:
             (conversation_id, message_id, now, reoffer_id),
         )
         identities = conn.execute(
-            """SELECT provider,provider_user_id FROM external_identities
+            """SELECT provider,provider_user_id,chat_id FROM external_identities
             WHERE chel_id=? AND access_status='active' AND provider IN ('telegram','max')""",
             (chel_id,),
         ).fetchall()
@@ -5180,7 +5205,7 @@ def queue_test_checkup_reoffer(identifier: str, public_url: str) -> dict:
         }, ensure_ascii=False)
         providers: list[str] = []
         for identity in identities:
-            recipient = str(identity["provider_user_id"] or "").strip()
+            recipient = _external_identity_recipient(identity)
             if not recipient:
                 continue
             provider = str(identity["provider"])
@@ -5344,7 +5369,7 @@ def queue_due_checkup_reoffers(examination_date: date, public_url: str) -> list[
                 (conversation_id, message_id, now, reoffer_id),
             )
             identities = conn.execute(
-                """SELECT provider,provider_user_id FROM external_identities
+                """SELECT provider,provider_user_id,chat_id FROM external_identities
                 WHERE chel_id=? AND access_status='active' AND provider IN ('telegram','max')""",
                 (chel_id,),
             ).fetchall()
@@ -5356,11 +5381,12 @@ def queue_due_checkup_reoffers(examination_date: date, public_url: str) -> list[
                 "action_label": "Выбрать чек-апы",
                 "reoffer_id": reoffer_id,
             }, ensure_ascii=False)
+            messenger_count = 0
             for identity in identities:
-                recipient = str(identity["provider_user_id"] or "").strip()
+                recipient = _external_identity_recipient(identity)
                 if not recipient:
                     continue
-                conn.execute(
+                cursor = conn.execute(
                     """INSERT OR IGNORE INTO user_notification_outbox
                     (reoffer_id,chel_id,provider,recipient_id,event_type,payload,status,
                      attempts,created_at,updated_at)
@@ -5370,12 +5396,13 @@ def queue_due_checkup_reoffers(examination_date: date, public_url: str) -> list[
                         "checkup_reoffer", payload, now, now,
                     ),
                 )
+                messenger_count += int(bool(cursor.rowcount))
             queued.append({
                 "id": reoffer_id, "chel_id": chel_id,
                 "active_seconds": int(candidate["active_seconds"]),
                 "duration_bucket": str(candidate["duration_bucket"]),
                 "examination_date": exam_day,
-                "messenger_count": len(identities),
+                "messenger_count": messenger_count,
             })
         conn.commit()
     return queued
@@ -6120,7 +6147,7 @@ def complete_lab_result_subscription_check(
         except json.JSONDecodeError:
             providers = set()
         identities = conn.execute(
-            """SELECT provider, provider_user_id FROM external_identities
+            """SELECT provider, provider_user_id, chat_id FROM external_identities
             WHERE chel_id = ? AND access_status = 'active'""",
             (subscription["chel_id"],),
         ).fetchall()
@@ -6139,7 +6166,7 @@ def complete_lab_result_subscription_check(
         inserted = 0
         for identity in identities:
             provider = str(identity["provider"] or "")
-            recipient = str(identity["provider_user_id"] or "").strip()
+            recipient = _external_identity_recipient(identity)
             if provider not in providers or not recipient:
                 continue
             cursor = conn.execute(
@@ -6201,6 +6228,13 @@ def claim_user_result_notifications(provider: str, limit: int = 20) -> list[dict
     return result
 
 
+def _permanent_messenger_delivery_error(error: str) -> bool:
+    normalized = str(error or "").lower()
+    return any(code in normalized for code in (
+        "chat.not.found", "dialog.not.found",
+    ))
+
+
 def acknowledge_user_result_notification(
     notification_id: int, lease_token: str, success: bool, error: str = "",
 ) -> bool:
@@ -6214,15 +6248,20 @@ def acknowledge_user_result_notification(
         ).fetchone()
         if not row:
             return False
+        permanent_failure = not success and _permanent_messenger_delivery_error(error)
         retry_delay = min(3600, 5 * (2 ** min(int(row["attempts"]), 10)))
-        next_attempt_at = None if success else (now_dt + timedelta(seconds=retry_delay)).isoformat()
+        next_attempt_at = (
+            (now_dt + timedelta(seconds=retry_delay)).isoformat()
+            if not success and not permanent_failure else None
+        )
         cursor = conn.execute(
             """UPDATE user_result_notification_outbox SET status = ?, sent_at = ?,
                 last_error = ?, next_attempt_at = ?, lease_token = NULL,
                 leased_at = NULL, updated_at = ?
             WHERE id = ? AND lease_token = ? AND status = 'delivering'""",
             (
-                "sent" if success else "pending", now if success else None,
+                "sent" if success else ("failed" if permanent_failure else "pending"),
+                now if success else None,
                 str(error or "")[:500], next_attempt_at, now,
                 int(notification_id), str(lease_token or ""),
             ),
@@ -6305,14 +6344,19 @@ def acknowledge_user_notification(
         ).fetchone()
         if not row:
             return False
+        permanent_failure = not success and _permanent_messenger_delivery_error(error)
         retry_delay = min(3600, 5 * (2 ** min(int(row["attempts"]), 10)))
-        next_attempt_at = None if success else (now_dt + timedelta(seconds=retry_delay)).isoformat()
+        next_attempt_at = (
+            (now_dt + timedelta(seconds=retry_delay)).isoformat()
+            if not success and not permanent_failure else None
+        )
         cursor = conn.execute(
             """UPDATE user_notification_outbox SET status=?,sent_at=?,last_error=?,
             next_attempt_at=?,lease_token=NULL,leased_at=NULL,updated_at=?
             WHERE id=? AND lease_token=? AND status='delivering'""",
             (
-                "sent" if success else "pending", now if success else None,
+                "sent" if success else ("failed" if permanent_failure else "pending"),
+                now if success else None,
                 str(error or "")[:500], next_attempt_at, now,
                 int(notification_id), str(lease_token or ""),
             ),

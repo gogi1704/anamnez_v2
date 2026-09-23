@@ -3141,6 +3141,22 @@ class OrchestratorTests(unittest.TestCase):
             db.ensure_user("chel_test_default")
             db.set_current_chel_id("chel_test_default")
 
+    def test_existing_max_identity_refreshes_recipient_chat(self):
+        login = db.create_messenger_login(
+            "max", "max-user-chat-refresh", chat_id="700001",
+        )
+        refreshed = db.create_messenger_login(
+            "max", "max-user-chat-refresh", chat_id="700002",
+        )
+        with db.connection() as conn:
+            identity = conn.execute(
+                """SELECT chat_id FROM external_identities
+                WHERE provider='max' AND provider_user_id=?""",
+                ("max-user-chat-refresh",),
+            ).fetchone()
+        self.assertEqual(login["chel_id"], refreshed["chel_id"])
+        self.assertEqual(identity["chat_id"], "700002")
+
     def test_auth_intent_is_provider_specific_and_one_time(self):
         chel_id = "chel_auth_test_intent"
         try:
