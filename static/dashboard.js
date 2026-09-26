@@ -60,6 +60,8 @@ let analyticsFunnelMode = 'start';
 let latestAnalyticsData = null;
 let latestMetric2Data = null;
 let metric2ActiveFlow = 'standard';
+let activeContentTextPanel = 'offer';
+let contentTextPreviewExaminations = [];
 const adminGetRequests = new Map();
 const loadedAdminViews = new Set();
 const panelLoadingCounts = new WeakMap();
@@ -1305,11 +1307,22 @@ const metric2ExamAudiences = {
   fatigue_basic:'Тем, кого беспокоят слабость, сонливость или снижение работоспособности.',fatigue_extended:'Тем, у кого усталость сохраняется длительно или сочетается с другими жалобами.',weight_basic:'Тем, кто хочет разобраться в возможных обменных причинах набора веса.',weight_extended:'Тем, кому нужна более широкая оценка гормональных и обменных факторов веса.',hair_loss:'При заметном выпадении волос, ломкости и подозрении на дефициты.',lipids:'Для оценки сердечно-сосудистого риска, особенно при повышенном давлении или лишнем весе.',liver_basic:'Для базовой проверки показателей печени и поджелудочной железы.',liver_extended:'При необходимости более широкой оценки печени, поджелудочной и желчевыводящих путей.',iron:'При утомляемости, слабости, бледности или подозрении на дефицит железа.',kidneys:'Для базовой оценки функции почек и азотистого обмена.',protein:'Для оценки белкового обмена, питания и синтетической функции печени.',joints:'При боли, скованности или отёчности суставов.',inflammation:'Когда важно дополнительно оценить наличие воспалительной реакции.',thyroid:'При изменениях веса, утомляемости, сердцебиении или других возможных признаках нарушения функции щитовидной железы.',female_hormones:'Женщинам при наличии показаний к оценке гормонального фона; сроки сдачи важно обсудить с врачом.',male_health:'Мужчинам для оценки гормонального фона и показателей предстательной железы с учётом возраста и показаний.',vitamin_d:'Тем, кому важно узнать уровень витамина D и обсудить необходимость коррекции.',ca125:'Только при наличии врачебных показаний; онкомаркер не подходит для самостоятельной диагностики.',ca153:'Только при наличии врачебных показаний; онкомаркер не подходит для самостоятельной диагностики.',ca199:'Только при наличии врачебных показаний; онкомаркер не подходит для самостоятельной диагностики.',
 };
 
-function metric2PreviewMarkup(screen, large = false) {
+function metric2PreviewMarkup(screen, large = false, suppliedData = null) {
   const kind = screen.kind || '';
   const action = (label,secondary = false,disabled = false) => `<span class="metric2-mock-button${secondary ? ' secondary' : ''}${disabled ? ' disabled' : ''}">${escapeHtml(label)}</span>`;
   const messengerAction = (icon,label) => `<span class="metric2-mock-button metric2-mock-messenger"><i>${escapeHtml(icon)}</i><span><b>${escapeHtml(label)}</b><small>Подтверждение через бота</small></span></span>`;
-  const examinations = latestMetric2Data?.examinations || [];
+  const previewData = suppliedData || latestMetric2Data || {};
+  const examinations = previewData.examinations || [];
+  const previewRuleId = Number(previewData.marketer_preview_rule_id || 10);
+  const marketerScenarioIds = {
+    2:['kidneys','thyroid','lipids'],3:['weight_basic','lipids','liver_basic','kidneys','thyroid'],
+    4:['liver_basic','kidneys'],5:['iron','fatigue_basic','vitamin_d'],6:['vitamin_d','fatigue_basic'],
+    7:['joints','inflammation'],8:['female_hormones'],9:['male_health'],10:['liver_basic','kidneys','vitamin_d'],
+  };
+  const marketerScenario = (marketerScenarioIds[previewRuleId] || marketerScenarioIds[10])
+    .map(id => examinations.find(test => test.id === id)).filter(Boolean);
+  const previewTemplate = (value,replacements = {}) => Object.entries(replacements)
+    .reduce((result,[key,replacement]) => result.replaceAll(`{${key}}`,String(replacement)),String(value || ''));
   let content = '';
   if (kind === 'welcome') content = `<div class="metric2-mock-brand"><span>К</span><div><strong>Консилиум</strong><small>Забота о здоровье начинается здесь</small></div></div><small>● ПЛАНОВЫЙ МЕДОСМОТР</small><b>Вам предстоит плановый медицинский осмотр</b><p>Анкетирование — обязательный этап медосмотра. Оно займёт не более 10 минут и поможет точнее оценить ваше состояние.</p><p>После этого вы сможете выбрать дополнительные обследования — они помогают обнаружить то, что обычно остаётся незамеченным.</p><span class="metric2-mock-pulse">⌁</span><span class="metric2-mock-welcome-highlight">☆ &nbsp; Все, кто пройдёт анкету до конца, получат <b>бесплатный доступ к новому сервису</b> — медицинскому ИИ-помощнику.</span><em class="metric2-mock-welcome-closing">Пройдите осмотр осознанно, с полной картиной своего здоровья — и без лишних переживаний.</em>${action('Начать анкету →')}<span class="metric2-mock-time">Анкета займёт около 10 минут</span>`;
   else if (kind === 'registration') content = `<div class="metric2-mock-brand"><span>К</span><div><strong>Консилиум</strong><small>Ваше личное пространство здоровья</small></div></div><small>БЕЗ ПАРОЛЯ</small><b>Войдите через удобный мессенджер</b><p>Так анкета, история диалогов и результаты останутся доступны на другом устройстве и после очистки браузера.</p>${messengerAction('➤','Продолжить с Telegram')}${messengerAction('М','Продолжить с MAX')}<span class="metric2-mock-link">Войти анонимно</span><p class="metric2-mock-note">Консилиум не получает пароль от мессенджера. Сохраняется только его технический ID для восстановления доступа.</p>`;
@@ -1332,7 +1345,40 @@ function metric2PreviewMarkup(screen, large = false) {
   } else if (kind === 'exam_catalog') {
     const cards = examinations.map(test => `<span class="metric2-mock-catalog-card"><header><strong>${escapeHtml(test.name)}</strong><em>${Number(test.price || 0).toLocaleString('ru-RU')} ₽</em></header><small>КОМУ ПОДХОДИТ</small><p>${escapeHtml(metric2ExamAudiences[test.id] || test.description || 'Тем, кто хочет получить больше информации о состоянии здоровья.')}</p><small>ДЛЯ ЧЕГО</small><p>${escapeHtml(test.description || 'Для дополнительной оценки показателей здоровья.')}</p><small>ЧТО ВХОДИТ</small><p>${escapeHtml(test.includes || 'Состав уточняется')}</p></span>`).join('');
     content = `<small>ДОСТУПНЫЕ ЧЕК-АПЫ</small><b>Что можно проверить</b><p>Краткое описание поможет сориентироваться. Необходимость обследований и интерпретацию результатов лучше обсуждать с врачом.</p>${cards}${action('Выбрать анализы')}${action('Вернуться к вопросу',true)}`;
+  } else if (kind === 'exam_objection_marketer') {
+    const texts = previewData.marketer_examination_texts || {};
+    const first = marketerScenario[0] || examinations[0] || {};
+    const price = Math.round(Number(first.price || 0) * .9).toLocaleString('ru-RU');
+    const backLabel = previewTemplate(texts.retention_back_template || 'Вернуться и добавить «{package}» — {price} ₽',{
+      package:first.name || 'чек-ап',price,
+    });
+    const benefits = [1,2,3,4].map(index => `<span class="metric2-mock-benefit"><b>✓ ${escapeHtml(texts[`retention_benefit_${index}_title`] || '')}</b><small>${escapeHtml(texts[`retention_benefit_${index}_body`] || '')}</small></span>`).join('');
+    content = `<small>${escapeHtml(texts.retention_kicker || 'ПЕРЕД ТЕМ КАК ПРОДОЛЖИТЬ')}</small><b>${escapeHtml(texts.retention_title || '')}</b><span class="metric2-mock-retention-intro"><p>${escapeHtml(texts.retention_body_1 || '')}</p><p>${escapeHtml(texts.retention_body_2 || '')}</p><p>${escapeHtml(texts.retention_body_3 || '')}</p></span>${benefits}<p class="metric2-mock-note">${escapeHtml(texts.retention_voluntary_note || '')}</p><span class="metric2-mock-warning">${escapeHtml(texts.retention_discount_note || '')}</span>${action(backLabel)}${action(texts.retention_decline || 'Всё равно отказаться',true)}`;
   } else if (kind === 'exam_objection') content = `<small>ПЕРЕД ТЕМ КАК ПРОДОЛЖИТЬ</small><b>После обследований вы получите больше, чем результаты</b><p>Врач высшей категории <strong>Татьяна Витальевна</strong> подготовит подробную расшифровку сложных показателей.</p><p>И самое главное — вы получите <strong>бесплатную консультацию</strong> по результатам.</p><p>Всё будет доступно в этом сервисе — без очередей и доплат за расшифровку.</p><span class="metric2-mock-benefit"><b>✓ Ничего дополнительно делать не нужно</b><small>Выберите обследования сейчас, а в день медосмотра сдайте всё вместе.</small></span><span class="metric2-mock-benefit"><b>✓ Один визит вместо отдельной поездки</b><small>Вы уже будете на осмотре — дополнительные анализы можно сдать за один раз.</small></span><span class="metric2-mock-benefit"><b>✓ Бесплатная консультация специалиста</b><small>После готовности дополнительных анализов врач высшей категории поможет разобраться в результатах.</small></span><span class="metric2-mock-benefit"><b>✓ Не придётся записываться отдельно</b><small>Если отложить обследования, позже могут потребоваться отдельная запись и поездка.</small></span><p class="metric2-mock-note">Дополнительные обследования добровольны — окончательное решение остаётся за вами.</p>${action('Выбрать обследования')}${action('Всё равно отказаться',true)}`;
+  else if (kind === 'exam_selection_marketer') {
+    const texts = previewData.marketer_examination_texts || {};
+    const genderSpecificIds = new Set(['female_hormones','ca125','ca153','male_health']);
+    const compatibleExaminations = examinations.filter(test => !genderSpecificIds.has(test.id));
+    const [primary,...extras] = marketerScenario.length ? marketerScenario : compatibleExaminations;
+    const card = (test,expanded=false,selected=false) => {
+      if (!test) return '';
+      const full = Number(test.price || 0);
+      const online = Math.round(full * .9);
+      const caption = previewTemplate(texts.price_caption_template || 'При оплате онлайн',{
+        online:online.toLocaleString('ru-RU'),full:full.toLocaleString('ru-RU'),
+      });
+      return `<span class="metric2-mock-test"><i class="metric2-mock-checkbox${selected ? ' checked' : ''}">${selected ? '✓' : ''}</i>${expanded ? `<mark>${escapeHtml(texts.recommended_badge || 'РЕКОМЕНДУЕМ ПО ВАШИМ ОТВЕТАМ')}</mark>` : ''}<strong>${escapeHtml(test.name || '')}</strong><span class="metric2-mock-pricing"><small><s>${full.toLocaleString('ru-RU')} ₽</s></small><b>${online.toLocaleString('ru-RU')} ₽</b><small>${escapeHtml(caption)}</small></span>${expanded ? `<small>${escapeHtml(test.description || '')}</small><em>${escapeHtml(test.includes || '')}</em>` : `<small>${escapeHtml(texts.package_add_label || '+ добавить')}</small>`}</span>`;
+    };
+    const full = Number(primary?.price || 0);
+    const total = Math.round(full * .9);
+    const discount = full - total;
+    const formatted = {count:1,amount:total.toLocaleString('ru-RU'),discount:discount.toLocaleString('ru-RU'),days:Number(texts.result_days || 14)};
+    const personal = previewTemplate(texts[`personal_rule_${previewRuleId}`] || texts.personal_rule_10 || '',{'имя':'Анна'});
+    const totalLabel = previewTemplate(texts.total_template || 'Выбрано: {count} · {amount} ₽',formatted);
+    const primaryLabel = previewTemplate(texts.primary_cta_template || 'Добавить к медосмотру — {amount} ₽',formatted);
+    const finePrint = previewTemplate(texts.fine_print_template || '',formatted);
+    content = `<small>${escapeHtml(texts.progress_label || 'ШАГ 20 ИЗ 20 · ПОСЛЕДНИЙ ШАГ')}</small><b>${escapeHtml(texts.headline || '')}</b><p class="metric2-mock-alert">${escapeHtml(personal)}</p><span class="metric2-mock-info metric2-mock-blood"><small>${escapeHtml(texts.zero_effort || '')}</small></span>${card(primary,true,true)}${extras.slice(0,2).map(test => card(test)).join('')}<span class="metric2-mock-info"><b>${escapeHtml(texts.show_all_packages || 'Показать все чек-апы')} ＋</b></span><span class="metric2-mock-benefit"><small>✓ ${escapeHtml(texts.benefit_results || '')}<br>✓ ${escapeHtml(texts.benefit_doctor || '')}<br>✓ ${escapeHtml(texts.benefit_visit || '')}</small><i class="metric2-mock-inline-action">${escapeHtml(texts.benefits_link || '')}</i></span><span class="metric2-mock-total"><b>${escapeHtml(totalLabel)}</b><small>${escapeHtml(texts.discount_note || '')}</small></span><div class="metric2-mock-actions">${action('Назад',true)}${action(primaryLabel)}</div>${action(texts.decline_link || 'Продолжить без дополнительных обследований',true)}<p class="metric2-mock-note">${escapeHtml(finePrint)}</p>`;
+  }
   else if (kind === 'exam_selection' || kind === 'exam_selection_no_questionnaire') {
     const questionnaireSkipped = kind === 'exam_selection_no_questionnaire';
     const priceMarkup = (test,recommended) => {
@@ -1363,7 +1409,8 @@ function metric2PreviewMarkup(screen, large = false) {
     content = `<small>ПОСЛЕ ПОЛУЧЕНИЯ РЕЗУЛЬТАТОВ</small><b>Всё необходимое — в личном кабинете</b><p>Здесь появятся оригиналы анализов, понятная ИИ-расшифровка и возможность бесплатно передать документы специалисту.</p><span class="metric2-mock-info"><b>▤ Оригинальный результат анализов</b><small>Один общий пример документа для всех пользователей · PDF</small><i class="metric2-mock-inline-action">Открыть пример документа →</i></span><span class="metric2-mock-info"><b>✦ Реальная ИИ-расшифровка</b><small><strong>СА 125: 10,20 Ед/мл</strong><br>Показатель находится в пределах референсного диапазона лаборатории (&lt; 34,53 Ед/мл).</small></span><span class="metric2-mock-benefit"><b>♙ Проверка медицинским специалистом</b><small>После появления результатов их можно бесплатно передать специалисту. Ответ придёт в этот же чат.</small></span>${action('Получить расшифровку специалиста')}${action('← Вернуться к выбору обследований',true)}`;
   } else if (kind === 'payment') {
     const selected = examinations[0];
-    content = `<small>ПОСЛЕДНИЙ ШАГ</small><b>Проверим заказ</b><p>Выберите, как вам будет удобнее оплатить дополнительные обследования.</p><span class="metric2-mock-test"><strong>${escapeHtml(selected?.name || 'Выбранное обследование')}</strong><em>${Number(selected?.price || 0).toLocaleString('ru-RU')} ₽</em></span><span class="metric2-mock-total">Итого <b>${Number(selected?.price || 0).toLocaleString('ru-RU')} ₽</b></span>${action('Оплатить онлайн')}${action('Оплатить на медосмотре')}${action('← Вернуться к обследованиям',true)}`;
+    const full = Number(selected?.price || 0); const online = Math.round(full * .9);
+    content = `<small>ПОСЛЕДНИЙ ШАГ</small><b>Проверим заказ</b><p>Выберите, как вам будет удобнее оплатить дополнительные обследования.</p><span class="metric2-mock-test"><strong>${escapeHtml(selected?.name || 'Выбранное обследование')}</strong><em>${full.toLocaleString('ru-RU')} ₽</em></span><span class="metric2-mock-total">Полная цена <b>${full.toLocaleString('ru-RU')} ₽</b></span><span class="metric2-mock-info"><b>Онлайн со скидкой 10 % — ${online.toLocaleString('ru-RU')} ₽</b></span>${action(`Оплатить онлайн · ${online.toLocaleString('ru-RU')} ₽`)}${action(`Оплатить на медосмотре · ${full.toLocaleString('ru-RU')} ₽`)}${action('← Вернуться к обследованиям',true)}`;
   } else if (kind === 'payment_processing') content = `<div class="metric2-mock-modal"><span class="metric2-mock-icon">⌛</span><b>Проверяем оплату</b><p>Обычно это занимает несколько секунд. Не закрывайте страницу.</p></div>`;
   else if (kind === 'payment_success') content = `<span class="metric2-mock-icon">✓</span><small>ОПЛАТА ПОДТВЕРЖДЕНА</small><b>Всё получилось!</b><p>ЮKassa подтвердила оплату. Выбранные обследования сохранены.</p><span class="metric2-mock-info"><b>Где потом найти оплату</b><small>Откройте чат → нажмите меню ☰ справа вверху → выберите «Мои покупки». Там будут сумма, дата, состав заказа и статус «Оплачено».</small></span><p class="metric2-mock-note">Успешная покупка хранится в истории и не удаляется. Электронный чек придёт на указанную при оплате почту.</p>${action('Открыть мои покупки')}${action('Перейти в чат',true)}`;
   else if (kind === 'payment_result') content = `<div class="metric2-mock-modal"><span class="metric2-mock-icon">!</span><b>Оплата не завершена</b><p>Попытка сохранена в разделе «Мои покупки». Можно проверить статус или повторить оплату.</p>${action('Вернуться к оплате')}${action('Мои покупки',true)}</div>`;
@@ -1386,7 +1433,7 @@ function metric2PreviewMarkup(screen, large = false) {
     : kind === 'not_medical_exam_info' ? 'Анкета'
     : kind.startsWith('question_') ? 'Анкета'
     : kind === 'exam_catalog' ? 'Описание чек-апов'
-    : ['exam_objection','exam_selection','exam_selection_no_questionnaire','exam_results_preview'].includes(kind) ? 'Обследования'
+    : ['exam_objection','exam_objection_marketer','exam_selection','exam_selection_marketer','exam_selection_no_questionnaire','exam_results_preview'].includes(kind) ? 'Обследования'
     : ['payment','payment_processing','payment_success','payment_result','payment_unavailable'].includes(kind) ? 'Оплата'
     : ['completion','completion_skipped'].includes(kind) ? 'Готово'
     : kind.startsWith('result_') ? (screen.stage || 'Результаты').replace('Результаты · ', '')
@@ -1394,8 +1441,8 @@ function metric2PreviewMarkup(screen, large = false) {
   const progress = kind === 'appearance' ? 2
     : kind === 'not_medical_exam_info' ? 8
     : kind.startsWith('question_') ? 5 + Math.round((Math.max(0,questionIndex) / metric2QuestionContent.length) * 60)
-    : ['exam_catalog','exam_objection'].includes(kind) ? 76
-    : ['exam_selection','exam_selection_no_questionnaire','exam_results_preview'].includes(kind) ? 80
+    : ['exam_catalog','exam_objection','exam_objection_marketer'].includes(kind) ? 76
+    : ['exam_selection','exam_selection_marketer','exam_selection_no_questionnaire','exam_results_preview'].includes(kind) ? 80
     : kind === 'payment' ? 92
     : kind === 'payment_processing' ? 96
     : kind === 'payment_result' ? 96
@@ -1438,11 +1485,11 @@ function renderMetric2(data) {
     $('#metric2ExperimentLink').dataset.link = link;
   }
   $('#metric2FlowEyebrow').textContent = resultFlow ? 'Ссылка /result' : experimentFlow ? 'Вариант эксперимента' : reofferFlow ? 'Повторное предложение' : 'Обычная ссылка';
-  $('#metric2FlowTitle').textContent = resultFlow ? 'Получение результатов анализов' : experimentFlow ? 'Воронка маркетолога' : reofferFlow ? 'Напоминание перед медосмотром' : 'Анкета и выбор обследований';
+  $('#metric2FlowTitle').textContent = resultFlow ? 'Получение результатов анализов' : experimentFlow ? 'Новое предложение marketer' : reofferFlow ? 'Напоминание перед медосмотром' : 'Основной вариант анкеты';
   $('#metric2FlowDescription').textContent = resultFlow
     ? 'Отдельная воронка для пользователей, которые пришли по специальной ссылке за результатами. Обычное анкетирование сюда не входит.'
     : experimentFlow
-    ? 'Путь пользователей, которым назначен вариант «маркетолог» в A/B-эксперименте. Экраны пока совпадают с обычной воронкой — здесь будет видно, когда появятся отличия.'
+    ? 'Путь варианта marketer: новый экран предложения чек-апов, экран удержания, выбор оплаты и финальный результат. Считаются только пользователи этого варианта.'
     : reofferFlow
     ? 'Путь основного варианта: от сообщения за день до медосмотра до выбора обследований и финального решения. Вариант «маркетолог» сюда не входит.'
     : 'Основная воронка новых пользователей: приветствие, регистрация, анкета, обследования и завершение. Переходы по ссылке /result сюда не входят.';
@@ -1832,7 +1879,7 @@ function renderExperimentReport(data) {
   fillExperimentSettings(data.settings || {});
   $('#experimentYandexGoal').textContent = data.yandex_goal || 'consilium_marketer_event';
   $('#experimentCounterStatus').textContent = data.yandex_marketer_counter_configured
-    ? 'Ветка «маркетолог» также пишется в отдельный счётчик Метрики (YANDEX_METRIKA_MARKETER_COUNTER_ID настроен на сервере).'
+    ? 'Оба варианта A/B пишутся в отдельный маркетинговый счётчик Метрики. В событиях передаётся параметр experiment.variant.'
     : 'Отдельный счётчик для ветки «маркетолог» не настроен — обе ветки пишутся в общий счётчик, отличить их можно только параметром experiment.variant.';
   const variants = Object.fromEntries((data.variants || []).map(item => [item.variant,item]));
   $('#experimentSummary').innerHTML = `
@@ -1880,6 +1927,99 @@ async function saveExperiment(event) {
   }
 }
 
+function showContentTextsStatus(message = '', error = false) {
+  const node = $('#contentTextsStatus');
+  node.textContent = message;
+  node.classList.toggle('hidden', !message);
+  node.classList.toggle('error', error);
+}
+
+function fillContentTexts(values = {}) {
+  document.querySelectorAll('#marketerExaminationTextsForm [data-text-key]').forEach(input => {
+    const value = values[input.dataset.textKey];
+    input.value = value == null ? '' : String(value);
+  });
+  renderContentTextPreview();
+}
+
+function contentTextDraftValues() {
+  const values = {};
+  document.querySelectorAll('#marketerExaminationTextsForm [data-text-key]').forEach(input => {
+    values[input.dataset.textKey] = input.type === 'number' ? Number(input.value || 0) : input.value;
+  });
+  return values;
+}
+
+function renderContentTextPreview(values = contentTextDraftValues()) {
+  const preview = $('#contentTextPreviewPhone');
+  if (!preview) return;
+  const retention = activeContentTextPanel === 'retention';
+  const ruleId = Number($('#contentTextPreviewRule')?.value || 10);
+  const screen = {
+    kind: retention ? 'exam_objection_marketer' : 'exam_selection_marketer',
+    stage: String(values.stage_label || 'Обследования'),
+    title: retention ? 'Удержание после отказа' : 'Новое предложение чек-апов',
+  };
+  preview.innerHTML = metric2PreviewMarkup(screen,true,{
+    examinations: contentTextPreviewExaminations,
+    marketer_examination_texts: values,
+    marketer_preview_rule_id: ruleId,
+  });
+  const title = $('#contentTextPreviewTitle');
+  if (title) title.textContent = retention ? 'Экран удержания' : 'Экран дополнительных обследований';
+  $('#contentTextPreviewRuleWrap')?.classList.toggle('hidden',retention);
+}
+
+function selectContentTextPanel(panelId = 'offer') {
+  const activeId = panelId === 'retention' ? 'retention' : 'offer';
+  activeContentTextPanel = activeId;
+  document.querySelectorAll('[data-content-text-tab]').forEach(button => {
+    const active = button.dataset.contentTextTab === activeId;
+    button.classList.toggle('active', active);
+    button.setAttribute('aria-selected', String(active));
+  });
+  document.querySelectorAll('[data-content-text-panel]').forEach(panel => {
+    panel.classList.toggle('hidden', panel.dataset.contentTextPanel !== activeId);
+  });
+  const title = $('#contentTextsScreenTitle');
+  if (title) title.textContent = activeId === 'retention' ? 'Удержание после отказа' : 'Предложение после анкеты';
+  renderContentTextPreview();
+}
+
+async function loadContentTexts() {
+  return withPanelLoading('#contentTextsAdminView', async () => {
+    const data = await adminFetch('/api/admin/content-texts');
+    const section = (data.sections || []).find(item => item.id === 'marketer_examinations');
+    contentTextPreviewExaminations = data.examinations || [];
+    fillContentTexts(section?.values || {});
+    showContentTextsStatus('');
+  }, 'Загружаем тексты экрана…');
+}
+
+async function saveContentTexts(event) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const button = form.querySelector('button[type="submit"]');
+  const payload = contentTextDraftValues();
+  for (const [key,value] of Object.entries(payload)) {
+    if (typeof value === 'string') payload[key] = value.trim();
+  }
+  button.disabled = true;
+  showContentTextsStatus('Сохраняем…');
+  try {
+    const result = await adminFetch('/api/admin/content-texts/marketer-examinations',undefined,{
+      method:'POST',body:JSON.stringify(payload),
+    });
+    fillContentTexts(result.values || {});
+    loadedAdminViews.add('content_texts');
+    showContentTextsStatus('Тексты сохранены. Новые открытия экрана получат обновлённую версию.');
+  } catch (error) {
+    showContentTextsStatus(error.message,true);
+  } finally {
+    button.disabled = false;
+  }
+}
+
 async function testFunnelMonitor(analysis = 'all', button = null) {
   const previousText = button?.textContent;
   if (button) { button.disabled = true; button.textContent = 'Отправляем…'; }
@@ -1895,12 +2035,13 @@ async function testFunnelMonitor(analysis = 'all', button = null) {
 }
 
 function showAdminView(view) {
-  activeAdminView = ['favorites','analytics','service_results','experiments','metric2','monitor','ikp','managers','examinations','costs'].includes(view) ? view : 'dashboard';
+  activeAdminView = ['favorites','analytics','service_results','experiments','metric2','content_texts','monitor','ikp','managers','examinations','costs'].includes(view) ? view : 'dashboard';
   const favoritesVisible = activeAdminView === 'favorites';
   const analyticsVisible = activeAdminView === 'analytics';
   const serviceResultsVisible = activeAdminView === 'service_results';
   const experimentsVisible = activeAdminView === 'experiments';
   const metric2Visible = activeAdminView === 'metric2';
+  const contentTextsVisible = activeAdminView === 'content_texts';
   const monitorVisible = activeAdminView === 'monitor';
   const ikpVisible = activeAdminView === 'ikp';
   const managersVisible = activeAdminView === 'managers';
@@ -1913,6 +2054,7 @@ function showAdminView(view) {
   $('#dashboard').classList.toggle('show-service-results', serviceResultsVisible);
   $('#dashboard').classList.toggle('show-experiments', experimentsVisible);
   $('#dashboard').classList.toggle('show-metric2', metric2Visible);
+  $('#dashboard').classList.toggle('show-content-texts', contentTextsVisible);
   $('#dashboard').classList.toggle('show-monitor', monitorVisible);
   $('#dashboard').classList.toggle('show-ikp', ikpVisible);
   $('#dashboard').classList.toggle('show-favorites', favoritesVisible);
@@ -1921,6 +2063,7 @@ function showAdminView(view) {
   $('#serviceResultsAdminView').classList.toggle('hidden', !serviceResultsVisible);
   $('#experimentsAdminView').classList.toggle('hidden', !experimentsVisible);
   $('#metric2AdminView').classList.toggle('hidden', !metric2Visible);
+  $('#contentTextsAdminView').classList.toggle('hidden', !contentTextsVisible);
   $('#monitorAdminView').classList.toggle('hidden', !monitorVisible);
   $('#ikpAdminView').classList.toggle('hidden', !ikpVisible);
   $('#managerAdminView').classList.toggle('hidden', !managersVisible);
@@ -1932,6 +2075,7 @@ function showAdminView(view) {
   $('#serviceResultsTab').classList.toggle('active', serviceResultsVisible);
   $('#experimentsTab').classList.toggle('active', experimentsVisible);
   $('#metric2Tab').classList.toggle('active', metric2Visible);
+  $('#contentTextsTab').classList.toggle('active', contentTextsVisible);
   $('#monitorTab').classList.toggle('active', monitorVisible);
   $('#ikpTab').classList.toggle('active', ikpVisible);
   $('#managersTab').classList.toggle('active', managersVisible);
@@ -1956,6 +2100,7 @@ async function loadAdminViewData(view = activeAdminView, {force = false} = {}) {
   else if (view === 'service_results') request = loadServiceResults();
   else if (view === 'experiments') request = loadExperiments();
   else if (view === 'metric2') request = loadMetric2();
+  else if (view === 'content_texts') request = loadContentTexts();
   else if (view === 'monitor') request = loadFunnelMonitor();
   else if (view === 'ikp') request = loadIkp();
   else return;
@@ -2376,12 +2521,21 @@ $('#analyticsTab').addEventListener('click', () => showAdminView('analytics'));
 $('#serviceResultsTab').addEventListener('click', () => showAdminView('service_results'));
 $('#experimentsTab').addEventListener('click', () => showAdminView('experiments'));
 $('#metric2Tab').addEventListener('click', () => showAdminView('metric2'));
+$('#contentTextsTab').addEventListener('click', () => showAdminView('content_texts'));
+document.querySelectorAll('[data-content-text-tab]').forEach(button => {
+  button.addEventListener('click', () => selectContentTextPanel(button.dataset.contentTextTab));
+});
 $('#monitorTab').addEventListener('click', () => showAdminView('monitor'));
 $('#ikpTab').addEventListener('click', () => showAdminView('ikp'));
 $('#managersTab').addEventListener('click', () => showAdminView('managers'));
 $('#examinationsTab').addEventListener('click', () => showAdminView('examinations'));
 $('#costsTab').addEventListener('click', () => showAdminView('costs'));
 $('#experimentForm').addEventListener('submit', event => saveExperiment(event));
+$('#marketerExaminationTextsForm').addEventListener('submit', saveContentTexts);
+$('#marketerExaminationTextsForm').addEventListener('input', event => {
+  if (event.target.matches('[data-text-key]')) renderContentTextPreview();
+});
+$('#contentTextPreviewRule').addEventListener('change', () => renderContentTextPreview());
 $('#experimentPeriod').addEventListener('change', () => loadExperiments().catch(showDashboardError));
 $('#monitorForm').addEventListener('submit', event => saveFunnelMonitor(event).catch(() => {}));
 $('#monitorPreviewButton').addEventListener('click', () => previewFunnelMonitor().catch(error => showMonitorStatus(error.message,true)));

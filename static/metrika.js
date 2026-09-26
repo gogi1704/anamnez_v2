@@ -14,11 +14,15 @@
     'step_14', 'step_15', 'step_16', 'step_17', 'step_18', 'step_19',
     'personal', 'personal_kabinet', 'personal_proverka', 'klick_online',
     'offline', 'otkaz_1', 'otkaz_2',
+    'offer_view', 'offer_package_toggle', 'offer_benefits_open',
+    'offer_continue', 'offer_decline', 'retain_view', 'retain_back',
+    'retain_decline', 'payment_start', 'payment_success',
   ]);
   let counterId = null;
   let counterReady = false;
   let experiment = null;
   const pendingGoals = [];
+  const pendingParams = [];
 
   function markElements(root, selector, className) {
     if (root?.nodeType === Node.ELEMENT_NODE && root.matches(selector)) {
@@ -63,13 +67,32 @@
     };
   }
 
+  function safeOfferParams(details = {}) {
+    const allowed = {
+      variant:40, sex:20, age_group:20, pressure:40, sugar:40,
+      smoking:40, complaints:8, is_test:8, recommended_package:80,
+      rule_id:8, package:80, selected:8, source:20, packages:400,
+    };
+    const offer = {};
+    Object.entries(allowed).forEach(([key,maxLength]) => {
+      if (details[key] === undefined || details[key] === null || details[key] === '') return;
+      offer[key] = String(details[key]).slice(0,maxLength);
+    });
+    ['amount','discount'].forEach(key => {
+      const value = Number(details[key]);
+      if (Number.isFinite(value) && value >= 0) offer[key] = Math.round(value);
+    });
+    return Object.keys(offer).length ? {offer} : {};
+  }
+
   function sendGoal(goal, details = {}) {
     if (!safeGoals.has(goal)) return;
     if (!counterReady || !counterId || typeof window.ym !== 'function') {
       pendingGoals.push({goal,details});
       return;
     }
-    window.ym(counterId, 'reachGoal', goal);
+    const offerParams = safeOfferParams(details);
+    window.ym(counterId, 'reachGoal', goal, offerParams);
     const params = safeExperimentParams(goal, details);
     const prefix = String(experiment?.yandex_goal_prefix || 'consilium_marketer');
     if (params && experiment?.yandex_enabled && /^[a-z][a-z0-9_-]{2,39}$/.test(prefix)) {
@@ -78,6 +101,13 @@
   }
 
   window.consiliumMetrikaGoal = sendGoal;
+  window.consiliumMetrikaParams = details => {
+    if (!counterReady || !counterId || typeof window.ym !== 'function') {
+      pendingParams.push(details);
+      return;
+    }
+    window.ym(counterId, 'params', safeOfferParams(details));
+  };
 
   function loadCounter() {
     if (!counterId || document.querySelector('script[data-consilium-metrika]')) return;
@@ -114,11 +144,17 @@
           const pending = pendingGoals.shift();
           sendGoal(pending.goal, pending.details);
         }
+        while (pendingParams.length) {
+          window.consiliumMetrikaParams(pendingParams.shift());
+        }
       };
     document.head.append(script);
   }
 
-  fetch('/api/public-config', { credentials: 'same-origin', cache: 'no-store' })
+  const publicConfigUrl = new URL('/api/public-config', location.origin);
+  const previewFunnel = new URLSearchParams(location.search).get('preview_funnel');
+  if (previewFunnel) publicConfigUrl.searchParams.set('preview_funnel', previewFunnel);
+  fetch(publicConfigUrl, { credentials: 'same-origin', cache: 'no-store' })
     .then(response => response.ok ? response.json() : {})
     .then(config => {
       const rawId = String(config.yandex_metrika_counter_id || '');

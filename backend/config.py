@@ -42,8 +42,8 @@ class Settings:
     analytics_retention_days: int = int(os.getenv("ANALYTICS_RETENTION_DAYS", "90"))
     ikp_integration_secret: str = os.getenv("IKP_INTEGRATION_SECRET", "").strip()
     yandex_metrika_counter_id: str = os.getenv("YANDEX_METRIKA_COUNTER_ID", "").strip()
-    # Optional dedicated counter for the marketer A/B variant. Falls back to the
-    # counter above when empty, so this is a pure opt-in addition.
+    # Dedicated counter for the marketer A/B variant. It intentionally never
+    # falls back to the control counter, so experiment cohorts cannot mix.
     yandex_metrika_marketer_counter_id: str = os.getenv("YANDEX_METRIKA_MARKETER_COUNTER_ID", "").strip()
     dadata_api_key: str = os.getenv("DADATA_API_KEY", "").strip()
     dadata_suggestions_url: str = os.getenv(

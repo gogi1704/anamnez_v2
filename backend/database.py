@@ -122,6 +122,131 @@ EXPERIMENT_DEFAULTS = {
     "assignment_counter": 0,
 }
 
+MARKETER_EXAMINATION_TEXT_DEFAULTS = {
+    "result_days": 14,
+    "progress_label": "Шаг 20 из 20 · последний шаг",
+    "stage_label": "Обследования",
+    "headline": "Кровь у вас возьмут в любом случае. Из той же пробирки можно проверить то, что медосмотр не покажет",
+    "zero_effort": "Без нового укола и записи — из той же пробы, что возьмут на медосмотре",
+    "recommended_badge": "Рекомендуем по вашим ответам",
+    "package_add_label": "+ добавить",
+    "price_caption_template": "При оплате онлайн",
+    "all_packages_title": "Все остальные чек-апы",
+    "show_all_packages": "Показать все чек-апы",
+    "hide_all_packages": "Скрыть остальные чек-апы",
+    "benefit_results": "Результаты и ИИ-расшифровка появятся в личном кабинете",
+    "benefit_doctor": "Врач высшей категории Татьяна Витальевна бесплатно поможет разобраться в результатах",
+    "benefit_visit": "Всё за один визит — без отдельной записи и нового укола",
+    "benefits_link": "Посмотреть пример расшифровки →",
+    "total_template": "Выбрано: {count} · {amount} ₽ (экономия {discount} ₽)",
+    "primary_cta_template": "Добавить к медосмотру — {amount} ₽",
+    "empty_cta": "Продолжить без обследований",
+    "decline_link": "Продолжить без дополнительных обследований",
+    "empty_warning": "Вы теряете скидку 10 % на онлайн-оплату",
+    "discount_note": "Скидка 10 % действует при оплате онлайн. На медосмотре — полная цена",
+    "fine_print_template": "Дополнительные обследования добровольны. Результаты через {days} дней в личном кабинете, расшифровка врача бесплатно",
+    "retention_kicker": "Перед тем как продолжить",
+    "retention_title": "После обследований вы получите больше, чем результаты",
+    "retention_body_1": "Врач высшей категории Татьяна Витальевна подготовит подробную расшифровку сложных показателей.",
+    "retention_body_2": "И самое главное — вы получите бесплатную консультацию по результатам.",
+    "retention_body_3": "Всё будет доступно в этом сервисе — без очередей и доплат за расшифровку.",
+    "retention_benefit_1_title": "Ничего дополнительно делать не нужно",
+    "retention_benefit_1_body": "Выберите обследования сейчас, а в день медосмотра сдайте всё вместе.",
+    "retention_benefit_2_title": "Один визит вместо отдельной поездки",
+    "retention_benefit_2_body": "Вы уже будете на осмотре — дополнительные анализы можно сдать за один раз.",
+    "retention_benefit_3_title": "Бесплатная консультация специалиста",
+    "retention_benefit_3_body": "После готовности дополнительных анализов врач высшей категории поможет разобраться в результатах.",
+    "retention_benefit_4_title": "Не придётся записываться отдельно",
+    "retention_benefit_4_body": "Если отложить обследования, позже могут потребоваться отдельная запись и поездка.",
+    "retention_voluntary_note": "Дополнительные обследования добровольны — окончательное решение остаётся за вами.",
+    "retention_discount_note": "Скидка 10 % на онлайн-оплату действует только до дня медосмотра — в клинике по полной цене",
+    "retention_back_template": "Вернуться и добавить «{package}» — {price} ₽",
+    "retention_decline": "Всё равно отказаться",
+    "personal_rule_2": "{имя}, давление бывает повышенным не само по себе — оно может быть связано с работой почек, щитовидной железы и обменом холестерина. Важно вовремя увидеть причины и не пропустить риски для сосудов и сердца",
+    "personal_rule_3": "{имя}, по сочетанию роста и веса организму сейчас непросто справляться с обменной нагрузкой. Это не про внешность, а про здоровье: важно понять причины и проверить, не страдают ли уже органы",
+    "personal_rule_4": "{имя}, даже если пока ничего не беспокоит, алкоголь часто отражается на функции печени и почек. Многие изменения долго никак себя не проявляют — анализы помогают увидеть их раньше симптомов",
+    "personal_rule_5": "{имя}, у женщин слабость и снижение энергии очень часто связаны с дефицитом железа. Это частая находка, и хорошая новость в том, что она обычно корректируется",
+    "personal_rule_6": "{имя}, длительная усталость часто связана с дефицитом витамина D и работой щитовидной железы. Это частая и корректируемая причина, её удобно исключить одной проверкой",
+    "personal_rule_7": "{имя}, боль в суставах бывает по разным причинам: иногда это возрастные изменения, иногда воспалительный процесс. Проверка помогает не гадать и понять, нужен ли ревматолог",
+    "personal_rule_8": "{имя}, после 45 самочувствие часто меняется из-за гормонального фона. Лучше увидеть картину целиком, чем списывать всё на возраст",
+    "personal_rule_9": "{имя}, после 40 заболевания простаты встречаются часто, а на ранних стадиях проявляются слабо. Чем раньше контролируются такие показатели, тем спокойнее и понятнее ситуация",
+    "personal_rule_10": "{имя}, жалоб нет — это как раз хорошо. Многие изменения долго не дают ярких симптомов, поэтому профилактическая проверка и важна. Можно начать с самого базового",
+}
+
+
+def admin_marketer_examination_texts() -> dict:
+    """Return editable copy for the marketer examination-offer screen."""
+    with connection() as conn:
+        row = conn.execute(
+            "SELECT value_json FROM content_text_settings WHERE section_id=?",
+            ("marketer_examinations",),
+        ).fetchone()
+    saved = {}
+    if row:
+        try:
+            saved = json.loads(row["value_json"] or "{}")
+        except (json.JSONDecodeError, TypeError):
+            saved = {}
+    if not isinstance(saved, dict):
+        saved = {}
+    result = {**MARKETER_EXAMINATION_TEXT_DEFAULTS}
+    for key in result:
+        if key in saved:
+            result[key] = saved[key]
+    # Preserve genuinely edited copy, but migrate values that were saved from
+    # the previous default form so an ordinary deployment receives the fixed UI.
+    if result["price_caption_template"] == "{online} ₽ онлайн · {full} ₽ на медосмотре":
+        result["price_caption_template"] = MARKETER_EXAMINATION_TEXT_DEFAULTS["price_caption_template"]
+    if result["retention_body_1"] == "Врач высшей категории Татьяна Витальевна подготовит понятную расшифровку сложных показателей.":
+        result["retention_body_1"] = MARKETER_EXAMINATION_TEXT_DEFAULTS["retention_body_1"]
+    if result["retention_body_2"] == "Дополнительные чек-апы можно сдать вместе с обязательным анализом — без нового укола и отдельной записи.":
+        result["retention_body_2"] = MARKETER_EXAMINATION_TEXT_DEFAULTS["retention_body_2"]
+    if result["personal_rule_10"] == "{имя}, по ответам анкеты не выделяется одно приоритетное направление. Для профилактической проверки можно начать с базового чек-апа":
+        result["personal_rule_10"] = MARKETER_EXAMINATION_TEXT_DEFAULTS["personal_rule_10"]
+    try:
+        result["result_days"] = max(1, min(90, int(result["result_days"])))
+    except (TypeError, ValueError):
+        result["result_days"] = MARKETER_EXAMINATION_TEXT_DEFAULTS["result_days"]
+    return result
+
+
+def admin_update_marketer_examination_texts(payload: dict) -> dict:
+    """Validate and persist one future-proof content-settings section."""
+    if not isinstance(payload, dict):
+        raise ValueError("Ожидается объект с текстами")
+    unknown = set(payload) - set(MARKETER_EXAMINATION_TEXT_DEFAULTS)
+    if unknown:
+        raise ValueError(f"Неизвестные поля настроек: {', '.join(sorted(unknown))}")
+    current = admin_marketer_examination_texts()
+    for key in MARKETER_EXAMINATION_TEXT_DEFAULTS:
+        if key not in payload:
+            continue
+        if key == "result_days":
+            try:
+                value = int(payload[key])
+            except (TypeError, ValueError):
+                raise ValueError("Срок готовности должен быть целым числом") from None
+            if not 1 <= value <= 90:
+                raise ValueError("Срок готовности должен быть от 1 до 90 дней")
+            current[key] = value
+            continue
+        value = str(payload[key] or "").strip()
+        if not value:
+            raise ValueError(f"Поле {key} не может быть пустым")
+        if len(value) > 2000:
+            raise ValueError(f"Поле {key} слишком длинное")
+        current[key] = value
+    now = utc_now()
+    with _write_lock, connection() as conn:
+        conn.execute(
+            """INSERT INTO content_text_settings (section_id,value_json,updated_at)
+               VALUES (?,?,?) ON CONFLICT(section_id) DO UPDATE SET
+               value_json=excluded.value_json,updated_at=excluded.updated_at""",
+            ("marketer_examinations", json.dumps(current, ensure_ascii=False), now),
+        )
+        conn.commit()
+    return admin_marketer_examination_texts()
+
 
 def admin_experiment_settings() -> dict:
     """Return the singleton A/B experiment configuration."""
@@ -2550,7 +2675,7 @@ def _public_payment_order(row) -> dict | None:
 
 def create_payment_order() -> dict:
     """Freeze the selected catalog items and server-calculated amount before payment."""
-    from .onboarding import effective_examination_price, normalize_examination_selection
+    from .onboarding import normalize_examination_selection, online_examination_price
 
     onboarding = get_onboarding()
     selected_ids = normalize_examination_selection(onboarding.get("selected_tests") or [])
@@ -2564,7 +2689,7 @@ def create_payment_order() -> dict:
             "default_name": str(
                 catalog[item_id].get("default_name") or catalog[item_id]["name"]
             )[:128],
-            "price": effective_examination_price(catalog[item_id]),
+            "price": online_examination_price(catalog[item_id]),
         }
         for item_id in selected_ids
     ]
@@ -4123,6 +4248,12 @@ def init_db() -> None:
 
             CREATE INDEX IF NOT EXISTS idx_experiment_assignments_variant_time
             ON experiment_assignments(experiment_key,variant,assigned_at);
+
+            CREATE TABLE IF NOT EXISTS content_text_settings (
+                section_id TEXT PRIMARY KEY,
+                value_json TEXT NOT NULL DEFAULT '{}',
+                updated_at TEXT NOT NULL
+            );
 
             CREATE TABLE IF NOT EXISTS payment_orders (
                 id TEXT PRIMARY KEY,

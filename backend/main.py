@@ -115,15 +115,17 @@ def ikp_token_valid(authorization: str) -> bool:
 
 
 def resolve_metrika_counter_id(variant: str, main_counter: str, marketer_counter: str) -> str:
-    """Route each session to its own Metrika counter for a clean per-branch dashboard.
+    """Route the control and marketer funnels to different counters.
 
-    Falls back to the shared/main counter whenever the marketer counter is not
-    configured, so leaving the new env var empty behaves exactly as before.
+    The existing/control funnel always keeps the main counter.  Only the
+    marketer funnel uses its dedicated counter.  A missing marketer counter
+    disables Yandex tracking for that variant instead of contaminating the
+    control counter with marketer sessions.
     """
     main_counter = str(main_counter or "")
     marketer_counter = str(marketer_counter or "")
-    if variant == "marketer" and marketer_counter.isdigit():
-        return marketer_counter
+    if variant == "marketer":
+        return marketer_counter if marketer_counter.isdigit() else ""
     return main_counter
 
 
@@ -227,6 +229,8 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                 "yandex_metrika_counter_id": counter_id if counter_id.isdigit() else "",
                 "yandex_metrika_marketer_counter_active": dedicated_marketer_counter,
                 "experiment": experiment,
+                "is_test": bool(db.is_test_user() or experiment.get("preview")),
+                "marketer_examination_texts": db.admin_marketer_examination_texts(),
                 "online_payments_enabled": bool(
                     settings.online_payments_enabled and yookassa.configured()
                 ),
@@ -330,6 +334,7 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
             "/api/admin/analytics", "/api/admin/metric2",
             "/api/admin/service-results",
             "/api/admin/experiments",
+            "/api/admin/content-texts",
             "/api/admin/ikp",
             "/api/admin/funnel-monitor", "/api/admin/funnel-monitor/preview",
             "/api/admin/checkup-reoffers",
@@ -392,6 +397,15 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                     return self._json(200, report)
                 except (ValueError, TypeError) as exc:
                     return self._json(422, {"detail": str(exc)})
+            if path == "/api/admin/content-texts":
+                return self._json(200, {
+                    "examinations": db.list_examinations(),
+                    "sections": [{
+                        "id": "marketer_examinations",
+                        "title": "Экран дополнительных обследований",
+                        "values": db.admin_marketer_examination_texts(),
+                    }],
+                })
             if path == "/api/admin/metric2":
                 try:
                     if query.get("refresh", [""])[0] == "1":
@@ -407,6 +421,7 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                         background=True,
                     )
                     report["examinations"] = db.list_examinations()
+                    report["marketer_examination_texts"] = db.admin_marketer_examination_texts()
                     return self._json(200, report)
                 except analytics.ReportBuilding:
                     return self._json(202, {"status": "building", "retry_after_ms": 750})
@@ -634,6 +649,16 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                 return self._json(200, {
                     "settings": db.admin_update_funnel_monitor_settings(payload),
                     "integration_configured": funnel_monitor.configured(),
+                })
+            except (ValueError, TypeError, json.JSONDecodeError, UnicodeDecodeError) as exc:
+                return self._json(422, {"detail": str(exc)})
+        if path == "/api/admin/content-texts/marketer-examinations":
+            if not self._admin_authorized():
+                return
+            try:
+                payload = self._read_json(max_bytes=64_000)
+                return self._json(200, {
+                    "values": db.admin_update_marketer_examination_texts(payload),
                 })
             except (ValueError, TypeError, json.JSONDecodeError, UnicodeDecodeError) as exc:
                 return self._json(422, {"detail": str(exc)})

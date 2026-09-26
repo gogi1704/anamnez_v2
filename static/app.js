@@ -42,6 +42,13 @@ const state = {
   miniProfilePurpose: 'interpretation',
   pendingLabAction: null,
   checkupReoffer: null,
+  marketerOfferInitialized: false,
+  marketerAllPackagesExpanded: false,
+  marketerExpandedTests: new Set(),
+  marketerOfferObserver: null,
+  offerViewGoalTracked: false,
+  metrikaVisitParamsSent: false,
+  paymentSuccessGoalOrders: new Set(),
 };
 
 const $ = selector => document.querySelector(selector);
@@ -1699,8 +1706,210 @@ function examSelectionAnalyticsScreen() {
     : 'exam_selection';
 }
 
+function marketerOfferActive() {
+  return isMarketerFunnel()
+    && onboardingAnalyticsContext() === 'onboarding'
+    && !state.onboarding?.questionnaire_skipped
+    && !state.returnToChatAfterExaminations;
+}
+
+function marketerOfferTexts() {
+  return state.publicConfig?.marketer_examination_texts || {};
+}
+
+function offerTemplate(value, replacements = {}) {
+  let result = String(value || '');
+  Object.entries(replacements).forEach(([key,replacement]) => {
+    result = result.replaceAll(`{${key}}`, String(replacement));
+  });
+  return result;
+}
+
+function examinationOnlinePrice(test) {
+  const value = Number(test?.online_price);
+  if (Number.isFinite(value)) return Math.max(0,value);
+  return Math.max(0,Math.round(examinationEffectivePrice(test) * .9));
+}
+
+function selectedOfferTotals() {
+  const selected = (state.onboarding?.tests || []).filter(test => state.selectedTests.has(test.id));
+  const full = selected.reduce((sum,test) => sum + examinationEffectivePrice(test),0);
+  const online = selected.reduce((sum,test) => sum + examinationOnlinePrice(test),0);
+  return {selected,full,online,discount:Math.max(0,full-online)};
+}
+
+function offerMetrikaDetails(extra = {}) {
+  const profile = state.profile || state.onboarding?.profile || {};
+  const age = Number(profile.age || 0);
+  const ageGroup = age >= 55 ? '55+' : age >= 45 ? '45-54' : age >= 35 ? '35-44' : age >= 25 ? '25-34' : '18-24';
+  const notes = String(profile.notes || '').trim().toLowerCase();
+  const complaints = notes && !['нет','нет жалоб','жалоб нет','не беспокоит','ничего'].includes(notes) ? 'yes' : 'no';
+  return {
+    variant:String(state.publicConfig?.experiment?.variant || ''),
+    sex:String(profile.sex || ''),
+    age_group:ageGroup,
+    pressure:String(profile.blood_pressure || ''),
+    sugar:String(profile.blood_sugar || ''),
+    smoking:String(profile.smoking || ''),
+    complaints,
+    is_test:Boolean(state.publicConfig?.is_test),
+    ...extra,
+  };
+}
+
+function sendOfferGoal(goal, extra = {}) {
+  if (!hasDedicatedMarketerMetrika() || onboardingAnalyticsContext() !== 'onboarding') return;
+  window.consiliumMetrikaGoal?.(goal, offerMetrikaDetails(extra));
+}
+
+function trackOfferViewGoal() {
+  if (state.offerViewGoalTracked) return;
+  state.offerViewGoalTracked = true;
+  const context = state.onboarding?.marketer_offer || {};
+  const primary = context.primary_test_id || state.onboarding?.featured_test_ids?.[0]
+    || state.onboarding?.recommended_test_ids?.[0] || '';
+  const details = offerMetrikaDetails({
+    recommended_package:primary,
+    rule_id:isMarketerFunnel() ? String(context.rule_id || '') : '',
+  });
+  sendOfferGoal('offer_view', details);
+  if (!state.metrikaVisitParamsSent) {
+    state.metrikaVisitParamsSent = true;
+    window.consiliumMetrikaParams?.(details);
+  }
+}
+
+function marketerPersonalText() {
+  const texts = marketerOfferTexts();
+  const ruleId = Number(state.onboarding?.marketer_offer?.rule_id || 10);
+  const template = String(texts[`personal_rule_${ruleId}`] || texts.personal_rule_10 || '');
+  const name = String(state.profile?.preferred_name || '').trim();
+  let result = template.replaceAll('{имя}, ', name ? `${name}, ` : '').replaceAll('{имя}',name);
+  result = result.trim();
+  return result ? result.charAt(0).toUpperCase() + result.slice(1) : '';
+}
+
+function marketerPriceMarkup(test) {
+  const full = examinationEffectivePrice(test);
+  const online = examinationOnlinePrice(test);
+  const caption = offerTemplate(marketerOfferTexts().price_caption_template || 'При оплате онлайн',{
+    online:online.toLocaleString('ru-RU'),full:full.toLocaleString('ru-RU'),
+  });
+  return `<span class="marketer-price"><span><s>${full.toLocaleString('ru-RU')} ₽</s><b>${online.toLocaleString('ru-RU')} ₽</b></span><small>${escapeHtml(caption)}</small></span>`;
+}
+
+function marketerOfferCard(test, {primary = false, visible = false, recommended = false} = {}) {
+  const selected = state.selectedTests.has(test.id);
+  const expanded = primary || selected || state.marketerExpandedTests.has(test.id);
+  const extendedId = EXAMINATION_UPGRADE_PAIRS[test.id];
+  const disabled = Boolean(extendedId && state.selectedTests.has(extendedId));
+  const indicators = String(test.includes || '').split(',').map(item => item.trim()).filter(Boolean).slice(0,3);
+  return `<label class="marketer-package-card${primary ? ' primary' : ''}${expanded ? ' expanded' : ' compact'}${selected ? ' selected' : ''}${disabled ? ' disabled-by-upgrade' : ''}${visible ? ' recommended-extra' : ''}" data-test-card="${escapeAttr(test.id)}" ${disabled ? 'aria-disabled="true"' : ''}>
+    <input type="checkbox" ${selected ? 'checked' : ''} ${disabled ? 'disabled' : ''}>
+    <span class="marketer-package-check">✓</span>
+    ${primary || recommended ? `<small class="marketer-recommended-badge">${escapeHtml(marketerOfferTexts().recommended_badge || 'Рекомендуем по вашим ответам')}</small>` : ''}
+    <span class="marketer-package-heading"><strong>${escapeHtml(test.name)}</strong>${marketerPriceMarkup(test)}</span>
+    ${expanded ? `<span class="marketer-package-details"><small>${escapeHtml(test.description || '')}</small>${indicators.length ? `<em>${indicators.map(item => `<i>${escapeHtml(item)}</i>`).join('')}</em>` : `<em>${escapeHtml(test.includes || '')}</em>`}</span>` : `<span class="marketer-package-add">${escapeHtml(marketerOfferTexts().package_add_label || '+ добавить')}</span>`}
+  </label>`;
+}
+
+function setupMarketerOfferObserver() {
+  state.marketerOfferObserver?.disconnect?.();
+  const main = $('#marketerOfferMainCta');
+  const sticky = $('#marketerOfferStickyCta');
+  if (!main || !sticky) return;
+  const fitSingleLine = button => {
+    if (!button?.clientWidth) return;
+    button.style.fontSize = '';
+    let size = Number.parseFloat(getComputedStyle(button).fontSize) || 16;
+    while (button.scrollWidth > button.clientWidth && size > 8) {
+      size -= .5;
+      button.style.fontSize = `${size}px`;
+    }
+  };
+  fitSingleLine(main);
+  if (!('IntersectionObserver' in window)) return;
+  state.marketerOfferObserver = new IntersectionObserver(entries => {
+    const hidden = entries.some(entry => entry.isIntersecting);
+    sticky.classList.toggle('hidden',hidden);
+    if (!hidden) requestAnimationFrame(() => fitSingleLine(sticky));
+  },{threshold:.15});
+  state.marketerOfferObserver.observe(main);
+}
+
+function renderMarketerExamSelection(scrollPosition = null) {
+  normalizeSelectedTestPairs();
+  const texts = marketerOfferTexts();
+  setOnboardingMeta(texts.stage_label || 'Обследования',100);
+  const genderIncompatible = new Set(state.onboarding?.gender_incompatible_test_ids || []);
+  const tests = (state.onboarding?.tests || []).filter(test => !genderIncompatible.has(test.id));
+  genderIncompatible.forEach(id => state.selectedTests.delete(id));
+  const byId = new Map(tests.map(test => [test.id,test]));
+  const context = state.onboarding?.marketer_offer || {};
+  const scenarioIds = (context.recommended_test_ids || context.visible_recommended_test_ids || []).filter(id => byId.has(id));
+  const scenarioSet = new Set(scenarioIds);
+  const scenarioOrder = new Map(scenarioIds.map((id,index) => [id,index]));
+  const visibleIds = (context.visible_recommended_test_ids || state.onboarding?.featured_test_ids || []).filter(id => byId.has(id));
+  const primaryId = context.primary_test_id || visibleIds[0] || tests[0]?.id || '';
+  if (!state.marketerOfferInitialized) {
+    state.marketerOfferInitialized = true;
+    if (!state.selectedTests.size && primaryId) state.selectedTests.add(primaryId);
+  }
+  const primary = byId.get(primaryId);
+  const recommendedExtras = visibleIds.filter(id => id !== primaryId).slice(0,2).map(id => byId.get(id)).filter(Boolean);
+  const usedIds = new Set([primaryId,...recommendedExtras.map(test => test.id)]);
+  const rest = tests.filter(test => !usedIds.has(test.id)).sort((left,right) => {
+    const leftOrder = scenarioOrder.has(left.id) ? scenarioOrder.get(left.id) : Number.MAX_SAFE_INTEGER;
+    const rightOrder = scenarioOrder.has(right.id) ? scenarioOrder.get(right.id) : Number.MAX_SAFE_INTEGER;
+    return leftOrder - rightOrder
+      || examinationEffectivePrice(right) - examinationEffectivePrice(left)
+      || String(left.name || '').localeCompare(String(right.name || ''),'ru');
+  });
+  const totals = selectedOfferTotals();
+  const hasSelection = totals.selected.length > 0;
+  const amount = totals.online.toLocaleString('ru-RU');
+  const mainLabel = hasSelection
+    ? offerTemplate(texts.primary_cta_template || 'Добавить к медосмотру — {amount} ₽',{amount})
+    : (texts.empty_cta || 'Продолжить без обследований');
+  const mainAction = hasSelection ? 'continue-payment' : 'review-exam-skip';
+  const mainButton = `<button id="marketerOfferMainCta" type="button" class="marketer-primary-cta${hasSelection ? '' : ' empty'}" data-onboarding-action="${mainAction}"${hasSelection ? '' : ' data-decline-source="button"'}>${escapeHtml(mainLabel)}</button>`;
+  const stickyButton = `<button id="marketerOfferStickyCta" type="button" class="marketer-sticky-cta${hasSelection ? '' : ' empty'}" data-onboarding-action="${mainAction}"${hasSelection ? '' : ' data-decline-source="button"'}>${escapeHtml(mainLabel)}</button>`;
+  const totalText = offerTemplate(texts.total_template || 'Выбрано: {count} · {amount} ₽ (экономия {discount} ₽',{
+    count:totals.selected.length,amount,discount:totals.discount.toLocaleString('ru-RU'),
+  });
+  const finePrint = offerTemplate(texts.fine_print_template || '',{days:Number(texts.result_days || 14)});
+  const otherCards = recommendedExtras.map(test => marketerOfferCard(test,{visible:true,recommended:true})).join('');
+  const restCards = rest.map(test => marketerOfferCard(test,{recommended:scenarioSet.has(test.id)})).join('');
+  $('#onboardingContent').innerHTML = `<div class="marketer-offer-screen">
+    <small class="marketer-offer-progress-label">${escapeHtml(texts.progress_label || 'Шаг 20 из 20 · последний шаг')}</small>
+    <h1>${escapeHtml(texts.headline || '')}</h1>
+    <p class="marketer-personal-copy">${escapeHtml(marketerPersonalText())}</p>
+    <p class="marketer-zero-effort"><span aria-hidden="true">🩸</span>${escapeHtml(texts.zero_effort || '')}</p>
+    ${primary ? marketerOfferCard(primary,{primary:true}) : ''}
+    ${otherCards ? `<section class="marketer-recommended-extras">${otherCards}</section>` : ''}
+    ${rest.length ? `<section class="marketer-all-packages"><button type="button" data-onboarding-action="toggle-marketer-all" aria-expanded="${state.marketerAllPackagesExpanded}"><span>${escapeHtml(state.marketerAllPackagesExpanded ? texts.hide_all_packages : texts.show_all_packages)}</span><b>${state.marketerAllPackagesExpanded ? '−' : '+'}</b></button>${state.marketerAllPackagesExpanded ? `<div class="marketer-all-package-list"><h2>${escapeHtml(texts.all_packages_title || '')}</h2>${restCards}</div>` : ''}</section>` : ''}
+    <section class="marketer-benefits"><ul><li>✓ <span>${escapeHtml(texts.benefit_results || '')}</span></li><li>✓ <span>${escapeHtml(texts.benefit_doctor || '')}</span></li><li>✓ <span>${escapeHtml(texts.benefit_visit || '')}</span></li></ul><button type="button" data-onboarding-action="open-results-preview">${escapeHtml(texts.benefits_link || '')}</button></section>
+    <div class="marketer-offer-total"><strong>${escapeHtml(totalText)}</strong><small>${escapeHtml(texts.discount_note || '')}</small></div>
+    ${!hasSelection ? `<p class="marketer-empty-warning">${escapeHtml(texts.empty_warning || '')}</p>` : ''}
+    <div class="marketer-offer-actions"><button type="button" class="onboarding-back" data-onboarding-action="exam-offer">Назад</button>${mainButton}</div>
+    ${hasSelection ? `<button type="button" class="marketer-decline-link" data-onboarding-action="review-exam-skip" data-decline-source="link">${escapeHtml(texts.decline_link || '')}</button>` : ''}
+    <p class="marketer-fine-print">${escapeHtml(finePrint)}</p>
+    ${stickyButton}
+  </div>`;
+  if (scrollPosition) {
+    $('#onboarding').scrollTop = scrollPosition.onboarding || 0;
+    requestAnimationFrame(() => { $('#onboarding').scrollTop = scrollPosition.onboarding || 0; });
+  }
+  requestAnimationFrame(setupMarketerOfferObserver);
+}
+
 function renderExamSelection(scrollPosition = null) {
   trackOnboardingScreen(examSelectionAnalyticsScreen());
+  trackOfferViewGoal();
+  if (marketerOfferActive()) {
+    renderMarketerExamSelection(scrollPosition);
+    return;
+  }
   normalizeSelectedTestPairs();
   setOnboardingMeta('Обследования', 80);
   const recommended = new Set(state.onboarding.recommended_test_ids || []);
@@ -1746,6 +1955,37 @@ function renderExamSelection(scrollPosition = null) {
 function renderExamSkipConfirmation() {
   trackEvent('examinations_objection_viewed', { screen:'examinations_skip' });
   trackOnboardingScreen('exam_objection');
+  const primaryId = state.onboarding?.marketer_offer?.primary_test_id
+    || state.onboarding?.featured_test_ids?.[0] || state.onboarding?.recommended_test_ids?.[0] || '';
+  const primary = state.onboarding?.tests?.find(test => test.id === primaryId);
+  if (marketerOfferActive() && primary) {
+    const texts = marketerOfferTexts();
+    state.marketerRetentionPackageId = primary.id;
+    sendOfferGoal('retain_view',{package:primary.id});
+    setOnboardingMeta(texts.stage_label || 'Обследования',100);
+    const price = examinationOnlinePrice(primary).toLocaleString('ru-RU');
+    const backLabel = offerTemplate(texts.retention_back_template || 'Вернуться и добавить «{package}» — {price} ₽',{
+      package:primary.name,price,
+    });
+    $('#onboardingContent').innerHTML = `
+      <div class="marketer-retention-screen">
+        <span class="onboarding-kicker">${escapeHtml(texts.retention_kicker || '')}</span>
+        <h1>${escapeHtml(texts.retention_title || '')}</h1>
+        <div class="exam-objection-intro">
+          <p>${escapeHtml(texts.retention_body_1 || '')}</p>
+          <p>${escapeHtml(texts.retention_body_2 || '')}</p>
+          <p>${escapeHtml(texts.retention_body_3 || '')}</p>
+        </div>
+        <ul class="marketer-retention-benefits">
+          ${[1,2,3,4].map(index => `<li><span aria-hidden="true">✓</span><div><strong>${escapeHtml(texts[`retention_benefit_${index}_title`] || '')}</strong><small>${escapeHtml(texts[`retention_benefit_${index}_body`] || '')}</small></div></li>`).join('')}
+        </ul>
+        <p class="marketer-retention-voluntary">${escapeHtml(texts.retention_voluntary_note || '')}</p>
+        <p class="marketer-retention-discount">${escapeHtml(texts.retention_discount_note || '')}</p>
+        <button type="button" class="onboarding-next marketer-retention-back" data-onboarding-action="start-exams">${escapeHtml(backLabel)}</button>
+        <button type="button" class="marketer-retention-decline" data-onboarding-action="confirm-skip-exams">${escapeHtml(texts.retention_decline || 'Всё равно отказаться')}</button>
+      </div>`;
+    return;
+  }
   setOnboardingMeta('Обследования', 76);
   $('#onboardingContent').innerHTML = `
     <span class="onboarding-kicker">Перед тем как продолжить</span>
@@ -1767,6 +2007,7 @@ function renderExamSkipConfirmation() {
 
 async function submitExamSelection(skip = false) {
   try {
+    const submittedTotals = selectedOfferTotals();
     state.onboarding = await api('/api/onboarding/exams', { method:'POST', body:JSON.stringify({ selected_tests:skip ? [] : [...state.selectedTests] }) });
     window.consiliumMetrikaGoal?.('exam_selection_completed');
     if (skip) {
@@ -1778,6 +2019,11 @@ async function submitExamSelection(skip = false) {
     // Count Continue only after the server has accepted a non-empty selection.
     // Otherwise a failed request looks like a real transition in Metric 2.0.
     trackOnboardingAction('continue', examSelectionAnalyticsScreen());
+    sendOfferGoal('offer_continue',{
+      packages:submittedTotals.selected.map(test => test.id).join(','),
+      amount:submittedTotals.online,
+      discount:submittedTotals.discount,
+    });
     renderPayment();
   } catch (error) { showOnboardingError(error.message); }
 }
@@ -1825,6 +2071,8 @@ function renderPayment() {
   setOnboardingMeta('Оплата', 92);
   const selected = selectedTestDetails();
   const total = selected.reduce((sum,test) => sum + examinationEffectivePrice(test), 0);
+  const onlineTotal = selected.reduce((sum,test) => sum + examinationOnlinePrice(test), 0);
+  const onlineSavings = Math.max(0,total - onlineTotal);
   const customerName = String(state.profile?.preferred_name || '').trim();
   const nameField = `<label class="payment-email-label">ФИО <span>только при оплате онлайн — нужно, чтобы идентифицировать вас на предприятии</span><input id="paymentCustomerName" type="text" autocomplete="name" maxlength="100" placeholder="Иванов Иван Иванович" value="${escapeAttr(customerName)}"></label>`;
   const emailField = state.publicConfig.online_payments_enabled && state.publicConfig.payment_receipt_email_required
@@ -1832,7 +2080,9 @@ function renderPayment() {
   const exitAction = state.paymentReviewSource === 'purchases'
     ? '<button type="button" class="payment-back-button" data-onboarding-action="close-payment-review">Закрыть</button>'
     : '<button type="button" class="payment-back-button" data-onboarding-action="back-to-exams">← Вернуться к обследованиям</button>';
-  $('#onboardingContent').innerHTML = `<span class="onboarding-kicker">Последний шаг</span><h1>Проверим заказ</h1><p class="onboarding-lead">Выберите, как вам будет удобнее оплатить дополнительные обследования.</p><div class="payment-stub"><span class="demo-badge">ВЫБРАННЫЕ ОБСЛЕДОВАНИЯ</span><ul class="payment-lines">${selected.map(test => `<li><span>${test.name}</span><strong>${examinationEffectivePrice(test).toLocaleString('ru')} ₽</strong></li>`).join('')}</ul><div class="payment-total"><span>Итого</span><strong>${total.toLocaleString('ru')} ₽</strong></div></div><div class="payment-customer-fields">${nameField}${emailField}</div><div class="payment-actions"><button type="button" class="payment-online-button" data-onboarding-action="pay-online">Оплатить онлайн</button><button type="button" class="payment-at-exam-button" data-onboarding-action="pay-at-exam">Оплатить на медосмотре</button></div>${exitAction}`;
+  const onlineLabel = `Оплатить онлайн · ${onlineTotal.toLocaleString('ru')} ₽`;
+  const atExamLabel = `Оплатить на медосмотре · ${total.toLocaleString('ru')} ₽`;
+  $('#onboardingContent').innerHTML = `<span class="onboarding-kicker">Последний шаг</span><h1>Проверим заказ</h1><p class="onboarding-lead">Выберите, как вам будет удобнее оплатить дополнительные обследования.</p><div class="payment-stub"><span class="demo-badge">ВЫБРАННЫЕ ОБСЛЕДОВАНИЯ</span><ul class="payment-lines">${selected.map(test => `<li><span>${test.name}</span><strong>${examinationEffectivePrice(test).toLocaleString('ru')} ₽</strong></li>`).join('')}</ul><div class="payment-total"><span>Полная цена</span><strong>${total.toLocaleString('ru')} ₽</strong></div><div class="payment-online-total"><span>При оплате онлайн · скидка 10 %</span><strong>${onlineTotal.toLocaleString('ru')} ₽</strong><small>Экономия ${onlineSavings.toLocaleString('ru')} ₽</small></div></div><div class="payment-customer-fields">${nameField}${emailField}</div><div class="payment-actions"><button type="button" class="payment-online-button" data-onboarding-action="pay-online" data-idle-label="${escapeAttr(onlineLabel)}">${escapeHtml(onlineLabel)}</button><button type="button" class="payment-at-exam-button" data-onboarding-action="pay-at-exam" data-idle-label="${escapeAttr(atExamLabel)}">${escapeHtml(atExamLabel)}</button></div>${exitAction}`;
 }
 
 function paymentCustomerName() {
@@ -1855,8 +2105,8 @@ function setPaymentActionsBusy(busy, activeLabel = '') {
   controls.forEach(control => { control.disabled = Boolean(busy); });
   const online = $('#onboardingContent [data-onboarding-action="pay-online"]');
   const atExam = $('#onboardingContent [data-onboarding-action="pay-at-exam"]');
-  if (online) online.textContent = busy && activeLabel === 'online' ? 'Открываем оплату…' : 'Оплатить онлайн';
-  if (atExam) atExam.textContent = busy && activeLabel === 'at_exam' ? 'Сохраняем…' : 'Оплатить на медосмотре';
+  if (online) online.textContent = busy && activeLabel === 'online' ? 'Открываем оплату…' : (online.dataset.idleLabel || online.textContent);
+  if (atExam) atExam.textContent = busy && activeLabel === 'at_exam' ? 'Сохраняем…' : (atExam.dataset.idleLabel || atExam.textContent);
 }
 
 async function startOnlinePayment() {
@@ -1886,6 +2136,10 @@ async function startOnlinePayment() {
     });
     const url = result.order?.confirmation_url;
     window.consiliumMetrikaGoal?.('payment_online');
+    sendOfferGoal('payment_start',{
+      amount:Number(result.order?.amount_kopecks || 0) / 100,
+      packages:selectedTestDetails().map(test => test.id).join(','),
+    });
     if (url) {
       trackEvent('payment_redirected', {provider:'yookassa'});
       localStorage.setItem(PAYMENT_PENDING_ORDER_KEY, JSON.stringify({
@@ -2109,6 +2363,14 @@ async function returnToConsultationPayment() {
 
 function renderPaymentSuccess(order) {
   const orderNumber = String(order?.id || state.paymentReviewOrderId || '').slice(-8).toUpperCase();
+  const successGoalKey = String(order?.id || state.paymentReviewOrderId || 'current');
+  if (!state.paymentSuccessGoalOrders.has(successGoalKey)) {
+    state.paymentSuccessGoalOrders.add(successGoalKey);
+    sendOfferGoal('payment_success',{
+      amount:Number(order?.amount_kopecks || 0) / 100,
+      packages:selectedTestDetails().map(test => test.id).join(','),
+    });
+  }
   trackEvent('payment_success_viewed', {provider:'yookassa'});
   trackOnboardingScreen('payment_success');
   setOnboardingMeta('Оплачено', 100);
@@ -2364,6 +2626,11 @@ async function loadOnboarding({ openCompletedMessengerAccount = false, initialOn
   state.paymentReviewSource = '';
   state.paymentReviewOrderId = '';
   state.paymentReceiptEmail = '';
+  state.marketerOfferInitialized = false;
+  state.marketerAllPackagesExpanded = false;
+  state.marketerExpandedTests = new Set();
+  state.offerViewGoalTracked = false;
+  state.metrikaVisitParamsSent = false;
   state.onboarding = initialOnboarding || await api('/api/onboarding');
   applyFontSize(state.onboarding.font_size || 'extra');
   state.profile = state.onboarding.profile;
@@ -2498,12 +2765,22 @@ $('#onboardingContent').addEventListener('click', async event => {
     };
     const selection = selectExamination(id);
     if (!selection.changed) return;
+    if (marketerOfferActive()) {
+      if (!selection.removing) state.marketerExpandedTests.add(id);
+      sendOfferGoal('offer_package_toggle',{
+        package:id,
+        selected:selection.removing ? 'no' : 'yes',
+      });
+      trackOnboardingAction('toggle_package', examSelectionAnalyticsScreen());
+    }
     trackEvent(selection.removing ? 'examination_deselected' : 'examination_selected', {
       exam_id:id,
       recommended:(state.onboarding.recommended_test_ids || []).includes(id),
       selected_count:state.selectedTests.size,
     });
-    if (!selection.removing) trackOnboardingAction('select_exam', examSelectionAnalyticsScreen());
+    if (!selection.removing && !marketerOfferActive()) {
+      trackOnboardingAction('select_exam', examSelectionAnalyticsScreen());
+    }
     renderExamSelection(scrollPosition);
     return;
   }
@@ -2517,7 +2794,13 @@ $('#onboardingContent').addEventListener('click', async event => {
   else if (action === 'question-back') { if (state.returnToChatAfterExaminations) editProfileFromChatExamFlow(); else { state.onboardingStep = activeOnboardingQuestions().length - 1; renderQuestion(); } }
   else if (action === 'open-exam-catalog-info') { trackOnboardingAction('catalog_info', 'exam_selection'); renderExamCatalogInfo(); }
   else if (action === 'close-exam-catalog-info') { trackOnboardingAction('back', 'exam_catalog'); renderExamSelection(); }
+  else if (action === 'toggle-marketer-all') {
+    state.marketerAllPackagesExpanded = !state.marketerAllPackagesExpanded;
+    trackOnboardingAction(state.marketerAllPackagesExpanded ? 'show_all' : 'hide_all', examSelectionAnalyticsScreen());
+    renderExamSelection({onboarding:$('#onboarding').scrollTop || 0});
+  }
   else if (action === 'open-results-preview') {
+    sendOfferGoal('offer_benefits_open');
     state.examResultsPreviewScroll = {
       examList:$('#onboardingContent .exam-list')?.scrollTop || 0,
       onboarding:$('#onboarding').scrollTop || 0,
@@ -2536,10 +2819,10 @@ $('#onboardingContent').addEventListener('click', async event => {
     trackOnboardingAction('specialist', 'exam_results_preview');
     $('#examResultsSpecialistStatus')?.classList.remove('hidden');
   }
-  else if (action === 'start-exams') { const sourceScreen = currentOnboardingAnalyticsScreen; const afterObjection = sourceScreen === 'exam_objection'; const actionId = sourceScreen === 'exam_catalog' ? 'choose' : afterObjection && state.onboarding?.questionnaire_skipped ? 'choose_no_questionnaire' : afterObjection ? 'choose' : 'view_options'; trackOnboardingAction(actionId, sourceScreen); trackEvent('funnel_action', {stage:'examinations_offer',action:afterObjection ? 'choose_after_objection' : 'view_options'}); trackEvent('examinations_opened', { screen:'examinations' }); renderExamSelection(); }
+  else if (action === 'start-exams') { const sourceScreen = currentOnboardingAnalyticsScreen; const afterObjection = sourceScreen === 'exam_objection'; const actionId = sourceScreen === 'exam_catalog' ? 'choose' : afterObjection && state.onboarding?.questionnaire_skipped ? 'choose_no_questionnaire' : afterObjection ? 'choose' : 'view_options'; trackOnboardingAction(actionId, sourceScreen); trackEvent('funnel_action', {stage:'examinations_offer',action:afterObjection ? 'choose_after_objection' : 'view_options'}); trackEvent('examinations_opened', { screen:'examinations' }); if (marketerOfferActive() && afterObjection && state.marketerRetentionPackageId) { state.selectedTests.add(state.marketerRetentionPackageId); state.marketerExpandedTests.add(state.marketerRetentionPackageId); sendOfferGoal('retain_back',{package:state.marketerRetentionPackageId}); } renderExamSelection(); }
   else if (action === 'exam-offer') { const skippedQuestionnaire = Boolean(state.onboarding?.questionnaire_skipped); trackOnboardingAction('back', examSelectionAnalyticsScreen()); trackEvent('funnel_action', {stage:'examinations_options',action:skippedQuestionnaire ? 'options_back_non_medical' : 'options_back'}); if (state.returnToChatAfterExaminations) { state.selectedTests = new Set(state.onboarding?.selected_tests || []); renderCurrentExamSelectionSummary(); } else if (skippedQuestionnaire) { renderNotMedicalExamExplanation(); } else { state.onboardingStep = activeOnboardingQuestions().length - 1; renderQuestion(); } }
-  else if (action === 'review-exam-skip') { const fromOptions = Boolean($('#onboardingContent .exam-list')); trackOnboardingAction(fromOptions ? 'nothing' : 'skip', fromOptions ? examSelectionAnalyticsScreen() : 'exam_offer'); trackEvent('funnel_action', {stage:fromOptions ? 'examinations_options' : 'examinations_offer',action:fromOptions ? 'nothing_selected' : 'skip'}); trackEvent('examinations_skip_clicked', { selected_count:state.selectedTests.size }); renderExamSkipConfirmation(); }
-  else if (action === 'confirm-skip-exams') { trackOnboardingAction('refuse', 'exam_objection'); trackEvent('funnel_action', {stage:'examinations_offer',action:'refuse'}); trackEvent('examinations_skipped', { screen:'examinations_skip' }); submitExamSelection(true); }
+  else if (action === 'review-exam-skip') { const fromOptions = Boolean($('#onboardingContent .exam-list')) || marketerOfferActive(); const source = event.target.closest('[data-decline-source]')?.dataset.declineSource || 'button'; trackOnboardingAction(marketerOfferActive() ? 'decline' : fromOptions ? 'nothing' : 'skip', fromOptions ? examSelectionAnalyticsScreen() : 'exam_offer'); trackEvent('funnel_action', {stage:fromOptions ? 'examinations_options' : 'examinations_offer',action:fromOptions ? 'nothing_selected' : 'skip'}); trackEvent('examinations_skip_clicked', { selected_count:state.selectedTests.size }); sendOfferGoal('offer_decline',{source}); renderExamSkipConfirmation(); }
+  else if (action === 'confirm-skip-exams') { trackOnboardingAction('refuse', 'exam_objection'); trackEvent('funnel_action', {stage:'examinations_offer',action:'refuse'}); trackEvent('examinations_skipped', { screen:'examinations_skip' }); sendOfferGoal('retain_decline'); submitExamSelection(true); }
   else if (action === 'continue-payment') { submitExamSelection(false); }
   else if (action === 'back-to-exams') { trackOnboardingAction('back', 'payment'); renderExamSelection(); }
   else if (action === 'close-payment-review') {

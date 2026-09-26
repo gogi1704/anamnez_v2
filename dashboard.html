@@ -11,7 +11,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/static/dashboard.css?v=20260923-result-messenger-first-v1">
+  <link rel="stylesheet" href="/static/dashboard.css?v=20260925-new-line-marketer-v7">
 </head>
 <body>
   <main class="dashboard-shell">
@@ -56,6 +56,7 @@
         <button id="serviceResultsTab" type="button">Услуги и результаты</button>
         <button id="experimentsTab" type="button">Эксперименты</button>
         <button id="metric2Tab" type="button">Метрика 2.0</button>
+        <button id="contentTextsTab" type="button">Изменение текстов</button>
         <button id="monitorTab" type="button">Мониторинг в Bitrix24</button>
         <button id="ikpTab" type="button">ИКП</button>
         <button id="managersTab" type="button">Менеджеры и врачи</button>
@@ -273,6 +274,93 @@
           <div class="panel-heading"><div><p class="eyebrow" id="metric2FlowEyebrow">Обычная ссылка</p><h2 id="metric2FlowTitle">Анкета и выбор обследований</h2><p id="metric2FlowDescription">Нажмите на любой экран, чтобы открыть крупный макет и увидеть статистику всех кнопок и переходов.</p></div></div>
           <div class="metric2-flow" id="metric2Flow"></div>
         </article>
+      </section>
+
+      <section class="content-texts-admin hidden" id="contentTextsAdminView">
+        <article class="panel content-texts-heading-panel">
+          <div class="panel-heading"><div><p class="eyebrow">Контент без публикации кода</p><h2>Изменение текстов</h2><p>Выберите экран и измените его тексты без публикации новой версии приложения.</p></div></div>
+          <div class="content-text-tabs" role="tablist" aria-label="Редактируемый экран">
+            <button class="active" type="button" role="tab" aria-selected="true" data-content-text-tab="offer">Экран дополнительных обследований</button>
+            <button type="button" role="tab" aria-selected="false" data-content-text-tab="retention">Экран удержания</button>
+          </div>
+        </article>
+        <form class="panel content-text-form" id="marketerExaminationTextsForm">
+          <div class="panel-heading"><div><p class="eyebrow">Вариант marketer</p><h2 id="contentTextsScreenTitle">Предложение после анкеты</h2><p>Плейсхолдеры в фигурных скобках сохраняйте: <code>{имя}</code>, <code>{count}</code>, <code>{amount}</code>, <code>{discount}</code>, <code>{days}</code>, <code>{package}</code>, <code>{price}</code>, <code>{online}</code>, <code>{full}</code>.</p></div></div>
+          <aside class="content-text-preview" aria-label="Предпросмотр экрана">
+            <div class="content-text-preview-heading"><div><p class="eyebrow">Предпросмотр</p><h3 id="contentTextPreviewTitle">Экран дополнительных обследований</h3></div><span>Обновляется при вводе</span></div>
+            <label class="content-text-preview-rule" id="contentTextPreviewRuleWrap">Пример условия
+              <select id="contentTextPreviewRule">
+                <option value="2">Повышенное или нестабильное давление</option>
+                <option value="3">ИМТ от 30</option>
+                <option value="4">Алкоголь чаще раза в неделю</option>
+                <option value="5">Усталость у женщины</option>
+                <option value="6">Усталость у мужчины</option>
+                <option value="7">Боли в суставах</option>
+                <option value="8">Женщина от 45 лет</option>
+                <option value="9">Мужчина от 40 лет</option>
+                <option value="10" selected>Профилактический вариант</option>
+              </select>
+            </label>
+            <div class="content-text-preview-phone" id="contentTextPreviewPhone"></div>
+            <p>Это визуальный пример. Пользователь увидит текст своего первого подходящего условия и соответствующие ему чекапы.</p>
+          </aside>
+          <fieldset data-content-text-panel="offer"><legend>Основной экран</legend>
+            <label>Срок готовности результатов, дней<input type="number" min="1" max="90" data-text-key="result_days" required></label>
+            <label>Подпись прогресса<input type="text" maxlength="200" data-text-key="progress_label" required></label>
+            <label>Подпись этапа<input type="text" maxlength="200" data-text-key="stage_label" required></label>
+            <label>Главный заголовок<textarea rows="3" maxlength="2000" data-text-key="headline" required></textarea></label>
+            <label>Строка про отсутствие нового укола<textarea rows="2" maxlength="2000" data-text-key="zero_effort" required></textarea></label>
+            <label>Плашка основного чекапа<input type="text" maxlength="200" data-text-key="recommended_badge" required></label>
+            <label>Подпись добавления<input type="text" maxlength="200" data-text-key="package_add_label" required></label>
+            <label>Подпись цен<input type="text" maxlength="500" data-text-key="price_caption_template" required></label>
+            <label>Заголовок остальных чекапов<input type="text" maxlength="200" data-text-key="all_packages_title" required></label>
+            <div class="content-text-pair"><label>Показать список<input type="text" maxlength="200" data-text-key="show_all_packages" required></label><label>Скрыть список<input type="text" maxlength="200" data-text-key="hide_all_packages" required></label></div>
+          </fieldset>
+          <fieldset data-content-text-panel="offer"><legend>Преимущества и действия</legend>
+            <label>Преимущество 1<textarea rows="2" maxlength="2000" data-text-key="benefit_results" required></textarea></label>
+            <label>Преимущество 2<textarea rows="2" maxlength="2000" data-text-key="benefit_doctor" required></textarea></label>
+            <label>Преимущество 3<textarea rows="2" maxlength="2000" data-text-key="benefit_visit" required></textarea></label>
+            <label>Ссылка на пример<input type="text" maxlength="200" data-text-key="benefits_link" required></label>
+            <label>Итоговая строка<input type="text" maxlength="500" data-text-key="total_template" required></label>
+            <label>Основная кнопка<input type="text" maxlength="500" data-text-key="primary_cta_template" required></label>
+            <label>Кнопка без выбранных чекапов<input type="text" maxlength="500" data-text-key="empty_cta" required></label>
+            <label>Ссылка отказа<input type="text" maxlength="500" data-text-key="decline_link" required></label>
+            <label>Предупреждение без выбора<input type="text" maxlength="500" data-text-key="empty_warning" required></label>
+            <label>Условие скидки<textarea rows="2" maxlength="2000" data-text-key="discount_note" required></textarea></label>
+            <label>Мелкий текст<textarea rows="2" maxlength="2000" data-text-key="fine_print_template" required></textarea></label>
+          </fieldset>
+          <fieldset class="hidden" data-content-text-panel="retention"><legend>Экран удержания</legend>
+            <label>Надзаголовок<input type="text" maxlength="200" data-text-key="retention_kicker" required></label>
+            <label>Заголовок<textarea rows="2" maxlength="2000" data-text-key="retention_title" required></textarea></label>
+            <label>Первый абзац<textarea rows="2" maxlength="2000" data-text-key="retention_body_1" required></textarea></label>
+            <label>Второй абзац<textarea rows="2" maxlength="2000" data-text-key="retention_body_2" required></textarea></label>
+            <label>Третий абзац<textarea rows="2" maxlength="2000" data-text-key="retention_body_3" required></textarea></label>
+            <label>Преимущество 1 — заголовок<input type="text" maxlength="500" data-text-key="retention_benefit_1_title" required></label>
+            <label>Преимущество 1 — пояснение<textarea rows="2" maxlength="2000" data-text-key="retention_benefit_1_body" required></textarea></label>
+            <label>Преимущество 2 — заголовок<input type="text" maxlength="500" data-text-key="retention_benefit_2_title" required></label>
+            <label>Преимущество 2 — пояснение<textarea rows="2" maxlength="2000" data-text-key="retention_benefit_2_body" required></textarea></label>
+            <label>Преимущество 3 — заголовок<input type="text" maxlength="500" data-text-key="retention_benefit_3_title" required></label>
+            <label>Преимущество 3 — пояснение<textarea rows="2" maxlength="2000" data-text-key="retention_benefit_3_body" required></textarea></label>
+            <label>Преимущество 4 — заголовок<input type="text" maxlength="500" data-text-key="retention_benefit_4_title" required></label>
+            <label>Преимущество 4 — пояснение<textarea rows="2" maxlength="2000" data-text-key="retention_benefit_4_body" required></textarea></label>
+            <label>Примечание о добровольности<textarea rows="2" maxlength="2000" data-text-key="retention_voluntary_note" required></textarea></label>
+            <label>Предупреждение о скидке<textarea rows="2" maxlength="2000" data-text-key="retention_discount_note" required></textarea></label>
+            <label>Кнопка возврата<input type="text" maxlength="500" data-text-key="retention_back_template" required></label>
+            <label>Окончательный отказ<input type="text" maxlength="200" data-text-key="retention_decline" required></label>
+          </fieldset>
+          <fieldset data-content-text-panel="offer"><legend>Персональные строки по приоритету</legend>
+            <label>1. Повышенное или нестабильное давление<textarea rows="3" maxlength="2000" data-text-key="personal_rule_2" required></textarea></label>
+            <label>2. ИМТ от 30<textarea rows="3" maxlength="2000" data-text-key="personal_rule_3" required></textarea></label>
+            <label>3. Алкоголь чаще раза в неделю<textarea rows="3" maxlength="2000" data-text-key="personal_rule_4" required></textarea></label>
+            <label>4. Усталость у женщины<textarea rows="3" maxlength="2000" data-text-key="personal_rule_5" required></textarea></label>
+            <label>5. Усталость у мужчины<textarea rows="3" maxlength="2000" data-text-key="personal_rule_6" required></textarea></label>
+            <label>6. Боли в суставах<textarea rows="3" maxlength="2000" data-text-key="personal_rule_7" required></textarea></label>
+            <label>7. Женщина от 45 лет<textarea rows="3" maxlength="2000" data-text-key="personal_rule_8" required></textarea></label>
+            <label>8. Мужчина от 40 лет<textarea rows="3" maxlength="2000" data-text-key="personal_rule_9" required></textarea></label>
+            <label>9. Профилактический вариант<textarea rows="3" maxlength="2000" data-text-key="personal_rule_10" required></textarea></label>
+          </fieldset>
+          <div class="content-text-actions"><button type="submit">Сохранить тексты</button><span class="form-status hidden" id="contentTextsStatus" role="status"></span></div>
+        </form>
       </section>
 
       <section class="monitor-admin hidden" id="monitorAdminView">
@@ -611,6 +699,6 @@
       </div>
     </section>
   </div>
-<script src="/static/dashboard.js?v=20260923-result-messenger-first-v1" defer></script>
+<script src="/static/dashboard.js?v=20260925-new-line-marketer-v7" defer></script>
 </body>
 </html>

@@ -1842,8 +1842,6 @@ def _metric2_report_uncached(
     flow = str(flow or "standard").strip().lower()
     if flow not in {"standard", "result", "experiment", "reoffer"}:
         raise ValueError("Неизвестная ветка Метрики 2.0")
-    # The marketer funnel (experiment) reuses the standard screens — only the
-    # cohort of users differs — until a divergent path is actually built.
     screen_flow = flow if flow in {"result", "reoffer"} else "standard"
     expected_context = "result" if flow == "result" else "reoffer" if flow == "reoffer" else "onboarding"
     where, params = _filters(period, device, method, source, date_from, date_to)
@@ -1854,6 +1852,11 @@ def _metric2_report_uncached(
             params.extend(cohort_ids)
         else:
             where += " AND 0"
+    elif flow == "standard":
+        cohort_ids = sorted(_experiment_cohort_chel_ids("marketer"))
+        if cohort_ids:
+            where += " AND e.chel_id NOT IN (" + ",".join("?" for _ in cohort_ids) + ")"
+            params.extend(cohort_ids)
     join = " FROM analytics_events e LEFT JOIN analytics_sessions s ON s.session_id=e.session_id "
     definitions = [
         definition for definition in _metric2_screen_definitions()
@@ -1863,6 +1866,30 @@ def _metric2_report_uncached(
             else "standard"
         ) == screen_flow
     ]
+    if flow == "experiment":
+        definitions = json.loads(json.dumps(definitions, ensure_ascii=False))
+        for definition in definitions:
+            if definition["id"] == "exam_selection":
+                definition.update({
+                    "kind": "exam_selection_marketer",
+                    "title": "Новое предложение чек-апов",
+                    "description": "Один рекомендованный чек-ап выбран и раскрыт, ещё два показаны сразу, остальные открываются по кнопке.",
+                })
+                definition["actions"] = [
+                    {"id": "toggle_package", "label": "Добавили или убрали чек-ап", "interaction": True, "legacy": []},
+                    {"id": "show_all", "label": "Открыли все чек-апы", "interaction": True, "legacy": []},
+                    {"id": "hide_all", "label": "Скрыли остальные чек-апы", "interaction": True, "legacy": []},
+                    {"id": "open_results_preview", "label": "Что вы получите", "target": "exam_results_preview", "interaction": True, "legacy": [_metric2_spec("exam_results_preview_viewed")]},
+                    {"id": "back", "label": "Назад", "target": "question_notes", "legacy": []},
+                    {"id": "continue", "label": "Добавить к медосмотру", "target": "payment", "legacy": [_metric2_spec("examinations_selection_completed", min_selected_count=1)]},
+                    {"id": "decline", "label": "Продолжить без обследований", "target": "exam_objection", "legacy": []},
+                ]
+            elif definition["id"] == "exam_objection":
+                definition.update({
+                    "kind": "exam_objection_marketer",
+                    "title": "Удержание после отказа",
+                    "description": "Повторно объясняет ценность расшифровки и скидки перед окончательным отказом.",
+                })
     relevant_events = {"onboarding_screen_viewed", "onboarding_screen_action"}
     for definition in definitions:
         relevant_events.update(
@@ -2419,7 +2446,7 @@ def _metric2_report_uncached(
         "flow": flow,
         "flow_label": (
             "Получение результатов" if flow == "result"
-            else "Воронка маркетолога" if flow == "experiment"
+            else "Новое предложение marketer" if flow == "experiment"
             else "Повторное предложение" if flow == "reoffer"
             else "Обычный путь"
         ),

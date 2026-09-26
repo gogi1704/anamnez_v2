@@ -676,13 +676,13 @@ class AnalyticsTests(unittest.TestCase):
 
         report = analytics.metric2_report("30", flow="experiment")
         self.assertEqual(report["flow"], "experiment")
-        self.assertEqual(report["flow_label"], "Воронка маркетолога")
+        self.assertEqual(report["flow_label"], "Новое предложение marketer")
         self.assertEqual(report["summary"]["start_users"], 1)
         self.assertIn("welcome", {item["id"] for item in report["screens"]})
         self.assertNotIn("result_welcome", {item["id"] for item in report["screens"]})
 
         standard = analytics.metric2_report("30", flow="standard")
-        self.assertEqual(standard["summary"]["start_users"], 2)
+        self.assertEqual(standard["summary"]["start_users"], 1)
 
     def test_metric2_builds_unique_paths_and_ignores_repeated_views(self):
         analytics.record_events("CHEL-METRIC-PATH-ONE", [

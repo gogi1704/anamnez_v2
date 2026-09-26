@@ -199,18 +199,16 @@ class MetrikaCounterRoutingTests(unittest.TestCase):
             resolve_metrika_counter_id("marketer", "111111", "112754652"), "112754652",
         )
 
-    def test_control_variant_always_uses_main_counter(self):
+    def test_control_and_disabled_experiment_use_main_counter(self):
         self.assertEqual(
             resolve_metrika_counter_id("control", "111111", "222222"), "111111",
         )
         self.assertEqual(resolve_metrika_counter_id("off", "111111", "222222"), "111111")
 
-    def test_falls_back_to_main_counter_when_marketer_counter_not_configured(self):
-        # Leaving YANDEX_METRIKA_MARKETER_COUNTER_ID empty must behave exactly
-        # like before this feature existed — nothing breaks for existing setups.
-        self.assertEqual(resolve_metrika_counter_id("marketer", "111111", ""), "111111")
+    def test_marketer_never_falls_back_to_control_counter(self):
+        self.assertEqual(resolve_metrika_counter_id("marketer", "111111", ""), "")
         self.assertEqual(
-            resolve_metrika_counter_id("marketer", "111111", "not-a-number"), "111111",
+            resolve_metrika_counter_id("marketer", "111111", "not-a-number"), "",
         )
 
     def test_no_counter_configured_at_all_returns_empty(self):

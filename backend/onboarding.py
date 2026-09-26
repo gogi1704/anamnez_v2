@@ -81,6 +81,22 @@ EXAMINATION_GENDER_AUDIENCES = {
 }
 
 
+# The copy and the recommended packages must always come from the same
+# questionnaire scenario. Rule 1 (free-text/body-map complaints) is
+# intentionally disabled for now, so the table starts with rule 2.
+MARKETER_RULE_TEST_IDS = {
+    2: ("kidneys", "thyroid", "lipids"),
+    3: ("weight_basic", "lipids", "liver_basic", "kidneys", "thyroid"),
+    4: ("liver_basic", "kidneys"),
+    5: ("iron", "fatigue_basic", "vitamin_d"),
+    6: ("vitamin_d", "fatigue_basic"),
+    7: ("joints", "inflammation"),
+    8: ("female_hormones",),
+    9: ("male_health",),
+    10: ("liver_basic", "kidneys", "vitamin_d"),
+}
+
+
 def gender_incompatible_test_ids(profile: dict) -> list[str]:
     sex = str(profile.get("sex") or "").strip().lower()
     if sex not in {"female", "male"}:
@@ -218,8 +234,56 @@ def examination_recommendation_copy(profile: dict) -> dict:
 
 
 def effective_examination_price(examination: dict) -> int:
-    """Return the actual price; comparison prices are presentation-only."""
+    """Return the full real price paid on the medical examination."""
     return max(0, int(examination.get("price") or 0))
+
+
+def online_examination_price(examination: dict) -> int:
+    """Return the real 10% discounted price used only for online payment."""
+    base_price = effective_examination_price(examination)
+    return max(0, (base_price * 90 + 50) // 100)
+
+
+def marketer_offer_context(profile: dict, available_ids: set[str]) -> dict:
+    """Build one prioritized scenario and its matching package order."""
+    height = float(profile.get("height_cm") or 0)
+    weight = float(profile.get("weight_kg") or 0)
+    bmi = weight / ((height / 100) ** 2) if height else 0
+    sex = str(profile.get("sex") or "").strip().lower()
+    try:
+        age = int(profile.get("age") or 0)
+    except (TypeError, ValueError):
+        age = 0
+    if profile.get("blood_pressure") in {"high", "unstable"}:
+        rule_id = 2
+    elif bmi >= 30:
+        rule_id = 3
+    elif profile.get("alcohol") == "often":
+        rule_id = 4
+    elif profile.get("fatigue") == "yes" and sex == "female":
+        rule_id = 5
+    elif profile.get("fatigue") == "yes" and sex == "male":
+        rule_id = 6
+    elif profile.get("joint_pain") == "yes":
+        rule_id = 7
+    elif sex == "female" and age >= 45:
+        rule_id = 8
+    elif sex == "male" and age >= 40:
+        rule_id = 9
+    else:
+        rule_id = 10
+    scenario_ids = [
+        item for item in MARKETER_RULE_TEST_IDS[rule_id] if item in available_ids
+    ]
+    primary_id = scenario_ids[0] if scenario_ids else (
+        sorted(available_ids)[0] if available_ids else ""
+    )
+    return {
+        "rule_id": rule_id,
+        "primary_test_id": primary_id,
+        "visible_recommended_test_ids": scenario_ids[:3],
+        "recommended_test_ids": scenario_ids,
+    }
 
 
 def public_onboarding(
@@ -227,10 +291,14 @@ def public_onboarding(
 ) -> dict:
     catalog = TEST_CATALOG if tests is None else tests
     available_ids = {item["id"] for item in catalog}
+    incompatible_list = [
+        item for item in gender_incompatible_test_ids(profile) if item in available_ids
+    ]
+    incompatible_ids = set(incompatible_list)
+    marketer_available_ids = available_ids - incompatible_ids
     recommended_ids = [
         item for item in recommend_test_ids(profile) if item in available_ids
     ]
-    recommended_set = set(recommended_ids)
     public_catalog = []
     for examination in catalog:
         item = dict(examination)
@@ -238,10 +306,9 @@ def public_onboarding(
         # not replace or leak into the user-facing catalog.
         item.pop("default_name", None)
         item["effective_price"] = effective_examination_price(item)
-        item["discount_applied"] = bool(
-            item["id"] in recommended_set
-            and int(item.get("price_without_discount") or 0) > item["effective_price"]
-        )
+        item["online_price"] = online_examination_price(item)
+        item["online_savings"] = item["effective_price"] - item["online_price"]
+        item["discount_applied"] = item["online_savings"] > 0
         public_catalog.append(item)
     return {
         **state,
@@ -249,9 +316,8 @@ def public_onboarding(
         "profile": profile,
         "tests": public_catalog,
         "recommended_test_ids": recommended_ids,
-        "gender_incompatible_test_ids": [
-            item for item in gender_incompatible_test_ids(profile) if item in available_ids
-        ],
+        "gender_incompatible_test_ids": incompatible_list,
         "featured_test_ids": [item for item in featured_test_ids(profile) if item in available_ids],
         "examination_recommendation_copy": examination_recommendation_copy(profile),
+        "marketer_offer": marketer_offer_context(profile, marketer_available_ids),
     }

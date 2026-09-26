@@ -32,7 +32,7 @@ from backend.llm import LLMService  # noqa: E402
 from backend.main import ConsiliumHandler, _chat_access_allowed, _lab_result_analytics_event, _result_entry_can_start, admin_token_valid  # noqa: E402
 from backend.orchestrator import ConversationOrchestrator  # noqa: E402
 from backend.onboarding import (  # noqa: E402
-    EXAMINATION_UPGRADE_PAIRS, TEST_CATALOG, effective_examination_price, examination_recommendation_copy,
+    EXAMINATION_UPGRADE_PAIRS, TEST_CATALOG, effective_examination_price, online_examination_price, examination_recommendation_copy,
     featured_test_ids, gender_incompatible_test_ids, normalize_examination_selection, public_onboarding,
     recommend_test_ids,
 )
@@ -2748,12 +2748,12 @@ class OrchestratorTests(unittest.TestCase):
         self.assertIn("url.pathname.startsWith('/auth/')", worker)
         self.assertIn("consilium-shell-v113", worker)
         self.assertIn("fetch(request)", worker)
-        self.assertIn("/static/styles.css?v=20260923-result-messenger-first-v1", index)
+        self.assertIn("/static/styles.css?v=20260925-new-line-marketer-v7", index)
         self.assertIn("/static/rich-text.2bf1f5fab764.css", index)
         self.assertTrue((project_root / "static" / "styles.07ffaefb4795.css").is_file())
         self.assertTrue((project_root / "static" / "rich-text.2bf1f5fab764.css").is_file())
-        self.assertIn("/static/app.js?v=20260923-result-messenger-first-v1", index)
-        self.assertIn("/static/metrika.js?v=20260922-marketer-goals-v1", index)
+        self.assertIn("/static/app.js?v=20260925-new-line-marketer-v7", index)
+        self.assertIn("/static/metrika.js?v=20260925-new-line-marketer-v7", index)
         self.assertIn('id="welcomeScreen"', index)
         self.assertIn('id="welcomeNextButton"', index)
         self.assertIn("Плановый медосмотр", index)
@@ -2836,7 +2836,7 @@ class OrchestratorTests(unittest.TestCase):
         main = (project_root / "backend" / "main.py").read_text(encoding="utf-8")
         config = (project_root / "backend" / "config.py").read_text(encoding="utf-8")
 
-        self.assertIn('src="/static/metrika.js?v=20260922-marketer-goals-v1"', index)
+        self.assertIn('src="/static/metrika.js?v=20260925-new-line-marketer-v7"', index)
         self.assertIn('YANDEX_METRIKA_COUNTER_ID', config)
         self.assertIn('path == "/api/public-config"', main)
         self.assertIn('"metrika.js"', main)
@@ -3605,7 +3605,9 @@ class OrchestratorTests(unittest.TestCase):
         self.assertTrue(recommended["tests"][0]["discount_applied"])
         self.assertEqual(ordinary["tests"][0]["competitor_price"], 5200)
         self.assertEqual(ordinary["tests"][0]["effective_price"], 2900)
-        self.assertFalse(ordinary["tests"][0]["discount_applied"])
+        self.assertTrue(ordinary["tests"][0]["discount_applied"])
+        self.assertEqual(recommended["tests"][0]["online_price"], 2610)
+        self.assertEqual(ordinary["tests"][0]["online_price"], 2610)
         self.assertEqual(effective_examination_price(catalog[0]), 2900)
 
         project_root = Path(__file__).resolve().parents[1]
@@ -3653,7 +3655,7 @@ class OrchestratorTests(unittest.TestCase):
             order = db.create_payment_order()
             self.assertEqual(
                 db.payment_order_private(order["id"])["amount_kopecks"],
-                original["price"] * 100,
+                online_examination_price(original) * 100,
             )
             db.set_current_chel_id(ordinary_chel_id)
             db.save_profile({"fatigue": "no"})
@@ -3663,7 +3665,7 @@ class OrchestratorTests(unittest.TestCase):
             ordinary_order = db.create_payment_order()
             self.assertEqual(
                 db.payment_order_private(ordinary_order["id"])["amount_kopecks"],
-                original["price"] * 100,
+                online_examination_price(original) * 100,
             )
         finally:
             db.set_current_chel_id("chel_test_default")
@@ -3688,7 +3690,7 @@ class OrchestratorTests(unittest.TestCase):
             self.assertEqual(frozen_items["fatigue_basic"]["name"], "«Энергия и бодрость» — базовый")
             self.assertEqual(frozen_items["fatigue_basic"]["default_name"], "Хроническая усталость – базовый")
             expected = sum(
-                item["price"] for item in db.list_examinations()
+                online_examination_price(item) for item in db.list_examinations()
                 if item["id"] in {"fatigue_basic", "lipids"}
             )
             self.assertEqual(private["amount_kopecks"], expected * 100)

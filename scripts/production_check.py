@@ -161,7 +161,10 @@ def main() -> int:
     elif marketer_metrika_id:
         passed.append("Отдельный счётчик Метрики для ветки маркетолога настроен")
     else:
-        warnings.append("Отдельный счётчик для ветки маркетолога не задан: используется общий YANDEX_METRIKA_COUNTER_ID")
+        warnings.append(
+            "YANDEX_METRIKA_MARKETER_COUNTER_ID не задан: Метрика в ветке маркетолога отключена, "
+            "данные в основной счётчик не подмешиваются"
+        )
 
     if settings.dadata_api_key:
         dadata_url = urlparse(settings.dadata_suggestions_url)
