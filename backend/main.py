@@ -372,7 +372,8 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                     sheets = examination_schedule.available_month_sheets()
                     requested_sheet = query.get("sheet_id", [""])[0]
                     if not requested_sheet and sheets:
-                        requested_sheet = sheets[0]["id"]
+                        default_sheet = examination_schedule.default_month_sheet(sheets)
+                        requested_sheet = default_sheet["id"] if default_sheet else ""
                     if not requested_sheet:
                         return self._json(200, {"sheets": [], "report": None})
                     source = examination_schedule.monthly_sheet_report(requested_sheet, sheets)

@@ -3919,6 +3919,21 @@ class OrchestratorTests(unittest.TestCase):
         self.assertEqual(result["rows"][0]["planned_people"], 12)
         self.assertEqual(result["diagnostics"]["rows_unapproved"], 1)
 
+    def test_schedule_report_defaults_to_current_then_previous_month(self):
+        sheets = [
+            {"id": "14", "title": "Январь 2027", "month": "2027-01"},
+            {"id": "10", "title": "Сентябрь 2026", "month": "2026-09"},
+            {"id": "9", "title": "Август 2026", "month": "2026-08"},
+        ]
+        self.assertEqual(
+            examination_schedule.default_month_sheet(sheets, date(2026, 9, 27))["id"],
+            "10",
+        )
+        self.assertEqual(
+            examination_schedule.default_month_sheet(sheets, date(2026, 12, 1))["id"],
+            "10",
+        )
+
     def test_monthly_schedule_report_supports_real_chelovekgrafik_shape(self):
         self.assertEqual(examination_schedule._positive_integer(0), 0)
         def response(path):

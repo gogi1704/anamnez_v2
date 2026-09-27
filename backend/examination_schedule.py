@@ -321,6 +321,23 @@ def available_month_sheets() -> list[dict]:
     return result
 
 
+def default_month_sheet(sheets: list[dict], today: date | None = None) -> dict | None:
+    """Prefer the current month, then the latest completed/current sheet."""
+    if not sheets:
+        return None
+    current_month = (today or date.today()).strftime("%Y-%m")
+    exact = next((item for item in sheets if item.get("month") == current_month), None)
+    if exact:
+        return exact
+    previous = [item for item in sheets if item.get("month") and item["month"] < current_month]
+    if previous:
+        return max(previous, key=lambda item: item["month"])
+    dated = [item for item in sheets if item.get("month")]
+    if dated:
+        return min(dated, key=lambda item: item["month"])
+    return sheets[0]
+
+
 def _header_map(payload: object, rows: list) -> tuple[dict[str, int], int]:
     """Find column names in metadata or in a spreadsheet-like first row."""
     metadata_candidates: list = []
