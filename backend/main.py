@@ -338,6 +338,7 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
             "/api/admin/ikp",
             "/api/admin/funnel-monitor", "/api/admin/funnel-monitor/preview",
             "/api/admin/checkup-reoffers",
+            "/api/admin/schedule-revenue",
         }:
             if not self._admin_authorized():
                 return
@@ -365,6 +366,26 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                     "outbox_without_failures": diagnostics["outbox"].get("exhausted", 0) == 0,
                 }
                 return self._json(200, diagnostics)
+            if path == "/api/admin/schedule-revenue":
+                query = parse_qs(parsed.query)
+                try:
+                    sheets = examination_schedule.available_month_sheets()
+                    requested_sheet = query.get("sheet_id", [""])[0]
+                    if not requested_sheet and sheets:
+                        requested_sheet = sheets[0]["id"]
+                    if not requested_sheet:
+                        return self._json(200, {"sheets": [], "report": None})
+                    source = examination_schedule.monthly_sheet_report(requested_sheet, sheets)
+                    report = db.admin_schedule_revenue_report(
+                        source["rows"], source["sheet"]["month"],
+                    )
+                    report["sheet"] = source["sheet"]
+                    report["diagnostics"] = source["diagnostics"]
+                    return self._json(200, {"sheets": sheets, "report": report})
+                except examination_schedule.ExaminationScheduleUnavailable as exc:
+                    return self._json(503, {"detail": str(exc)})
+                except (ValueError, TypeError) as exc:
+                    return self._json(422, {"detail": str(exc)})
             if path == "/api/admin/dashboard":
                 return self._json(200, db.admin_dashboard())
             if path == "/api/admin/ikp":

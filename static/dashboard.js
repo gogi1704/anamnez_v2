@@ -80,9 +80,6 @@ const favoriteDefinitions = [
   ['dashboard-os','#osDistribution','Операционные системы','dashboard'],
   ['dashboard-browsers','#browserDistribution','Браузеры','dashboard'],
   ['dashboard-users','#usersTable','Пользователи','dashboard'],
-  ['dashboard-devices-table','#devicesTable','Таблица устройств','dashboard'],
-  ['dashboard-conversations','#conversationsTable','Диалоги','dashboard'],
-  ['dashboard-requests','#requestsTable','Обращения к человеку','dashboard'],
   ['analytics-funnel','#analyticsFunnel','Полная воронка','analytics'],
   ['analytics-daily','#analyticsDaily','Пользователи по дням','analytics'],
   ['analytics-devices','#analyticsDevices','Устройства','analytics'],
@@ -102,9 +99,6 @@ const favoriteDefinitions = [
 ];
 const tableStates = {
   users:{apiName:'users',prefix:'users',offset:0,limit:25,total:0,query:'',createdFrom:'',createdTo:'',sort:'last_seen_at',order:'desc'},
-  devices:{apiName:'devices',prefix:'devices',offset:0,limit:25,total:0,query:'',sort:'last_seen_at',order:'desc'},
-  conversations:{apiName:'conversations',prefix:'conversations',offset:0,limit:25,total:0,query:'',sort:'updated_at',order:'desc'},
-  requests:{apiName:'human_requests',prefix:'requests',offset:0,limit:25,total:0,query:'',sort:'updated_at',order:'desc'},
 };
 
 function favoriteSourceBlock(node) {
@@ -795,6 +789,81 @@ async function loadIkp() {
   $('#ikpUsersTable').innerHTML = (data.users || []).map(item => `<tr><td><strong>${escapeHtml(item.company || 'Без названия')}</strong><small>${escapeHtml(item.inn || '')}</small></td><td><code>${escapeHtml(item.chel_id)}</code></td><td>${item.visit_count}</td><td>${escapeHtml(statusNames[item.onboarding_status] || item.onboarding_status)}</td><td>${item.conversations}</td><td>${item.messages}</td><td>${escapeHtml(formatDate(item.last_seen_at))}</td></tr>`).join('') || '<tr><td colspan="7">Переходов пока нет</td></tr>';
 }
 
+function scheduleMetricCard(label, value, note = '') {
+  return `<article><span>${escapeHtml(label)}</span><strong>${escapeHtml(value)}</strong>${note ? `<small>${escapeHtml(note)}</small>` : ''}</article>`;
+}
+
+function renderScheduleRevenue(data = {}) {
+  const sheets = data.sheets || [];
+  const report = data.report;
+  const select = $('#scheduleRevenueSheet');
+  const previous = select.value;
+  select.innerHTML = sheets.map(item => `<option value="${escapeHtml(item.id)}">${escapeHtml(item.title)}${item.month ? ` · ${escapeHtml(item.month)}` : ''}</option>`).join('');
+  if (previous && sheets.some(item => item.id === previous)) select.value = previous;
+  else if (report?.sheet?.id) select.value = report.sheet.id;
+  select.disabled = !sheets.length;
+  $('#scheduleRevenueApply').disabled = !sheets.length;
+  if (!report) {
+    $('#scheduleRevenueGeneratedAt').textContent = '';
+    $('#scheduleRevenueDiagnostics').textContent = 'В ЧеловекГрафик не найдено доступных листов.';
+    $('#scheduleRevenueAttendanceSummary').innerHTML = '';
+    $('#scheduleRevenueMoneySummary').innerHTML = '';
+    $('#scheduleRevenueManagersTable').innerHTML = '<tr><td colspan="12">Нет данных</td></tr>';
+    $('#scheduleRevenueCompaniesTable').innerHTML = '<tr><td colspan="11">Нет данных</td></tr>';
+    return;
+  }
+  const summary = report.summary || {};
+  const diagnostics = report.diagnostics || {};
+  $('#scheduleRevenueGeneratedAt').textContent = `Обновлено ${formatDate(report.generated_at)}`;
+  $('#scheduleRevenueDiagnostics').textContent = [
+    `Лист: ${report.sheet?.title || report.month}`,
+    `строк получено: ${diagnostics.rows_total || 0}`,
+    `согласовано: ${diagnostics.rows_approved || 0}`,
+    `не согласовано и исключено: ${diagnostics.rows_unapproved || 0}`,
+    diagnostics.rows_missing_agreement ? `без значения «Согласовано»: ${diagnostics.rows_missing_agreement}` : '',
+    diagnostics.rows_missing_inn ? `без корректного ИНН: ${diagnostics.rows_missing_inn}` : '',
+    diagnostics.rows_missing_people ? `без количества людей: ${diagnostics.rows_missing_people}` : '',
+  ].filter(Boolean).join(' · ');
+  $('#scheduleRevenueAttendanceSummary').innerHTML = [
+    ['Согласованных ИНН',summary.approved_inns || 0,'только строки «Да»'],
+    ['Должны были прийти',summary.planned_people || 0,'человек по графику'],
+    ['Пришли реально',summary.arrived_people || 0,'новые пользователи по ИНН'],
+    ['Не пришли',summary.missing_people || 0,'разница плана и факта'],
+    ['Выполнение плана',`${Number(summary.attendance_conversion || 0).toLocaleString('ru-RU')}%`,'явка'],
+    ['Менеджеры',summary.managers || 0,'из «Чей клиент»'],
+  ].map(item => scheduleMetricCard(...item)).join('');
+  $('#scheduleRevenueMoneySummary').innerHTML = [
+    ['Заявки',summary.applications || 0,`конверсия ${Number(summary.application_conversion || 0).toLocaleString('ru-RU')}%`],
+    ['Потенциально по заявкам',formatRublesFromKopecks(summary.application_value_kopecks),'по актуальному прайсу'],
+    ['Средний чек заявки',formatRublesFromKopecks(summary.average_application_value_kopecks),'по актуальному прайсу'],
+    ['Онлайн-плательщики',summary.online_payers || 0,`конверсия ${Number(summary.online_payment_conversion || 0).toLocaleString('ru-RU')}% от заявок`],
+    ['Онлайн-выручка',formatRublesFromKopecks(summary.online_revenue_kopecks),'только успешные платежи'],
+    ['Оценка наличной выручки',formatRublesFromKopecks(summary.estimated_cash_revenue_kopecks),'99% заявок без онлайн-оплаты'],
+    ['Оценочная выручка',formatRublesFromKopecks(summary.estimated_revenue_kopecks),'онлайн + оценка наличных'],
+    ['Ожидаемо утрачено заявок',Number(summary.expected_lost_applications || 0).toLocaleString('ru-RU'),'из-за неявки'],
+    ['Утраченная выручка',formatRublesFromKopecks(summary.lost_revenue_kopecks),'оценка по фактической конверсии'],
+    ['Полный потенциал',formatRublesFromKopecks(summary.full_revenue_potential_kopecks),'оценочная + утраченная'],
+  ].map(item => scheduleMetricCard(...item)).join('');
+  const managers = report.managers || [];
+  $('#scheduleRevenueManagersCount').textContent = `${managers.length} менеджеров`;
+  $('#scheduleRevenueManagersTable').innerHTML = managers.map(item => `<tr><td><strong>${escapeHtml(item.manager)}</strong></td><td>${item.approved_inns}</td><td>${item.planned_people}</td><td>${item.arrived_people}</td><td>${Number(item.attendance_conversion || 0).toLocaleString('ru-RU')}%</td><td>${item.applications}</td><td>${Number(item.application_conversion || 0).toLocaleString('ru-RU')}%</td><td>${item.online_payers}</td><td>${escapeHtml(formatRublesFromKopecks(item.online_revenue_kopecks))}</td><td>${escapeHtml(formatRublesFromKopecks(item.estimated_cash_revenue_kopecks))}</td><td>${escapeHtml(formatRublesFromKopecks(item.lost_revenue_kopecks))}</td><td><strong>${escapeHtml(formatRublesFromKopecks(item.full_revenue_potential_kopecks))}</strong></td></tr>`).join('') || '<tr><td colspan="12">Согласованных строк нет</td></tr>';
+  const companies = report.companies || [];
+  $('#scheduleRevenueCompaniesCount').textContent = `${companies.length} предприятий`;
+  $('#scheduleRevenueCompaniesTable').innerHTML = companies.map(item => {
+    const schedule = [item.dates?.join(', '), item.brigades?.join(', ')].filter(Boolean).join(' · ') || '—';
+    return `<tr><td>${escapeHtml(item.manager)}</td><td><strong>${escapeHtml(item.organization_name || 'Без названия')}</strong></td><td>${escapeHtml(item.inn)}</td><td>${escapeHtml(schedule)}</td><td>${item.planned_people}</td><td>${item.arrived_people}</td><td>${item.applications}</td><td>${escapeHtml(formatRublesFromKopecks(item.application_value_kopecks))}</td><td>${item.online_payers}</td><td>${escapeHtml(formatRublesFromKopecks(item.estimated_revenue_kopecks))}</td><td>${escapeHtml(formatRublesFromKopecks(item.lost_revenue_kopecks))}</td></tr>`;
+  }).join('') || '<tr><td colspan="11">Согласованных предприятий нет</td></tr>';
+}
+
+async function loadScheduleRevenue() {
+  const panel = $('#scheduleRevenueAdminView');
+  return withPanelLoading(panel, async () => {
+    const sheetId = $('#scheduleRevenueSheet').value;
+    const query = sheetId ? `?sheet_id=${encodeURIComponent(sheetId)}` : '';
+    renderScheduleRevenue(await adminFetch(`/api/admin/schedule-revenue${query}`));
+  }, 'Сверяем график, заявки и оплаты…');
+}
+
 async function deleteUserData(event) {
   event.preventDefault();
   const chelId = $('#userDataCleanupId').value.trim();
@@ -1453,7 +1522,7 @@ function metric2PreviewMarkup(screen, large = false, suppliedData = null) {
     : kind === 'result_tube' ? 54 : kind === 'result_search' ? 72
     : kind === 'result_not_found' ? 88 : kind.startsWith('result_') ? 100 : 0;
   const appHeader = standalone ? '' : `<div class="metric2-phone-app"><span class="metric2-phone-brand"><b>К</b><span><strong>Консилиум</strong><small>Персональный старт</small></span></span><em>${escapeHtml(stage)}</em></div><div class="metric2-phone-progress"><i style="width:${progress}%"></i></div>`;
-  const safety = standalone ? '' : '<div class="metric2-phone-safety">Данные используются для персонализации ответов. Сервис не заменяет очную диагностику и экстренную помощь.</div>';
+  const safety = standalone ? '' : '<div class="metric2-phone-safety">Медицинская деятельность осуществляется на основании лицензий № Л041-01197-26/00343424 и № Л041-01050-61/00339366. Данные используются для персонализации ответов. Сервис не заменяет очную диагностику и экстренную помощь.</div>';
   return `<div class="metric2-phone ${kind}${large ? ' large' : ''}"><div class="metric2-phone-status"><span>11:37</span><span>● ▰</span></div>${appHeader}<div class="metric2-phone-content">${content}</div>${safety}<div class="metric2-phone-home"></div></div>`;
 }
 
@@ -1766,9 +1835,6 @@ async function loadFavoriteSources() {
   if (ids.some(id => id.startsWith('cost-'))) tasks.push(loadCosts());
   for (const [id,key] of [
     ['dashboard-users','users'],
-    ['dashboard-devices-table','devices'],
-    ['dashboard-conversations','conversations'],
-    ['dashboard-requests','requests'],
   ]) {
     if (favoriteAnalytics.has(id)) tasks.push(loadTable(key));
   }
@@ -2035,10 +2101,11 @@ async function testFunnelMonitor(analysis = 'all', button = null) {
 }
 
 function showAdminView(view) {
-  activeAdminView = ['favorites','analytics','service_results','experiments','metric2','content_texts','monitor','ikp','managers','examinations','costs'].includes(view) ? view : 'dashboard';
+  activeAdminView = ['favorites','analytics','service_results','schedule_revenue','experiments','metric2','content_texts','monitor','ikp','managers','examinations','costs'].includes(view) ? view : 'dashboard';
   const favoritesVisible = activeAdminView === 'favorites';
   const analyticsVisible = activeAdminView === 'analytics';
   const serviceResultsVisible = activeAdminView === 'service_results';
+  const scheduleRevenueVisible = activeAdminView === 'schedule_revenue';
   const experimentsVisible = activeAdminView === 'experiments';
   const metric2Visible = activeAdminView === 'metric2';
   const contentTextsVisible = activeAdminView === 'content_texts';
@@ -2052,6 +2119,7 @@ function showAdminView(view) {
   $('#dashboard').classList.toggle('show-costs', costsVisible);
   $('#dashboard').classList.toggle('show-analytics', analyticsVisible);
   $('#dashboard').classList.toggle('show-service-results', serviceResultsVisible);
+  $('#dashboard').classList.toggle('show-schedule-revenue', scheduleRevenueVisible);
   $('#dashboard').classList.toggle('show-experiments', experimentsVisible);
   $('#dashboard').classList.toggle('show-metric2', metric2Visible);
   $('#dashboard').classList.toggle('show-content-texts', contentTextsVisible);
@@ -2061,6 +2129,7 @@ function showAdminView(view) {
   $('#favoritesAdminView').classList.toggle('hidden', !favoritesVisible);
   $('#analyticsAdminView').classList.toggle('hidden', !analyticsVisible);
   $('#serviceResultsAdminView').classList.toggle('hidden', !serviceResultsVisible);
+  $('#scheduleRevenueAdminView').classList.toggle('hidden', !scheduleRevenueVisible);
   $('#experimentsAdminView').classList.toggle('hidden', !experimentsVisible);
   $('#metric2AdminView').classList.toggle('hidden', !metric2Visible);
   $('#contentTextsAdminView').classList.toggle('hidden', !contentTextsVisible);
@@ -2073,6 +2142,7 @@ function showAdminView(view) {
   $('#favoritesTab').classList.toggle('active', favoritesVisible);
   $('#analyticsTab').classList.toggle('active', analyticsVisible);
   $('#serviceResultsTab').classList.toggle('active', serviceResultsVisible);
+  $('#scheduleRevenueTab').classList.toggle('active', scheduleRevenueVisible);
   $('#experimentsTab').classList.toggle('active', experimentsVisible);
   $('#metric2Tab').classList.toggle('active', metric2Visible);
   $('#contentTextsTab').classList.toggle('active', contentTextsVisible);
@@ -2098,6 +2168,7 @@ async function loadAdminViewData(view = activeAdminView, {force = false} = {}) {
   else if (view === 'costs') request = loadCosts();
   else if (view === 'analytics') request = loadAnalytics();
   else if (view === 'service_results') request = loadServiceResults();
+  else if (view === 'schedule_revenue') request = loadScheduleRevenue();
   else if (view === 'experiments') request = loadExperiments();
   else if (view === 'metric2') request = loadMetric2();
   else if (view === 'content_texts') request = loadContentTexts();
@@ -2519,6 +2590,8 @@ $('#dashboardTab').addEventListener('click', () => showAdminView('dashboard'));
 $('#favoritesTab').addEventListener('click', () => showAdminView('favorites'));
 $('#analyticsTab').addEventListener('click', () => showAdminView('analytics'));
 $('#serviceResultsTab').addEventListener('click', () => showAdminView('service_results'));
+$('#scheduleRevenueTab').addEventListener('click', () => showAdminView('schedule_revenue'));
+$('#scheduleRevenueApply').addEventListener('click', () => loadScheduleRevenue().catch(showDashboardError));
 $('#experimentsTab').addEventListener('click', () => showAdminView('experiments'));
 $('#metric2Tab').addEventListener('click', () => showAdminView('metric2'));
 $('#contentTextsTab').addEventListener('click', () => showAdminView('content_texts'));

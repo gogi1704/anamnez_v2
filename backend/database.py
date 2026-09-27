@@ -942,6 +942,189 @@ def admin_ikp_report() -> dict:
     }
 
 
+def _schedule_revenue_metrics(
+    planned_people: int, arrived_users: set[str], applications: dict[str, int],
+    payment_orders: list[dict], cash_probability: float = 0.99,
+) -> dict:
+    online_payers = {str(item["chel_id"]) for item in payment_orders}
+    online_revenue = sum(int(item["amount_kopecks"] or 0) for item in payment_orders)
+    application_value = sum(applications.values())
+    estimated_cash = round(sum(
+        amount for chel_id, amount in applications.items() if chel_id not in online_payers
+    ) * cash_probability)
+    estimated_revenue = online_revenue + estimated_cash
+    arrived = len(arrived_users)
+    application_count = len(applications)
+    missing_people = max(0, int(planned_people) - arrived)
+    application_conversion = application_count / arrived if arrived else 0
+    expected_lost_applications = missing_people * application_conversion
+    average_revenue_per_application = estimated_revenue / application_count if application_count else 0
+    lost_revenue = round(expected_lost_applications * average_revenue_per_application)
+    return {
+        "planned_people": int(planned_people),
+        "arrived_people": arrived,
+        "missing_people": missing_people,
+        "attendance_conversion": round(arrived * 100 / planned_people, 1) if planned_people else 0,
+        "applications": application_count,
+        "application_conversion": round(application_conversion * 100, 1),
+        "application_value_kopecks": application_value,
+        "average_application_value_kopecks": round(application_value / application_count) if application_count else 0,
+        "online_payment_orders": len(payment_orders),
+        "online_payers": len(online_payers),
+        "online_payment_conversion": round(len(online_payers) * 100 / application_count, 1) if application_count else 0,
+        "online_revenue_kopecks": online_revenue,
+        "estimated_cash_revenue_kopecks": estimated_cash,
+        "estimated_revenue_kopecks": estimated_revenue,
+        "expected_lost_applications": round(expected_lost_applications, 1),
+        "lost_revenue_kopecks": lost_revenue,
+        "full_revenue_potential_kopecks": estimated_revenue + lost_revenue,
+    }
+
+
+def admin_schedule_revenue_report(schedule_rows: list[dict], month: str) -> dict:
+    """Join an approved monthly schedule to Consilium users and revenue events."""
+    if not re.fullmatch(r"20\d{2}-(?:0[1-9]|1[0-2])", str(month or "")):
+        raise ValueError("Некорректный месяц листа")
+    year, month_number = (int(part) for part in month.split("-"))
+    next_year = year + (1 if month_number == 12 else 0)
+    next_month = month_number % 12 + 1
+    moscow = timezone(timedelta(hours=3))
+    start = datetime(year, month_number, 1, tzinfo=moscow).astimezone(timezone.utc).isoformat()
+    end = datetime(next_year, next_month, 1, tzinfo=moscow).astimezone(timezone.utc).isoformat()
+
+    valid_rows = [
+        row for row in schedule_rows
+        if len(re.sub(r"\D", "", str(row.get("inn") or ""))) in {10, 12}
+        and int(row.get("planned_people") or 0) >= 0
+    ]
+    approved_inns = {re.sub(r"\D", "", str(row["inn"])) for row in valid_rows}
+    manager_by_inn: dict[str, set[str]] = {}
+    for row in valid_rows:
+        inn = re.sub(r"\D", "", str(row["inn"]))
+        manager_by_inn.setdefault(inn, set()).add(str(row.get("manager") or "Не назначен").strip() or "Не назначен")
+
+    with connection() as conn:
+        excluded = _statistics_excluded_chel_ids(conn)
+        user_rows = conn.execute(
+            """SELECT u.chel_id,p.company_inn FROM users u
+               JOIN user_profile p ON p.chel_id=u.chel_id
+               WHERE u.created_at>=? AND u.created_at<?""",
+            (start, end),
+        ).fetchall()
+        catalog = {
+            str(row["id"]): int(row["price"] or 0) * 100
+            for row in conn.execute("SELECT id,price FROM examination_catalog").fetchall()
+        }
+        application_rows = conn.execute(
+            """SELECT o.chel_id,o.selected_tests FROM onboarding_state o
+               WHERE o.status='complete' AND o.updated_at>=? AND o.updated_at<?
+                 AND JSON_VALID(o.selected_tests) AND JSON_ARRAY_LENGTH(o.selected_tests)>0""",
+            (start, end),
+        ).fetchall()
+        paid_rows = conn.execute(
+            """SELECT chel_id,amount_kopecks,id FROM payment_orders
+               WHERE paid=1 AND test=0 AND order_type='examinations'
+                 AND paid_at>=? AND paid_at<?""",
+            (start, end),
+        ).fetchall()
+
+    user_inn: dict[str, str] = {}
+    for row in user_rows:
+        chel_id = str(row["chel_id"])
+        inn = re.sub(r"\D", "", str(row["company_inn"] or ""))
+        if chel_id not in excluded and inn in approved_inns:
+            user_inn[chel_id] = inn
+    arrived_users = set(user_inn)
+
+    applications: dict[str, int] = {}
+    for row in application_rows:
+        chel_id = str(row["chel_id"])
+        if chel_id not in arrived_users:
+            continue
+        try:
+            selected = json.loads(row["selected_tests"] or "[]")
+        except json.JSONDecodeError:
+            selected = []
+        if isinstance(selected, list):
+            selected_ids = {
+                str(item) for item in selected if isinstance(item, (str, int))
+            }
+            applications[chel_id] = sum(catalog.get(item, 0) for item in selected_ids)
+    payments = [dict(row) for row in paid_rows if str(row["chel_id"]) in arrived_users]
+
+    def manager_for_inn(inn: str) -> str:
+        managers = manager_by_inn.get(inn) or {"Не назначен"}
+        return next(iter(managers)) if len(managers) == 1 else "Конфликт менеджеров"
+
+    companies_by_inn: dict[str, dict] = {}
+    for row in valid_rows:
+        inn = re.sub(r"\D", "", str(row["inn"]))
+        item = companies_by_inn.setdefault(inn, {
+            "inn": inn, "organization_name": str(row.get("organization_name") or ""),
+            "manager": manager_for_inn(inn), "planned_people": 0,
+            "dates": set(), "brigades": set(),
+        })
+        item["planned_people"] += int(row.get("planned_people") or 0)
+        if row.get("examination_date"):
+            item["dates"].add(str(row["examination_date"]))
+        if row.get("brigade"):
+            item["brigades"].add(str(row["brigade"]))
+
+    users_by_inn: dict[str, set[str]] = {inn: set() for inn in approved_inns}
+    for chel_id, inn in user_inn.items():
+        users_by_inn.setdefault(inn, set()).add(chel_id)
+    app_by_inn = {
+        inn: {chel_id: applications[chel_id] for chel_id in users if chel_id in applications}
+        for inn, users in users_by_inn.items()
+    }
+    payments_by_inn = {
+        inn: [item for item in payments if user_inn.get(str(item["chel_id"])) == inn]
+        for inn in approved_inns
+    }
+
+    companies = []
+    for inn, item in companies_by_inn.items():
+        metrics = _schedule_revenue_metrics(
+            item["planned_people"], users_by_inn.get(inn, set()),
+            app_by_inn.get(inn, {}), payments_by_inn.get(inn, []),
+        )
+        companies.append({
+            **{key: value for key, value in item.items() if key not in {"dates", "brigades"}},
+            "dates": sorted(item["dates"]), "brigades": sorted(item["brigades"]), **metrics,
+        })
+    companies.sort(key=lambda item: (item["manager"].casefold(), item["organization_name"].casefold(), item["inn"]))
+
+    manager_names = sorted({item["manager"] for item in companies}, key=str.casefold)
+    managers = []
+    for manager in manager_names:
+        manager_companies = [item for item in companies if item["manager"] == manager]
+        manager_inns = {item["inn"] for item in manager_companies}
+        manager_users = {chel_id for chel_id, inn in user_inn.items() if inn in manager_inns}
+        manager_apps = {chel_id: value for chel_id, value in applications.items() if chel_id in manager_users}
+        manager_payments = [item for item in payments if str(item["chel_id"]) in manager_users]
+        managers.append({
+            "manager": manager, "approved_inns": len(manager_inns),
+            **_schedule_revenue_metrics(
+                sum(item["planned_people"] for item in manager_companies),
+                manager_users, manager_apps, manager_payments,
+            ),
+        })
+    managers.sort(key=lambda item: (-item["planned_people"], item["manager"].casefold()))
+
+    summary = {
+        "approved_inns": len(approved_inns), "managers": len(manager_names),
+        **_schedule_revenue_metrics(
+            sum(item["planned_people"] for item in companies),
+            arrived_users, applications, payments,
+        ),
+    }
+    return {
+        "month": month, "period_started_at": start, "period_ended_at": end,
+        "cash_probability_percent": 99, "summary": summary,
+        "managers": managers, "companies": companies, "generated_at": utc_now(),
+    }
+
+
 def reset_current_user(preserve_identity: bool = False) -> None:
     """Remove user content; optionally preserve a verified external identity."""
     chel_id = current_chel_id()

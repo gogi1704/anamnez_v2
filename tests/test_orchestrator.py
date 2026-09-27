@@ -1601,6 +1601,15 @@ class OrchestratorTests(unittest.TestCase):
         self.assertIn('id="osDistribution"', dashboard)
         self.assertIn('id="browserDistribution"', dashboard)
         self.assertIn('id="devicesTable"', dashboard)
+        self.assertIn('id="devicesAdminTable" hidden', dashboard)
+        self.assertIn('id="conversationsAdminTable" hidden', dashboard)
+        self.assertIn('id="humanRequestsAdminTable" hidden', dashboard)
+        self.assertNotIn("['dashboard-devices-table'", script)
+        self.assertNotIn("['dashboard-conversations'", script)
+        self.assertNotIn("['dashboard-requests'", script)
+        self.assertNotIn("devices:{apiName:'devices'", script)
+        self.assertNotIn("conversations:{apiName:'conversations'", script)
+        self.assertNotIn("requests:{apiName:'human_requests'", script)
         self.assertIn("renderDevices", script)
         self.assertIn("created_from", script)
         self.assertIn("Новых за период", script)
@@ -2746,14 +2755,14 @@ class OrchestratorTests(unittest.TestCase):
         self.assertIn("controllerchange", script)
         self.assertIn("url.pathname.startsWith('/api/')", worker)
         self.assertIn("url.pathname.startsWith('/auth/')", worker)
-        self.assertIn("consilium-shell-v113", worker)
+        self.assertIn("consilium-shell-v116", worker)
         self.assertIn("fetch(request)", worker)
-        self.assertIn("/static/styles.css?v=20260925-new-line-marketer-v7", index)
+        self.assertIn("/static/styles.css?v=20260927-schedule-revenue-v1", index)
         self.assertIn("/static/rich-text.2bf1f5fab764.css", index)
         self.assertTrue((project_root / "static" / "styles.07ffaefb4795.css").is_file())
         self.assertTrue((project_root / "static" / "rich-text.2bf1f5fab764.css").is_file())
-        self.assertIn("/static/app.js?v=20260925-new-line-marketer-v7", index)
-        self.assertIn("/static/metrika.js?v=20260925-new-line-marketer-v7", index)
+        self.assertIn("/static/app.js?v=20260927-schedule-revenue-v1", index)
+        self.assertIn("/static/metrika.js?v=20260927-schedule-revenue-v1", index)
         self.assertIn('id="welcomeScreen"', index)
         self.assertIn('id="welcomeNextButton"', index)
         self.assertIn("Плановый медосмотр", index)
@@ -2836,7 +2845,7 @@ class OrchestratorTests(unittest.TestCase):
         main = (project_root / "backend" / "main.py").read_text(encoding="utf-8")
         config = (project_root / "backend" / "config.py").read_text(encoding="utf-8")
 
-        self.assertIn('src="/static/metrika.js?v=20260925-new-line-marketer-v7"', index)
+        self.assertIn('src="/static/metrika.js?v=20260927-schedule-revenue-v1"', index)
         self.assertIn('YANDEX_METRIKA_COUNTER_ID', config)
         self.assertIn('path == "/api/public-config"', main)
         self.assertIn('"metrika.js"', main)
@@ -3886,6 +3895,121 @@ class OrchestratorTests(unittest.TestCase):
             dict(row, date="01.09.2026"), "sheet-9", {"7": "Бригада 7"},
             date(2026, 9, 2), date(2026, 11, 2),
         ))
+
+    def test_monthly_schedule_report_keeps_only_approved_rows(self):
+        def response(path):
+            if path == "v1/sheets":
+                return {"data": [{"id": "10", "title": "Сентябрь 2026"}]}
+            if path == "v1/sheets/10/rows":
+                return {"data": [
+                    {"cells": ["ИНН", "Организация", "Дата", "Согласовано", "Чей клиент", "Количество человек"]},
+                    {"cells": ["7701234567", "ООО Да", "15.09.2026", "Да", "Мария", "12"]},
+                    {"cells": ["7701234568", "ООО Нет", "16.09.2026", "Нет", "Ольга", "20"]},
+                ]}
+            raise AssertionError(path)
+
+        with (
+            patch.object(examination_schedule, "configured", return_value=True),
+            patch.object(examination_schedule, "_request", side_effect=response),
+        ):
+            result = examination_schedule.monthly_sheet_report("10")
+        self.assertEqual(result["sheet"]["month"], "2026-09")
+        self.assertEqual(len(result["rows"]), 1)
+        self.assertEqual(result["rows"][0]["manager"], "Мария")
+        self.assertEqual(result["rows"][0]["planned_people"], 12)
+        self.assertEqual(result["diagnostics"]["rows_unapproved"], 1)
+
+    def test_monthly_schedule_report_supports_real_chelovekgrafik_shape(self):
+        self.assertEqual(examination_schedule._positive_integer(0), 0)
+        def response(path):
+            if path == "v1/sheets":
+                return {"message": "Успех", "data": [{"id": 10, "title": "Сентябрь 2026"}]}
+            if path == "v1/sheets/10/rows":
+                return {"message": "Успех", "data": {"sheet": {
+                    "id": 10, "title": "Сентябрь 2026",
+                }, "rows": [
+                    {
+                        "id": 17239, "brigade": {"id": 1, "name": "1 Бригада"},
+                        "client": {"id": 10, "name": " Сарасон"}, "date": "2026-09-01",
+                        "peopleQuantity": 49, "approved": "approved",
+                        "organization": 'ООО "БЕЛОМЕЧЕТСКОЕ"', "inn": "2610016372",
+                    },
+                    {
+                        "id": 18035, "brigade": None,
+                        "client": {"id": 4, "name": " Зельцер"}, "date": None,
+                        "peopleQuantity": 5, "approved": "approved",
+                        "organization": "МАУ ШКОЛЬНОЕ ПИТАНИЕ", "inn": "800025100",
+                    },
+                    {
+                        "id": 1, "client": {"name": "Другой"}, "date": "2026-09-02",
+                        "peopleQuantity": 100, "approved": "rejected",
+                        "organization": "ООО Отклонено", "inn": "7701234567",
+                    },
+                ]}}
+            raise AssertionError(path)
+
+        with (
+            patch.object(examination_schedule, "configured", return_value=True),
+            patch.object(examination_schedule, "_request", side_effect=response),
+        ):
+            result = examination_schedule.monthly_sheet_report("10")
+        self.assertEqual(len(result["rows"]), 2)
+        self.assertEqual(result["rows"][0]["manager"], "Сарасон")
+        self.assertEqual(result["rows"][0]["planned_people"], 49)
+        self.assertEqual(result["rows"][0]["brigade"], "1 Бригада")
+        self.assertEqual(result["rows"][1]["inn"], "0800025100")
+        self.assertEqual(result["rows"][1]["manager"], "Зельцер")
+        self.assertEqual(result["diagnostics"]["rows_unapproved"], 1)
+
+    def test_schedule_revenue_report_joins_arrivals_applications_and_payments(self):
+        chel_id = "chel_schedule_revenue_test"
+        inn = "7707654321"
+        paid_at = "2026-09-14T09:00:00+00:00"
+        selected_id = TEST_CATALOG[0]["id"]
+        with db.connection() as conn:
+            conn.execute("DELETE FROM users WHERE chel_id=?", (chel_id,))
+            conn.execute(
+                "INSERT INTO users (chel_id,created_at,last_seen_at) VALUES (?,?,?)",
+                (chel_id, paid_at, paid_at),
+            )
+            conn.execute(
+                "INSERT INTO user_profile (chel_id,company_inn,updated_at) VALUES (?,?,?)",
+                (chel_id, inn, paid_at),
+            )
+            conn.execute(
+                """INSERT INTO onboarding_state
+                   (chel_id,status,selected_tests,payment_status,updated_at)
+                   VALUES (?,?,?,?,?)""",
+                (chel_id, "complete", json.dumps([selected_id]), "paid_online", paid_at),
+            )
+            conn.execute(
+                """INSERT INTO payment_orders
+                   (id,chel_id,idempotence_key,selection_fingerprint,status,amount_kopecks,
+                    items,paid,test,created_at,updated_at,paid_at)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+                ("schedule-revenue-order", chel_id, "schedule-revenue-key", "fp", "succeeded",
+                 90000, "[]", 1, 0, paid_at, paid_at, paid_at),
+            )
+            conn.commit()
+        try:
+            report = db.admin_schedule_revenue_report([{
+                "inn": inn, "organization_name": "ООО График", "manager": "Мария",
+                "planned_people": 10, "examination_date": "2026-09-14", "brigade": "Бригада 1",
+            }], "2026-09")
+            summary = report["summary"]
+            self.assertEqual(summary["planned_people"], 10)
+            self.assertEqual(summary["arrived_people"], 1)
+            self.assertEqual(summary["applications"], 1)
+            self.assertEqual(summary["online_payers"], 1)
+            self.assertEqual(summary["online_revenue_kopecks"], 90000)
+            self.assertEqual(summary["estimated_cash_revenue_kopecks"], 0)
+            self.assertEqual(summary["expected_lost_applications"], 9.0)
+            self.assertEqual(summary["lost_revenue_kopecks"], 810000)
+            self.assertEqual(report["managers"][0]["manager"], "Мария")
+        finally:
+            with db.connection() as conn:
+                conn.execute("DELETE FROM users WHERE chel_id=?", (chel_id,))
+                conn.commit()
 
     def test_upcoming_examination_uses_nearest_date_and_combines_brigades(self):
         db.replace_enterprise_examination_schedule([

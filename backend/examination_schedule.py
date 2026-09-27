@@ -259,6 +259,12 @@ def _brigade_map(payload: object) -> dict[str, str]:
 
 
 def _sheet_month(sheet: dict) -> tuple[int, int] | None:
+    raw_year = _plain(_field(sheet, "year", "sheet_year", "calendar_year", "год"))
+    raw_month = _plain(_field(sheet, "month", "month_number", "sheet_month", "месяц")).casefold()
+    if raw_year.isdigit() and len(raw_year) == 4:
+        month_number = int(raw_month) if raw_month.isdigit() else _MONTHS_RU.get(raw_month)
+        if month_number and 1 <= month_number <= 12:
+            return int(raw_year), month_number
     label = _plain(_field(sheet, "name", "title", "label")).casefold()
     year_match = re.search(r"\b(20\d{2})\b", label)
     if not year_match:
@@ -268,6 +274,198 @@ def _sheet_month(sheet: dict) -> tuple[int, int] | None:
             return int(year_match.group(1)), month
     numeric = re.search(r"(?:^|\D)(0?[1-9]|1[0-2])[./-](20\d{2})(?:\D|$)", label)
     return (int(numeric.group(2)), int(numeric.group(1))) if numeric else None
+
+
+_AGREED_ALIASES = (
+    "agreed", "approved", "is_agreed", "is_approved", "согласовано",
+    "согласован", "подтверждено", "agreement", "coordination", "согласование",
+)
+_MANAGER_ALIASES = (
+    "manager", "manager_name", "client_manager", "owner", "account_manager",
+    "whose_client", "client_owner", "client_owner_name", "client",
+    "чей клиент", "менеджер",
+)
+_PEOPLE_ALIASES = (
+    "people_count", "person_count", "employees_count", "employee_count",
+    "planned_people", "planned_count", "patient_count", "number_of_people",
+    "people_quantity", "headcount", "численность", "количество человек",
+    "кол-во человек", "количество сотрудников", "план человек", "человек",
+)
+
+
+def _sheet_title(sheet: dict) -> str:
+    return _plain(_field(sheet, "name", "title", "label")) or "Лист без названия"
+
+
+def available_month_sheets() -> list[dict]:
+    """Return server-approved sheet IDs; IDs supplied by an admin are never trusted."""
+    if not configured():
+        raise ExaminationScheduleUnavailable("Интеграция с ЧеловекГрафик не настроена")
+    raw_sheets = _unwrap_list(_request("v1/sheets"), "sheets")
+    if len(raw_sheets) > settings.examination_schedule_max_sheets:
+        raise ExaminationScheduleUnavailable("Сервис графика вернул слишком много таблиц")
+    result = []
+    for sheet in raw_sheets:
+        if not isinstance(sheet, dict):
+            continue
+        sheet_id = _plain(_field(sheet, "id", "sheet_id", "value"))
+        if not sheet_id or len(sheet_id) > 100:
+            continue
+        month = _sheet_month(sheet)
+        result.append({
+            "id": sheet_id,
+            "title": _sheet_title(sheet),
+            "month": f"{month[0]:04d}-{month[1]:02d}" if month else "",
+        })
+    result.sort(key=lambda item: (item["month"], item["title"]), reverse=True)
+    return result
+
+
+def _header_map(payload: object, rows: list) -> tuple[dict[str, int], int]:
+    """Find column names in metadata or in a spreadsheet-like first row."""
+    metadata_candidates: list = []
+    if isinstance(payload, dict):
+        for key in ("columns", "headers", "fields"):
+            value = payload.get(key)
+            if isinstance(value, list):
+                metadata_candidates.append(value)
+            data = payload.get("data")
+            if isinstance(data, dict) and isinstance(data.get(key), list):
+                metadata_candidates.append(data[key])
+    useful = {
+        _normalized_key(alias)
+        for alias in (
+            *_AGREED_ALIASES, *_MANAGER_ALIASES, *_PEOPLE_ALIASES,
+            "inn", "инн", "organization", "организация", "date", "дата",
+            "brigade", "бригада",
+        )
+    }
+    def mapping_for(candidate: list) -> dict[str, int]:
+        names = []
+        for item in candidate:
+            if isinstance(item, dict):
+                names.append(_plain(_field(item, "name", "title", "label", "key", "field")))
+            else:
+                names.append(_plain(item))
+        return {_normalized_key(name): index for index, name in enumerate(names) if name}
+
+    for candidate in metadata_candidates:
+        mapping = mapping_for(candidate)
+        if sum(1 for key in mapping if key in useful) >= 2:
+            return mapping, 0
+    for index, row in enumerate(rows[:5]):
+        if not isinstance(row, dict):
+            continue
+        mapping = mapping_for(_cell_values(row))
+        if sum(1 for key in mapping if key in useful) >= 2:
+            return mapping, index + 1
+    return {}, 0
+
+
+def _column_value(row: dict, header: dict[str, int], *aliases: str):
+    direct = _field(row, *aliases)
+    if direct not in (None, ""):
+        return direct
+    cells = _cell_values(row)
+    for alias in aliases:
+        index = header.get(_normalized_key(alias))
+        if index is not None and index < len(cells):
+            return cells[index]
+    return None
+
+
+def _positive_integer(value: object) -> int | None:
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        return max(0, int(value))
+    text = _plain(value).replace("\u00a0", " ").strip()
+    match = re.search(r"\d+", text)
+    if not match:
+        return None
+    return max(0, int(match.group(0)))
+
+
+def _is_agreed(value: object) -> bool:
+    return _normalized_key(_plain(value)) in {
+        "да", "yes", "true", "1", "approved", "agreed", "согласовано",
+    }
+
+
+def _normalize_company_inn(value: object) -> str:
+    """Restore a leading zero lost by the source's numeric spreadsheet cells."""
+    inn = re.sub(r"\D", "", _plain(value))
+    if len(inn) in {9, 11}:
+        inn = f"0{inn}"
+    return inn if len(inn) in {10, 12} else ""
+
+
+def monthly_sheet_report(sheet_id: str, sheets: list[dict] | None = None) -> dict:
+    """Load one monthly sheet and expose only rows explicitly approved by its owner."""
+    requested = str(sheet_id or "").strip()
+    available = sheets if sheets is not None else available_month_sheets()
+    sheet = next((item for item in available if item["id"] == requested), None)
+    if not sheet:
+        raise ValueError("Выбранный лист отсутствует в доступном списке ЧеловекГрафик")
+    payload = _request(f"v1/sheets/{requested}/rows")
+    raw_rows = _unwrap_list(payload, "rows")
+    header, first_data_row = _header_map(payload, raw_rows)
+    raw_rows = raw_rows[first_data_row:]
+    parsed: list[dict] = []
+    diagnostics = {
+        "rows_total": len(raw_rows), "rows_approved": 0, "rows_unapproved": 0,
+        "rows_missing_agreement": 0, "rows_missing_inn": 0,
+        "rows_missing_people": 0, "detected_columns": sorted(header),
+    }
+    discovered_months: dict[str, int] = {}
+    for raw_row in raw_rows:
+        if not isinstance(raw_row, dict):
+            continue
+        agreed = _column_value(raw_row, header, *_AGREED_ALIASES)
+        if agreed in (None, ""):
+            diagnostics["rows_missing_agreement"] += 1
+            continue
+        if not _is_agreed(agreed):
+            diagnostics["rows_unapproved"] += 1
+            continue
+        diagnostics["rows_approved"] += 1
+        inn = _normalize_company_inn(_column_value(
+            raw_row, header, "inn", "company_inn", "organization_inn", "инн",
+        ))
+        if not inn:
+            diagnostics["rows_missing_inn"] += 1
+            continue
+        people = _positive_integer(_column_value(raw_row, header, *_PEOPLE_ALIASES))
+        if people is None:
+            diagnostics["rows_missing_people"] += 1
+            continue
+        examination_date = _parse_date(_column_value(
+            raw_row, header, "date", "examination_date", "inspection_date", "дата",
+        ))
+        if examination_date:
+            key = examination_date.strftime("%Y-%m")
+            discovered_months[key] = discovered_months.get(key, 0) + 1
+        parsed.append({
+            "source_sheet_id": requested,
+            "source_row_id": _plain(_field(raw_row, "id", "row_id", "uuid"))[:200],
+            "inn": inn,
+            "organization_name": _plain(_column_value(
+                raw_row, header, "organization", "organization_name", "company",
+                "company_name", "организация",
+            ))[:300],
+            "examination_date": examination_date.isoformat() if examination_date else "",
+            "brigade": _plain(_column_value(raw_row, header, "brigade", "brigade_name", "бригада"))[:200],
+            "manager": _plain(_column_value(raw_row, header, *_MANAGER_ALIASES))[:200] or "Не назначен",
+            "planned_people": people,
+        })
+    month = sheet["month"]
+    if not month and discovered_months:
+        month = max(discovered_months, key=lambda key: discovered_months[key])
+    if not month:
+        raise ValueError("Не удалось определить месяц выбранного листа")
+    parsed = [
+        row for row in parsed
+        if not row["examination_date"] or row["examination_date"].startswith(month)
+    ]
+    return {"sheet": {**sheet, "month": month}, "rows": parsed, "diagnostics": diagnostics}
 
 
 def _months_in_window(start: date, end: date) -> set[tuple[int, int]]:
