@@ -638,16 +638,20 @@ tbody tr:hover { background:#f8fbf9; }
 .schedule-revenue-controls { display:grid; grid-template-columns:minmax(260px,440px) auto; align-items:end; gap:12px; margin-top:18px; }
 .schedule-revenue-controls select { width:100%; height:48px; padding:0 13px; border:1px solid #c9dbd1; border-radius:12px; color:var(--ink); background:#fff; font:inherit; }
 .schedule-revenue-summary { display:grid; grid-template-columns:repeat(5,minmax(0,1fr)); gap:12px; }
-.schedule-revenue-summary article { min-height:126px; padding:18px; border:1px solid var(--line); border-radius:17px; background:#fff; box-shadow:0 10px 28px rgba(34,72,56,.06); }
-.schedule-revenue-summary span,.schedule-revenue-summary strong,.schedule-revenue-summary small { display:block; }
-.schedule-revenue-summary span { min-height:32px; color:var(--muted); font-size:11px; font-weight:700; }
-.schedule-revenue-summary strong { margin-top:5px; color:var(--green-dark); font-size:25px; line-height:1.15; }
-.schedule-revenue-summary small { margin-top:7px; color:var(--muted); font-size:9px; line-height:1.45; }
+.schedule-revenue-money-groups { display:grid; gap:22px; margin-top:18px; }
+.schedule-revenue-metric-group { display:grid; gap:10px; }
+.schedule-revenue-metric-group + .schedule-revenue-metric-group { padding-top:19px; border-top:1px solid var(--line); }
+.schedule-revenue-metric-group h3 { margin:0; color:var(--green-dark); font-size:13px; }
+.schedule-revenue-group-cards { display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:12px; }
+.schedule-revenue-summary article,.schedule-revenue-group-cards article { min-height:126px; padding:18px; border:1px solid var(--line); border-radius:17px; background:#fff; box-shadow:0 10px 28px rgba(34,72,56,.06); }
+.schedule-revenue-summary span,.schedule-revenue-summary strong,.schedule-revenue-summary small,.schedule-revenue-group-cards span,.schedule-revenue-group-cards strong,.schedule-revenue-group-cards small { display:block; }
+.schedule-revenue-summary span,.schedule-revenue-group-cards span { min-height:32px; color:var(--muted); font-size:11px; font-weight:700; }
+.schedule-revenue-summary strong,.schedule-revenue-group-cards strong { margin-top:5px; color:var(--green-dark); font-size:25px; line-height:1.15; }
+.schedule-revenue-summary small,.schedule-revenue-group-cards small { margin-top:7px; color:var(--muted); font-size:9px; line-height:1.45; }
 .schedule-revenue-formula > p { margin:16px 0 0; padding:13px 15px; border-radius:12px; color:#587067; background:#f1f7f4; font-size:10px; line-height:1.55; }
-.schedule-revenue-formula .schedule-revenue-summary { margin-top:16px; }
 .schedule-revenue-admin td strong { color:var(--green-dark); }
 @media(max-width:1200px){.schedule-revenue-summary{grid-template-columns:repeat(3,minmax(0,1fr))}}
-@media(max-width:700px){.schedule-revenue-controls,.schedule-revenue-summary{grid-template-columns:1fr}.schedule-revenue-controls button{width:100%}.schedule-revenue-summary article{min-height:0}}
+@media(max-width:700px){.schedule-revenue-controls,.schedule-revenue-summary,.schedule-revenue-group-cards{grid-template-columns:1fr}.schedule-revenue-controls button{width:100%}.schedule-revenue-summary article,.schedule-revenue-group-cards article{min-height:0}}
 
 .content-texts-admin { display:grid; gap:18px; }
 .content-text-tabs { display:flex; flex-wrap:wrap; gap:8px; margin-top:16px; }

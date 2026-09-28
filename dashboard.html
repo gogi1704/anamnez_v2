@@ -11,7 +11,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/static/dashboard.css?v=20260927-schedule-revenue-v1">
+  <link rel="stylesheet" href="/static/dashboard.css?v=20260928-schedule-layout-v2">
 </head>
 <body>
   <main class="dashboard-shell">
@@ -192,18 +192,18 @@
 
         <article class="panel schedule-revenue-formula">
           <div class="panel-heading"><div><p class="eyebrow">Заявки, оплаты и прогноз</p><h2>Выручка</h2></div></div>
-          <section class="schedule-revenue-summary" id="scheduleRevenueMoneySummary"></section>
-          <p>Оценочная наличная выручка = 99% стоимости подтверждённых заявок без успешной онлайн-оплаты. Утраченная выручка = не пришедшие × фактическая конверсия пришедших в заявку × средняя ожидаемая выручка с заявки. Это управленческая оценка, а не бухгалтерская выручка.</p>
+          <section class="schedule-revenue-money-groups" id="scheduleRevenueMoneySummary"></section>
+          <p>Утраченный потенциал = не пришедшие × фактическая конверсия пришедших в заявку × средняя ожидаемая выручка с заявки. Это управленческая оценка, а не бухгалтерская выручка.</p>
         </article>
 
         <article class="panel table-panel">
           <div class="panel-heading"><div><p class="eyebrow">Ответственные</p><h2>По менеджерам</h2></div><span class="table-count" id="scheduleRevenueManagersCount"></span></div>
-          <div class="table-scroll"><table><thead><tr><th>Менеджер</th><th>ИНН</th><th>План</th><th>Пришли</th><th>Явка</th><th>Заявки</th><th>Конверсия</th><th>Онлайн</th><th>Онлайн-выручка</th><th>Оценка наличных</th><th>Утраченная выручка</th><th>Потенциал</th></tr></thead><tbody id="scheduleRevenueManagersTable"></tbody></table></div>
+          <div class="table-scroll"><table><thead><tr><th>Менеджер</th><th>ИНН</th><th>План</th><th>Всего по ИНН</th><th>За месяц</th><th>Явка</th><th>Заявки</th><th>Конверсия</th><th>Онлайн</th><th>Онлайн-выручка</th><th>Утраченный потенциал</th></tr></thead><tbody id="scheduleRevenueManagersTable"></tbody></table></div>
         </article>
 
         <article class="panel table-panel">
           <div class="panel-heading"><div><p class="eyebrow">Детализация</p><h2>По предприятиям и ИНН</h2></div><span class="table-count" id="scheduleRevenueCompaniesCount"></span></div>
-          <div class="table-scroll"><table><thead><tr><th>Менеджер</th><th>Предприятие</th><th>ИНН</th><th>Дата / бригада</th><th>План</th><th>Пришли</th><th>Заявки</th><th>Сумма заявок</th><th>Онлайн-плательщики</th><th>Оценочная выручка</th><th>Утраченная выручка</th></tr></thead><tbody id="scheduleRevenueCompaniesTable"></tbody></table></div>
+          <div class="table-scroll"><table><thead><tr><th>Менеджер</th><th>Предприятие</th><th>ИНН</th><th>Дата / бригада</th><th>План</th><th>Всего по ИНН</th><th>За месяц</th><th>Заявки</th><th>Сумма заявок</th><th>Онлайн</th><th>Утраченный потенциал</th></tr></thead><tbody id="scheduleRevenueCompaniesTable"></tbody></table></div>
         </article>
       </section>
 
@@ -736,6 +736,6 @@
       </div>
     </section>
   </div>
-<script src="/static/dashboard.js?v=20260927-schedule-revenue-v1" defer></script>
+<script src="/static/dashboard.js?v=20260928-schedule-layout-v2" defer></script>
 </body>
 </html>

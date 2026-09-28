@@ -793,6 +793,17 @@ function scheduleMetricCard(label, value, note = '') {
   return `<article><span>${escapeHtml(label)}</span><strong>${escapeHtml(value)}</strong>${note ? `<small>${escapeHtml(note)}</small>` : ''}</article>`;
 }
 
+function scheduleMonthLocative(value) {
+  const names = ['январе','феврале','марте','апреле','мае','июне','июле','августе','сентябре','октябре','ноябре','декабре'];
+  const match = String(value || '').match(/^(\d{4})-(\d{2})$/);
+  if (!match) return 'выбранном месяце';
+  return `${names[Number(match[2]) - 1]} ${match[1]}`;
+}
+
+function scheduleMetricGroup(title, items) {
+  return `<section class="schedule-revenue-metric-group"><h3>${escapeHtml(title)}</h3><div class="schedule-revenue-group-cards">${items.map(item => scheduleMetricCard(...item)).join('')}</div></section>`;
+}
+
 function renderScheduleRevenue(data = {}) {
   const sheets = data.sheets || [];
   const report = data.report;
@@ -808,12 +819,13 @@ function renderScheduleRevenue(data = {}) {
     $('#scheduleRevenueDiagnostics').textContent = 'В ЧеловекГрафик не найдено доступных листов.';
     $('#scheduleRevenueAttendanceSummary').innerHTML = '';
     $('#scheduleRevenueMoneySummary').innerHTML = '';
-    $('#scheduleRevenueManagersTable').innerHTML = '<tr><td colspan="12">Нет данных</td></tr>';
+    $('#scheduleRevenueManagersTable').innerHTML = '<tr><td colspan="11">Нет данных</td></tr>';
     $('#scheduleRevenueCompaniesTable').innerHTML = '<tr><td colspan="11">Нет данных</td></tr>';
     return;
   }
   const summary = report.summary || {};
   const diagnostics = report.diagnostics || {};
+  const monthLabel = scheduleMonthLocative(report.month);
   $('#scheduleRevenueGeneratedAt').textContent = `Обновлено ${formatDate(report.generated_at)}`;
   $('#scheduleRevenueDiagnostics').textContent = [
     `Лист: ${report.sheet?.title || report.month}`,
@@ -825,33 +837,35 @@ function renderScheduleRevenue(data = {}) {
     diagnostics.rows_missing_people ? `без количества людей: ${diagnostics.rows_missing_people}` : '',
   ].filter(Boolean).join(' · ');
   $('#scheduleRevenueAttendanceSummary').innerHTML = [
-    ['Согласованных ИНН',summary.approved_inns || 0,'только строки «Да»'],
-    ['Должны были прийти',summary.planned_people || 0,'человек по графику'],
-    ['Пришли реально',summary.arrived_people || 0,'новые пользователи по ИНН'],
-    ['Не пришли',summary.missing_people || 0,'разница плана и факта'],
+    ['Должны прийти',summary.planned_people || 0,'человек по согласованному графику'],
+    ['Пришли всего по ИНН',summary.arrived_people_all_time || 0,'за всё время в Консилиуме'],
+    [`Пришли всего в ${monthLabel}`,summary.arrived_people || 0,'новые пользователи выбранного месяца'],
     ['Выполнение плана',`${Number(summary.attendance_conversion || 0).toLocaleString('ru-RU')}%`,'явка'],
-    ['Менеджеры',summary.managers || 0,'из «Чей клиент»'],
+    ['Неактивированные ИНН',summary.inactive_approved_inns || 0,'согласованы, но пользователей ещё нет'],
   ].map(item => scheduleMetricCard(...item)).join('');
   $('#scheduleRevenueMoneySummary').innerHTML = [
-    ['Заявки',summary.applications || 0,`конверсия ${Number(summary.application_conversion || 0).toLocaleString('ru-RU')}%`],
-    ['Потенциально по заявкам',formatRublesFromKopecks(summary.application_value_kopecks),'по актуальному прайсу'],
-    ['Средний чек заявки',formatRublesFromKopecks(summary.average_application_value_kopecks),'по актуальному прайсу'],
-    ['Онлайн-плательщики',summary.online_payers || 0,`конверсия ${Number(summary.online_payment_conversion || 0).toLocaleString('ru-RU')}% от заявок`],
-    ['Онлайн-выручка',formatRublesFromKopecks(summary.online_revenue_kopecks),'только успешные платежи'],
-    ['Оценка наличной выручки',formatRublesFromKopecks(summary.estimated_cash_revenue_kopecks),'99% заявок без онлайн-оплаты'],
-    ['Оценочная выручка',formatRublesFromKopecks(summary.estimated_revenue_kopecks),'онлайн + оценка наличных'],
-    ['Ожидаемо утрачено заявок',Number(summary.expected_lost_applications || 0).toLocaleString('ru-RU'),'из-за неявки'],
-    ['Утраченная выручка',formatRublesFromKopecks(summary.lost_revenue_kopecks),'оценка по фактической конверсии'],
-    ['Полный потенциал',formatRublesFromKopecks(summary.full_revenue_potential_kopecks),'оценочная + утраченная'],
-  ].map(item => scheduleMetricCard(...item)).join('');
+    scheduleMetricGroup('Заявки', [
+      ['Заявок',summary.applications || 0,`конверсия ${Number(summary.application_conversion || 0).toLocaleString('ru-RU')}%`],
+      ['Средний чек заявок',formatRublesFromKopecks(summary.average_application_value_kopecks),'по актуальному прайсу'],
+      ['Сумма по заявкам',formatRublesFromKopecks(summary.application_value_kopecks),'по актуальному прайсу'],
+    ]),
+    scheduleMetricGroup('Онлайн-оплата', [
+      ['Онлайн',summary.online_payers || 0,`конверсия ${Number(summary.online_payment_conversion || 0).toLocaleString('ru-RU')}% от заявок`],
+      ['Онлайн-выручка',formatRublesFromKopecks(summary.online_revenue_kopecks),'только успешные платежи'],
+    ]),
+    scheduleMetricGroup('Утраченный потенциал', [
+      ['Утраченные заявки',Number(summary.expected_lost_applications || 0).toLocaleString('ru-RU'),'оценка из-за неявки'],
+      ['Утраченный потенциал',formatRublesFromKopecks(summary.lost_revenue_kopecks),'по фактической конверсии'],
+    ]),
+  ].join('');
   const managers = report.managers || [];
   $('#scheduleRevenueManagersCount').textContent = `${managers.length} менеджеров`;
-  $('#scheduleRevenueManagersTable').innerHTML = managers.map(item => `<tr><td><strong>${escapeHtml(item.manager)}</strong></td><td>${item.approved_inns}</td><td>${item.planned_people}</td><td>${item.arrived_people}</td><td>${Number(item.attendance_conversion || 0).toLocaleString('ru-RU')}%</td><td>${item.applications}</td><td>${Number(item.application_conversion || 0).toLocaleString('ru-RU')}%</td><td>${item.online_payers}</td><td>${escapeHtml(formatRublesFromKopecks(item.online_revenue_kopecks))}</td><td>${escapeHtml(formatRublesFromKopecks(item.estimated_cash_revenue_kopecks))}</td><td>${escapeHtml(formatRublesFromKopecks(item.lost_revenue_kopecks))}</td><td><strong>${escapeHtml(formatRublesFromKopecks(item.full_revenue_potential_kopecks))}</strong></td></tr>`).join('') || '<tr><td colspan="12">Согласованных строк нет</td></tr>';
+  $('#scheduleRevenueManagersTable').innerHTML = managers.map(item => `<tr><td><strong>${escapeHtml(item.manager)}</strong></td><td>${item.approved_inns}</td><td>${item.planned_people}</td><td>${item.arrived_people_all_time}</td><td>${item.arrived_people}</td><td>${Number(item.attendance_conversion || 0).toLocaleString('ru-RU')}%</td><td>${item.applications}</td><td>${Number(item.application_conversion || 0).toLocaleString('ru-RU')}%</td><td>${item.online_payers}</td><td>${escapeHtml(formatRublesFromKopecks(item.online_revenue_kopecks))}</td><td><strong>${escapeHtml(formatRublesFromKopecks(item.lost_revenue_kopecks))}</strong></td></tr>`).join('') || '<tr><td colspan="11">Согласованных строк нет</td></tr>';
   const companies = report.companies || [];
   $('#scheduleRevenueCompaniesCount').textContent = `${companies.length} предприятий`;
   $('#scheduleRevenueCompaniesTable').innerHTML = companies.map(item => {
     const schedule = [item.dates?.join(', '), item.brigades?.join(', ')].filter(Boolean).join(' · ') || '—';
-    return `<tr><td>${escapeHtml(item.manager)}</td><td><strong>${escapeHtml(item.organization_name || 'Без названия')}</strong></td><td>${escapeHtml(item.inn)}</td><td>${escapeHtml(schedule)}</td><td>${item.planned_people}</td><td>${item.arrived_people}</td><td>${item.applications}</td><td>${escapeHtml(formatRublesFromKopecks(item.application_value_kopecks))}</td><td>${item.online_payers}</td><td>${escapeHtml(formatRublesFromKopecks(item.estimated_revenue_kopecks))}</td><td>${escapeHtml(formatRublesFromKopecks(item.lost_revenue_kopecks))}</td></tr>`;
+    return `<tr><td>${escapeHtml(item.manager)}</td><td><strong>${escapeHtml(item.organization_name || 'Без названия')}</strong></td><td>${escapeHtml(item.inn)}</td><td>${escapeHtml(schedule)}</td><td>${item.planned_people}</td><td>${item.arrived_people_all_time}</td><td>${item.arrived_people}</td><td>${item.applications}</td><td>${escapeHtml(formatRublesFromKopecks(item.application_value_kopecks))}</td><td>${item.online_payers}</td><td><strong>${escapeHtml(formatRublesFromKopecks(item.lost_revenue_kopecks))}</strong></td></tr>`;
   }).join('') || '<tr><td colspan="11">Согласованных предприятий нет</td></tr>';
 }
 
