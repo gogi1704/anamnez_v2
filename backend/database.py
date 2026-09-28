@@ -1005,11 +1005,6 @@ def admin_schedule_revenue_report(schedule_rows: list[dict], month: str) -> dict
 
     with connection() as conn:
         excluded = _statistics_excluded_chel_ids(conn)
-        all_user_rows = conn.execute(
-            """SELECT u.chel_id,p.company_inn FROM users u
-               JOIN user_profile p ON p.chel_id=u.chel_id
-               WHERE TRIM(p.company_inn)<>''"""
-        ).fetchall()
         user_rows = conn.execute(
             """SELECT u.chel_id,p.company_inn FROM users u
                JOIN user_profile p ON p.chel_id=u.chel_id
@@ -1033,18 +1028,12 @@ def admin_schedule_revenue_report(schedule_rows: list[dict], month: str) -> dict
             (start, end),
         ).fetchall()
 
-    def matched_user_inn(rows) -> dict[str, str]:
-        result: dict[str, str] = {}
-        for row in rows:
-            chel_id = str(row["chel_id"])
-            inn = re.sub(r"\D", "", str(row["company_inn"] or ""))
-            if chel_id not in excluded and inn in approved_inns:
-                result[chel_id] = inn
-        return result
-
-    all_time_user_inn = matched_user_inn(all_user_rows)
-    user_inn = matched_user_inn(user_rows)
-    arrived_users_all_time = set(all_time_user_inn)
+    user_inn: dict[str, str] = {}
+    for row in user_rows:
+        chel_id = str(row["chel_id"])
+        inn = re.sub(r"\D", "", str(row["company_inn"] or ""))
+        if chel_id not in excluded and inn in approved_inns:
+            user_inn[chel_id] = inn
     arrived_users = set(user_inn)
 
     applications: dict[str, int] = {}
@@ -1084,9 +1073,6 @@ def admin_schedule_revenue_report(schedule_rows: list[dict], month: str) -> dict
     users_by_inn: dict[str, set[str]] = {inn: set() for inn in approved_inns}
     for chel_id, inn in user_inn.items():
         users_by_inn.setdefault(inn, set()).add(chel_id)
-    all_time_users_by_inn: dict[str, set[str]] = {inn: set() for inn in approved_inns}
-    for chel_id, inn in all_time_user_inn.items():
-        all_time_users_by_inn.setdefault(inn, set()).add(chel_id)
     app_by_inn = {
         inn: {chel_id: applications[chel_id] for chel_id in users if chel_id in applications}
         for inn, users in users_by_inn.items()
@@ -1104,9 +1090,7 @@ def admin_schedule_revenue_report(schedule_rows: list[dict], month: str) -> dict
         )
         companies.append({
             **{key: value for key, value in item.items() if key not in {"dates", "brigades"}},
-            "dates": sorted(item["dates"]), "brigades": sorted(item["brigades"]),
-            "arrived_people_all_time": len(all_time_users_by_inn.get(inn, set())),
-            **metrics,
+            "dates": sorted(item["dates"]), "brigades": sorted(item["brigades"]), **metrics,
         })
     companies.sort(key=lambda item: (item["manager"].casefold(), item["organization_name"].casefold(), item["inn"]))
 
@@ -1116,14 +1100,10 @@ def admin_schedule_revenue_report(schedule_rows: list[dict], month: str) -> dict
         manager_companies = [item for item in companies if item["manager"] == manager]
         manager_inns = {item["inn"] for item in manager_companies}
         manager_users = {chel_id for chel_id, inn in user_inn.items() if inn in manager_inns}
-        manager_users_all_time = {
-            chel_id for chel_id, inn in all_time_user_inn.items() if inn in manager_inns
-        }
         manager_apps = {chel_id: value for chel_id, value in applications.items() if chel_id in manager_users}
         manager_payments = [item for item in payments if str(item["chel_id"]) in manager_users]
         managers.append({
             "manager": manager, "approved_inns": len(manager_inns),
-            "arrived_people_all_time": len(manager_users_all_time),
             **_schedule_revenue_metrics(
                 sum(item["planned_people"] for item in manager_companies),
                 manager_users, manager_apps, manager_payments,
@@ -1133,9 +1113,8 @@ def admin_schedule_revenue_report(schedule_rows: list[dict], month: str) -> dict
 
     summary = {
         "approved_inns": len(approved_inns), "managers": len(manager_names),
-        "arrived_people_all_time": len(arrived_users_all_time),
         "inactive_approved_inns": sum(
-            1 for inn in approved_inns if not all_time_users_by_inn.get(inn)
+            1 for inn in approved_inns if not users_by_inn.get(inn)
         ),
         **_schedule_revenue_metrics(
             sum(item["planned_people"] for item in companies),

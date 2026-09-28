@@ -3978,16 +3978,11 @@ class OrchestratorTests(unittest.TestCase):
 
     def test_schedule_revenue_report_joins_arrivals_applications_and_payments(self):
         chel_id = "chel_schedule_revenue_test"
-        historical_chel_id = "chel_schedule_revenue_historical_test"
         inn = "7707654321"
         paid_at = "2026-09-14T09:00:00+00:00"
-        historical_at = "2026-08-14T09:00:00+00:00"
         selected_id = TEST_CATALOG[0]["id"]
         with db.connection() as conn:
-            conn.execute(
-                "DELETE FROM users WHERE chel_id IN (?,?)",
-                (chel_id, historical_chel_id),
-            )
+            conn.execute("DELETE FROM users WHERE chel_id=?", (chel_id,))
             conn.execute(
                 "INSERT INTO users (chel_id,created_at,last_seen_at) VALUES (?,?,?)",
                 (chel_id, paid_at, paid_at),
@@ -4010,14 +4005,6 @@ class OrchestratorTests(unittest.TestCase):
                 ("schedule-revenue-order", chel_id, "schedule-revenue-key", "fp", "succeeded",
                  90000, "[]", 1, 0, paid_at, paid_at, paid_at),
             )
-            conn.execute(
-                "INSERT INTO users (chel_id,created_at,last_seen_at) VALUES (?,?,?)",
-                (historical_chel_id, historical_at, historical_at),
-            )
-            conn.execute(
-                "INSERT INTO user_profile (chel_id,company_inn,updated_at) VALUES (?,?,?)",
-                (historical_chel_id, inn, historical_at),
-            )
             conn.commit()
         try:
             report = db.admin_schedule_revenue_report([
@@ -4033,7 +4020,7 @@ class OrchestratorTests(unittest.TestCase):
             ], "2026-09")
             summary = report["summary"]
             self.assertEqual(summary["planned_people"], 10)
-            self.assertEqual(summary["arrived_people_all_time"], 2)
+            self.assertEqual(summary["approved_inns"], 2)
             self.assertEqual(summary["arrived_people"], 1)
             self.assertEqual(summary["inactive_approved_inns"], 1)
             self.assertEqual(summary["applications"], 1)
@@ -4043,15 +4030,9 @@ class OrchestratorTests(unittest.TestCase):
             self.assertEqual(summary["expected_lost_applications"], 9.0)
             self.assertEqual(summary["lost_revenue_kopecks"], 810000)
             self.assertEqual(report["managers"][0]["manager"], "Мария")
-            self.assertEqual(report["managers"][0]["arrived_people_all_time"], 2)
-            active_company = next(item for item in report["companies"] if item["inn"] == inn)
-            self.assertEqual(active_company["arrived_people_all_time"], 2)
         finally:
             with db.connection() as conn:
-                conn.execute(
-                    "DELETE FROM users WHERE chel_id IN (?,?)",
-                    (chel_id, historical_chel_id),
-                )
+                conn.execute("DELETE FROM users WHERE chel_id=?", (chel_id,))
                 conn.commit()
 
     def test_upcoming_examination_uses_nearest_date_and_combines_brigades(self):

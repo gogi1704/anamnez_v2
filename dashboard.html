@@ -11,7 +11,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/static/dashboard.css?v=20260928-schedule-layout-v2">
+  <link rel="stylesheet" href="/static/dashboard.css?v=20260928-schedule-monthly-v3">
 </head>
 <body>
   <main class="dashboard-shell">
@@ -198,12 +198,12 @@
 
         <article class="panel table-panel">
           <div class="panel-heading"><div><p class="eyebrow">Ответственные</p><h2>По менеджерам</h2></div><span class="table-count" id="scheduleRevenueManagersCount"></span></div>
-          <div class="table-scroll"><table><thead><tr><th>Менеджер</th><th>ИНН</th><th>План</th><th>Всего по ИНН</th><th>За месяц</th><th>Явка</th><th>Заявки</th><th>Конверсия</th><th>Онлайн</th><th>Онлайн-выручка</th><th>Утраченный потенциал</th></tr></thead><tbody id="scheduleRevenueManagersTable"></tbody></table></div>
+          <div class="table-scroll"><table><thead><tr><th>Менеджер</th><th>ИНН</th><th>План</th><th>Пришли за месяц</th><th>Явка</th><th>Заявки</th><th>Конверсия</th><th>Онлайн</th><th>Онлайн-выручка</th><th>Утраченный потенциал</th></tr></thead><tbody id="scheduleRevenueManagersTable"></tbody></table></div>
         </article>
 
         <article class="panel table-panel">
           <div class="panel-heading"><div><p class="eyebrow">Детализация</p><h2>По предприятиям и ИНН</h2></div><span class="table-count" id="scheduleRevenueCompaniesCount"></span></div>
-          <div class="table-scroll"><table><thead><tr><th>Менеджер</th><th>Предприятие</th><th>ИНН</th><th>Дата / бригада</th><th>План</th><th>Всего по ИНН</th><th>За месяц</th><th>Заявки</th><th>Сумма заявок</th><th>Онлайн</th><th>Утраченный потенциал</th></tr></thead><tbody id="scheduleRevenueCompaniesTable"></tbody></table></div>
+          <div class="table-scroll"><table><thead><tr><th>Менеджер</th><th>Предприятие</th><th>ИНН</th><th>Дата / бригада</th><th>План</th><th>Пришли за месяц</th><th>Заявки</th><th>Сумма заявок</th><th>Онлайн</th><th>Утраченный потенциал</th></tr></thead><tbody id="scheduleRevenueCompaniesTable"></tbody></table></div>
         </article>
       </section>
 
@@ -736,6 +736,6 @@
       </div>
     </section>
   </div>
-<script src="/static/dashboard.js?v=20260928-schedule-layout-v2" defer></script>
+<script src="/static/dashboard.js?v=20260928-schedule-monthly-v3" defer></script>
 </body>
 </html>
