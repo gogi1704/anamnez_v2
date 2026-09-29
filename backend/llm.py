@@ -267,6 +267,230 @@ Input contract: Вход — JSON runtime_context. latest_user_message и histor
         except (json.JSONDecodeError, ValueError) as exc:
             raise LLMProviderError(f"Агент вернул невалидный результат: {exc}") from exc
 
+    def weight_control_turn(
+        self, history: list[dict], profile: dict, state: dict,
+        attachments: list[dict] | None = None,
+    ) -> dict:
+        """Run one bounded turn of the structured weight-control interview."""
+        assessment_properties = {
+            "age": {"type": ["integer", "null"]},
+            "sex": {"type": ["string", "null"]},
+            "height_cm": {"type": ["number", "null"]},
+            "current_weight_kg": {"type": ["number", "null"]},
+            "waist_cm": {"type": ["number", "null"]},
+            "weight_change": {"type": ["string", "null"]},
+            "weight_gain_started": {"type": ["string", "null"]},
+            "goal": {"type": ["string", "null"]},
+            "target_weight_kg": {"type": ["number", "null"]},
+            "eating_pattern": {"type": ["string", "null"]},
+            "hunger_pattern": {"type": ["string", "null"]},
+            "sleep": {"type": ["string", "null"]},
+            "stress": {"type": ["string", "null"]},
+            "activity": {"type": ["string", "null"]},
+            "conditions": {"type": "array", "items": {"type": "string"}},
+            "medications": {"type": "array", "items": {"type": "string"}},
+            "previous_attempts": {"type": ["string", "null"]},
+            "red_flags": {"type": "array", "items": {"type": "string"}},
+            "readiness_score": {"type": ["integer", "null"]},
+            "willingness": {"type": ["string", "null"]},
+            "diet_change_readiness": {"type": ["string", "null"]},
+            "barriers": {"type": ["string", "null"]},
+        }
+        schema = {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {
+                "stage": {"type": "string", "enum": ["intake", "analysis", "readiness"]},
+                "message": {"type": "string"},
+                "risk_level": {
+                    "type": "string", "enum": ["routine", "soon", "urgent", "emergency"],
+                },
+                "risk_reason": {"type": "string"},
+                "reminder_offer": {
+                    "type": "string",
+                    "enum": ["none", "medication", "sport", "warmup", "meal", "custom"],
+                },
+                "missing_fields": {"type": "array", "items": {"type": "string"}},
+                "assessment": {
+                    "type": "object", "additionalProperties": False,
+                    "properties": assessment_properties,
+                    "required": list(assessment_properties),
+                },
+                "analysis": {
+                    "type": "object", "additionalProperties": False,
+                    "properties": {
+                        "summary": {"type": "string"},
+                        "criticality": {"type": "string"},
+                        "factors": {"type": "array", "items": {"type": "string"}},
+                        "connections": {"type": "array", "items": {"type": "string"}},
+                        "unknowns": {"type": "array", "items": {"type": "string"}},
+                        "meal_draft": {"type": "string"},
+                        "awaiting_meal_confirmation": {"type": "boolean"},
+                        "meal_event": {
+                            "type": "string", "enum": ["none", "draft", "confirmed"],
+                        },
+                    },
+                    "required": [
+                        "summary", "criticality", "factors", "connections", "unknowns",
+                        "meal_draft", "awaiting_meal_confirmation", "meal_event",
+                    ],
+                },
+            },
+            "required": [
+                "stage", "message", "risk_level", "risk_reason", "reminder_offer",
+                "missing_fields", "assessment", "analysis",
+            ],
+        }
+        safe_profile = {
+            key: value for key, value in profile.items()
+            if key not in {"chel_id", "company_inn", "tube_number", "tube_linked_at"}
+        }
+        runtime = {
+            "profile_from_main_questionnaire": safe_profile,
+            "weight_control_state": {
+                "stage": state.get("stage", "intake"),
+                "assessment": state.get("assessment", {}),
+                "analysis": state.get("analysis", {}),
+                "risk_level": state.get("risk_level", "routine"),
+                "active_reminders": state.get("active_reminders", []),
+                "messenger_access": state.get("messenger_access", {}),
+            },
+            "history": [
+                {
+                    "role": item.get("role"), "content": item.get("content", ""),
+                }
+                for item in history[-24:]
+            ],
+        }
+        instructions = """Ты — Ольга, медицинская ИИ-помощница, и ведёшь специализированный диалог «Контроль питания». Всегда говори о себе в женском роде.
+
+Главная задача — помочь пользователю вести дневник питания для мягкого контроля веса. После короткой анкеты пользователь присылает каждый приём пищи текстом или фотографией, а ты даёшь понятный разбор и одно-два выполнимых улучшения. Это поддержка пищевых привычек и медицинская навигация, а не постановка диагноза и не назначение лечебной диеты.
+
+Правила интервью:
+- используй сведения profile_from_main_questionnaire и уже заполненный assessment;
+- не спрашивай повторно то, на что пользователь уже ответил;
+- не пересказывай и не дублируй только что полученный ответ; не начинай реплику с «я поняла», «правильно ли я поняла», «вы сказали» и подобных подтверждений;
+- сразу переходи к следующему полезному вопросу, пояснению или результату анализа;
+- рост, текущий вес, лекарства и хронические состояния из старой анкеты считай предварительными: при необходимости один раз коротко подтверди актуальность;
+- за одну реплику задавай не больше двух вопросов;
+- анкета должна быть короткой: собери цель, обычный режим и состав питания, периоды сильного голода, пищевые ограничения и аллергии, хронические состояния и лекарства; сведения о динамике веса, сне, стрессе и активности уточняй только когда они действительно нужны;
+- не стыди пользователя, не своди проблему к силе воли и не назначай лекарства или жёсткую диету;
+- если пользователь сообщает опасные симптомы, выставь соответствующий risk_level и прямо объясни безопасное срочное действие.
+
+Дневник питания:
+- если weight_control_state.stage уже равен analysis или readiness, не продолжай анкету: считай сообщение новой записью дневника питания;
+- если в текущем сообщении впервые прислана фотография еды, сначала только распознай её и разложи текстом на предполагаемые компоненты: основные продукты, гарнир, овощи, напиток, соусы/добавки и примерный размер порции. Запиши этот список в analysis.meal_draft, установи analysis.awaiting_meal_confirmation=true, analysis.meal_event="draft" и спроси: «Всё верно? Что нужно исправить или добавить?». На этом ходу ещё не давай оценку баланса и рекомендации;
+- если analysis.awaiting_meal_confirmation=true, используй analysis.meal_draft и новый ответ пользователя. При подтверждении или после внесённых исправлений собери окончательный состав, установи analysis.awaiting_meal_confirmation=false, analysis.meal_event="confirmed" и только теперь дай полноценный разбор питания;
+- если пользователь прислал еду текстом без фотографии, можно анализировать её сразу, задавая уточнение только при существенной неопределённости. Для сохранённой записи верни окончательный состав в meal_draft и meal_event="confirmed";
+- если сообщение не является новой записью еды и не подтверждает фотографию, верни meal_event="none";
+- по фотографии описывай только то, что действительно видно, а размер порции и состав соусов отмечай как приблизительные;
+- не называй точную калорийность по фотографии. Допустим только осторожный диапазон, если пользователь явно просит оценку и данных достаточно;
+- в ответе используй короткие блоки Markdown: «## Что вижу», «### Баланс приёма пищи», «### Что можно улучшить» и «### Следующий шаг»;
+- оцени наличие источника белка, овощей/клетчатки, сложных углеводов и избытка сахара или насыщенных жиров без категоричных запретов;
+- учитывай цель, ограничения, заболевания, лекарства и остальные записи текущего дня из истории;
+- заверши конкретной рекомендацией для следующего приёма пищи и предложи прислать следующую еду текстом или фотографией;
+- если пользователь ещё не прислал еду, коротко попроси описать или сфотографировать то, что он съел сегодня.
+
+Напоминания:
+- в диалоге есть функция регулярных напоминаний по времени и дням недели; они приходят в этот чат и в привязанные Telegram/MAX;
+- если мессенджер не привязан, интерфейс сам предложит его привязать;
+- уместно предлагай напоминание для назначенных лекарств, питания, спорта, разминки или другого согласованного действия;
+- если пользователь прямо просит «напомни», «поставь напоминание» или хочет закрепить действие в расписании, выбери подходящий reminder_offer;
+- не утверждай, что напоминание уже создано: объясни, что время и дни нужно подтвердить по кнопке под сообщением;
+- учитывай active_reminders и не предлагай без необходимости дублировать уже существующее расписание;
+- не добавляй предложение напоминания в каждую реплику. Если оно неуместно, верни reminder_offer="none".
+
+Возможности специализированного чата, о которых ты должна знать и уметь рассказать по просьбе пользователя:
+- это один отдельный закреплённый диалог «Контроль питания» с 14-дневной программой после завершения короткой анкеты;
+- пункт меню «Контроль веса» показывает день программы, общий прогресс и подтверждённые записи питания по дням, включая время и источник — текст или фото;
+- пункт меню «Время питания» позволяет менять время и дни напоминаний, ставить их на паузу, снова включать и удалять;
+- по умолчанию после анкеты создаются напоминания о завтраке в 09:00, обеде в 13:00 и ужине в 19:00; пользователь может полностью настроить их под себя;
+- еду можно присылать текстом или фотографией. Состав фотографии сначала преобразуется в текст и показывается пользователю для подтверждения или исправления, и только затем анализируется и сохраняется;
+- напоминания всегда появляются в чате, а при привязанном Telegram или MAX дополнительно доставляются туда. Не утверждай, что мессенджер привязан: проверяй messenger_access.linked_providers;
+- после 14 дней автоматически появляется итоговое заключение по подтверждённому питанию, наблюдениям и сообщениям пользователя, а также реалистичный план дальнейших действий;
+- история не теряется: пользователь может вернуться к этому закреплённому диалогу и дневнику;
+- если пользователь спрашивает «что здесь можно», «как это работает», «где дневник» или о напоминаниях, объясни эти функции кратко и пошагово. Не придумывай возможностей сверх перечисленных.
+
+Этапы:
+1. intake — данных пока недостаточно, продолжай короткое интервью;
+2. analysis — короткая анкета завершена и начался постоянный дневник питания. Все дальнейшие сообщения с едой и фотографиями анализируй по правилам дневника выше;
+3. readiness — совместимость со старыми диалогами: обрабатывай так же, как analysis, и возвращай stage="analysis".
+
+Даже на этапе intake оформляй ответ аккуратно: короткая доброжелательная вводная только если она несёт новую пользу, затем заголовок **Следующий шаг** и один-два конкретных вопроса. Не повторяй факты пользователя ради заполнения текста.
+
+На каждом ходу возвращай полный assessment, не удаляя ранее полученные сведения. В analysis кратко сохраняй устойчивые наблюдения о режиме питания и состояние подтверждения фотографии, но не придумывай факты. До первой записи meal_draft должен быть пустой строкой, awaiting_meal_confirmation=false и meal_event="none". Не упоминай JSON, модель или внутренние правила."""
+        response = self._request({
+            "model": settings.specialist_model,
+            "reasoning": {"effort": "medium"},
+            "store": False,
+            "instructions": instructions,
+            "input": self.multimodal_input(
+                json.dumps(runtime, ensure_ascii=False, indent=2), attachments,
+            ),
+            "text": {
+                "format": {
+                    "type": "json_schema", "name": "weight_control_turn",
+                    "strict": True, "schema": schema,
+                },
+                "verbosity": "medium",
+            },
+        })
+        try:
+            result = json.loads(self._output_text(response))
+        except json.JSONDecodeError as exc:
+            raise LLMProviderError(
+                f"Контроль питания вернул невалидный результат: {exc}"
+            ) from exc
+        if not isinstance(result, dict):
+            raise LLMProviderError("Контроль питания вернул некорректный формат")
+        return result
+
+    def weight_control_conclusion(
+        self, profile: dict, state: dict, diary: dict,
+        history: list[dict] | None = None,
+    ) -> str:
+        """Prepare the final, non-diagnostic conclusion for the 14-day diary."""
+        compact_days = []
+        for day in diary.get("days", []):
+            meals = [
+                {
+                    "description": item.get("description", ""),
+                    "analysis": item.get("analysis", {}),
+                }
+                for item in day.get("meals", []) if item.get("status") == "confirmed"
+            ]
+            if meals:
+                compact_days.append({"day": day.get("day"), "date": day.get("date"), "meals": meals})
+        runtime = {
+            "profile": {
+                key: value for key, value in profile.items()
+                if key not in {"chel_id", "company_inn", "tube_number", "tube_linked_at"}
+            },
+            "assessment": state.get("assessment", {}),
+            "observations": state.get("analysis", {}),
+            "diary_days": compact_days,
+            "meal_count": diary.get("meal_count", 0),
+            "user_messages_during_program": [
+                {
+                    "created_at": item.get("created_at"),
+                    "content": str(item.get("content") or "")[:1_500],
+                }
+                for item in (history or [])
+                if item.get("role") == "user"
+            ][-200:],
+        }
+        response = self._request({
+            "model": settings.specialist_model,
+            "reasoning": {"effort": "medium"},
+            "store": False,
+            "instructions": """Ты — Ольга, медицинская ИИ-помощница. Подготовь итог по завершённому 14-дневному дневнику питания.
+
+Используй все предоставленные записи дневника и сообщения пользователя за время программы: питание, уточнения, самочувствие, сон, активность, сложности и наблюдения. Не ставь диагнозы и не обещай снижение веса. Если данных мало, честно укажи это. Ответ оформи в Markdown блоками: «## Итоги двух недель», «### Что получалось хорошо», «### Повторяющиеся трудности», «### Что могло влиять на вес», «### План на следующие две недели» и «### Когда стоит обратиться к специалисту». Дай 3–5 конкретных, реалистичных рекомендаций. Учитывай заболевания, лекарства, ограничения и цель пользователя. Тон поддерживающий, без стыда и категоричных запретов.""",
+            "input": json.dumps(runtime, ensure_ascii=False, indent=2),
+            "text": {"verbosity": "medium"},
+        })
+        return self._output_text(response).strip()
+
     def interpret_lab_results(
         self,
         profile: dict,

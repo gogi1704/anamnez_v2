@@ -1970,6 +1970,10 @@ function renderExperimentReport(data) {
     <section class="experiment-variant">
       <header><div><b>${escapeHtml(variant.label)}</b><small>${escapeHtml(variant.version)}</small></div><strong>${Number(variant.users || 0).toLocaleString('ru-RU')} чел.</strong></header>
       ${(variant.stages || []).map(stage => `<div class="experiment-stage"><b>${escapeHtml(stage.label)}</b><strong>${Number(stage.users || 0).toLocaleString('ru-RU')}</strong><small>${Number(stage.percent || 0).toLocaleString('ru-RU')}% от назначенных</small><span class="experiment-stage-track"><i style="width:${Math.min(100,Number(stage.percent || 0))}%"></i></span></div>`).join('')}
+      <div class="experiment-money-summary">
+        <div><span>Выбрано допобследований на сумму</span><strong>${escapeHtml(formatRublesFromKopecks(variant.selected_amount_kopecks))}</strong></div>
+        <div><span>Оплачено онлайн</span><strong>${escapeHtml(formatRublesFromKopecks(variant.online_paid_amount_kopecks))}</strong></div>
+      </div>
     </section>`).join('');
 }
 

@@ -2,6 +2,7 @@ const state = {
   active: 'manager',
   processing: false,
   conversationId: localStorage.getItem('consilium_conversation_id'),
+  conversationType: 'general',
   context: null,
   urgency: 'routine',
   attachments: [],
@@ -49,6 +50,10 @@ const state = {
   offerViewGoalTracked: false,
   metrikaVisitParamsSent: false,
   paymentSuccessGoalOrders: new Set(),
+  weightReminders: [],
+  weightDiary: null,
+  weightDiaryEditingId: null,
+  weightDiaryEditingDate: '',
 };
 
 const $ = selector => document.querySelector(selector);
@@ -1061,6 +1066,11 @@ function closeMessengerLinkModal() {
 
 function continueFromMessengerLinkModal() {
   const source = $('#messengerLinkModal').dataset.source || 'menu';
+  if (source === 'weight_control') {
+    closeMessengerLinkModal();
+    openWeightReminders();
+    return;
+  }
   if (source !== 'lab_specialist') {
     closeMessengerLinkModal();
     return;
@@ -1100,6 +1110,7 @@ function openMessengerLinkModal({ source = 'menu', justLinked = '' } = {}) {
   success.textContent = justLinked ? `Готово — ${messengerName(justLinked)} привязан к вашему профилю.` : '';
   const specialist = source === 'lab_specialist';
   const resultFlow = source === 'result_flow';
+  const weightControl = source === 'weight_control';
   $('#messengerLinkTitle').textContent = resultFlow
     ? 'Войти через мессенджер'
     : 'Привязать мессенджер';
@@ -1107,12 +1118,15 @@ function openMessengerLinkModal({ source = 'menu', justLinked = '' } = {}) {
     ? 'Привяжите Telegram или MAX, чтобы не потерять доступ к диалогу и увидеть ответ врача на любом устройстве.'
     : resultFlow
       ? 'Войдите через Telegram или MAX, чтобы сохранить найденные результаты и открывать их с других устройств.'
+    : weightControl
+      ? 'Привяжите Telegram или MAX, чтобы получать напоминания о приёмах пищи и не терять дневник питания.'
     : linkedMessengerProviders().size
       ? 'Добавьте ещё один способ входа или проверьте уже подключённые мессенджеры.'
       : 'Сохраните доступ к анкете, выбранным обследованиям, результатам и расшифровкам на любом устройстве.';
   $('#messengerLinkLater').textContent = specialist
     ? 'Продолжить без привязки'
     : resultFlow ? 'Продолжить без входа'
+    : weightControl ? 'Настроить время питания'
     : justLinked ? 'Готово' : 'Не сейчас';
   $('#messengerLinkModal').dataset.source = source;
   $('#messengerLinkModal').classList.remove('hidden');
@@ -2976,7 +2990,13 @@ function addMessage(sender, text, agentId = state.active, urgent = false, create
   if (messageId) wrapper.dataset.messageId = String(messageId);
   const date = createdAt ? new Date(createdAt) : new Date();
   const time = new Intl.DateTimeFormat('ru', { hour: '2-digit', minute: '2-digit' }).format(date);
-  const attachmentBadges = (metadata.attachments || []).map(item => `<em class="message-file">▱ ${escapeHtml(item.name)}</em>`).join('');
+  const attachmentMarkup = (metadata.attachments || []).map(item => {
+    const preview = item.thumbnail_url || (String(item.type || '').startsWith('image/') ? item.data_url : '');
+    if (preview) {
+      return `<figure class="message-photo"><img src="${escapeAttr(preview)}" alt="${escapeAttr(item.name || 'Фотография еды')}" loading="lazy"><figcaption>${escapeHtml(item.name || 'Фотография')}</figcaption></figure>`;
+    }
+    return `<em class="message-file">▱ ${escapeHtml(item.name)}</em>`;
+  }).join('');
   const cached = metadata.action === 'lab_interpretation' && metadata.interpretation_cached
     ? '<b class="special-label">Сохранённая расшифровка</b>' : '';
   const labDocuments = sender === 'agent'
@@ -2990,9 +3010,22 @@ function addMessage(sender, text, agentId = state.active, urgent = false, create
   const reofferAction = sender === 'agent' && metadata.action === 'checkup_reoffer'
     ? `<button type="button" class="message-checkup-reoffer" data-checkup-reoffer="${escapeAttr(metadata.access_token || '')}">${escapeHtml(metadata.action_label || 'Выбрать чек-апы →')}</button>`
     : '';
+  const reminderAction = sender === 'agent' && metadata.action === 'weight_reminder_setup'
+    ? `<button type="button" class="message-checkup-reoffer message-reminder-setup" data-weight-reminder-setup="${escapeAttr(metadata.reminder_type || 'custom')}">⏰ ${escapeHtml(metadata.action_label || 'Настроить напоминание')}</button>`
+    : '';
+  const messengerLinkAction = sender === 'agent' && (metadata.action === 'weight_messenger_link' || metadata.weight_messenger_link)
+    ? `<div class="message-messenger-actions"><button type="button" class="message-checkup-reoffer message-messenger-link" data-weight-messenger-link>↗ ${escapeHtml(metadata.weight_messenger_label || (metadata.action === 'weight_messenger_link' ? metadata.action_label : '') || 'Привязать мессенджер')}</button>${metadata.weight_messenger_dismiss ? '<button type="button" class="message-messenger-dismiss" data-weight-messenger-dismiss>Больше не предлагать</button>' : ''}</div>`
+    : '';
+  const mealConfirmationAction = sender === 'agent' && metadata.action === 'weight_meal_confirmation'
+    ? `<div class="message-meal-confirmation-actions">
+        <button type="button" class="message-checkup-reoffer" data-weight-meal-confirm>✓ ${escapeHtml(metadata.action_label || 'Всё верно')}</button>
+        <button type="button" class="message-meal-edit" data-weight-meal-edit>Исправить или добавить</button>
+      </div>`
+    : '';
+  const userTextMarkup = String(text || '').trim() ? `<p>${escapeHtml(text)}</p>` : '';
   wrapper.innerHTML = sender === 'user'
-    ? `<div class="bubble user-bubble">${attachmentBadges}<p>${escapeHtml(text)}</p><span>${time}</span></div>`
-    : `<div class="message-avatar">${humanManager ? (metadata.staff_role === 'doctor' ? 'В' : 'Ч') : agent.initials}</div><div><div class="message-author"><strong>${humanManager ? escapeHtml(metadata.manager_name || humanRole) : agent.name}</strong><span>${humanManager ? humanRole : agent.role}</span>${cached}</div><div class="bubble agent-bubble">${assistantContent}${labDocuments}${reofferAction}<span>${time}</span></div></div>`;
+    ? `<div class="bubble user-bubble">${attachmentMarkup}${userTextMarkup}<span>${time}</span></div>`
+    : `<div class="message-avatar">${humanManager ? (metadata.staff_role === 'doctor' ? 'В' : 'Ч') : agent.initials}</div><div><div class="message-author"><strong>${humanManager ? escapeHtml(metadata.manager_name || humanRole) : agent.name}</strong><span>${humanManager ? humanRole : agent.role}</span>${cached}</div><div class="bubble agent-bubble">${assistantContent}${labDocuments}${reofferAction}${reminderAction}${messengerLinkAction}${mealConfirmationAction}<span>${time}</span></div></div>`;
   messages.appendChild(wrapper);
   scrollChatToBottom();
   return wrapper;
@@ -3085,7 +3118,7 @@ async function processMessage(text) {
   $('#taskStatus').textContent = 'Ольга изучает вопрос';
   $('#suggestions').classList.add('hidden');
   const outgoingAttachments = [...state.attachments];
-  addMessage('user', text || 'Прикреплён файл для анализа', state.active, false, null, { attachments: outgoingAttachments });
+  addMessage('user', text, state.active, false, null, { attachments: outgoingAttachments });
   clearAttachments();
   addTimeline('manager', 'Изучаю вопрос', 'Учитываю контекст и выбираю, кто лучше поможет');
   showTyping('manager');
@@ -3176,8 +3209,9 @@ async function loadConversationList() {
     applyUnreadCounts(Object.fromEntries(items.map(item => [item.id, Number(item.unread_count || 0)])));
     $('#mobileConversationCount').textContent = String(items.length);
     $('#conversationList').innerHTML = items.length ? items.map(item => `
-      <button class="conversation-row ${item.id === state.conversationId ? 'active' : ''} ${Number(item.unread_count || 0) ? 'unread' : ''}" data-id="${item.id}">
-        <span class="conversation-row-title"><strong>${escapeHtml(item.title)}</strong>${Number(item.unread_count || 0) ? `<b>${formatUnreadCount(item.unread_count)}</b>` : ''}</span>
+      <button class="conversation-row ${item.id === state.conversationId ? 'active' : ''} ${Number(item.unread_count || 0) ? 'unread' : ''} ${item.dialog_type === 'weight_control' ? 'specialized' : ''}" data-id="${item.id}">
+        <span class="conversation-row-title"><strong>${escapeHtml(item.title)}</strong>${item.pinned ? '<i class="conversation-pin" aria-label="Закреплён">●</i>' : ''}${Number(item.unread_count || 0) ? `<b>${formatUnreadCount(item.unread_count)}</b>` : ''}</span>
+        ${item.dialog_type === 'weight_control' ? '<span class="conversation-specialized-badge">Персональная программа</span>' : ''}
         <span>${escapeHtml(conversationSummary(item))}</span><small>${formatRelative(item.updated_at)}</small>
       </button>`).join('') : '<p class="no-conversations">Пока нет сохранённых диалогов</p>';
   } catch {
@@ -3311,6 +3345,8 @@ async function openConversation(id) {
   try {
     const data = await api(`/api/conversations/${id}`);
     state.conversationId = id;
+    state.conversationType = data.dialog_type || 'general';
+    updateWeightControlTools();
     localStorage.setItem('consilium_conversation_id', id);
     messages.innerHTML = '';
     resetTimeline();
@@ -3356,7 +3392,10 @@ async function openConversation(id) {
 }
 
 function newConversation() {
+  closeNewChatMenu();
   state.conversationId = null;
+  state.conversationType = 'general';
+  updateWeightControlTools();
   localStorage.removeItem('consilium_conversation_id');
   messages.innerHTML = '';
   resetTimeline();
@@ -3371,6 +3410,366 @@ function newConversation() {
   $('#taskStatus').textContent = 'Ожидает задачу';
   addMessage('agent', 'Здравствуйте! Я Ольга, ваш медицинский помощник. Задавайте вопросы о здоровье, питании, спорте или возможностях сервиса — я помогу разобраться и при необходимости предложу подключить человека.', 'manager');
   loadConversationList();
+}
+
+function closeNewChatMenu() {
+  const menu = $('#newChatMenu');
+  if (!menu) return;
+  menu.classList.add('hidden');
+  $('#newChatButton')?.setAttribute('aria-expanded', 'false');
+}
+
+function toggleNewChatMenu() {
+  const menu = $('#newChatMenu');
+  const opening = menu.classList.contains('hidden');
+  menu.classList.toggle('hidden', !opening);
+  $('#newChatButton').setAttribute('aria-expanded', String(opening));
+}
+
+async function startWeightControlConversation() {
+  if (state.processing) return;
+  closeNewChatMenu();
+  state.processing = true;
+  beginUserProgress('Открываем «Контроль питания»…');
+  let conversation = null;
+  try {
+    conversation = await api('/api/conversations/weight-control', {
+      method:'POST', body:'{}',
+    });
+  } catch (error) {
+    addSystemError(error.message);
+  } finally {
+    state.processing = false;
+    endUserProgress();
+  }
+  if (conversation) {
+    await openConversation(conversation.id);
+    document.body.classList.remove('show-team');
+  }
+}
+
+const WEIGHT_REMINDER_TEMPLATES = {
+  breakfast: {type:'meal', title:'Завтрак', time:'09:00', message:'Время отметить завтрак. Пришлите в чат описание или фото — разберём состав и баланс.'},
+  lunch: {type:'meal', title:'Обед', time:'13:00', message:'Время отметить обед. Пришлите в чат описание или фото того, что съели.'},
+  dinner: {type:'meal', title:'Ужин', time:'19:00', message:'Время отметить ужин. Пришлите описание или фото — подскажу, что можно улучшить.'},
+};
+
+function updateWeightControlTools() {
+  const visible = state.conversationType === 'weight_control';
+  $('#weightToolsMenuWrap')?.classList.toggle('hidden', !visible);
+  if (!visible) closeWeightToolsMenu();
+}
+
+function weightDiaryDateLabel(value) {
+  const date = new Date(`${value}T12:00:00`);
+  return new Intl.DateTimeFormat('ru', {day:'numeric', month:'long'}).format(date);
+}
+
+function weightDiaryMealMeta(item) {
+  const parts = [item.source_type === 'photo' ? 'Фото' : item.source_type === 'manual' ? 'Добавлено вручную' : 'Текст'];
+  const created = item.created_at ? new Date(item.created_at) : null;
+  if (created && !Number.isNaN(created.getTime())) {
+    parts.unshift(new Intl.DateTimeFormat('ru', {hour:'2-digit', minute:'2-digit'}).format(created));
+  }
+  return parts.join(' · ');
+}
+
+function renderWeightDiary(data) {
+  state.weightDiary = data;
+  if (!data.program_started) {
+    $('#weightDiaryProgressLabel').textContent = 'Программа ещё не началась';
+    $('#weightDiaryMealCount').textContent = 'Сначала закончим короткую анкету';
+    $('#weightDiaryProgressBar').style.width = '0%';
+    $('#weightDiarySubtitle').textContent = 'Подготовка к двухнедельному дневнику';
+    $('#weightDiaryNote').textContent = 'После анкеты начнётся 14-дневная программа: вы будете присылать питание текстом или фотографией, а Консилиум — помогать разбирать рацион.';
+    $('#weightDiaryDays').innerHTML = '<div class="reminder-empty">Ответьте на оставшиеся вопросы в чате — после этого здесь появятся 14 дней дневника.</div>';
+    return;
+  }
+  const elapsed = Math.max(1, Math.min(14, Number(data.elapsed_days || 1)));
+  $('#weightDiaryProgressLabel').textContent = data.completed
+    ? '14 дней завершены'
+    : `День ${elapsed} из 14`;
+  $('#weightDiaryMealCount').textContent = `Записей о питании: ${Number(data.meal_count || 0)}`;
+  $('#weightDiaryProgressBar').style.width = `${Math.round(elapsed / 14 * 100)}%`;
+  $('#weightDiarySubtitle').textContent = data.conclusion_ready
+    ? 'Итоговое заключение готово в чате'
+    : data.completed ? 'Готовим итоговое заключение' : `До итога осталось ${data.remaining_days} дн.`;
+  $('#weightDiaryNote').textContent = data.conclusion_ready
+    ? 'Программа завершена. Итоговое заключение находится в диалоге «Контроль питания».'
+    : 'Добавляйте каждый приём пищи текстом или фотографией. После 14 дней в чате появится итоговое заключение.';
+  $('#weightDiaryDays').innerHTML = (data.days || []).map(day => {
+    const meals = day.meals || [];
+    const status = day.status === 'today' ? 'Сегодня' : day.status === 'future' ? 'Впереди' : (meals.length ? 'Заполнен' : 'Нет записей');
+    const mealMarkup = meals.length ? meals.map(item => `
+      <div class="weight-diary-meal ${item.status === 'pending' ? 'pending' : ''}">
+        <i>${item.source_type === 'photo' ? '▧' : '≡'}</i>
+        <div><strong>${item.status === 'pending' ? 'Ждёт уточнения состава' : 'Приём пищи'}</strong><small>${escapeHtml(weightDiaryMealMeta(item))}</small><p>${escapeHtml(item.description || 'Состав уточняется')}</p>
+        ${day.status !== 'future' ? `<span class="weight-diary-meal-actions"><button type="button" data-weight-diary-edit="${Number(item.id)}">Изменить</button><button type="button" data-weight-diary-delete="${Number(item.id)}">Удалить</button></span>` : ''}</div>
+      </div>`).join('') : '<p class="weight-diary-empty">Приёмы пищи пока не добавлены</p>';
+    const addButton = day.status === 'future'
+      ? '<p class="weight-diary-locked">Записи можно будет добавлять в этот день</p>'
+      : `<button class="weight-diary-add" type="button" data-weight-diary-add="${escapeAttr(day.date)}">+ Добавить приём пищи</button>`;
+    return `<details class="weight-diary-day ${day.status}" ${day.status === 'today' ? 'open' : ''}>
+      <summary><span><b>День ${day.day}</b><small>${escapeHtml(weightDiaryDateLabel(day.date))}</small></span><em>${status}</em></summary>
+      <div class="weight-diary-meals">${mealMarkup}${addButton}</div>
+    </details>`;
+  }).join('');
+}
+
+function closeWeightDiaryEditor() {
+  state.weightDiaryEditingId = null;
+  state.weightDiaryEditingDate = '';
+  $('#weightDiaryEntryDescription').value = '';
+  $('#weightDiaryEntryError').classList.add('hidden');
+  $('#weightDiaryEditor').classList.add('hidden');
+}
+
+function openWeightDiaryEditor(entryDate, mealId = null) {
+  const day = (state.weightDiary?.days || []).find(item => item.date === entryDate);
+  if (!day || day.status === 'future') return;
+  const meal = mealId
+    ? (day.meals || []).find(item => Number(item.id) === Number(mealId))
+    : null;
+  state.weightDiaryEditingId = meal ? Number(meal.id) : null;
+  state.weightDiaryEditingDate = entryDate;
+  $('#weightDiaryEditorTitle').textContent = meal
+    ? `Изменить запись за ${weightDiaryDateLabel(entryDate)}`
+    : `Добавить за ${weightDiaryDateLabel(entryDate)}`;
+  $('#weightDiaryEntryDescription').value = meal?.description || '';
+  $('#weightDiaryEntryError').classList.add('hidden');
+  $('#weightDiaryEditor').classList.remove('hidden');
+  $('#weightDiaryEntryDescription').focus();
+  $('#weightDiaryEditor').scrollIntoView({behavior:'smooth', block:'nearest'});
+}
+
+async function saveWeightDiaryEntry() {
+  const description = $('#weightDiaryEntryDescription').value.trim();
+  const error = $('#weightDiaryEntryError');
+  if (!description) {
+    error.textContent = 'Опишите, что вы ели.';
+    error.classList.remove('hidden');
+    return;
+  }
+  const button = $('#weightDiaryEntrySave');
+  button.disabled = true;
+  try {
+    const editId = state.weightDiaryEditingId;
+    await api(editId
+      ? `/api/weight-control/diary/entries/${editId}/update`
+      : '/api/weight-control/diary/entries', {
+      method:'POST',
+      body:JSON.stringify(editId ? {description} : {
+        conversation_id:state.conversationId,
+        entry_date:state.weightDiaryEditingDate,
+        description,
+      }),
+    });
+    closeWeightDiaryEditor();
+    await reloadWeightDiary();
+  } catch (requestError) {
+    error.textContent = requestError.message;
+    error.classList.remove('hidden');
+  } finally {
+    button.disabled = false;
+  }
+}
+
+async function deleteWeightDiaryEntry(mealId) {
+  if (!confirm('Удалить эту запись из дневника?')) return;
+  try {
+    await api(`/api/weight-control/diary/entries/${mealId}/delete`, {method:'POST'});
+    closeWeightDiaryEditor();
+    await reloadWeightDiary();
+  } catch (error) {
+    $('#weightDiaryEntryError').textContent = error.message;
+    $('#weightDiaryEntryError').classList.remove('hidden');
+    $('#weightDiaryEditor').classList.remove('hidden');
+  }
+}
+
+async function reloadWeightDiary() {
+  const data = await api(`/api/weight-control/diary?conversation_id=${encodeURIComponent(state.conversationId)}`);
+  renderWeightDiary(data);
+}
+
+async function openWeightDiary() {
+  closeFunctionMenu();
+  if (!state.conversationId || state.conversationType !== 'weight_control') return;
+  $('#weightDiaryModal').classList.remove('hidden');
+  closeWeightDiaryEditor();
+  $('#weightDiaryDays').innerHTML = '<div class="reminder-empty">Загружаем дневник…</div>';
+  try {
+    await reloadWeightDiary();
+  } catch (error) {
+    $('#weightDiaryDays').innerHTML = `<div class="reminder-error">${escapeHtml(error.message)}</div>`;
+  }
+}
+
+function closeWeightDiary() { closeWeightDiaryEditor(); $('#weightDiaryModal').classList.add('hidden'); }
+
+function selectWeightReminderTemplate(type) {
+  const template = WEIGHT_REMINDER_TEMPLATES[type];
+  if (!template) return;
+  $('#weightReminderTitle').value = template.title;
+  $('#weightReminderMessage').value = template.message;
+  $('#weightReminderTime').value = template.time;
+  $('#weightRemindersModal').dataset.reminderType = template.type || type;
+  document.querySelectorAll('[data-reminder-template]').forEach(button => {
+    button.classList.toggle('selected', button.dataset.reminderTemplate === type);
+  });
+}
+
+function reminderDaysLabel(days) {
+  const labels = ['Пн','Вт','Ср','Чт','Пт','Сб','Вс'];
+  if ((days || []).length === 7) return 'каждый день';
+  return (days || []).map(day => labels[Number(day) - 1]).filter(Boolean).join(', ');
+}
+
+function renderWeightReminders(data) {
+  const reminders = data.reminders || [];
+  state.weightReminders = reminders;
+  $('#weightReminderMessengerNote').classList.toggle('hidden', Boolean(data.messenger_linked));
+  $('#weightReminderList').innerHTML = reminders.length ? reminders.map(item => `
+    <article class="reminder-item ${item.enabled ? '' : 'disabled'}">
+      <strong>${escapeHtml(item.title)} · ${escapeHtml(item.time_local)} <em class="reminder-state ${item.enabled ? 'active' : ''}">${item.enabled ? 'Активно' : 'Выключено'}</em></strong>
+      <small>${escapeHtml(reminderDaysLabel(item.weekdays))} · ${escapeHtml(item.message)}</small>
+      <div class="reminder-item-actions">
+        <button type="button" data-reminder-edit="${item.id}">Настроить</button>
+        <button type="button" data-reminder-toggle="${item.id}" data-enabled="${item.enabled ? '1' : '0'}">${item.enabled ? 'Выключить' : 'Включить'}</button>
+        <button type="button" class="danger" data-reminder-delete="${item.id}" aria-label="Удалить">Удалить</button>
+      </div>
+    </article>`).join('') : '<div class="reminder-empty">Напоминаний пока нет</div>';
+}
+
+async function loadWeightReminders() {
+  if (!state.conversationId || state.conversationType !== 'weight_control') return;
+  const data = await api(`/api/weight-control/reminders?conversation_id=${encodeURIComponent(state.conversationId)}`);
+  renderWeightReminders(data);
+}
+
+async function openWeightReminders() {
+  closeFunctionMenu();
+  if (state.conversationType !== 'weight_control') return;
+  $('#weightReminderError').classList.add('hidden');
+  $('#weightReminderSuccess').classList.add('hidden');
+  $('#weightRemindersModal').classList.remove('hidden');
+  try { await loadWeightReminders(); }
+  catch (error) {
+    $('#weightReminderError').textContent = error.message === 'Failed to fetch'
+      ? 'Не удалось загрузить напоминания. Обновите страницу и попробуйте ещё раз.'
+      : error.message;
+    $('#weightReminderError').classList.remove('hidden');
+  }
+}
+
+function resetWeightReminderForm() {
+  $('#weightReminderTitle').value = '';
+  $('#weightReminderMessage').value = '';
+  $('#weightReminderTime').value = '09:00';
+  $('#weightRemindersModal').dataset.reminderType = 'custom';
+  delete $('#weightRemindersModal').dataset.editId;
+  $('#weightReminderEditorTitle').textContent = 'Новое напоминание';
+  $('#saveWeightReminderButton').textContent = 'Сохранить напоминание';
+  $('#cancelWeightReminderEdit').classList.add('hidden');
+  document.querySelectorAll('[data-reminder-template]').forEach(item => item.classList.remove('selected'));
+}
+
+function editWeightReminder(reminderId) {
+  const reminder = state.weightReminders.find(item => Number(item.id) === Number(reminderId));
+  if (!reminder) return;
+  $('#weightReminderTitle').value = reminder.title || '';
+  $('#weightReminderMessage').value = reminder.message || '';
+  $('#weightReminderTime').value = reminder.time_local || '09:00';
+  $('#weightRemindersModal').dataset.reminderType = reminder.reminder_type || 'custom';
+  $('#weightRemindersModal').dataset.editId = String(reminder.id);
+  $('#weightReminderEditorTitle').textContent = `Настройка: ${reminder.title || 'напоминание'}`;
+  const selectedDays = new Set((reminder.weekdays || []).map(Number));
+  document.querySelectorAll('.reminder-weekdays input').forEach(box => {
+    box.checked = selectedDays.has(Number(box.value));
+  });
+  $('#saveWeightReminderButton').textContent = 'Сохранить изменения';
+  $('#cancelWeightReminderEdit').classList.remove('hidden');
+  $('#weightReminderError').classList.add('hidden');
+  $('#weightReminderSuccess').classList.add('hidden');
+  document.querySelectorAll('[data-reminder-template]').forEach(item => item.classList.remove('selected'));
+  $('#weightReminderTitle').focus();
+  $('#weightReminderEditor').scrollIntoView({behavior:'smooth', block:'start'});
+}
+
+function closeWeightReminders() {
+  $('#weightRemindersModal').classList.add('hidden');
+  resetWeightReminderForm();
+}
+
+async function saveWeightReminder() {
+  const errorNode = $('#weightReminderError');
+  errorNode.classList.add('hidden');
+  const successNode = $('#weightReminderSuccess');
+  successNode.classList.add('hidden');
+  const weekdays = [...document.querySelectorAll('.reminder-weekdays input:checked')].map(input => Number(input.value));
+  const button = $('#saveWeightReminderButton');
+  const editId = $('#weightRemindersModal').dataset.editId || '';
+  button.disabled = true;
+  try {
+    await api(editId
+      ? `/api/weight-control/reminders/${encodeURIComponent(editId)}/update`
+      : '/api/weight-control/reminders', {
+      method:'POST',
+      body:JSON.stringify({
+        conversation_id:state.conversationId,
+        reminder_type:$('#weightRemindersModal').dataset.reminderType || 'custom',
+        title:$('#weightReminderTitle').value,
+        message:$('#weightReminderMessage').value,
+        time_local:$('#weightReminderTime').value,
+        weekdays,
+      }),
+    });
+    const wasEditing = Boolean(editId);
+    resetWeightReminderForm();
+    await loadWeightReminders();
+    successNode.textContent = wasEditing ? 'Изменения сохранены.' : 'Напоминание сохранено и включено.';
+    successNode.classList.remove('hidden');
+  } catch (error) {
+    errorNode.textContent = error.message === 'Failed to fetch'
+      ? 'Не удалось связаться с сервером. Обновите страницу и попробуйте ещё раз.'
+      : error.message;
+    errorNode.classList.remove('hidden');
+  } finally { button.disabled = false; }
+}
+
+async function handleWeightReminderAction(event) {
+  const edit = event.target.closest('[data-reminder-edit]');
+  const toggle = event.target.closest('[data-reminder-toggle]');
+  const remove = event.target.closest('[data-reminder-delete]');
+  $('#weightReminderError').classList.add('hidden');
+  $('#weightReminderSuccess').classList.add('hidden');
+  try {
+    if (edit) {
+      editWeightReminder(edit.dataset.reminderEdit);
+      return;
+    }
+    if (toggle) {
+      const enable = toggle.dataset.enabled !== '1';
+      await api(`/api/weight-control/reminders/${toggle.dataset.reminderToggle}/status`, {
+        method:'POST', body:JSON.stringify({enabled:enable}),
+      });
+      $('#weightReminderSuccess').textContent = enable ? 'Напоминание включено.' : 'Напоминание выключено.';
+      $('#weightReminderSuccess').classList.remove('hidden');
+    }
+    if (remove) {
+      await api(`/api/weight-control/reminders/${remove.dataset.reminderDelete}/delete`, {
+        method:'POST', body:'{}',
+      });
+      $('#weightReminderSuccess').textContent = 'Напоминание удалено.';
+      $('#weightReminderSuccess').classList.remove('hidden');
+    }
+    if (toggle || remove) await loadWeightReminders();
+  } catch (error) {
+    $('#weightReminderError').textContent = error.message === 'Failed to fetch'
+      ? 'Не удалось связаться с сервером. Обновите страницу и попробуйте ещё раз.'
+      : error.message;
+    $('#weightReminderError').classList.remove('hidden');
+  }
 }
 
 async function openHumanModal() {
@@ -3444,8 +3843,21 @@ function closeFunctionMenu() {
   $('#functionMenuButton').setAttribute('aria-expanded', 'false');
 }
 
+function closeWeightToolsMenu() {
+  $('#weightToolsMenu').classList.add('hidden');
+  $('#weightToolsButton').setAttribute('aria-expanded', 'false');
+}
+
+function toggleWeightToolsMenu() {
+  const willOpen = $('#weightToolsMenu').classList.contains('hidden');
+  closeFunctionMenu();
+  $('#weightToolsMenu').classList.toggle('hidden', !willOpen);
+  $('#weightToolsButton').setAttribute('aria-expanded', String(willOpen));
+}
+
 function toggleFunctionMenu() {
   const willOpen = $('#functionMenu').classList.contains('hidden');
+  closeWeightToolsMenu();
   $('#functionMenu').classList.toggle('hidden', !willOpen);
   $('#functionMenuButton').setAttribute('aria-expanded', String(willOpen));
 }
@@ -4658,9 +5070,30 @@ async function addAttachments(files) {
     if (file.size > 4 * 1024 * 1024) { addSystemError(`${file.name}: файл больше 4 МБ`); continue; }
     const dataUrl = await new Promise((resolve, reject) => { const reader = new FileReader(); reader.onload = () => resolve(reader.result); reader.onerror = reject; reader.readAsDataURL(file); });
     const text = file.type.startsWith('text/') ? await file.text() : '';
-    state.attachments.push({ name:file.name, type:file.type || 'text/plain', data_url:dataUrl, text:text.slice(0,12000) });
+    const thumbnailUrl = file.type.startsWith('image/') ? await createImageThumbnail(dataUrl) : '';
+    state.attachments.push({ name:file.name, type:file.type || 'text/plain', data_url:dataUrl, thumbnail_url:thumbnailUrl, text:text.slice(0,12000) });
   }
   renderAttachments();
+}
+
+function createImageThumbnail(dataUrl) {
+  return new Promise(resolve => {
+    const image = new Image();
+    image.onload = () => {
+      const maxSide = 360;
+      const scale = Math.min(1, maxSide / Math.max(image.naturalWidth || 1, image.naturalHeight || 1));
+      const canvas = document.createElement('canvas');
+      canvas.width = Math.max(1, Math.round(image.naturalWidth * scale));
+      canvas.height = Math.max(1, Math.round(image.naturalHeight * scale));
+      const context = canvas.getContext('2d');
+      context.fillStyle = '#ffffff';
+      context.fillRect(0, 0, canvas.width, canvas.height);
+      context.drawImage(image, 0, 0, canvas.width, canvas.height);
+      resolve(canvas.toDataURL('image/jpeg', .72));
+    };
+    image.onerror = () => resolve('');
+    image.src = dataUrl;
+  });
 }
 
 function renderAttachments() {
@@ -4788,6 +5221,10 @@ function closeTopUiLayer() {
     closeFunctionMenu();
     return true;
   }
+  if (!$('#weightToolsMenu').classList.contains('hidden')) {
+    closeWeightToolsMenu();
+    return true;
+  }
   if (document.body.classList.contains('show-team')) {
     closeMobileTeam();
     return true;
@@ -4843,6 +5280,8 @@ $('#deleteMyDataModal').addEventListener('click', event => {
 });
 $('#functionMenuButton').addEventListener('click', toggleFunctionMenu);
 $('#functionMenu').addEventListener('click', event => { if (event.target.closest('button')) closeFunctionMenu(); });
+$('#weightToolsButton').addEventListener('click', toggleWeightToolsMenu);
+$('#weightToolsMenu').addEventListener('click', event => { if (event.target.closest('button')) closeWeightToolsMenu(); });
 $('#menuFontSizeButton').addEventListener('click', openFontSizeModal);
 $('#fontSizeClose').addEventListener('click', closeFontSizeModal);
 $('#fontSizeModal').addEventListener('click', event => { if (event.target.id === 'fontSizeModal') closeFontSizeModal(); });
@@ -4854,6 +5293,8 @@ $('#menuPurchasesButton').addEventListener('click', () => openPurchases());
 $('#menuConsultationsButton').addEventListener('click', openConsultations);
 $('#menuBodyMapButton').addEventListener('click', openBodyMap);
 $('#menuHealthHistoryButton').addEventListener('click', () => openHealthHistory());
+$('#menuWeightRemindersButton').addEventListener('click', openWeightReminders);
+$('#menuWeightDiaryButton').addEventListener('click', openWeightDiary);
 $('#menuInstallAppButton').addEventListener('click', openInstallApp);
 $('#installAppClose').addEventListener('click', () => closeInstallApp({ dismissed:true }));
 $('#installAppLaterButton').addEventListener('click', () => closeInstallApp({ dismissed:true }));
@@ -4894,7 +5335,49 @@ $('#saveLabTubeButton').addEventListener('click', saveLabTube);
 $('#changeLabTubeButton').addEventListener('click', changeLabTube);
 $('#fetchLabResultsButton').addEventListener('click', fetchLabResults);
 $('#requestLabResultNotificationButton').addEventListener('click', requestLabResultNotification);
+async function dismissWeightMessengerPrompt(button) {
+  const actions = button.closest('.message-messenger-actions');
+  actions?.querySelectorAll('button').forEach(item => { item.disabled = true; });
+  try {
+    await api('/api/weight-control/messenger-prompt/dismiss', {
+      method:'POST',
+      body:JSON.stringify({conversation_id:state.conversationId}),
+    });
+    if (actions) actions.innerHTML = '<small>Больше не будем предлагать привязку мессенджера.</small>';
+  } catch (error) {
+    actions?.querySelectorAll('button').forEach(item => { item.disabled = false; });
+    addSystemError(error.message);
+  }
+}
 function handleLabInterpretClick(event) {
+  const mealConfirmButton = event.target.closest('[data-weight-meal-confirm]');
+  if (mealConfirmButton) {
+    mealConfirmButton.closest('.message-meal-confirmation-actions')?.querySelectorAll('button').forEach(button => { button.disabled = true; });
+    processMessage('Всё верно, можно анализировать этот приём пищи.');
+    return;
+  }
+  const mealEditButton = event.target.closest('[data-weight-meal-edit]');
+  if (mealEditButton) {
+    input.value = 'Нужно исправить или добавить: ';
+    focusChatInput();
+    return;
+  }
+  const messengerLinkButton = event.target.closest('[data-weight-messenger-link]');
+  if (messengerLinkButton) {
+    openMessengerLinkModal({source:'weight_control'});
+    return;
+  }
+  const messengerDismissButton = event.target.closest('[data-weight-messenger-dismiss]');
+  if (messengerDismissButton) {
+    dismissWeightMessengerPrompt(messengerDismissButton);
+    return;
+  }
+  const reminderButton = event.target.closest('[data-weight-reminder-setup]');
+  if (reminderButton) {
+    openWeightReminders();
+    selectWeightReminderTemplate(reminderButton.dataset.weightReminderSetup);
+    return;
+  }
   const reofferButton = event.target.closest('[data-checkup-reoffer]');
   if (reofferButton) {
     reofferButton.disabled = true;
@@ -4954,7 +5437,57 @@ $('#healthHistoryList').addEventListener('click', event => {
 $('#attachButton').addEventListener('click', () => $('#attachmentInput').click());
 $('#attachmentInput').addEventListener('change', async event => { await addAttachments(event.target.files); event.target.value = ''; });
 $('#attachmentList').addEventListener('click', event => { const button = event.target.closest('[data-attachment-remove]'); if (button) { state.attachments.splice(Number(button.dataset.attachmentRemove), 1); renderAttachments(); } });
-$('#newChatButton').addEventListener('click', newConversation);
+$('#newChatButton').addEventListener('click', event => {
+  event.stopPropagation();
+  toggleNewChatMenu();
+});
+$('#weightRemindersClose').addEventListener('click', closeWeightReminders);
+$('#weightRemindersModal').addEventListener('click', event => {
+  if (event.target.id === 'weightRemindersModal') closeWeightReminders();
+});
+$('#weightReminderTemplates').addEventListener('click', event => {
+  const button = event.target.closest('[data-reminder-template]');
+  if (button) selectWeightReminderTemplate(button.dataset.reminderTemplate);
+});
+$('#saveWeightReminderButton').addEventListener('click', saveWeightReminder);
+$('#cancelWeightReminderEdit').addEventListener('click', () => {
+  resetWeightReminderForm();
+  $('#weightReminderError').classList.add('hidden');
+});
+$('#weightReminderList').addEventListener('click', handleWeightReminderAction);
+$('#linkMessengerFromReminder').addEventListener('click', () => {
+  closeWeightReminders();
+  openMessengerLinkModal({source:'weight_reminder'});
+});
+$('#weightDiaryClose').addEventListener('click', closeWeightDiary);
+$('#weightDiaryModal').addEventListener('click', event => {
+  if (event.target.id === 'weightDiaryModal') closeWeightDiary();
+});
+$('#weightDiaryDays').addEventListener('click', event => {
+  const addButton = event.target.closest('[data-weight-diary-add]');
+  const editButton = event.target.closest('[data-weight-diary-edit]');
+  const deleteButton = event.target.closest('[data-weight-diary-delete]');
+  if (addButton) openWeightDiaryEditor(addButton.dataset.weightDiaryAdd);
+  else if (editButton) {
+    const mealId = Number(editButton.dataset.weightDiaryEdit);
+    const day = (state.weightDiary?.days || []).find(item =>
+      (item.meals || []).some(meal => Number(meal.id) === mealId)
+    );
+    if (day) openWeightDiaryEditor(day.date, mealId);
+  } else if (deleteButton) deleteWeightDiaryEntry(Number(deleteButton.dataset.weightDiaryDelete));
+});
+$('#weightDiaryEditorCancel').addEventListener('click', closeWeightDiaryEditor);
+$('#weightDiaryEntrySave').addEventListener('click', saveWeightDiaryEntry);
+$('#weightDiaryReminderButton').addEventListener('click', () => {
+  closeWeightDiary();
+  openWeightReminders();
+});
+$('#newChatMenu').addEventListener('click', event => {
+  const button = event.target.closest('[data-new-dialog]');
+  if (!button) return;
+  if (button.dataset.newDialog === 'weight_control') startWeightControlConversation();
+  else newConversation();
+});
 $('#chatModeNewDialog').addEventListener('click', newConversation);
 $('#chatModeBanner').addEventListener('click', event => {
   if (event.target.closest('#chatModeNewDialog')) return;
@@ -4983,10 +5516,14 @@ $('#mobileHeaderDialogsButton').addEventListener('click', openMobileSidebar);
 $('#mobileTeamClose').addEventListener('click', closeMobileTeam);
 $('#teamBackdrop').addEventListener('click', closeMobileTeam);
 document.addEventListener('click', event => {
-  if (!event.target.closest('.function-menu-wrap')) closeFunctionMenu();
+  if (!event.target.closest('.new-chat-menu-wrap')) closeNewChatMenu();
+  if (!event.target.closest('#functionMenuButton') && !event.target.closest('#functionMenu')) closeFunctionMenu();
+  if (!event.target.closest('#weightToolsMenuWrap')) closeWeightToolsMenu();
 });
 document.addEventListener('keydown', event => {
   if (event.key !== 'Escape') return;
+  closeNewChatMenu();
+  closeWeightToolsMenu();
   closeTopUiLayer();
 });
 

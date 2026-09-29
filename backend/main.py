@@ -15,7 +15,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, quote, urlparse
 
-from . import analytics, checkup_reoffers, company_suggestions, database as db, examination_schedule, funnel_monitor, splitter_tracking
+from . import analytics, checkup_reoffers, company_suggestions, database as db, examination_schedule, funnel_monitor, splitter_tracking, weight_reminders
 from .config import BASE_DIR, settings
 from .llm import LLMNotConfigured
 from .lab_results import LabResultsUnavailable, lookup_lab_results
@@ -245,9 +245,14 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                 provider = query.get("provider", [""])[0]
                 limit = max(1, min(50, int(query.get("limit", ["20"])[0])))
                 _refresh_due_lab_result_notifications()
-                user_notifications = db.claim_user_notifications(
+                user_notifications = db.claim_weight_reminder_notifications(
                     provider, min(5, limit),
                 )
+                remaining = limit - len(user_notifications)
+                if remaining > 0:
+                    user_notifications += db.claim_user_notifications(
+                        provider, min(5, remaining),
+                    )
                 remaining = limit - len(user_notifications)
                 if remaining > 0:
                     user_notifications += db.claim_user_result_notifications(
@@ -617,6 +622,26 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
             return self._json(200, db.list_conversations())
         if path == "/api/conversations/unread":
             return self._json(200, {"unread_counts": db.conversation_unread_counts()})
+        if path == "/api/weight-control/reminders":
+            query = parse_qs(parsed.query)
+            try:
+                return self._json(200, db.list_weight_control_reminders(
+                    query.get("conversation_id", [""])[0],
+                ))
+            except ValueError as exc:
+                return self._json(422, {"detail": str(exc)})
+        if path == "/api/weight-control/diary":
+            query = parse_qs(parsed.query)
+            try:
+                conversation_id = query.get("conversation_id", [""])[0]
+                state = db.get_weight_control_state(conversation_id)
+                if not state:
+                    raise ValueError("Дневник питания не найден")
+                if state.get("stage") in {"analysis", "readiness"}:
+                    db.ensure_weight_control_program(conversation_id)
+                return self._json(200, db.weight_control_diary(conversation_id))
+            except ValueError as exc:
+                return self._json(422, {"detail": str(exc)})
         if path.startswith("/api/conversations/") and path.endswith("/updates"):
             conversation_id = path.removeprefix("/api/conversations/").removesuffix("/updates").strip("/")
             item = db.get_conversation(conversation_id)
@@ -824,7 +849,13 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                 payload = self._read_json()
                 if not isinstance(payload.get("success"), bool):
                     raise ValueError("success должен быть true или false")
-                if notification_id <= -db.USER_NOTIFICATION_ID_OFFSET:
+                if notification_id <= -db.WEIGHT_REMINDER_NOTIFICATION_ID_OFFSET:
+                    reminder_id = abs(notification_id) - db.WEIGHT_REMINDER_NOTIFICATION_ID_OFFSET
+                    acknowledged = db.acknowledge_weight_reminder_notification(
+                        reminder_id, str(payload.get("lease_token", "")),
+                        payload["success"], str(payload.get("error", "")),
+                    )
+                elif notification_id <= -db.USER_NOTIFICATION_ID_OFFSET:
                     generic_id = abs(notification_id) - db.USER_NOTIFICATION_ID_OFFSET
                     notification = db.user_notification_details(generic_id)
                     acknowledged = db.acknowledge_user_notification(
@@ -1327,6 +1358,95 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                 return self._json(422, {"detail": str(exc)})
         if path == "/api/auth/messenger/start":
             return self._start_messenger_auth()
+        if path == "/api/conversations/weight-control":
+            conversation = db.create_or_get_weight_control_conversation()
+            self._track_analytics("weight_control_dialog_opened", {
+                "conversation_id": conversation["id"],
+            })
+            return self._json(200, conversation)
+        if path == "/api/weight-control/reminders":
+            try:
+                payload = self._read_json(max_bytes=8_000)
+                reminder = db.create_weight_control_reminder(
+                    str(payload.get("conversation_id", "")),
+                    reminder_type=str(payload.get("reminder_type", "custom")),
+                    title=str(payload.get("title", "")),
+                    message=str(payload.get("message", "")),
+                    time_local=str(payload.get("time_local", "")),
+                    weekdays=payload.get("weekdays") if isinstance(payload.get("weekdays"), list) else [],
+                )
+                return self._json(201, reminder)
+            except (ValueError, TypeError, json.JSONDecodeError, UnicodeDecodeError) as exc:
+                return self._json(422, {"detail": str(exc)})
+        if path == "/api/weight-control/diary/entries":
+            try:
+                payload = self._read_json(max_bytes=12_000)
+                entry = db.create_weight_control_diary_meal(
+                    str(payload.get("conversation_id", "")),
+                    entry_date=str(payload.get("entry_date", "")),
+                    description=str(payload.get("description", "")),
+                )
+                return self._json(201, entry)
+            except (ValueError, TypeError, json.JSONDecodeError, UnicodeDecodeError) as exc:
+                return self._json(422, {"detail": str(exc)})
+        if path == "/api/weight-control/messenger-prompt/dismiss":
+            try:
+                payload = self._read_json(max_bytes=2_000)
+                return self._json(200, db.dismiss_weight_messenger_prompt(
+                    str(payload.get("conversation_id", "")),
+                ))
+            except (ValueError, json.JSONDecodeError, UnicodeDecodeError) as exc:
+                return self._json(422, {"detail": str(exc)})
+        if path.startswith("/api/weight-control/diary/entries/") and path.endswith("/update"):
+            try:
+                meal_id = int(path.removeprefix("/api/weight-control/diary/entries/").removesuffix("/update").strip("/"))
+                payload = self._read_json(max_bytes=10_000)
+                return self._json(200, db.update_weight_control_diary_meal(
+                    meal_id, description=str(payload.get("description", "")),
+                ))
+            except (ValueError, TypeError, json.JSONDecodeError, UnicodeDecodeError) as exc:
+                return self._json(422, {"detail": str(exc)})
+        if path.startswith("/api/weight-control/diary/entries/") and path.endswith("/delete"):
+            try:
+                meal_id = int(path.removeprefix("/api/weight-control/diary/entries/").removesuffix("/delete").strip("/"))
+                db.delete_weight_control_diary_meal(meal_id)
+                return self._json(200, {"status": "deleted"})
+            except (ValueError, TypeError) as exc:
+                return self._json(422, {"detail": str(exc)})
+        if path.startswith("/api/weight-control/reminders/") and path.endswith("/update"):
+            try:
+                reminder_id = int(path.removeprefix("/api/weight-control/reminders/").removesuffix("/update").strip("/"))
+                payload = self._read_json(max_bytes=8_000)
+                reminder = db.update_weight_control_reminder(
+                    reminder_id,
+                    reminder_type=str(payload.get("reminder_type", "") or ""),
+                    title=str(payload.get("title", "")),
+                    message=str(payload.get("message", "")),
+                    time_local=str(payload.get("time_local", "")),
+                    weekdays=payload.get("weekdays") if isinstance(payload.get("weekdays"), list) else [],
+                )
+                return self._json(200, reminder)
+            except (ValueError, TypeError, json.JSONDecodeError, UnicodeDecodeError) as exc:
+                return self._json(422, {"detail": str(exc)})
+        if path.startswith("/api/weight-control/reminders/") and path.endswith("/status"):
+            try:
+                reminder_id = int(path.removeprefix("/api/weight-control/reminders/").removesuffix("/status").strip("/"))
+                payload = self._read_json(max_bytes=2_000)
+                if not isinstance(payload.get("enabled"), bool):
+                    raise ValueError("enabled должен быть true или false")
+                return self._json(200, db.update_weight_control_reminder_status(
+                    reminder_id, payload["enabled"],
+                ))
+            except (ValueError, TypeError, json.JSONDecodeError, UnicodeDecodeError) as exc:
+                return self._json(422, {"detail": str(exc)})
+        if path.startswith("/api/weight-control/reminders/") and path.endswith("/delete"):
+            try:
+                reminder_id = int(path.removeprefix("/api/weight-control/reminders/").removesuffix("/delete").strip("/"))
+                if not db.delete_weight_control_reminder(reminder_id):
+                    return self._json(404, {"detail": "Напоминание не найдено"})
+                return self._json(200, {"status": "deleted"})
+            except (ValueError, TypeError) as exc:
+                return self._json(422, {"detail": str(exc)})
         if path == "/api/conversations":
             conversation = db.create_conversation()
             self._track_analytics("conversation_created")
@@ -1749,10 +1869,12 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
             attachments = self._validate_attachments(payload.get("attachments", []))
             if (not message and not attachments) or len(message) > 12_000:
                 return self._json(422, {"detail": "Сообщение должно содержать от 1 до 12000 символов"})
-            if not message:
-                message = "Проанализируй прикреплённый файл и объясни, что в нём важно."
             conversation_id = str(payload.get("conversation_id") or "")
             conversation = db.get_conversation(conversation_id) if conversation_id else None
+            if not message and not (
+                conversation and conversation.get("dialog_type") == "weight_control"
+            ):
+                message = "Проанализируй прикреплённый файл и объясни, что в нём важно."
             is_first_message = not conversation or not db.list_messages(conversation_id, 1)
             self._track_analytics("message_sent")
             if is_first_message:
@@ -2021,10 +2143,18 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                 raise ValueError("Поддерживаются изображения, PDF, TXT и CSV")
             if len(data_url) > 5_500_000:
                 raise ValueError("Размер одного файла не должен превышать 4 МБ")
-            result.append({
+            validated = {
                 "name": str(item.get("name", "file"))[:160], "type": mime,
                 "data_url": data_url, "text": str(item.get("text", ""))[:12000],
-            })
+            }
+            thumbnail_url = str(item.get("thumbnail_url", ""))
+            if mime.startswith("image/") and thumbnail_url:
+                if not re.match(r"^data:image/(?:jpeg|png|webp);base64,", thumbnail_url):
+                    raise ValueError("Некорректная миниатюра изображения")
+                if len(thumbnail_url) > 350_000:
+                    raise ValueError("Миниатюра изображения слишком большая")
+                validated["thumbnail_url"] = thumbnail_url
+            result.append(validated)
         return result
 
     @staticmethod
@@ -2466,6 +2596,7 @@ def serve() -> None:
     _record_startup_event("База данных готова")
     schedule_stop = examination_schedule.start_background_sync(_record_startup_event)
     reoffer_stop = checkup_reoffers.start_background_scheduler(_record_startup_event)
+    weight_reminder_stop = weight_reminders.start_background_scheduler(_record_startup_event)
     funnel_monitor_stop = funnel_monitor.start_background_monitor(_record_startup_event)
     server = ConsiliumHTTPServer((settings.host, settings.port), ConsiliumHandler)
     _record_startup_event(f"Порт {settings.port} открыт")
@@ -2486,6 +2617,7 @@ def serve() -> None:
     finally:
         schedule_stop.set()
         reoffer_stop.set()
+        weight_reminder_stop.set()
         funnel_monitor_stop.set()
         _record_startup_event("Остановка сервера")
         server.server_close()

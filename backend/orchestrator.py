@@ -39,6 +39,23 @@ PROFILE_ANALYSIS_REQUEST = re.compile(
     r"\b(?:проанализир\w*|разбер\w*|оцен\w*)\b)",
     re.IGNORECASE,
 )
+FOOD_ENTRY_HINT = re.compile(
+    r"\b(?:ел(?:а|и)?|съел(?:а|и)?|поел(?:а|и)?|выпил(?:а|и)?|завтрак\w*|"
+    r"обед\w*|ужин\w*|перекус\w*|каша|суп|салат|мяс\w*|рыб\w*|куриц\w*|"
+    r"яйц\w*|овощ\w*|фрукт\w*|хлеб\w*|кофе|чай|йогурт\w*|творог\w*)\b",
+    re.IGNORECASE,
+)
+
+
+def _attachment_metadata(attachments: list[dict] | None) -> list[dict]:
+    """Keep safe display metadata and a small persisted image preview."""
+    result = []
+    for item in attachments or []:
+        metadata = {"name": item.get("name"), "type": item.get("type")}
+        if item.get("thumbnail_url"):
+            metadata["thumbnail_url"] = item["thumbnail_url"]
+        result.append(metadata)
+    return result
 OTHER_PERSON_SUBJECT = re.compile(
     r"\b(?:реб[её]н\w*|сын\w*|доч\w*|мам\w*|пап\w*|муж\w*|жен\w*|"
     r"бабуш\w*|дедуш\w*|друг\w*|подруг\w*|пациент\w*)\b",
@@ -95,8 +112,14 @@ class ConversationOrchestrator:
         conversation["_device"] = _device_for_ai()
         conversation["_messenger_access"] = _messenger_access_for_ai()
         conversation["_body_symptoms"] = db.list_body_symptoms(status="active", limit=20)
+        if (
+            conversation.get("dialog_type") == "weight_control"
+            and not HUMAN_REQUEST.search(user_text)
+            and not CRITICAL_RISK.search(user_text)
+        ):
+            return self._process_weight_control(conversation, user_text, attachments)
         previous_agent = conversation["active_agent"]
-        attachment_meta = [{"name": item.get("name"), "type": item.get("type")} for item in (attachments or [])]
+        attachment_meta = _attachment_metadata(attachments)
         user_message = db.add_message(conversation_id, "user", user_text, metadata={"attachments": attachment_meta})
         history = self._recent_history(conversation_id)
         previous_context = self._load_context(conversation.get("context_summary", ""))
@@ -317,6 +340,288 @@ class ConversationOrchestrator:
             missing_information=missing_information,
             attachments=attachment_meta,
             council_available=target in {"therapist", "cardiologist", "neurologist", "dermatologist", "pediatrician", "psychologist"} and not emergency,
+        )
+
+    def _process_weight_control(
+        self, conversation: dict, user_text: str,
+        attachments: list[dict] | None = None,
+    ) -> ChatResponse:
+        """Advance the dedicated structured weight-control dialogue."""
+        conversation_id = str(conversation["id"])
+        attachment_meta = _attachment_metadata(attachments)
+        user_message = db.add_message(
+            conversation_id, "user", user_text,
+            metadata={"attachments": attachment_meta, "specialized_dialog": "weight_control"},
+        )
+        history = self._recent_history(conversation_id)
+        state = db.get_weight_control_state(conversation_id)
+        if not state:
+            raise ValueError("Анкета контроля веса не найдена")
+        previous_stage = str(state.get("stage") or "intake")
+        reminder_data = db.list_weight_control_reminders(conversation_id)
+        state = {
+            **state,
+            "messenger_access": dict(conversation.get("_messenger_access") or {}),
+            "active_reminders": [
+                {
+                    "type": item.get("reminder_type"),
+                    "title": item.get("title"),
+                    "time": item.get("time_local"),
+                    "weekdays": item.get("weekdays", []),
+                }
+                for item in reminder_data.get("reminders", []) if item.get("enabled")
+            ],
+        }
+        try:
+            result = self.llm.weight_control_turn(
+                history, conversation.get("_profile", {}), state, attachments,
+            )
+        except (LLMProviderError, LLMNotConfigured):
+            image_received = any(
+                str(item.get("type") or "").startswith("image/")
+                for item in (attachments or [])
+            )
+            food_text_received = bool(user_text and FOOD_ENTRY_HINT.search(user_text))
+            if str(state.get("stage") or "intake") not in {"analysis", "readiness"} or not (
+                image_received or food_text_received
+            ):
+                raise
+            fallback_analysis = dict(state.get("analysis") or {})
+            fallback_analysis.update({
+                "meal_event": "draft" if image_received else "confirmed",
+                "meal_draft": (
+                    "Фото приёма пищи — состав пока не распознан"
+                    if image_received else user_text
+                ),
+                "awaiting_meal_confirmation": False,
+            })
+            result = {
+                "stage": str(state.get("stage") or "analysis"),
+                "risk_level": str(state.get("risk_level") or "routine"),
+                "assessment": dict(state.get("assessment") or {}),
+                "analysis": fallback_analysis,
+                "missing_fields": [],
+                "reminder_offer": "none",
+                "message": (
+                    "Фото сохранено в дневнике питания. Сейчас не удалось распознать "
+                    "его состав. Напишите одним сообщением, что было на тарелке — я "
+                    "добавлю описание к этой записи."
+                    if image_received else
+                    "Запись о приёме пищи сохранена в дневнике. Сейчас подробный "
+                    "разбор временно недоступен, но сама запись не потерялась."
+                ),
+                "provider_fallback": True,
+            }
+        stage = str(result.get("stage") or "intake")
+        risk_level = str(result.get("risk_level") or "routine")
+        if stage not in {"intake", "analysis", "readiness"}:
+            stage = "intake"
+        if risk_level not in {"routine", "soon", "urgent", "emergency"}:
+            risk_level = "routine"
+        assessment = result.get("assessment")
+        analysis = result.get("analysis")
+        if not isinstance(assessment, dict):
+            assessment = dict(state.get("assessment") or {})
+        if not isinstance(analysis, dict):
+            analysis = dict(state.get("analysis") or {})
+        db.save_weight_control_state(
+            conversation_id, stage=stage, assessment=assessment,
+            analysis=analysis, risk_level=risk_level,
+        )
+        intake_completed = previous_stage == "intake" and stage in {"analysis", "readiness"}
+        program = None
+        show_program_intro = False
+        linked_messengers = list(
+            conversation.get("_messenger_access", {}).get("linked_providers") or []
+        )
+        daily_messenger_offer = False
+        if stage in {"analysis", "readiness"} and risk_level != "emergency":
+            program = db.ensure_weight_control_program(conversation_id)
+            show_program_intro = not program.get("onboarding_shown")
+            daily_messenger_offer = db.weight_messenger_prompt_offer_due(conversation_id)
+        if show_program_intro:
+            db.ensure_default_weight_meal_reminders(conversation_id)
+            messenger_text = (
+                "Мессенджер уже привязан — напоминания будут приходить туда и в этот чат."
+                if linked_messengers else
+                "Чтобы дневником было удобно пользоваться каждый день, привяжите Telegram "
+                "или MAX. Туда будут приходить напоминания о завтраке, обеде и ужине."
+            )
+            intro_message = (
+                "## Анкета готова\n\n"
+                "Следующие **14 дней** я буду помогать вам следить за питанием и "
+                "постепенно двигаться к снижению веса без жёстких запретов. "
+                "Теперь основная работа — **контроль питания по дневнику**. "
+                f"{messenger_text}\n\n"
+                "### Как вести дневник\n"
+                "Пришлите в этот чат всё, что уже съели сегодня. Можно:\n"
+                "- написать состав блюда и примерный объём;\n"
+                "- отправить **фотографию еды** вместо текстового описания;\n"
+                "- добавлять каждый приём пищи отдельным сообщением.\n\n"
+                "Я разберу баланс блюда, отмечу сильные стороны и предложу небольшое "
+                "улучшение с учётом вашей цели. Точную калорийность по одной фотографии "
+                "я обещать не буду — оценка порции всегда приблизительная.\n\n"
+                "### Возможности этого чата\n"
+                "- **«Контроль веса»** в меню показывает все 14 дней программы, "
+                "прогресс и подтверждённые приёмы пищи по дням;\n"
+                "- **«Время питания»** позволяет изменить часы и дни напоминаний, "
+                "временно отключить или снова включить их;\n"
+                "- еду можно присылать **текстом или фотографией** — состав на фото "
+                "сначала будет показан вам для проверки;\n"
+                "- напоминания приходят в этот чат, а после привязки — ещё и в "
+                "**Telegram или MAX**;\n"
+                "- по окончании 14 дней в чате появится **итоговое заключение** по "
+                "питанию, привычкам и вашим наблюдениям с планом следующих шагов.\n\n"
+                "Я добавила примерное время питания: **09:00, 13:00 и 19:00**. "
+                "Его можно изменить в разделе «Время питания и напоминания».\n\n"
+                "### Начнём\n"
+                "Пришлите описание или фото того, что вы съели сегодня."
+            )
+            if intake_completed:
+                message = intro_message
+            else:
+                current_message = self._limit_questions(
+                    str(result.get("message") or ""), QUESTIONS_PER_MESSAGE_LIMIT,
+                )
+                message = f"{intro_message}\n\n---\n\n{current_message}" if current_message else intro_message
+        else:
+            message = self._limit_questions(
+                str(result.get("message") or "Продолжим уточнять данные."),
+                QUESTIONS_PER_MESSAGE_LIMIT,
+            )
+            if daily_messenger_offer:
+                message = (
+                    f"{message}\n\n---\n\n"
+                    "Привяжите Telegram или MAX, чтобы ежедневные напоминания о "
+                    "питании приходили даже когда Консилиум закрыт."
+                )
+        action = "emergency" if risk_level == "emergency" else (
+            "clarify" if stage == "intake" else "continue"
+        )
+        missing_information = [
+            str(item)[:300] for item in (result.get("missing_fields") or [])[:12]
+        ]
+        reminder_offer = str(result.get("reminder_offer") or "none")
+        if reminder_offer not in {"none", "medication", "sport", "warmup", "meal", "custom"}:
+            reminder_offer = "none"
+        metadata = {
+            "action": action,
+            "urgency": risk_level,
+            "emergency": risk_level == "emergency",
+            "missing_information": missing_information[:2],
+            "weight_control_stage": stage,
+            "weight_control_risk_reason": str(result.get("risk_reason") or "")[:500],
+            "specialized_dialog": True,
+            "attachments": attachment_meta,
+        }
+        if result.get("provider_fallback"):
+            metadata["weight_entry_saved_without_analysis"] = True
+        awaiting_meal_confirmation = bool(
+            analysis.get("awaiting_meal_confirmation")
+        )
+        if show_program_intro:
+            metadata["weight_program_intro"] = True
+        if daily_messenger_offer:
+            metadata["weight_messenger_link"] = True
+            metadata["weight_messenger_dismiss"] = True
+            metadata["weight_messenger_label"] = "Привязать Telegram или MAX"
+        if awaiting_meal_confirmation and risk_level != "emergency":
+            metadata.update({
+                "action": "weight_meal_confirmation",
+                "action_label": "Всё верно",
+                "meal_draft": str(analysis.get("meal_draft") or "")[:2_000],
+            })
+        elif show_program_intro and not daily_messenger_offer:
+            metadata.update({
+                "action": "weight_reminder_setup",
+                "reminder_type": "meal",
+                "action_label": "Настроить время питания",
+            })
+        elif show_program_intro and daily_messenger_offer:
+            metadata.update({
+                "action": "weight_messenger_link",
+                "action_label": "Привязать Telegram или MAX",
+            })
+        elif reminder_offer != "none":
+            metadata.update({
+                "action": "weight_reminder_setup",
+                "reminder_type": reminder_offer,
+                "action_label": "Настроить напоминание",
+            })
+        assistant_message = db.add_message(
+            conversation_id, "assistant", message, "manager", metadata,
+        )
+        if show_program_intro:
+            db.mark_weight_control_onboarding_shown(conversation_id)
+        if daily_messenger_offer:
+            db.mark_weight_messenger_prompt_shown(conversation_id)
+        meal_event = str(analysis.get("meal_event") or "none")
+        source_type = "photo" if any(
+            str(item.get("type") or "").startswith("image/") for item in (attachments or [])
+        ) else "text"
+        meal_description = str(analysis.get("meal_draft") or "")
+        # The diary must not depend solely on perfect model classification:
+        # recognizable food text and every food photo are preserved deterministically.
+        if meal_event not in {"draft", "confirmed"} and source_type == "photo":
+            meal_event = "draft"
+            meal_description = meal_description or "Фото приёма пищи — состав уточняется"
+        elif meal_event not in {"draft", "confirmed"} and FOOD_ENTRY_HINT.search(user_text):
+            meal_event = "confirmed"
+            meal_description = meal_description or user_text
+        db.record_weight_control_meal(
+            conversation_id,
+            user_message_id=int(user_message.get("id") or 0),
+            assistant_message_id=int(assistant_message.get("id") or 0),
+            source_type=source_type,
+            meal_event=meal_event,
+            description=meal_description,
+            analysis=analysis,
+        )
+        known_facts = []
+        for key in (
+            "weight_change", "weight_gain_started", "goal", "eating_pattern",
+            "hunger_pattern", "sleep", "stress", "activity", "previous_attempts",
+        ):
+            value = assessment.get(key)
+            if value not in {None, ""}:
+                known_facts.append(f"{key}: {value}")
+        context = normalize_context({
+            "current_topic": "контроль веса",
+            "topic_relation": "followup",
+            "user_goal": str(assessment.get("goal") or "разобраться с факторами веса"),
+            "known_facts": known_facts[:20],
+            "open_questions": missing_information[:20],
+            "patient": {
+                "age": assessment.get("age"),
+                "sex": assessment.get("sex") or "",
+                "weight_kg": assessment.get("current_weight_kg"),
+                "pregnancy": conversation.get("_profile", {}).get("pregnancy", "unknown"),
+                "conditions": assessment.get("conditions") or [],
+                "medications": assessment.get("medications") or [],
+                "allergies": conversation.get("_profile", {}).get("allergies") or [],
+            },
+        })
+        db.update_conversation(
+            conversation_id, active_agent="manager",
+            context_summary=json.dumps(context, ensure_ascii=False),
+            status="active", human_status=conversation.get("human_status", "none"),
+            human_ticket_id=conversation.get("human_ticket_id"),
+            human_channel=conversation.get("human_channel"), ai_enabled=None,
+        )
+        return ChatResponse(
+            conversation_id=conversation_id,
+            user_message=user_message,
+            assistant_message=assistant_message,
+            agent="manager",
+            handoff_from=None,
+            handoff_reason="Специализированный маршрут «Контроль питания»",
+            action=action,
+            emergency=risk_level == "emergency",
+            context=context,
+            urgency=risk_level,
+            missing_information=missing_information,
+            attachments=attachment_meta,
+            council_available=stage in {"analysis", "readiness"} and risk_level != "emergency",
         )
 
     @staticmethod
