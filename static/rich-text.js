@@ -59,8 +59,39 @@
     return cells.length > 0 && cells.every(cell => /^:?-{3,}:?$/.test(cell));
   }
 
+  function normalizeStandaloneNumberedItems(value) {
+    const lines = String(value ?? '').split('\n');
+    const result = [];
+    for (let index = 0; index < lines.length; index += 1) {
+      const marker = lines[index].trim().match(/^(\d+[.)])$/);
+      if (!marker) {
+        result.push(lines[index]);
+        continue;
+      }
+      const parts = [];
+      let cursor = index + 1;
+      while (cursor < lines.length) {
+        const candidate = lines[cursor].trim();
+        if (
+          !candidate
+          || /^\d+[.)](?:\s+|$)/.test(candidate)
+          || /^(?:#{1,6}\s+|[-+*•]\s+|>\s?|```|\|)/.test(candidate)
+        ) break;
+        parts.push(candidate);
+        cursor += 1;
+      }
+      if (!parts.length) {
+        result.push(lines[index]);
+        continue;
+      }
+      result.push(marker[1] + ' ' + parts.join(' '));
+      index = cursor - 1;
+    }
+    return result.join('\n');
+  }
+
   function normalize(value) {
-    return String(value ?? '')
+    return normalizeStandaloneNumberedItems(value)
       .replace(/\r\n?/g, '\n')
       .replace(/[ \t]+$/gm, '')
       .replace(/\s*(Обращение H-[A-ZА-Я0-9-]+ уже передано человеку; ожидайте ответа специалиста\.)/giu, '\n\n$1')
