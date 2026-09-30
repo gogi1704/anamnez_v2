@@ -441,11 +441,21 @@ class ConversationOrchestrator:
             daily_messenger_offer = db.weight_messenger_prompt_offer_due(conversation_id)
         if show_program_intro:
             db.ensure_default_weight_meal_reminders(conversation_id)
+            body_measurements = db.weight_control_body_measurements(conversation_id)
+            show_body_prompt = not bool(body_measurements.get("history"))
             messenger_text = (
                 "Мессенджер уже привязан — напоминания будут приходить туда и в этот чат."
                 if linked_messengers else
                 "Чтобы дневником было удобно пользоваться каждый день, привяжите Telegram "
                 "или MAX. Туда будут приходить напоминания о завтраке, обеде и ужине."
+            )
+            body_prompt_text = (
+                "### Зафиксируем отправную точку\n"
+                "Укажите текущий вес и доступные объёмы тела. Это поможет видеть "
+                "динамику, а не оценивать результат по одному дню. Если сейчас неудобно, "
+                "я могу напомнить об этом завтра.\n\n"
+                if show_body_prompt else
+                "Ваши параметры тела уже сохранены — продолжим отслеживать их динамику.\n\n"
             )
             intro_message = (
                 "## Анкета готова\n\n"
@@ -466,6 +476,8 @@ class ConversationOrchestrator:
                 "прогресс и подтверждённые приёмы пищи по дням;\n"
                 "- **«Время питания»** позволяет изменить часы и дни напоминаний, "
                 "временно отключить или снова включить их;\n"
+                "- **«Параметры тела»** хранит замеры веса и объёмов по датам, "
+                "показывает динамику и учитывает её в следующих разборах;\n"
                 "- еду можно присылать **текстом или фотографией** — состав на фото "
                 "сначала будет показан вам для проверки;\n"
                 "- напоминания приходят в этот чат, а после привязки — ещё и в "
@@ -473,7 +485,9 @@ class ConversationOrchestrator:
                 "- по окончании 14 дней в чате появится **итоговое заключение** по "
                 "питанию, привычкам и вашим наблюдениям с планом следующих шагов.\n\n"
                 "Я добавила примерное время питания: **09:00, 13:00 и 19:00**. "
-                "Его можно изменить в разделе «Время питания и напоминания».\n\n"
+                "Его можно изменить в разделе «Время питания и напоминания». "
+                "Также раз в пять дней я напомню обновить параметры тела.\n\n"
+                f"{body_prompt_text}"
                 "### Начнём\n"
                 "Пришлите описание или фото того, что вы съели сегодня."
             )
@@ -521,6 +535,9 @@ class ConversationOrchestrator:
         )
         if show_program_intro:
             metadata["weight_program_intro"] = True
+            if show_body_prompt:
+                metadata["weight_body_prompt"] = True
+                metadata["weight_body_remind_later"] = True
         if daily_messenger_offer:
             metadata["weight_messenger_link"] = True
             metadata["weight_messenger_dismiss"] = True

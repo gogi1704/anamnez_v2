@@ -1,5 +1,6 @@
 import json
 import os
+import inspect
 import re
 import secrets
 import tempfile
@@ -181,6 +182,7 @@ class WeightControlLLM(FakeLLM):
             "weight_change": "плюс 8 кг за год",
             "weight_gain_started": "около года назад",
             "goal": "понять причины и постепенно снизить вес",
+            "target_weight_kg": 72,
             "eating_pattern": "основной объём еды вечером",
             "hunger_pattern": "сильный вечерний голод",
             "sleep": "около 6 часов",
@@ -363,6 +365,61 @@ class OrchestratorTests(unittest.TestCase):
             self.assertEqual(state["assessment"]["conditions"], ["гипертония"])
             self.assertFalse(db.weight_control_diary(first["id"])["program_started"])
 
+            measured_today = datetime.now(db.MOSCOW_TZ).date()
+            measured_yesterday = measured_today - timedelta(days=1)
+            db.update_weight_control_body_measurements(first["id"], {
+                "measured_on": measured_yesterday.isoformat(),
+                "weight_kg": 83.4,
+                "waist_cm": 93,
+                "hips_cm": 109,
+            })
+            measurements = db.update_weight_control_body_measurements(first["id"], {
+                "measured_on": measured_today.isoformat(),
+                "weight_kg": 82.4,
+                "waist_cm": 91,
+                "hips_cm": 108.5,
+                "chest_cm": 101,
+                "thigh_cm": 61,
+                "arm_cm": 32,
+                "notes": "Одежда стала свободнее в талии",
+            })
+            self.assertEqual(measurements["height_cm"], 168)
+            self.assertEqual(measurements["measurements"]["weight_kg"], 82.4)
+            self.assertEqual(measurements["measurements"]["waist_cm"], 91.0)
+            self.assertEqual(len(measurements["history"]), 2)
+            self.assertEqual(
+                measurements["history"][0]["changes_from_previous"]["weight_kg"],
+                -1.0,
+            )
+            self.assertEqual(measurements["history"][0]["measured_on"], measured_today.isoformat())
+            measurements = db.update_weight_control_body_measurements(first["id"], {
+                "measured_on": measured_today.isoformat(), "waist_cm": 90,
+            })
+            self.assertEqual(len(measurements["history"]), 2)
+            self.assertEqual(measurements["measurements"]["weight_kg"], 82.4)
+            self.assertEqual(measurements["measurements"]["waist_cm"], 90.0)
+            self.assertEqual(
+                measurements["history"][0]["changes_from_previous"]["waist_cm"],
+                -3.0,
+            )
+            self.assertEqual(
+                db.get_weight_control_state(first["id"])["body_measurements"]["notes"],
+                "Одежда стала свободнее в талии",
+            )
+            self.assertEqual(
+                len(db.get_weight_control_state(first["id"])["body_measurements"]["history"]),
+                2,
+            )
+            with self.assertRaisesRegex(ValueError, "Обхват талии"):
+                db.update_weight_control_body_measurements(first["id"], {
+                    "measured_on": measured_today.isoformat(), "waist_cm": 10,
+                })
+            with self.assertRaisesRegex(ValueError, "будущую дату"):
+                db.update_weight_control_body_measurements(first["id"], {
+                    "measured_on": (measured_today + timedelta(days=1)).isoformat(),
+                    "weight_kg": 82,
+                })
+
             fake = WeightControlLLM()
             response = ConversationOrchestrator(fake).process(
                 first["id"], "Да, готова. За год набрала около восьми килограммов.",
@@ -382,11 +439,16 @@ class OrchestratorTests(unittest.TestCase):
             self.assertIn("### Возможности этого чата", response.assistant_message["content"])
             self.assertIn("**«Контроль веса»**", response.assistant_message["content"])
             self.assertIn("**«Время питания»**", response.assistant_message["content"])
+            self.assertIn("**«Параметры тела»**", response.assistant_message["content"])
             self.assertIn("**итоговое заключение**", response.assistant_message["content"])
             self.assertEqual(saved["stage"], "analysis")
             self.assertTrue(db.weight_control_diary(first["id"])["program_started"])
             self.assertIn("недостаток сна", saved["analysis"]["factors"])
             self.assertEqual(fake.weight_calls[0]["profile"]["height_cm"], 168)
+            self.assertEqual(
+                fake.weight_calls[0]["state"]["body_measurements"]["waist_cm"],
+                90.0,
+            )
             self.assertEqual(
                 fake.weight_calls[0]["state"]["messenger_access"]["linked_providers"],
                 [],
@@ -394,8 +456,17 @@ class OrchestratorTests(unittest.TestCase):
             reminders = db.list_weight_control_reminders(first["id"])["reminders"]
             self.assertEqual(
                 [(item["title"], item["time_local"]) for item in reminders],
-                [("Завтрак", "09:00"), ("Обед", "13:00"), ("Ужин", "19:00")],
+                [
+                    ("Завтрак", "09:00"),
+                    ("Обновить параметры тела", "10:00"),
+                    ("Обед", "13:00"),
+                    ("Ужин", "19:00"),
+                ],
             )
+            body_reminder = next(
+                item for item in reminders if item["reminder_type"] == "body_measurement"
+            )
+            self.assertEqual(body_reminder["interval_days"], 5)
 
             meal = ConversationOrchestrator(fake).process(
                 first["id"], "Сегодня была гречка с курицей и овощами.",
@@ -478,6 +549,74 @@ class OrchestratorTests(unittest.TestCase):
             self.assertTrue(db.weight_messenger_prompt_offer_due(conversation["id"]))
             db.dismiss_weight_messenger_prompt(conversation["id"])
             self.assertFalse(db.weight_messenger_prompt_offer_due(conversation["id"]))
+        finally:
+            with db.connection() as conn:
+                conn.execute("DELETE FROM users WHERE chel_id=?", (chel_id,))
+                conn.commit()
+            db.set_current_chel_id("chel_test_default")
+
+    def test_weight_body_prompt_goal_and_five_day_reminder(self):
+        chel_id = "chel_weight_body_prompt_test"
+        db.ensure_user(chel_id)
+        db.set_current_chel_id(chel_id)
+        try:
+            db.save_profile({
+                "age": 35, "sex": "female", "height_cm": 170,
+                "weight_kg": 84,
+            })
+            conversation = db.create_or_get_weight_control_conversation()
+            response = ConversationOrchestrator(WeightControlLLM()).process(
+                conversation["id"], "Хочу снизить вес до 72 килограммов.",
+            )
+            metadata = response.assistant_message["metadata"]
+            self.assertTrue(metadata["weight_body_prompt"])
+            self.assertTrue(metadata["weight_body_remind_later"])
+            self.assertIn("Зафиксируем отправную точку", response.assistant_message["content"])
+
+            measurements = db.weight_control_body_measurements(conversation["id"])
+            self.assertEqual(measurements["goal"]["target_weight_kg"], 72.0)
+            self.assertEqual(measurements["goal"]["progress_percent"], 0.0)
+            reminders = db.list_weight_control_reminders(conversation["id"])["reminders"]
+            body_reminder = next(
+                item for item in reminders if item["reminder_type"] == "body_measurement"
+            )
+            self.assertEqual(body_reminder["interval_days"], 5)
+            with db.connection() as conn:
+                due = (datetime.now(timezone.utc) - timedelta(minutes=1)).isoformat()
+                conn.execute(
+                    "UPDATE weight_control_reminders SET next_run_at=? WHERE id=?",
+                    (due, body_reminder["id"]),
+                )
+                conn.commit()
+            self.assertEqual(db.dispatch_due_weight_control_reminders("https://example.test"), 1)
+            reminder_message = db.list_messages(conversation["id"])[-1]
+            self.assertTrue(reminder_message["metadata"]["weight_body_prompt"])
+            refreshed = next(
+                item for item in db.list_weight_control_reminders(conversation["id"])["reminders"]
+                if item["reminder_type"] == "body_measurement"
+            )
+            next_run = datetime.fromisoformat(refreshed["next_run_at"])
+            self.assertGreater(next_run, datetime.now(timezone.utc) + timedelta(days=4))
+
+            snoozed = db.snooze_weight_body_prompt(conversation["id"])
+            self.assertEqual(snoozed["status"], "scheduled")
+            self.assertTrue(any(
+                item["reminder_type"] == "body_prompt_once" and item["enabled"]
+                for item in db.list_weight_control_reminders(conversation["id"])["reminders"]
+            ))
+            today = datetime.now(db.MOSCOW_TZ).date().isoformat()
+            updated = db.update_weight_control_body_measurements(conversation["id"], {
+                "measured_on": today, "weight_kg": 80, "waist_cm": 88,
+            })
+            self.assertAlmostEqual(updated["goal"]["progress_percent"], 33.3, places=1)
+            self.assertFalse(any(
+                item["reminder_type"] == "body_prompt_once"
+                for item in db.list_weight_control_reminders(conversation["id"])["reminders"]
+            ))
+            self.assertEqual(
+                db.snooze_weight_body_prompt(conversation["id"])["status"],
+                "already_completed",
+            )
         finally:
             with db.connection() as conn:
                 conn.execute("DELETE FROM users WHERE chel_id=?", (chel_id,))
@@ -624,6 +763,12 @@ class OrchestratorTests(unittest.TestCase):
                     VALUES ('telegram','12345','',?,'active',?,?)""",
                     (chel_id, now, now),
                 )
+                conn.execute(
+                    """INSERT INTO external_identities
+                    (provider,provider_user_id,chat_id,chel_id,access_status,created_at,last_login_at)
+                    VALUES ('max','67890','700001',?,'active',?,?)""",
+                    (chel_id, now, now),
+                )
                 conn.commit()
             reminder = db.create_weight_control_reminder(
                 conversation["id"], reminder_type="warmup", title="Разминка",
@@ -665,12 +810,71 @@ class OrchestratorTests(unittest.TestCase):
             self.assertEqual(len(claimed), 1)
             self.assertEqual(claimed[0]["recipient_id"], "12345")
             self.assertEqual(claimed[0]["event_type"], "weight_control_reminder")
+            self.assertEqual(claimed[0]["payload"]["conversation_id"], conversation["id"])
+            self.assertEqual(
+                claimed[0]["payload"]["action_url"],
+                f"https://example.test/?conversation={conversation['id']}",
+            )
+            self.assertEqual(claimed[0]["payload"]["action_label"], "Открыть чат")
             self.assertTrue(db.acknowledge_weight_reminder_notification(
                 abs(claimed[0]["id"]) - db.WEIGHT_REMINDER_NOTIFICATION_ID_OFFSET,
                 claimed[0]["lease_token"], True,
             ))
+            max_claimed = db.claim_weight_reminder_notifications("max")
+            self.assertEqual(len(max_claimed), 1)
+            self.assertEqual(max_claimed[0]["recipient_id"], "700001")
+            self.assertEqual(max_claimed[0]["event_type"], "weight_control_reminder")
+            self.assertEqual(max_claimed[0]["payload"]["recipient_kind"], "chat")
+            self.assertEqual(max_claimed[0]["payload"]["conversation_id"], conversation["id"])
+            self.assertEqual(
+                max_claimed[0]["payload"]["action_url"],
+                f"https://example.test/?conversation={conversation['id']}",
+            )
+            self.assertEqual(max_claimed[0]["payload"]["action_label"], "Открыть чат")
+            self.assertTrue(db.acknowledge_weight_reminder_notification(
+                abs(max_claimed[0]["id"]) - db.WEIGHT_REMINDER_NOTIFICATION_ID_OFFSET,
+                max_claimed[0]["lease_token"], True,
+            ))
             self.assertTrue(db.delete_weight_control_reminder(reminder["id"]))
             self.assertFalse(db.list_weight_control_reminders(conversation["id"])["reminders"])
+        finally:
+            with db.connection() as conn:
+                conn.execute("DELETE FROM users WHERE chel_id=?", (chel_id,))
+                conn.commit()
+            db.set_current_chel_id("chel_test_default")
+
+    def test_weight_reminder_falls_back_to_max_user_id_for_legacy_link(self):
+        chel_id = "chel_weight_reminder_legacy_max_test"
+        db.ensure_user(chel_id)
+        db.set_current_chel_id(chel_id)
+        try:
+            conversation = db.create_or_get_weight_control_conversation()
+            with db.connection() as conn:
+                now = db.utc_now()
+                conn.execute(
+                    """INSERT INTO external_identities
+                    (provider,provider_user_id,chat_id,chel_id,access_status,created_at,last_login_at)
+                    VALUES ('max','990001','',?,'active',?,?)""",
+                    (chel_id, now, now),
+                )
+                conn.commit()
+            reminder = db.create_weight_control_reminder(
+                conversation["id"], reminder_type="meal", title="Обед",
+                message="Время отметить обед.", time_local="13:00",
+                weekdays=[1, 2, 3, 4, 5, 6, 7],
+            )
+            with db.connection() as conn:
+                conn.execute(
+                    "UPDATE weight_control_reminders SET next_run_at=? WHERE id=?",
+                    ((datetime.now(timezone.utc) - timedelta(minutes=1)).isoformat(), reminder["id"]),
+                )
+                conn.commit()
+
+            self.assertEqual(db.dispatch_due_weight_control_reminders("https://example.test"), 1)
+            claimed = db.claim_weight_reminder_notifications("max")
+            self.assertEqual(len(claimed), 1)
+            self.assertEqual(claimed[0]["recipient_id"], "990001")
+            self.assertEqual(claimed[0]["payload"]["recipient_kind"], "user")
         finally:
             with db.connection() as conn:
                 conn.execute("DELETE FROM users WHERE chel_id=?", (chel_id,))
@@ -1293,6 +1497,10 @@ class OrchestratorTests(unittest.TestCase):
         self.assertIn("отдельный закреплённый диалог «Контроль питания»", manager_prompt)
         self.assertIn("пункт «Контроль веса» показывает дни", manager_prompt)
         self.assertIn("Через 14 дней сервис", manager_prompt)
+        weight_prompt = inspect.getsource(LLMService.weight_control_turn)
+        self.assertIn("говори тепло, доброжелательно и по-человечески", weight_prompt)
+        self.assertIn("без стыда, давления", weight_prompt)
+        self.assertIn("body_measurements", weight_prompt)
 
     def test_agents_can_explain_messenger_linking_with_current_status(self):
         manager_prompt = PROFILES["manager"].prompt
@@ -2919,11 +3127,35 @@ class OrchestratorTests(unittest.TestCase):
         self.assertIn('id="weightToolsMenuWrap"', index)
         self.assertIn('id="weightToolsButton"', index)
         self.assertIn('id="menuWeightDiaryButton"', index)
+        self.assertIn('id="menuWeightBodyButton"', index)
+        self.assertIn('id="weightBodyModal"', index)
+        self.assertIn('id="weightBodyDate"', index)
+        self.assertIn('id="weightBodyHistory"', index)
+        self.assertIn('id="weightBodyGoal"', index)
         self.assertLess(index.index('id="menuWeightDiaryButton"'), index.index('id="functionMenuButton"'))
         self.assertIn("state.conversationType === 'weight_control'", app)
         self.assertIn("closeWeightToolsMenu()", app)
         self.assertIn('id="weightDiaryModal"', index)
         self.assertIn("/api/weight-control/diary", app)
+        self.assertIn("/api/weight-control/body-measurements", app)
+        self.assertIn("function openWeightBody()", app)
+        self.assertIn("function renderWeightBodyHistory", app)
+        self.assertIn("data-weight-body-open", app)
+        self.assertIn("data-weight-body-later", app)
+        self.assertIn("/api/weight-control/body-prompt/remind-later", app)
+        self.assertIn("каждые ${Number(item.interval_days)} дней", app)
+        self.assertIn("WEIGHT_REMINDER_CATEGORIES", app)
+        self.assertIn("label:'Приём пищи'", app)
+        self.assertIn("label:'Параметры тела'", app)
+        self.assertIn("label:'Другое'", app)
+        self.assertIn('data-reminder-category="${category.id}"', app)
+        self.assertIn(".reminder-category", styles)
+        self.assertIn(".message-messenger-actions .message-checkup-reoffer", styles)
+        self.assertIn("min-height:38px", styles)
+        self.assertIn("font-size:clamp(12px,calc(9px + var(--text-bump)),15px)", styles)
+        self.assertIn("REQUESTED_CONVERSATION_KEY", app)
+        self.assertIn("entryParams.get('conversation')", app)
+        self.assertIn("openConversation(validRequestedConversation)", app)
         self.assertIn("После 14 дней", app)
         self.assertIn(".conversation-row.specialized", styles)
         self.assertIn("Персональная программа", app)
@@ -3311,14 +3543,17 @@ class OrchestratorTests(unittest.TestCase):
         self.assertIn("controllerchange", script)
         self.assertIn("url.pathname.startsWith('/api/')", worker)
         self.assertIn("url.pathname.startsWith('/auth/')", worker)
-        self.assertIn("consilium-shell-v129", worker)
+        self.assertIn("consilium-shell-v135", worker)
         self.assertIn("fetch(request)", worker)
-        self.assertIn("/static/styles.css?v=20260929-nutrition-diary-v9", index)
+        self.assertIn("/static/styles.css?v=20260930-compact-message-actions-v6", index)
         self.assertIn("/static/rich-text.2bf1f5fab764.css", index)
         self.assertTrue((project_root / "static" / "styles.07ffaefb4795.css").is_file())
         self.assertTrue((project_root / "static" / "rich-text.2bf1f5fab764.css").is_file())
-        self.assertIn("/static/app.js?v=20260929-nutrition-diary-v9", index)
-        self.assertIn("/static/metrika.js?v=20260929-nutrition-diary-v9", index)
+        self.assertIn("/static/app.js?v=20260930-compact-message-actions-v6", index)
+        self.assertIn("/static/metrika.js?v=20260930-compact-message-actions-v6", index)
+        self.assertIn("Enter — новая строка · отправка — кнопкой", index)
+        self.assertIn('enterkeyhint="enter"', index)
+        self.assertNotIn("$('#chatForm').requestSubmit()", script)
         self.assertIn('id="welcomeScreen"', index)
         self.assertIn('id="welcomeNextButton"', index)
         self.assertIn("Плановый медосмотр", index)
@@ -3401,7 +3636,7 @@ class OrchestratorTests(unittest.TestCase):
         main = (project_root / "backend" / "main.py").read_text(encoding="utf-8")
         config = (project_root / "backend" / "config.py").read_text(encoding="utf-8")
 
-        self.assertIn('src="/static/metrika.js?v=20260929-nutrition-diary-v9"', index)
+        self.assertIn('src="/static/metrika.js?v=20260930-compact-message-actions-v6"', index)
         self.assertIn('YANDEX_METRIKA_COUNTER_ID', config)
         self.assertIn('path == "/api/public-config"', main)
         self.assertIn('"metrika.js"', main)

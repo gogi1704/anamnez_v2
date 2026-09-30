@@ -4486,6 +4486,7 @@ def init_db() -> None:
                 stage TEXT NOT NULL DEFAULT 'intake',
                 assessment TEXT NOT NULL DEFAULT '{}',
                 analysis TEXT NOT NULL DEFAULT '{}',
+                body_measurements TEXT NOT NULL DEFAULT '{}',
                 risk_level TEXT NOT NULL DEFAULT 'routine',
                 program_started_at TEXT,
                 program_ends_at TEXT,
@@ -4498,6 +4499,28 @@ def init_db() -> None:
                 FOREIGN KEY(conversation_id) REFERENCES conversations(id) ON DELETE CASCADE,
                 FOREIGN KEY(chel_id) REFERENCES users(chel_id) ON DELETE CASCADE
             );
+
+            CREATE TABLE IF NOT EXISTS weight_control_body_measurements (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                conversation_id TEXT NOT NULL,
+                chel_id TEXT NOT NULL,
+                measured_on TEXT NOT NULL,
+                weight_kg REAL,
+                waist_cm REAL,
+                hips_cm REAL,
+                chest_cm REAL,
+                thigh_cm REAL,
+                arm_cm REAL,
+                notes TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                UNIQUE(conversation_id, measured_on),
+                FOREIGN KEY(conversation_id) REFERENCES conversations(id) ON DELETE CASCADE,
+                FOREIGN KEY(chel_id) REFERENCES users(chel_id) ON DELETE CASCADE
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_weight_body_measurements_history
+            ON weight_control_body_measurements(conversation_id,measured_on DESC);
 
             CREATE TABLE IF NOT EXISTS weight_control_meals (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -4531,6 +4554,8 @@ def init_db() -> None:
                 time_local TEXT NOT NULL,
                 weekdays TEXT NOT NULL DEFAULT '[]',
                 timezone TEXT NOT NULL DEFAULT 'Europe/Moscow',
+                interval_days INTEGER NOT NULL DEFAULT 0,
+                one_off INTEGER NOT NULL DEFAULT 0,
                 enabled INTEGER NOT NULL DEFAULT 1,
                 next_run_at TEXT NOT NULL,
                 last_sent_at TEXT,
@@ -5050,6 +5075,7 @@ def init_db() -> None:
             ).fetchall()
         }
         for name, declaration in (
+            ("body_measurements", "TEXT NOT NULL DEFAULT '{}'"),
             ("program_started_at", "TEXT"),
             ("program_ends_at", "TEXT"),
             ("onboarding_shown_at", "TEXT"),
@@ -5060,6 +5086,19 @@ def init_db() -> None:
             if name not in weight_state_columns:
                 conn.execute(
                     f"ALTER TABLE weight_control_states ADD COLUMN {name} {declaration}"
+                )
+        weight_reminder_columns = {
+            row[1] for row in conn.execute(
+                "PRAGMA table_info(weight_control_reminders)"
+            ).fetchall()
+        }
+        for name, declaration in (
+            ("interval_days", "INTEGER NOT NULL DEFAULT 0"),
+            ("one_off", "INTEGER NOT NULL DEFAULT 0"),
+        ):
+            if name not in weight_reminder_columns:
+                conn.execute(
+                    f"ALTER TABLE weight_control_reminders ADD COLUMN {name} {declaration}"
                 )
 
         staff_columns = {row[1] for row in conn.execute("PRAGMA table_info(staff_users)").fetchall()}
@@ -6026,11 +6065,233 @@ def get_weight_control_state(conversation_id: str) -> dict | None:
     if not row:
         return None
     result = dict(row)
-    for key in ("assessment", "analysis"):
+    for key in ("assessment", "analysis", "body_measurements"):
         try:
             result[key] = json.loads(result[key] or "{}")
         except json.JSONDecodeError:
             result[key] = {}
+    return result
+
+
+WEIGHT_BODY_MEASUREMENT_LIMITS = {
+    "weight_kg": (25.0, 400.0, "Вес"),
+    "waist_cm": (30.0, 300.0, "Обхват талии"),
+    "hips_cm": (30.0, 300.0, "Обхват бёдер"),
+    "chest_cm": (30.0, 300.0, "Обхват груди"),
+    "thigh_cm": (15.0, 180.0, "Обхват бедра"),
+    "arm_cm": (10.0, 100.0, "Обхват плеча"),
+}
+
+
+def weight_control_body_measurements(conversation_id: str) -> dict:
+    """Return dated body measurements and changes for the nutrition dialogue."""
+    state = get_weight_control_state(conversation_id)
+    if not state:
+        raise ValueError("Диалог «Контроль питания» не найден")
+    profile = get_profile()
+    with connection() as conn:
+        rows = conn.execute(
+            """SELECT * FROM weight_control_body_measurements
+            WHERE conversation_id=? AND chel_id=?
+            ORDER BY measured_on DESC,id DESC LIMIT 365""",
+            (conversation_id, current_chel_id()),
+        ).fetchall()
+    history = []
+    previous = None
+    for row in reversed(rows):
+        item = dict(row)
+        measurement = {
+            key: item.get(key) for key in WEIGHT_BODY_MEASUREMENT_LIMITS
+        }
+        changes = {}
+        if previous:
+            for key in WEIGHT_BODY_MEASUREMENT_LIMITS:
+                current_value = measurement.get(key)
+                previous_value = previous.get(key)
+                changes[key] = (
+                    round(float(current_value) - float(previous_value), 1)
+                    if current_value is not None and previous_value is not None else None
+                )
+        history.append({
+            "id": int(item["id"]),
+            "measured_on": str(item["measured_on"]),
+            **measurement,
+            "notes": str(item.get("notes") or ""),
+            "changes_from_previous": changes,
+            "created_at": item.get("created_at"),
+            "updated_at": item.get("updated_at"),
+        })
+        previous = measurement
+    history.reverse()
+    latest = dict(history[0]) if history else {}
+    if not latest:
+        latest = {
+            key: None for key in WEIGHT_BODY_MEASUREMENT_LIMITS
+        }
+        latest["weight_kg"] = (
+            (state.get("assessment") or {}).get("current_weight_kg")
+            or profile.get("weight_kg")
+        )
+        latest.update({
+            "measured_on": None, "notes": "", "updated_at": None,
+            "changes_from_previous": {},
+        })
+    assessment = dict(state.get("assessment") or {})
+    starting_weight = assessment.get("current_weight_kg") or profile.get("weight_kg")
+    target_weight = assessment.get("target_weight_kg")
+    current_weight = next(
+        (item.get("weight_kg") for item in history if item.get("weight_kg") is not None),
+        latest.get("weight_kg"),
+    )
+    goal = None
+    try:
+        starting_number = float(starting_weight)
+        target_number = float(target_weight)
+        current_number = float(current_weight if current_weight is not None else starting_number)
+        if 25 <= target_number < starting_number <= 400:
+            distance = starting_number - target_number
+            progress = max(0.0, min(100.0, (starting_number - current_number) / distance * 100))
+            goal = {
+                "starting_weight_kg": round(starting_number, 1),
+                "target_weight_kg": round(target_number, 1),
+                "current_weight_kg": round(current_number, 1),
+                "remaining_kg": round(max(0.0, current_number - target_number), 1),
+                "progress_percent": round(progress, 1),
+                "achieved": current_number <= target_number,
+            }
+    except (TypeError, ValueError):
+        goal = None
+    return {
+        "conversation_id": conversation_id,
+        "height_cm": profile.get("height_cm"),
+        "today": datetime.now(timezone.utc).astimezone(MOSCOW_TZ).date().isoformat(),
+        "measurements": latest,
+        "history": history,
+        "goal": goal,
+    }
+
+
+def update_weight_control_body_measurements(
+    conversation_id: str, payload: dict,
+) -> dict:
+    """Validate and upsert one dated measurement, then refresh the model context."""
+    state = get_weight_control_state(conversation_id)
+    if not state:
+        raise ValueError("Диалог «Контроль питания» не найден")
+    if not isinstance(payload, dict):
+        raise ValueError("Параметры тела должны быть объектом")
+    measured_on_raw = str(payload.get("measured_on") or "").strip()
+    try:
+        measured_on = datetime.strptime(measured_on_raw, "%Y-%m-%d").date()
+    except ValueError:
+        raise ValueError("Укажите корректную дату замера") from None
+    today = datetime.now(timezone.utc).astimezone(MOSCOW_TZ).date()
+    if measured_on > today:
+        raise ValueError("Нельзя сохранить замер на будущую дату")
+    with connection() as conn:
+        existing = conn.execute(
+            """SELECT * FROM weight_control_body_measurements
+            WHERE conversation_id=? AND chel_id=? AND measured_on=?""",
+            (conversation_id, current_chel_id(), measured_on.isoformat()),
+        ).fetchone()
+    current = {
+        key: existing[key] if existing else None
+        for key in WEIGHT_BODY_MEASUREMENT_LIMITS
+    }
+    for key, (minimum, maximum, label) in WEIGHT_BODY_MEASUREMENT_LIMITS.items():
+        if key not in payload:
+            continue
+        raw = payload.get(key)
+        if raw is None or raw == "":
+            current[key] = None
+            continue
+        try:
+            value = float(raw)
+        except (TypeError, ValueError):
+            raise ValueError(f"{label}: укажите число") from None
+        if not minimum <= value <= maximum:
+            raise ValueError(
+                f"{label}: допустимое значение от {minimum:g} до {maximum:g}"
+            )
+        current[key] = round(value, 1)
+    current["notes"] = (
+        " ".join(str(payload.get("notes") or "").split())[:500]
+        if "notes" in payload else str(existing["notes"] or "") if existing else ""
+    )
+    if not any(current.get(key) is not None for key in WEIGHT_BODY_MEASUREMENT_LIMITS):
+        raise ValueError("Укажите хотя бы один параметр замера")
+    now = utc_now()
+    with _write_lock, connection() as conn:
+        conn.execute(
+            """INSERT INTO weight_control_body_measurements
+            (conversation_id,chel_id,measured_on,weight_kg,waist_cm,hips_cm,
+             chest_cm,thigh_cm,arm_cm,notes,created_at,updated_at)
+            VALUES (?,?,?,?,?,?,?,?,?,?,?,?)
+            ON CONFLICT(conversation_id,measured_on) DO UPDATE SET
+              weight_kg=excluded.weight_kg,waist_cm=excluded.waist_cm,
+              hips_cm=excluded.hips_cm,chest_cm=excluded.chest_cm,
+              thigh_cm=excluded.thigh_cm,arm_cm=excluded.arm_cm,
+              notes=excluded.notes,updated_at=excluded.updated_at""",
+            (
+                conversation_id, current_chel_id(), measured_on.isoformat(),
+                current["weight_kg"], current["waist_cm"], current["hips_cm"],
+                current["chest_cm"], current["thigh_cm"], current["arm_cm"],
+                current["notes"], now, now,
+            ),
+        )
+        latest = conn.execute(
+            """SELECT * FROM weight_control_body_measurements
+            WHERE conversation_id=? AND chel_id=?
+            ORDER BY measured_on DESC,id DESC LIMIT 1""",
+            (conversation_id, current_chel_id()),
+        ).fetchone()
+        latest_context = {
+            key: latest[key] for key in WEIGHT_BODY_MEASUREMENT_LIMITS
+        }
+        latest_context.update({
+            "measured_on": latest["measured_on"],
+            "notes": latest["notes"],
+            "updated_at": latest["updated_at"],
+        })
+        conn.execute(
+            """UPDATE weight_control_states SET body_measurements=?,updated_at=?
+            WHERE conversation_id=? AND chel_id=?""",
+            (
+                json.dumps(latest_context, ensure_ascii=False), now,
+                conversation_id, current_chel_id(),
+            ),
+        )
+        conn.execute(
+            """UPDATE weight_control_reminders SET enabled=0,updated_at=?
+            WHERE conversation_id=? AND chel_id=? AND reminder_type='body_prompt_once'""",
+            (now, conversation_id, current_chel_id()),
+        )
+        conn.commit()
+    result = weight_control_body_measurements(conversation_id)
+    latest_for_model = dict(result["measurements"])
+    latest_for_model["history"] = [
+        {
+            key: item.get(key)
+            for key in (
+                "measured_on", *WEIGHT_BODY_MEASUREMENT_LIMITS,
+                "changes_from_previous", "notes",
+            )
+        }
+        for item in result["history"][:12]
+    ]
+    with _write_lock, connection() as conn:
+        conn.execute(
+            """UPDATE weight_control_states SET body_measurements=?,updated_at=?
+            WHERE conversation_id=? AND chel_id=?""",
+            (
+                json.dumps(latest_for_model, ensure_ascii=False), utc_now(),
+                conversation_id, current_chel_id(),
+            ),
+        )
+        conn.commit()
+    result["saved_measurement"] = next(
+        item for item in result["history"] if item["measured_on"] == measured_on.isoformat()
+    )
     return result
 
 
@@ -6434,19 +6695,32 @@ def complete_weight_control_conclusion(conversation_id: str, content: str) -> di
 
 
 WEIGHT_REMINDER_NOTIFICATION_ID_OFFSET = 2_000_000_000
-WEIGHT_REMINDER_TYPES = {"medication", "sport", "warmup", "meal", "custom"}
+WEIGHT_REMINDER_TYPES = {
+    "medication", "sport", "warmup", "meal", "custom",
+    "body_measurement", "body_prompt_once",
+}
 
 
-def _weight_reminder_next_run(time_local: str, weekdays: list[int], *, after: datetime | None = None) -> str:
+def _weight_reminder_next_run(
+    time_local: str, weekdays: list[int], *, after: datetime | None = None,
+    interval_days: int = 0,
+) -> str:
     match = re.fullmatch(r"([01]\d|2[0-3]):([0-5]\d)", str(time_local or ""))
     if not match:
         raise ValueError("Укажите время в формате ЧЧ:ММ")
-    normalized_days = sorted({int(day) for day in weekdays if 1 <= int(day) <= 7})
-    if not normalized_days:
-        raise ValueError("Выберите хотя бы один день недели")
+    interval_days = max(0, min(365, int(interval_days or 0)))
     tz = MOSCOW_TZ
     cursor = (after or datetime.now(timezone.utc)).astimezone(tz)
     hour, minute = int(match.group(1)), int(match.group(2))
+    if interval_days:
+        candidate_day = cursor.date() + timedelta(days=interval_days)
+        candidate = datetime.combine(candidate_day, datetime.min.time(), tzinfo=tz).replace(
+            hour=hour, minute=minute,
+        )
+        return candidate.astimezone(timezone.utc).isoformat()
+    normalized_days = sorted({int(day) for day in weekdays if 1 <= int(day) <= 7})
+    if not normalized_days:
+        raise ValueError("Выберите хотя бы один день недели")
     for offset in range(8):
         candidate_day = cursor.date() + timedelta(days=offset)
         if candidate_day.isoweekday() not in normalized_days:
@@ -6466,7 +6740,9 @@ def list_weight_control_reminders(conversation_id: str) -> dict:
     with connection() as conn:
         rows = conn.execute(
             """SELECT * FROM weight_control_reminders
-            WHERE conversation_id=? AND chel_id=? ORDER BY enabled DESC,time_local,id""",
+            WHERE conversation_id=? AND chel_id=?
+              AND (one_off=0 OR enabled=1)
+            ORDER BY enabled DESC,time_local,id""",
             (conversation_id, current_chel_id()),
         ).fetchall()
         linked = conn.execute(
@@ -6489,7 +6765,7 @@ def list_weight_control_reminders(conversation_id: str) -> dict:
 
 def create_weight_control_reminder(
     conversation_id: str, *, reminder_type: str, title: str, message: str,
-    time_local: str, weekdays: list[int],
+    time_local: str, weekdays: list[int], interval_days: int = 0,
 ) -> dict:
     conversation = get_conversation(conversation_id)
     if not conversation or conversation.get("dialog_type") != "weight_control":
@@ -6502,17 +6778,20 @@ def create_weight_control_reminder(
     if not title or not message:
         raise ValueError("Заполните название и текст напоминания")
     days = sorted({int(day) for day in (weekdays or []) if 1 <= int(day) <= 7})
-    next_run_at = _weight_reminder_next_run(time_local, days)
+    interval_days = max(0, min(365, int(interval_days or 0)))
+    next_run_at = _weight_reminder_next_run(
+        time_local, days, interval_days=interval_days,
+    )
     now = utc_now()
     with _write_lock, connection() as conn:
         cursor = conn.execute(
             """INSERT INTO weight_control_reminders
             (conversation_id,chel_id,reminder_type,title,message,time_local,weekdays,
-             timezone,enabled,next_run_at,created_at,updated_at)
-            VALUES (?,?,?,?,?,?,?,'Europe/Moscow',1,?,?,?)""",
+             timezone,interval_days,one_off,enabled,next_run_at,created_at,updated_at)
+            VALUES (?,?,?,?,?,?,?,'Europe/Moscow',?,0,1,?,?,?)""",
             (
                 conversation_id, current_chel_id(), reminder_type, title, message,
-                time_local, json.dumps(days), next_run_at, now, now,
+                time_local, json.dumps(days), interval_days, next_run_at, now, now,
             ),
         )
         reminder_id = int(cursor.lastrowid)
@@ -6524,7 +6803,7 @@ def create_weight_control_reminder(
 
 
 def ensure_default_weight_meal_reminders(conversation_id: str) -> list[dict]:
-    """Create the standard food-diary schedule once after the intake is complete."""
+    """Create the standard food and body-measurement schedule after intake."""
     conversation = get_conversation(conversation_id)
     if not conversation or conversation.get("dialog_type") != "weight_control":
         raise ValueError("Диалог «Контроль питания» не найден")
@@ -6556,15 +6835,95 @@ def ensure_default_weight_meal_reminders(conversation_id: str) -> list[dict]:
             conn.execute(
                 """INSERT INTO weight_control_reminders
                 (conversation_id,chel_id,reminder_type,title,message,time_local,weekdays,
-                 timezone,enabled,next_run_at,created_at,updated_at)
-                VALUES (?,?,'meal',?,?,?,?, 'Europe/Moscow',1,?,?,?)""",
+                 timezone,interval_days,one_off,enabled,next_run_at,created_at,updated_at)
+                VALUES (?,?,'meal',?,?,?,?, 'Europe/Moscow',0,0,1,?,?,?)""",
                 (
                     conversation_id, current_chel_id(), title, message, time_local,
                     json.dumps(days), _weight_reminder_next_run(time_local, days), now, now,
                 ),
             )
+        body_exists = conn.execute(
+            """SELECT 1 FROM weight_control_reminders
+            WHERE conversation_id=? AND chel_id=? AND reminder_type='body_measurement'
+            LIMIT 1""",
+            (conversation_id, current_chel_id()),
+        ).fetchone()
+        if not body_exists:
+            conn.execute(
+                """INSERT INTO weight_control_reminders
+                (conversation_id,chel_id,reminder_type,title,message,time_local,weekdays,
+                 timezone,interval_days,one_off,enabled,next_run_at,created_at,updated_at)
+                VALUES (?,?,'body_measurement','Обновить параметры тела',
+                'Пора обновить вес и объёмы, чтобы видеть динамику и учитывать её в рекомендациях.',
+                '10:00','[]','Europe/Moscow',5,0,1,?,?,?)""",
+                (
+                    conversation_id, current_chel_id(),
+                    _weight_reminder_next_run("10:00", [], interval_days=5), now, now,
+                ),
+            )
         conn.commit()
     return list_weight_control_reminders(conversation_id)["reminders"]
+
+
+def snooze_weight_body_prompt(conversation_id: str) -> dict:
+    """Create or move the one-time body-measurement prompt to the next day."""
+    conversation = get_conversation(conversation_id)
+    if not conversation or conversation.get("dialog_type") != "weight_control":
+        raise ValueError("Диалог «Контроль питания» не найден")
+    with connection() as conn:
+        completed = conn.execute(
+            """SELECT 1 FROM weight_control_body_measurements
+            WHERE conversation_id=? AND chel_id=? LIMIT 1""",
+            (conversation_id, current_chel_id()),
+        ).fetchone()
+    if completed:
+        return {"status": "already_completed", "conversation_id": conversation_id}
+    now_dt = datetime.now(timezone.utc)
+    local_now = now_dt.astimezone(MOSCOW_TZ)
+    due_at = now_dt + timedelta(days=1)
+    time_local = due_at.astimezone(MOSCOW_TZ).strftime("%H:%M")
+    weekdays = [due_at.astimezone(MOSCOW_TZ).isoweekday()]
+    now = now_dt.isoformat()
+    with _write_lock, connection() as conn:
+        existing = conn.execute(
+            """SELECT id FROM weight_control_reminders
+            WHERE conversation_id=? AND chel_id=? AND reminder_type='body_prompt_once'
+            ORDER BY id DESC LIMIT 1""",
+            (conversation_id, current_chel_id()),
+        ).fetchone()
+        if existing:
+            reminder_id = int(existing["id"])
+            conn.execute(
+                """UPDATE weight_control_reminders
+                SET title='Указать параметры тела',
+                    message='Добавьте текущий вес и объёмы — так будет видна динамика изменений.',
+                    time_local=?,weekdays=?,interval_days=0,one_off=1,enabled=1,
+                    next_run_at=?,last_sent_at=NULL,updated_at=? WHERE id=?""",
+                (
+                    time_local, json.dumps(weekdays), due_at.isoformat(), now,
+                    reminder_id,
+                ),
+            )
+        else:
+            cursor = conn.execute(
+                """INSERT INTO weight_control_reminders
+                (conversation_id,chel_id,reminder_type,title,message,time_local,weekdays,
+                 timezone,interval_days,one_off,enabled,next_run_at,created_at,updated_at)
+                VALUES (?,?,'body_prompt_once','Указать параметры тела',
+                'Добавьте текущий вес и объёмы — так будет видна динамика изменений.',
+                ?,?,'Europe/Moscow',0,1,1,?,?,?)""",
+                (
+                    conversation_id, current_chel_id(), time_local,
+                    json.dumps(weekdays), due_at.isoformat(), now, now,
+                ),
+            )
+            reminder_id = int(cursor.lastrowid)
+        conn.commit()
+    return {
+        "status": "scheduled", "reminder_id": reminder_id,
+        "scheduled_for": due_at.isoformat(),
+        "local_date": (local_now.date() + timedelta(days=1)).isoformat(),
+    }
 
 
 def update_weight_control_reminder_status(reminder_id: int, enabled: bool) -> dict:
@@ -6579,6 +6938,7 @@ def update_weight_control_reminder_status(reminder_id: int, enabled: bool) -> di
             raise ValueError("Напоминание не найдено")
         next_run = _weight_reminder_next_run(
             str(row["time_local"]), json.loads(row["weekdays"] or "[]"),
+            interval_days=int(row["interval_days"] or 0),
         ) if enabled else str(row["next_run_at"])
         conn.execute(
             "UPDATE weight_control_reminders SET enabled=?,next_run_at=?,updated_at=? WHERE id=?",
@@ -6591,6 +6951,7 @@ def update_weight_control_reminder_status(reminder_id: int, enabled: bool) -> di
 def update_weight_control_reminder(
     reminder_id: int, *, title: str, message: str, time_local: str,
     weekdays: list[int], reminder_type: str | None = None,
+    interval_days: int | None = None,
 ) -> dict:
     """Update a reminder owned by the current user and recalculate its next run."""
     title = str(title or "").strip()[:80]
@@ -6598,7 +6959,6 @@ def update_weight_control_reminder(
     if not title or not message:
         raise ValueError("Заполните название и текст напоминания")
     days = sorted({int(day) for day in (weekdays or []) if 1 <= int(day) <= 7})
-    next_run_at = _weight_reminder_next_run(time_local, days)
     with _write_lock, connection() as conn:
         row = conn.execute(
             """SELECT r.* FROM weight_control_reminders r
@@ -6608,16 +6968,23 @@ def update_weight_control_reminder(
         ).fetchone()
         if not row:
             raise ValueError("Напоминание не найдено")
+        normalized_interval = (
+            int(row["interval_days"] or 0) if interval_days is None
+            else max(0, min(365, int(interval_days or 0)))
+        )
+        next_run_at = _weight_reminder_next_run(
+            time_local, days, interval_days=normalized_interval,
+        )
         normalized_type = str(reminder_type or row["reminder_type"] or "custom").strip().lower()
         if normalized_type not in WEIGHT_REMINDER_TYPES:
             normalized_type = "custom"
         conn.execute(
             """UPDATE weight_control_reminders
-            SET reminder_type=?,title=?,message=?,time_local=?,weekdays=?,next_run_at=?,updated_at=?
+            SET reminder_type=?,title=?,message=?,time_local=?,weekdays=?,interval_days=?,next_run_at=?,updated_at=?
             WHERE id=?""",
             (
                 normalized_type, title, message, time_local, json.dumps(days),
-                next_run_at, utc_now(), int(reminder_id),
+                normalized_interval, next_run_at, utc_now(), int(reminder_id),
             ),
         )
         conversation_id = str(row["conversation_id"])
@@ -6683,6 +7050,11 @@ def dispatch_due_weight_control_reminders(public_url: str) -> int:
                     "action": "weight_reminder", "reminder_id": int(row["id"]),
                     "reminder_type": row["reminder_type"],
                 }
+                if row["reminder_type"] in {"body_measurement", "body_prompt_once"}:
+                    message_metadata.update({
+                        "weight_body_prompt": True,
+                        "weight_body_remind_later": row["reminder_type"] == "body_prompt_once",
+                    })
                 if daily_offer:
                     content += (
                         "\n\nПривяжите Telegram или MAX, чтобы такие напоминания "
@@ -6714,32 +7086,54 @@ def dispatch_due_weight_control_reminders(public_url: str) -> int:
                     "UPDATE conversations SET updated_at=? WHERE id=?",
                     (now, row["conversation_id"]),
                 )
-                payload = json.dumps({
+                conversation_url = (
+                    f"{str(public_url or '').rstrip('/')}/?conversation={row['conversation_id']}"
+                )
+                payload = {
                     "title": f"Напоминание: {row['title']}", "body": row["message"],
                     "kind": "weight_control_reminder",
-                    "action_url": str(public_url or "").rstrip("/"),
-                    "action_label": "Открыть Консилиум",
-                }, ensure_ascii=False)
+                    "conversation_id": row["conversation_id"],
+                    "action_url": conversation_url,
+                    "action_label": "Открыть чат",
+                }
                 for identity in identities:
                     recipient = _external_identity_recipient(identity)
+                    recipient_kind = "chat"
+                    if identity["provider"] == "max" and not recipient:
+                        recipient = str(identity["provider_user_id"] or "").strip()
+                        recipient_kind = "user"
                     if recipient:
+                        identity_payload = dict(payload)
+                        if identity["provider"] == "max":
+                            identity_payload["recipient_kind"] = recipient_kind
                         conn.execute(
                             """INSERT OR IGNORE INTO weight_control_reminder_outbox
                             (run_id,chel_id,provider,recipient_id,payload,status,attempts,created_at,updated_at)
                             VALUES (?,?,?,?,?,'pending',0,?,?)""",
-                            (run_id, row["chel_id"], identity["provider"], recipient, payload, now, now),
+                            (
+                                run_id, row["chel_id"], identity["provider"], recipient,
+                                json.dumps(identity_payload, ensure_ascii=False), now, now,
+                            ),
                         )
                 delivered += 1
-            days = json.loads(row["weekdays"] or "[]")
-            next_run = _weight_reminder_next_run(
-                str(row["time_local"]), days,
-                after=datetime.fromisoformat(scheduled_for) + timedelta(seconds=1),
-            )
-            conn.execute(
-                """UPDATE weight_control_reminders
-                SET next_run_at=?,last_sent_at=?,updated_at=? WHERE id=?""",
-                (next_run, now, now, row["id"]),
-            )
+            if int(row["one_off"] or 0):
+                conn.execute(
+                    """UPDATE weight_control_reminders
+                    SET enabled=0,last_sent_at=?,updated_at=? WHERE id=?""",
+                    (now, now, row["id"]),
+                )
+            else:
+                days = json.loads(row["weekdays"] or "[]")
+                next_run = _weight_reminder_next_run(
+                    str(row["time_local"]), days,
+                    after=datetime.fromisoformat(scheduled_for) + timedelta(seconds=1),
+                    interval_days=int(row["interval_days"] or 0),
+                )
+                conn.execute(
+                    """UPDATE weight_control_reminders
+                    SET next_run_at=?,last_sent_at=?,updated_at=? WHERE id=?""",
+                    (next_run, now, now, row["id"]),
+                )
         conn.commit()
     return delivered
 

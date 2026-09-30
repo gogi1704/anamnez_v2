@@ -1,5 +1,5 @@
-const CACHE_NAME = 'consilium-shell-v129';
-const ASSET_VERSION = '20260929-nutrition-diary-v9';
+const CACHE_NAME = 'consilium-shell-v135';
+const ASSET_VERSION = '20260930-compact-message-actions-v6';
 const APP_SHELL = [
   '/',
   '/manifest.webmanifest',

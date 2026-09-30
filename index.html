@@ -17,7 +17,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/static/styles.css?v=20260929-nutrition-diary-v9">
+  <link rel="stylesheet" href="/static/styles.css?v=20260930-compact-message-actions-v6">
   <link rel="stylesheet" href="/static/rich-text.2bf1f5fab764.css">
 </head>
 <body>
@@ -146,6 +146,7 @@
               <strong>Контроль питания</strong>
               <button id="menuWeightDiaryButton" role="menuitem"><i>14</i><span>Контроль веса<small>Дни программы и дневник питания</small></span></button>
               <button id="menuWeightRemindersButton" role="menuitem"><i>⏰</i><span>Время питания<small>Настроить напоминания</small></span></button>
+              <button id="menuWeightBodyButton" role="menuitem"><i>↔</i><span>Параметры тела<small>Вес и текущие объёмы</small></span></button>
             </div>
           </div>
           <div class="function-menu-wrap">
@@ -205,7 +206,7 @@
 
       <form class="composer" id="chatForm">
         <label class="sr-only" for="messageInput">Сообщение</label>
-        <textarea id="messageInput" rows="1" placeholder="Задайте вопрос о здоровье..." autocomplete="off"></textarea>
+        <textarea id="messageInput" rows="1" placeholder="Задайте вопрос о здоровье..." autocomplete="off" enterkeyhint="enter"></textarea>
         <input class="sr-only" type="file" id="attachmentInput" accept="image/jpeg,image/png,image/webp,image/gif,application/pdf,text/plain,text/csv" multiple>
         <button type="button" class="attach-button" id="attachButton" aria-label="Прикрепить файл" title="Прикрепить файл">
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m18.38 12.74-7.7 7.69a4.5 4.5 0 0 1-6.36-6.36L15.26 3.13a3 3 0 0 1 4.24 4.24L8.55 18.32a1.5 1.5 0 0 1-2.12-2.12l7.94-7.94"/></svg>
@@ -214,7 +215,7 @@
           <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12 14-7-4 14-3-5-7-2Z"/><path d="m12 14 7-9"/></svg>
         </button>
         <div class="attachment-list hidden" id="attachmentList"></div>
-        <div class="composer-meta"><span>Enter — отправить · Shift+Enter — новая строка</span></div>
+        <div class="composer-meta"><span>Enter — новая строка · отправка — кнопкой</span></div>
       </form>
     </main>
 
@@ -630,6 +631,39 @@
     </div>
   </div>
 
+  <div class="modal-backdrop hidden" id="weightBodyModal" role="dialog" aria-modal="true" aria-labelledby="weightBodyTitle">
+    <div class="modal weight-body-modal">
+      <button class="modal-close" id="weightBodyClose" type="button" aria-label="Закрыть">×</button>
+      <div class="modal-icon">↔</div>
+      <h2 id="weightBodyTitle">Параметры тела и динамика</h2>
+      <p>Добавляйте замеры с датой — так вы сможете видеть изменения со временем. Прошлые записи можно открыть и исправить, будущие даты недоступны.</p>
+      <p class="weight-body-height" id="weightBodyHeight">Рост из основной анкеты: не указан</p>
+      <section class="weight-body-goal hidden" id="weightBodyGoal" aria-label="Прогресс к целевому весу">
+        <div><strong id="weightBodyGoalTitle">Цель: 0 кг</strong><span id="weightBodyGoalStatus"></span></div>
+        <i><b id="weightBodyGoalBar"></b></i>
+        <small id="weightBodyGoalCaption"></small>
+      </section>
+      <div class="weight-body-form">
+        <label class="field-label weight-body-date">Дата замера<input id="weightBodyDate" type="date"></label>
+        <label class="field-label">Текущий вес, кг<input id="weightBodyWeight" type="number" min="25" max="400" step="0.1" inputmode="decimal" placeholder="Например, 78,5"></label>
+        <label class="field-label">Талия, см<input id="weightBodyWaist" type="number" min="30" max="300" step="0.1" inputmode="decimal" placeholder="Например, 86"></label>
+        <label class="field-label">Бёдра, см<input id="weightBodyHips" type="number" min="30" max="300" step="0.1" inputmode="decimal" placeholder="Например, 102"></label>
+        <label class="field-label">Грудь, см<input id="weightBodyChest" type="number" min="30" max="300" step="0.1" inputmode="decimal" placeholder="Например, 96"></label>
+        <label class="field-label">Бедро, см<input id="weightBodyThigh" type="number" min="15" max="180" step="0.1" inputmode="decimal" placeholder="Необязательно"></label>
+        <label class="field-label">Плечо, см<input id="weightBodyArm" type="number" min="10" max="100" step="0.1" inputmode="decimal" placeholder="Необязательно"></label>
+        <label class="field-label weight-body-notes">Комментарий<textarea id="weightBodyNotes" rows="3" maxlength="500" placeholder="Например: объём сильнее меняется в области талии или одежда стала свободнее"></textarea></label>
+      </div>
+      <p class="reminder-error hidden" id="weightBodyError" role="alert"></p>
+      <p class="reminder-success hidden" id="weightBodySuccess" role="status"></p>
+      <button class="primary-button weight-body-save" id="saveWeightBodyButton" type="button">Сохранить параметры</button>
+      <small class="weight-body-note">Последний замер и динамика будут учитываться в следующих ответах Ольги.</small>
+      <section class="weight-body-history-section" aria-labelledby="weightBodyHistoryTitle">
+        <h3 id="weightBodyHistoryTitle">История замеров</h3>
+        <div class="weight-body-history" id="weightBodyHistory"></div>
+      </section>
+    </div>
+  </div>
+
   <div class="modal-backdrop hidden" id="weightRemindersModal" role="dialog" aria-modal="true" aria-labelledby="weightRemindersTitle">
     <div class="modal weight-reminders-modal">
       <button class="modal-close" id="weightRemindersClose" type="button" aria-label="Закрыть">×</button>
@@ -648,9 +682,10 @@
         <label class="field-label">Время<input id="weightReminderTime" type="time" value="09:00"></label>
         <label class="field-label reminder-message-field">Текст напоминания<textarea id="weightReminderMessage" rows="3" maxlength="500" placeholder="Что именно нужно сделать"></textarea></label>
         </div>
-        <fieldset class="reminder-weekdays"><legend>Дни недели</legend>
+        <fieldset class="reminder-weekdays" id="weightReminderWeekdays"><legend>Дни недели</legend>
         <label><input type="checkbox" value="1" checked><span>Пн</span></label><label><input type="checkbox" value="2" checked><span>Вт</span></label><label><input type="checkbox" value="3" checked><span>Ср</span></label><label><input type="checkbox" value="4" checked><span>Чт</span></label><label><input type="checkbox" value="5" checked><span>Пт</span></label><label><input type="checkbox" value="6" checked><span>Сб</span></label><label><input type="checkbox" value="7" checked><span>Вс</span></label>
         </fieldset>
+        <p class="weight-reminder-interval hidden" id="weightReminderIntervalNote"></p>
         <p class="reminder-error hidden" id="weightReminderError" role="alert"></p>
         <p class="reminder-success hidden" id="weightReminderSuccess" role="status"></p>
         <div class="reminder-editor-actions"><button class="secondary-button hidden" id="cancelWeightReminderEdit" type="button">Отменить редактирование</button><button class="primary-button reminder-save" id="saveWeightReminderButton" type="button">Сохранить напоминание</button></div>
@@ -680,9 +715,9 @@
     </div>
   </div>
 
-  <script src="/static/metrika.js?v=20260929-nutrition-diary-v9"></script>
+  <script src="/static/metrika.js?v=20260930-compact-message-actions-v6"></script>
   <script src="/static/agents.js?v=20260829-interpret-profile-v1"></script>
   <script src="/static/rich-text.js?v=20260929-loose-lists-v1"></script>
-  <script src="/static/app.js?v=20260929-nutrition-diary-v9"></script>
+  <script src="/static/app.js?v=20260930-compact-message-actions-v6"></script>
 </body>
 </html>

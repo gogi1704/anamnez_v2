@@ -54,6 +54,7 @@ const state = {
   weightDiary: null,
   weightDiaryEditingId: null,
   weightDiaryEditingDate: '',
+  weightBodyMeasurements: null,
 };
 
 const $ = selector => document.querySelector(selector);
@@ -65,6 +66,7 @@ const WELCOME_SEEN_KEY = 'consilium_welcome_seen';
 const INSTALL_DISMISSED_KEY = 'consilium_install_dismissed_at';
 const MESSENGER_LINK_PENDING_KEY = 'consilium_messenger_link_pending';
 const SPECIALIST_ANALYSIS_PENDING_KEY = 'consilium_specialist_analysis_pending';
+const REQUESTED_CONVERSATION_KEY = 'consilium_requested_conversation_id';
 const PAYMENT_PENDING_ORDER_KEY = 'consilium_pending_payment_order';
 const RESULT_FLOW_KEY = 'consilium_result_flow_v1';
 const INSTALL_REOFFER_AFTER_MS = 7 * 24 * 60 * 60 * 1000;
@@ -3016,6 +3018,9 @@ function addMessage(sender, text, agentId = state.active, urgent = false, create
   const messengerLinkAction = sender === 'agent' && (metadata.action === 'weight_messenger_link' || metadata.weight_messenger_link)
     ? `<div class="message-messenger-actions"><button type="button" class="message-checkup-reoffer message-messenger-link" data-weight-messenger-link>↗ ${escapeHtml(metadata.weight_messenger_label || (metadata.action === 'weight_messenger_link' ? metadata.action_label : '') || 'Привязать мессенджер')}</button>${metadata.weight_messenger_dismiss ? '<button type="button" class="message-messenger-dismiss" data-weight-messenger-dismiss>Больше не предлагать</button>' : ''}</div>`
     : '';
+  const bodyParametersAction = sender === 'agent' && metadata.weight_body_prompt
+    ? `<div class="message-messenger-actions message-body-actions"><button type="button" class="message-checkup-reoffer" data-weight-body-open>↔ Указать параметры тела</button>${metadata.weight_body_remind_later ? '<button type="button" class="message-messenger-dismiss" data-weight-body-later>Напомнить завтра</button>' : ''}</div>`
+    : '';
   const mealConfirmationAction = sender === 'agent' && metadata.action === 'weight_meal_confirmation'
     ? `<div class="message-meal-confirmation-actions">
         <button type="button" class="message-checkup-reoffer" data-weight-meal-confirm>✓ ${escapeHtml(metadata.action_label || 'Всё верно')}</button>
@@ -3025,7 +3030,7 @@ function addMessage(sender, text, agentId = state.active, urgent = false, create
   const userTextMarkup = String(text || '').trim() ? `<p>${escapeHtml(text)}</p>` : '';
   wrapper.innerHTML = sender === 'user'
     ? `<div class="bubble user-bubble">${attachmentMarkup}${userTextMarkup}<span>${time}</span></div>`
-    : `<div class="message-avatar">${humanManager ? (metadata.staff_role === 'doctor' ? 'В' : 'Ч') : agent.initials}</div><div><div class="message-author"><strong>${humanManager ? escapeHtml(metadata.manager_name || humanRole) : agent.name}</strong><span>${humanManager ? humanRole : agent.role}</span>${cached}</div><div class="bubble agent-bubble">${assistantContent}${labDocuments}${reofferAction}${reminderAction}${messengerLinkAction}${mealConfirmationAction}<span>${time}</span></div></div>`;
+    : `<div class="message-avatar">${humanManager ? (metadata.staff_role === 'doctor' ? 'В' : 'Ч') : agent.initials}</div><div><div class="message-author"><strong>${humanManager ? escapeHtml(metadata.manager_name || humanRole) : agent.name}</strong><span>${humanManager ? humanRole : agent.role}</span>${cached}</div><div class="bubble agent-bubble">${assistantContent}${labDocuments}${reofferAction}${reminderAction}${messengerLinkAction}${bodyParametersAction}${mealConfirmationAction}<span>${time}</span></div></div>`;
   messages.appendChild(wrapper);
   scrollChatToBottom();
   return wrapper;
@@ -3607,6 +3612,145 @@ async function openWeightDiary() {
 
 function closeWeightDiary() { closeWeightDiaryEditor(); $('#weightDiaryModal').classList.add('hidden'); }
 
+const WEIGHT_BODY_FIELDS = {
+  weight_kg:'#weightBodyWeight',
+  waist_cm:'#weightBodyWaist',
+  hips_cm:'#weightBodyHips',
+  chest_cm:'#weightBodyChest',
+  thigh_cm:'#weightBodyThigh',
+  arm_cm:'#weightBodyArm',
+};
+
+const WEIGHT_BODY_LABELS = {
+  weight_kg:['Вес','кг'], waist_cm:['Талия','см'], hips_cm:['Бёдра','см'],
+  chest_cm:['Грудь','см'], thigh_cm:['Бедро','см'], arm_cm:['Плечо','см'],
+};
+
+function populateWeightBodyForm(record = {}, fallbackWeight = null) {
+  Object.entries(WEIGHT_BODY_FIELDS).forEach(([key, selector]) => {
+    $(selector).value = record[key] ?? (key === 'weight_kg' ? fallbackWeight ?? '' : '');
+  });
+  $('#weightBodyNotes').value = record.notes || '';
+}
+
+function selectWeightBodyDate(value) {
+  const data = state.weightBodyMeasurements || {};
+  const record = (data.history || []).find(item => item.measured_on === value);
+  $('#weightBodyDate').value = value;
+  populateWeightBodyForm(
+    record || {},
+    !data.history?.length && value === data.today ? data.measurements?.weight_kg : null,
+  );
+  $('#weightBodySuccess').classList.add('hidden');
+}
+
+function formatWeightBodyDate(value) {
+  const parsed = new Date(`${value}T12:00:00`);
+  return Number.isNaN(parsed.getTime()) ? value : parsed.toLocaleDateString('ru-RU', {
+    day:'numeric', month:'long', year:'numeric',
+  });
+}
+
+function renderWeightBodyHistory(history = []) {
+  const target = $('#weightBodyHistory');
+  if (!history.length) {
+    target.innerHTML = '<div class="reminder-empty">Замеров пока нет</div>';
+    return;
+  }
+  target.innerHTML = history.map(item => {
+    const values = Object.entries(WEIGHT_BODY_LABELS).filter(([key]) => item[key] != null).map(([key, [label, unit]]) => {
+      const delta = item.changes_from_previous?.[key];
+      const deltaHtml = delta == null || delta === 0 ? ''
+        : `<b class="${delta < 0 ? 'negative' : ''}">${delta > 0 ? '+' : ''}${escapeHtml(String(delta).replace('.', ','))}</b>`;
+      return `<span>${escapeHtml(label)}: ${escapeHtml(String(item[key]).replace('.', ','))} ${unit}${deltaHtml}</span>`;
+    }).join('');
+    return `<button class="weight-body-history-item" type="button" data-weight-body-date="${escapeHtml(item.measured_on)}">
+      <span class="weight-body-history-head"><strong>${escapeHtml(formatWeightBodyDate(item.measured_on))}</strong><span>Открыть и изменить</span></span>
+      <span class="weight-body-history-values">${values}</span>
+      ${item.notes ? `<span class="weight-body-history-note">${escapeHtml(item.notes)}</span>` : ''}
+    </button>`;
+  }).join('');
+}
+
+function renderWeightBodyMeasurements(data, selectedDate = '') {
+  state.weightBodyMeasurements = data;
+  const dateInput = $('#weightBodyDate');
+  dateInput.max = data.today;
+  renderWeightBodyHistory(data.history || []);
+  selectWeightBodyDate(selectedDate || data.today);
+  $('#weightBodyHeight').textContent = data.height_cm
+    ? `Рост из основной анкеты: ${Number(data.height_cm).toLocaleString('ru-RU')} см`
+    : 'Рост в основной анкете пока не указан';
+  const goal = data.goal;
+  $('#weightBodyGoal').classList.toggle('hidden', !goal);
+  if (goal) {
+    const target = Number(goal.target_weight_kg).toLocaleString('ru-RU');
+    const current = Number(goal.current_weight_kg).toLocaleString('ru-RU');
+    const remaining = Number(goal.remaining_kg).toLocaleString('ru-RU');
+    $('#weightBodyGoalTitle').textContent = `Цель: ${target} кг`;
+    $('#weightBodyGoalStatus').textContent = `${Number(goal.progress_percent).toLocaleString('ru-RU')}% пути`;
+    $('#weightBodyGoalBar').style.width = `${Math.max(0, Math.min(100, Number(goal.progress_percent) || 0))}%`;
+    $('#weightBodyGoalCaption').textContent = goal.achieved
+      ? `Целевой вес достигнут · текущий вес ${current} кг`
+      : `Сейчас ${current} кг · до цели ${remaining} кг`;
+  }
+}
+
+async function openWeightBody() {
+  closeFunctionMenu();
+  closeWeightToolsMenu();
+  if (!state.conversationId || state.conversationType !== 'weight_control') return;
+  $('#weightBodyError').classList.add('hidden');
+  $('#weightBodySuccess').classList.add('hidden');
+  $('#weightBodyModal').classList.remove('hidden');
+  const button = $('#saveWeightBodyButton');
+  button.disabled = true;
+  try {
+    const data = await api(`/api/weight-control/body-measurements?conversation_id=${encodeURIComponent(state.conversationId)}`);
+    renderWeightBodyMeasurements(data);
+  } catch (error) {
+    $('#weightBodyError').textContent = error.message === 'Failed to fetch'
+      ? 'Не удалось загрузить параметры. Обновите страницу и попробуйте ещё раз.'
+      : error.message;
+    $('#weightBodyError').classList.remove('hidden');
+  } finally { button.disabled = false; }
+}
+
+function closeWeightBody() { $('#weightBodyModal').classList.add('hidden'); }
+
+async function saveWeightBodyMeasurements() {
+  const errorNode = $('#weightBodyError');
+  const successNode = $('#weightBodySuccess');
+  errorNode.classList.add('hidden');
+  successNode.classList.add('hidden');
+  const payload = {
+    conversation_id:state.conversationId,
+    measured_on:$('#weightBodyDate').value,
+    notes:$('#weightBodyNotes').value.trim(),
+  };
+  if (!$('#weightBodyDate').reportValidity()) return;
+  for (const [key, selector] of Object.entries(WEIGHT_BODY_FIELDS)) {
+    const inputNode = $(selector);
+    if (!inputNode.reportValidity()) return;
+    payload[key] = inputNode.value === '' ? null : Number(inputNode.value.replace(',', '.'));
+  }
+  const button = $('#saveWeightBodyButton');
+  button.disabled = true;
+  try {
+    const data = await api('/api/weight-control/body-measurements', {
+      method:'POST', body:JSON.stringify(payload),
+    });
+    renderWeightBodyMeasurements(data, data.saved_measurement?.measured_on || payload.measured_on);
+    successNode.textContent = 'Замер сохранён. История и динамика обновлены.';
+    successNode.classList.remove('hidden');
+  } catch (error) {
+    errorNode.textContent = error.message === 'Failed to fetch'
+      ? 'Не удалось сохранить параметры. Обновите страницу и попробуйте ещё раз.'
+      : error.message;
+    errorNode.classList.remove('hidden');
+  } finally { button.disabled = false; }
+}
+
 function selectWeightReminderTemplate(type) {
   const template = WEIGHT_REMINDER_TEMPLATES[type];
   if (!template) return;
@@ -3614,6 +3758,9 @@ function selectWeightReminderTemplate(type) {
   $('#weightReminderMessage').value = template.message;
   $('#weightReminderTime').value = template.time;
   $('#weightRemindersModal').dataset.reminderType = template.type || type;
+  $('#weightRemindersModal').dataset.intervalDays = '0';
+  $('#weightReminderWeekdays').classList.remove('hidden');
+  $('#weightReminderIntervalNote').classList.add('hidden');
   document.querySelectorAll('[data-reminder-template]').forEach(button => {
     button.classList.toggle('selected', button.dataset.reminderTemplate === type);
   });
@@ -3625,20 +3772,49 @@ function reminderDaysLabel(days) {
   return (days || []).map(day => labels[Number(day) - 1]).filter(Boolean).join(', ');
 }
 
+function reminderScheduleLabel(item) {
+  if (item.one_off) return 'однократно';
+  if (Number(item.interval_days || 0) > 0) return `каждые ${Number(item.interval_days)} дней`;
+  return reminderDaysLabel(item.weekdays);
+}
+
+const WEIGHT_REMINDER_CATEGORIES = [
+  {id:'meal', label:'Приём пищи', icon:'🍽', types:new Set(['meal'])},
+  {id:'body', label:'Параметры тела', icon:'↔', types:new Set(['body_measurement','body_prompt_once'])},
+  {id:'other', label:'Другое', icon:'⏰', types:new Set(['medication','sport','warmup','custom'])},
+];
+
+function renderWeightReminderItem(item) {
+  return `<article class="reminder-item ${item.enabled ? '' : 'disabled'}">
+    <strong>${escapeHtml(item.title)} · ${escapeHtml(item.time_local)} <em class="reminder-state ${item.enabled ? 'active' : ''}">${item.enabled ? 'Активно' : 'Выключено'}</em></strong>
+    <small>${escapeHtml(reminderScheduleLabel(item))} · ${escapeHtml(item.message)}</small>
+    <div class="reminder-item-actions">
+      <button type="button" data-reminder-edit="${item.id}">Настроить</button>
+      <button type="button" data-reminder-toggle="${item.id}" data-enabled="${item.enabled ? '1' : '0'}">${item.enabled ? 'Выключить' : 'Включить'}</button>
+      <button type="button" class="danger" data-reminder-delete="${item.id}" aria-label="Удалить">Удалить</button>
+    </div>
+  </article>`;
+}
+
 function renderWeightReminders(data) {
   const reminders = data.reminders || [];
   state.weightReminders = reminders;
   $('#weightReminderMessengerNote').classList.toggle('hidden', Boolean(data.messenger_linked));
-  $('#weightReminderList').innerHTML = reminders.length ? reminders.map(item => `
-    <article class="reminder-item ${item.enabled ? '' : 'disabled'}">
-      <strong>${escapeHtml(item.title)} · ${escapeHtml(item.time_local)} <em class="reminder-state ${item.enabled ? 'active' : ''}">${item.enabled ? 'Активно' : 'Выключено'}</em></strong>
-      <small>${escapeHtml(reminderDaysLabel(item.weekdays))} · ${escapeHtml(item.message)}</small>
-      <div class="reminder-item-actions">
-        <button type="button" data-reminder-edit="${item.id}">Настроить</button>
-        <button type="button" data-reminder-toggle="${item.id}" data-enabled="${item.enabled ? '1' : '0'}">${item.enabled ? 'Выключить' : 'Включить'}</button>
-        <button type="button" class="danger" data-reminder-delete="${item.id}" aria-label="Удалить">Удалить</button>
-      </div>
-    </article>`).join('') : '<div class="reminder-empty">Напоминаний пока нет</div>';
+  if (!reminders.length) {
+    $('#weightReminderList').innerHTML = '<div class="reminder-empty">Напоминаний пока нет</div>';
+    return;
+  }
+  const knownTypes = new Set(WEIGHT_REMINDER_CATEGORIES.flatMap(category => [...category.types]));
+  $('#weightReminderList').innerHTML = WEIGHT_REMINDER_CATEGORIES.map(category => {
+    const items = reminders.filter(item => category.id === 'other'
+      ? !knownTypes.has(item.reminder_type) || category.types.has(item.reminder_type)
+      : category.types.has(item.reminder_type));
+    if (!items.length) return '';
+    return `<section class="reminder-category" data-reminder-category="${category.id}">
+      <h4><span>${category.icon}</span>${category.label}<b>${items.length}</b></h4>
+      <div>${items.map(renderWeightReminderItem).join('')}</div>
+    </section>`;
+  }).join('');
 }
 
 async function loadWeightReminders() {
@@ -3667,11 +3843,15 @@ function resetWeightReminderForm() {
   $('#weightReminderMessage').value = '';
   $('#weightReminderTime').value = '09:00';
   $('#weightRemindersModal').dataset.reminderType = 'custom';
+  $('#weightRemindersModal').dataset.intervalDays = '0';
   delete $('#weightRemindersModal').dataset.editId;
   $('#weightReminderEditorTitle').textContent = 'Новое напоминание';
   $('#saveWeightReminderButton').textContent = 'Сохранить напоминание';
   $('#cancelWeightReminderEdit').classList.add('hidden');
   document.querySelectorAll('[data-reminder-template]').forEach(item => item.classList.remove('selected'));
+  document.querySelectorAll('.reminder-weekdays input').forEach(box => { box.checked = true; });
+  $('#weightReminderWeekdays').classList.remove('hidden');
+  $('#weightReminderIntervalNote').classList.add('hidden');
 }
 
 function editWeightReminder(reminderId) {
@@ -3681,12 +3861,18 @@ function editWeightReminder(reminderId) {
   $('#weightReminderMessage').value = reminder.message || '';
   $('#weightReminderTime').value = reminder.time_local || '09:00';
   $('#weightRemindersModal').dataset.reminderType = reminder.reminder_type || 'custom';
+  const intervalDays = Number(reminder.interval_days || 0);
+  $('#weightRemindersModal').dataset.intervalDays = String(intervalDays);
   $('#weightRemindersModal').dataset.editId = String(reminder.id);
   $('#weightReminderEditorTitle').textContent = `Настройка: ${reminder.title || 'напоминание'}`;
   const selectedDays = new Set((reminder.weekdays || []).map(Number));
   document.querySelectorAll('.reminder-weekdays input').forEach(box => {
     box.checked = selectedDays.has(Number(box.value));
   });
+  $('#weightReminderWeekdays').classList.toggle('hidden', intervalDays > 0);
+  $('#weightReminderIntervalNote').textContent = intervalDays > 0
+    ? `Повторяется каждые ${intervalDays} дней. Можно изменить время и текст.` : '';
+  $('#weightReminderIntervalNote').classList.toggle('hidden', intervalDays <= 0);
   $('#saveWeightReminderButton').textContent = 'Сохранить изменения';
   $('#cancelWeightReminderEdit').classList.remove('hidden');
   $('#weightReminderError').classList.add('hidden');
@@ -3722,6 +3908,7 @@ async function saveWeightReminder() {
         message:$('#weightReminderMessage').value,
         time_local:$('#weightReminderTime').value,
         weekdays,
+        interval_days:Number($('#weightRemindersModal').dataset.intervalDays || 0),
       }),
     });
     const wasEditing = Boolean(editId);
@@ -5143,9 +5330,6 @@ $('#chatForm').addEventListener('submit', event => {
   input.style.height = 'auto';
   processMessage(text);
 });
-input.addEventListener('keydown', event => {
-  if (event.key === 'Enter' && !event.shiftKey) { event.preventDefault(); $('#chatForm').requestSubmit(); }
-});
 input.addEventListener('input', () => { input.style.height = 'auto'; input.style.height = `${Math.min(input.scrollHeight, 140)}px`; });
 input.addEventListener('focus', () => {
   syncVisualViewport();
@@ -5295,6 +5479,7 @@ $('#menuBodyMapButton').addEventListener('click', openBodyMap);
 $('#menuHealthHistoryButton').addEventListener('click', () => openHealthHistory());
 $('#menuWeightRemindersButton').addEventListener('click', openWeightReminders);
 $('#menuWeightDiaryButton').addEventListener('click', openWeightDiary);
+$('#menuWeightBodyButton').addEventListener('click', openWeightBody);
 $('#menuInstallAppButton').addEventListener('click', openInstallApp);
 $('#installAppClose').addEventListener('click', () => closeInstallApp({ dismissed:true }));
 $('#installAppLaterButton').addEventListener('click', () => closeInstallApp({ dismissed:true }));
@@ -5349,6 +5534,22 @@ async function dismissWeightMessengerPrompt(button) {
     addSystemError(error.message);
   }
 }
+async function snoozeWeightBodyPrompt(button) {
+  const actions = button.closest('.message-body-actions');
+  actions?.querySelectorAll('button').forEach(item => { item.disabled = true; });
+  try {
+    const result = await api('/api/weight-control/body-prompt/remind-later', {
+      method:'POST', body:JSON.stringify({conversation_id:state.conversationId}),
+    });
+    if (actions) actions.innerHTML = result.status === 'already_completed'
+      ? '<small>Параметры уже сохранены.</small>'
+      : '<small>Хорошо, напомню завтра.</small>';
+    await loadWeightReminders();
+  } catch (error) {
+    actions?.querySelectorAll('button').forEach(item => { item.disabled = false; });
+    addSystemError(error.message);
+  }
+}
 function handleLabInterpretClick(event) {
   const mealConfirmButton = event.target.closest('[data-weight-meal-confirm]');
   if (mealConfirmButton) {
@@ -5370,6 +5571,16 @@ function handleLabInterpretClick(event) {
   const messengerDismissButton = event.target.closest('[data-weight-messenger-dismiss]');
   if (messengerDismissButton) {
     dismissWeightMessengerPrompt(messengerDismissButton);
+    return;
+  }
+  const bodyOpenButton = event.target.closest('[data-weight-body-open]');
+  if (bodyOpenButton) {
+    openWeightBody();
+    return;
+  }
+  const bodyLaterButton = event.target.closest('[data-weight-body-later]');
+  if (bodyLaterButton) {
+    snoozeWeightBodyPrompt(bodyLaterButton);
     return;
   }
   const reminderButton = event.target.closest('[data-weight-reminder-setup]');
@@ -5459,6 +5670,18 @@ $('#linkMessengerFromReminder').addEventListener('click', () => {
   closeWeightReminders();
   openMessengerLinkModal({source:'weight_reminder'});
 });
+$('#weightBodyClose').addEventListener('click', closeWeightBody);
+$('#weightBodyModal').addEventListener('click', event => {
+  if (event.target.id === 'weightBodyModal') closeWeightBody();
+});
+$('#weightBodyDate').addEventListener('change', event => selectWeightBodyDate(event.target.value));
+$('#weightBodyHistory').addEventListener('click', event => {
+  const button = event.target.closest('[data-weight-body-date]');
+  if (!button) return;
+  selectWeightBodyDate(button.dataset.weightBodyDate);
+  $('#weightBodyDate').scrollIntoView({behavior:'smooth', block:'center'});
+});
+$('#saveWeightBodyButton').addEventListener('click', saveWeightBodyMeasurements);
 $('#weightDiaryClose').addEventListener('click', closeWeightDiary);
 $('#weightDiaryModal').addEventListener('click', event => {
   if (event.target.id === 'weightDiaryModal') closeWeightDiary();
@@ -5534,7 +5757,20 @@ async function initMainApp() {
   await loadProfile();
   await Promise.all([loadBodySymptoms(), loadHealthHistory()]);
   await loadConversationList();
-  if (state.conversationId) await openConversation(state.conversationId);
+  const query = new URLSearchParams(location.search);
+  const requestedConversation = query.get('conversation')
+    || localStorage.getItem(REQUESTED_CONVERSATION_KEY) || '';
+  const validRequestedConversation = /^[0-9a-f-]{36}$/i.test(requestedConversation)
+    ? requestedConversation : '';
+  if (validRequestedConversation) {
+    await openConversation(validRequestedConversation);
+    if (state.conversationId === validRequestedConversation) {
+      localStorage.removeItem(REQUESTED_CONVERSATION_KEY);
+      query.delete('conversation');
+      const cleanQuery = query.toString();
+      history.replaceState({}, '', `${location.pathname}${cleanQuery ? `?${cleanQuery}` : ''}`);
+    }
+  } else if (state.conversationId) await openConversation(state.conversationId);
   else newConversation();
   const pendingSpecialistDocument = sessionStorage.getItem(SPECIALIST_ANALYSIS_PENDING_KEY);
   if (pendingSpecialistDocument && linkedMessengerProviders().size) {
@@ -5566,6 +5802,10 @@ async function init() {
     consumeCompletedMessengerLink(identity);
     updateMessengerLinkMenu();
     const entryParams = new URLSearchParams(window.location.search);
+    const requestedConversation = entryParams.get('conversation') || '';
+    if (/^[0-9a-f-]{36}$/i.test(requestedConversation)) {
+      localStorage.setItem(REQUESTED_CONVERSATION_KEY, requestedConversation);
+    }
     const messengerLoginRequired = entryParams.get('auth') === 'messenger_required';
     const messengerLoginCompleted = entryParams.get('auth') === 'messenger_login';
     const forceWelcomePreview = entryParams.get('welcome') === '1';

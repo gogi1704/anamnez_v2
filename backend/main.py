@@ -642,6 +642,14 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                 return self._json(200, db.weight_control_diary(conversation_id))
             except ValueError as exc:
                 return self._json(422, {"detail": str(exc)})
+        if path == "/api/weight-control/body-measurements":
+            query = parse_qs(parsed.query)
+            try:
+                return self._json(200, db.weight_control_body_measurements(
+                    query.get("conversation_id", [""])[0],
+                ))
+            except ValueError as exc:
+                return self._json(422, {"detail": str(exc)})
         if path.startswith("/api/conversations/") and path.endswith("/updates"):
             conversation_id = path.removeprefix("/api/conversations/").removesuffix("/updates").strip("/")
             item = db.get_conversation(conversation_id)
@@ -1374,6 +1382,7 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                     message=str(payload.get("message", "")),
                     time_local=str(payload.get("time_local", "")),
                     weekdays=payload.get("weekdays") if isinstance(payload.get("weekdays"), list) else [],
+                    interval_days=int(payload.get("interval_days") or 0),
                 )
                 return self._json(201, reminder)
             except (ValueError, TypeError, json.JSONDecodeError, UnicodeDecodeError) as exc:
@@ -1387,6 +1396,25 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                     description=str(payload.get("description", "")),
                 )
                 return self._json(201, entry)
+            except (ValueError, TypeError, json.JSONDecodeError, UnicodeDecodeError) as exc:
+                return self._json(422, {"detail": str(exc)})
+        if path == "/api/weight-control/body-measurements":
+            try:
+                payload = self._read_json(max_bytes=5_000)
+                if not isinstance(payload, dict):
+                    raise ValueError("Параметры тела должны быть объектом")
+                conversation_id = str(payload.pop("conversation_id", ""))
+                return self._json(200, db.update_weight_control_body_measurements(
+                    conversation_id, payload,
+                ))
+            except (ValueError, TypeError, json.JSONDecodeError, UnicodeDecodeError) as exc:
+                return self._json(422, {"detail": str(exc)})
+        if path == "/api/weight-control/body-prompt/remind-later":
+            try:
+                payload = self._read_json(max_bytes=2_000)
+                return self._json(200, db.snooze_weight_body_prompt(
+                    str(payload.get("conversation_id", "")),
+                ))
             except (ValueError, TypeError, json.JSONDecodeError, UnicodeDecodeError) as exc:
                 return self._json(422, {"detail": str(exc)})
         if path == "/api/weight-control/messenger-prompt/dismiss":
@@ -1424,6 +1452,10 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                     message=str(payload.get("message", "")),
                     time_local=str(payload.get("time_local", "")),
                     weekdays=payload.get("weekdays") if isinstance(payload.get("weekdays"), list) else [],
+                    interval_days=(
+                        int(payload.get("interval_days"))
+                        if payload.get("interval_days") not in {None, ""} else None
+                    ),
                 )
                 return self._json(200, reminder)
             except (ValueError, TypeError, json.JSONDecodeError, UnicodeDecodeError) as exc:
