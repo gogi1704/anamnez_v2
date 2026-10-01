@@ -613,6 +613,51 @@ class AnalyticsTests(unittest.TestCase):
         self.assertEqual(actions["specialist"]["users"], 1)
         self.assertEqual(actions["back"]["users"], 1)
 
+    def test_metric2_health_passport_and_checkup_tail_count_button_conversions(self):
+        analytics.record_events("CHEL-PASSPORT-ACCEPT", [
+            {"event_id": "passport-accept-welcome", "session_id": "passport-accept-session", "event_name": "onboarding_screen_viewed", "properties": {"screen": "welcome", "context": "onboarding"}},
+            {"event_id": "passport-accept-completion", "session_id": "passport-accept-session", "event_name": "onboarding_screen_viewed", "properties": {"screen": "completion", "previous_screen": "welcome", "context": "onboarding"}},
+            {"event_id": "passport-accept-offer", "session_id": "passport-accept-session", "event_name": "onboarding_screen_viewed", "properties": {"screen": "health_passport_offer", "previous_screen": "completion", "context": "onboarding"}},
+            {"event_id": "passport-accept-action", "session_id": "passport-accept-session", "event_name": "onboarding_screen_action", "properties": {"screen": "health_passport_offer", "action": "accept", "context": "onboarding"}},
+            {"event_id": "passport-ready", "session_id": "passport-accept-session", "event_name": "onboarding_screen_viewed", "properties": {"screen": "health_passport_ready", "previous_screen": "health_passport_offer", "context": "onboarding"}},
+            {"event_id": "passport-view", "session_id": "passport-accept-session", "event_name": "onboarding_screen_action", "properties": {"screen": "health_passport_ready", "action": "view_pdf", "context": "onboarding"}},
+            {"event_id": "passport-checkups-action", "session_id": "passport-accept-session", "event_name": "onboarding_screen_action", "properties": {"screen": "health_passport_ready", "action": "choose_checkups", "context": "onboarding"}},
+            {"event_id": "passport-checkups-view", "session_id": "passport-accept-session", "event_name": "onboarding_screen_viewed", "properties": {"screen": "health_passport_checkups", "previous_screen": "health_passport_ready", "context": "onboarding"}},
+            {"event_id": "passport-checkup-selected", "session_id": "passport-accept-session", "event_name": "onboarding_screen_action", "properties": {"screen": "health_passport_checkups", "action": "select_exam", "context": "onboarding"}},
+            {"event_id": "passport-checkups-continued", "session_id": "passport-accept-session", "event_name": "onboarding_screen_action", "properties": {"screen": "health_passport_checkups", "action": "continue", "context": "onboarding"}},
+        ])
+        analytics.record_events("CHEL-PASSPORT-DECLINE", [
+            {"event_id": "passport-decline-welcome", "session_id": "passport-decline-session", "event_name": "onboarding_screen_viewed", "properties": {"screen": "welcome", "context": "onboarding"}},
+            {"event_id": "passport-decline-completion", "session_id": "passport-decline-session", "event_name": "onboarding_screen_viewed", "properties": {"screen": "completion", "previous_screen": "welcome", "context": "onboarding"}},
+            {"event_id": "passport-decline-offer", "session_id": "passport-decline-session", "event_name": "onboarding_screen_viewed", "properties": {"screen": "health_passport_offer", "previous_screen": "completion", "context": "onboarding"}},
+            {"event_id": "passport-decline-action", "session_id": "passport-decline-session", "event_name": "onboarding_screen_action", "properties": {"screen": "health_passport_offer", "action": "decline", "context": "onboarding"}},
+        ])
+
+        report = analytics.metric2_report("30")
+        screens = {item["id"]: item for item in report["screens"]}
+        self.assertEqual(report["screens"][-1]["id"], "health_passport_checkups")
+        offer = screens["health_passport_offer"]
+        offer_actions = {item["id"]: item for item in offer["actions"]}
+        self.assertEqual(offer["comparison_id"], "completion")
+        self.assertEqual(offer["users"], 2)
+        self.assertTrue(offer["terminal"])
+        self.assertEqual(offer_actions["accept"]["users"], 1)
+        self.assertEqual(offer_actions["decline"]["users"], 1)
+
+        ready = screens["health_passport_ready"]
+        ready_actions = {item["id"]: item for item in ready["actions"]}
+        self.assertEqual(ready["comparison_id"], "health_passport_offer")
+        self.assertEqual(ready["users"], 1)
+        self.assertEqual(ready_actions["view_pdf"]["users"], 1)
+        self.assertEqual(ready_actions["choose_checkups"]["users"], 1)
+
+        checkups = screens["health_passport_checkups"]
+        checkup_actions = {item["id"]: item for item in checkups["actions"]}
+        self.assertEqual(checkups["comparison_id"], "health_passport_ready")
+        self.assertEqual(checkups["users"], 1)
+        self.assertEqual(checkup_actions["select_exam"]["users"], 1)
+        self.assertEqual(checkup_actions["continue"]["users"], 1)
+
     def test_metric2_separates_standard_and_result_link_funnels(self):
         analytics.record_events("CHEL-STANDARD-BRANCH", [
             {"event_id": "branch-standard-welcome", "session_id": "branch-standard-session", "event_name": "onboarding_screen_viewed", "properties": {"screen": "welcome", "context": "onboarding"}},

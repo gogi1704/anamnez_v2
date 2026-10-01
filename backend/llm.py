@@ -169,6 +169,13 @@ class LLMService:
             "user_memory": conversation.get("_memories", []),
             "user_profile": profile,
             "profile_analysis": cls._profile_analysis(profile),
+            "health_passport": conversation.get("_health_passport", {
+                "status": "not_created",
+                "available_in": "Мои данные → Паспорт здоровья",
+                "overview": "",
+                "questions": [],
+            }),
+            "checkup_catalog": conversation.get("_checkup_catalog", []),
             "current_device": conversation.get("_device", {
                 "device_type": "other",
                 "operating_system": "Другое",
@@ -503,6 +510,127 @@ Input contract: Вход — JSON runtime_context. latest_user_message и histor
             "text": {"verbosity": "medium"},
         })
         return self._output_text(response).strip()
+
+    def generate_health_passport(
+        self, profile: dict, onboarding: dict, body_symptoms: list[dict],
+        examinations: list[dict],
+    ) -> dict:
+        """Generate one concise structured passport from the completed questionnaire."""
+        schema = {
+            "type": "object", "additionalProperties": False,
+            "properties": {
+                "overview": {"type": "string"},
+                "metrics": {
+                    "type": "array", "maxItems": 8,
+                    "items": {
+                        "type": "object", "additionalProperties": False,
+                        "properties": {
+                            "label": {"type": "string"}, "value": {"type": "string"},
+                            "note": {"type": "string"},
+                        },
+                        "required": ["label", "value", "note"],
+                    },
+                },
+                "attention_points": {
+                    "type": "array", "maxItems": 5,
+                    "items": {
+                        "type": "object", "additionalProperties": False,
+                        "properties": {
+                            "title": {"type": "string"}, "reason": {"type": "string"},
+                            "action": {"type": "string"},
+                        },
+                        "required": ["title", "reason", "action"],
+                    },
+                },
+                "protective_factors": {"type": "array", "maxItems": 5, "items": {"type": "string"}},
+                "next_steps": {"type": "array", "maxItems": 6, "items": {"type": "string"}},
+                "questions": {"type": "array", "minItems": 3, "maxItems": 3, "items": {"type": "string"}},
+                "recommended_checkups": {
+                    "type": "array", "maxItems": 2,
+                    "items": {
+                        "type": "object", "additionalProperties": False,
+                        "properties": {
+                            "id": {"type": "string"},
+                            "reason": {"type": "string"},
+                        },
+                        "required": ["id", "reason"],
+                    },
+                },
+                "disclaimer": {"type": "string"},
+            },
+            "required": [
+                "overview", "metrics", "attention_points", "protective_factors",
+                "next_steps", "questions", "recommended_checkups", "disclaimer",
+            ],
+        }
+        safe_profile = {
+            key: value for key, value in profile.items()
+            if key not in {"chel_id", "company_inn", "tube_number", "tube_linked_at"}
+        }
+        selected_ids = set(onboarding.get("selected_tests") or [])
+        selected_examinations = [
+            {"id": item.get("id"), "name": item.get("name"), "description": item.get("description", "")}
+            for item in examinations if item.get("id") in selected_ids
+        ]
+        available_examinations = [
+            {
+                "id": item.get("id"), "name": item.get("name"),
+                "description": item.get("description", ""),
+                "includes": item.get("includes", ""),
+            }
+            for item in examinations
+        ]
+        runtime = {
+            "questionnaire": safe_profile,
+            "derived": self._profile_analysis(safe_profile).get("derived_indicators", {}),
+            "body_symptoms": [
+                {
+                    "region": item.get("region"), "symptom_type": item.get("symptom_type"),
+                    "intensity": item.get("intensity"), "duration": item.get("duration"),
+                }
+                for item in body_symptoms[:20]
+            ],
+            "selected_examinations": selected_examinations,
+            "available_examinations": available_examinations,
+        }
+        response = self._request({
+            "model": settings.specialist_model,
+            "reasoning": {"effort": "medium"},
+            "store": False,
+            "instructions": """Ты составляешь персональный «Паспорт здоровья» только по данным заполненной анкеты пользователя.
+
+Цель документа — за 1–2 минуты дать человеку полезное резюме перед разговором с медицинским специалистом. Пиши по-русски, спокойно, доброжелательно и без запугивания.
+
+Правила качества и экономии токенов:
+- используй только факты входа; неизвестное не превращай в «нет» и не придумывай анализы, диагнозы или семейный анамнез;
+- не перечисляй анкету подряд и не дублируй один факт в нескольких разделах;
+- overview — 2–3 коротких предложения, до 70 слов;
+- metrics — только реально вычислимые или явно указанные показатели; ИМТ называй расчётным ориентиром, не диагнозом;
+- attention_points — только при наличии основания, каждый reason до 35 слов, action конкретный и безопасный;
+- protective_factors — подтверждённые позитивные факторы; если их мало, оставь массив пустым;
+- next_steps — приоритетные профилактические действия, включая уже выбранные обследования, если они есть;
+- questions — ровно 3 самых важных самостоятельных вопроса, которые пользователь может дословно задать специалисту. Расставь их по приоритету: сначала вопрос с наибольшей пользой для здоровья. Каждый вопрос должен быть связан с конкретным фактом паспорта и быть понятен без дополнительного контекста;
+- recommended_checkups — от 0 до 2 наиболее полезных чекапов по фактам паспорта. Используй только точные id из available_examinations, не рекомендуй обследование без основания и не выбирай вариант для другого пола. reason — одно короткое объяснение связи с анкетой. Если подходящих вариантов нет, верни пустой массив;
+- не назначай лечение и не меняй лекарства;
+- disclaimer: одна короткая фраза о том, что паспорт основан на анкете, не является диагнозом и не заменяет консультацию врача.
+
+Верни только данные по заданной JSON-схеме.""",
+            "input": json.dumps(runtime, ensure_ascii=False, indent=2),
+            "text": {
+                "format": {
+                    "type": "json_schema", "name": "health_passport",
+                    "strict": True, "schema": schema,
+                },
+                "verbosity": "low",
+            },
+        })
+        try:
+            result = json.loads(self._output_text(response))
+        except json.JSONDecodeError as exc:
+            raise LLMProviderError(f"Паспорт здоровья вернул невалидный результат: {exc}") from exc
+        if not isinstance(result, dict):
+            raise LLMProviderError("Паспорт здоровья вернул некорректный формат")
+        return result
 
     def interpret_lab_results(
         self,

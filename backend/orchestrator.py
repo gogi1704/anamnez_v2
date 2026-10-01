@@ -1,6 +1,7 @@
 import json
 import hashlib
 import re
+import secrets
 
 from . import database as db
 from .config import settings
@@ -43,6 +44,19 @@ FOOD_ENTRY_HINT = re.compile(
     r"\b(?:ел(?:а|и)?|съел(?:а|и)?|поел(?:а|и)?|выпил(?:а|и)?|завтрак\w*|"
     r"обед\w*|ужин\w*|перекус\w*|каша|суп|салат|мяс\w*|рыб\w*|куриц\w*|"
     r"яйц\w*|овощ\w*|фрукт\w*|хлеб\w*|кофе|чай|йогурт\w*|творог\w*)\b",
+    re.IGNORECASE,
+)
+CHECKUP_PURCHASE_OBJECT = re.compile(
+    r"\b(?:чек[- ]?ап\w*|обследован\w*|комплекс\w*\s+анализ\w*|набор\w*\s+анализ\w*)\b",
+    re.IGNORECASE,
+)
+CHECKUP_PURCHASE_ACTION = re.compile(
+    r"\b(?:купить|покупать|приобрест\w*|заказ\w*|оформ\w*|оплат\w*|беру|возьму)\b",
+    re.IGNORECASE,
+)
+CHECKUP_PURCHASE_NEGATION = re.compile(
+    r"\b(?:не\s+хочу|не\s+буду|не\s+готов\w*|пока\s+не|передумал\w*)\b.{0,35}"
+    r"\b(?:купить|покупать|приобрест\w*|заказ\w*|оформ\w*|оплат\w*|брать)\b",
     re.IGNORECASE,
 )
 
@@ -98,17 +112,59 @@ def _messenger_access_for_ai() -> dict:
     }
 
 
+def _health_passport_for_ai() -> dict:
+    return db.health_passport_ai_context()
+
+
+def _checkup_catalog_for_ai() -> list[dict]:
+    """Expose only current catalog fields needed for a grounded recommendation."""
+    return [
+        {
+            "id": str(item.get("id") or ""),
+            "name": str(item.get("name") or ""),
+            "description": str(item.get("description") or ""),
+            "includes": str(item.get("includes") or ""),
+            "price_rub": int(item.get("price") or 0),
+        }
+        for item in db.list_examinations()
+    ]
+
+
 class ConversationOrchestrator:
     def __init__(self, llm: LLMService = llm_service) -> None:
         self.llm = llm
 
-    def process(self, conversation_id: str | None, user_text: str, attachments: list[dict] | None = None) -> ChatResponse:
+    @staticmethod
+    def _retryable_user_message(
+        conversation_id: str, user_text: str, attachment_meta: list[dict], retry: bool,
+    ) -> dict | None:
+        if not retry:
+            return None
+        recent = db.list_messages(conversation_id, 1)
+        if not recent:
+            return None
+        message = recent[-1]
+        metadata = message.get("metadata") or {}
+        if (
+            message.get("role") == "user"
+            and str(message.get("content") or "") == user_text
+            and list(metadata.get("attachments") or []) == attachment_meta
+        ):
+            return message
+        return None
+
+    def process(
+        self, conversation_id: str | None, user_text: str,
+        attachments: list[dict] | None = None, *, retry: bool = False,
+    ) -> ChatResponse:
         conversation = db.get_conversation(conversation_id) if conversation_id else None
         if not conversation:
             conversation = db.create_conversation(self._title(user_text))
         conversation_id = conversation["id"]
         conversation["_memories"] = [{"category": item["category"], "content": item["content"]} for item in db.list_memories()[:20]]
         conversation["_profile"] = _profile_for_ai()
+        conversation["_health_passport"] = _health_passport_for_ai()
+        conversation["_checkup_catalog"] = _checkup_catalog_for_ai()
         conversation["_device"] = _device_for_ai()
         conversation["_messenger_access"] = _messenger_access_for_ai()
         conversation["_body_symptoms"] = db.list_body_symptoms(status="active", limit=20)
@@ -116,17 +172,29 @@ class ConversationOrchestrator:
             conversation.get("dialog_type") == "weight_control"
             and not HUMAN_REQUEST.search(user_text)
             and not CRITICAL_RISK.search(user_text)
+            and not self._wants_to_buy_checkup(
+                user_text, self._recent_history(conversation_id),
+            )
         ):
-            return self._process_weight_control(conversation, user_text, attachments)
+            return self._process_weight_control(conversation, user_text, attachments, retry=retry)
         previous_agent = conversation["active_agent"]
         attachment_meta = _attachment_metadata(attachments)
-        user_message = db.add_message(conversation_id, "user", user_text, metadata={"attachments": attachment_meta})
+        user_message = self._retryable_user_message(
+            conversation_id, user_text, attachment_meta, retry,
+        ) or db.add_message(
+            conversation_id, "user", user_text, metadata={"attachments": attachment_meta},
+        )
         history = self._recent_history(conversation_id)
         previous_context = self._load_context(conversation.get("context_summary", ""))
         previous_question_count = self._assessment_question_count(
             history, previous_context.get("current_topic", "")
         )
         conversation["_consultation_progress"] = self._consultation_progress(previous_question_count)
+
+        if self._wants_to_buy_checkup(user_text, history[:-1]):
+            return self._process_checkup_purchase(
+                conversation, user_message, previous_context, attachment_meta, user_text,
+            )
 
         if self._wants_lab_interpretation(user_text, attachments):
             return self._interpret_lab_results_response(
@@ -345,11 +413,14 @@ class ConversationOrchestrator:
     def _process_weight_control(
         self, conversation: dict, user_text: str,
         attachments: list[dict] | None = None,
+        *, retry: bool = False,
     ) -> ChatResponse:
         """Advance the dedicated structured weight-control dialogue."""
         conversation_id = str(conversation["id"])
         attachment_meta = _attachment_metadata(attachments)
-        user_message = db.add_message(
+        user_message = self._retryable_user_message(
+            conversation_id, user_text, attachment_meta, retry,
+        ) or db.add_message(
             conversation_id, "user", user_text,
             metadata={"attachments": attachment_meta, "specialized_dialog": "weight_control"},
         )
@@ -650,6 +721,128 @@ class ConversationOrchestrator:
         )
 
     @staticmethod
+    def _wants_to_buy_checkup(text: str, previous_history: list[dict] | None = None) -> bool:
+        compact = " ".join(str(text or "").split())
+        if not compact or CHECKUP_PURCHASE_NEGATION.search(compact):
+            return False
+        if not CHECKUP_PURCHASE_ACTION.search(compact):
+            return False
+        if CHECKUP_PURCHASE_OBJECT.search(compact):
+            return True
+        prior_assistant = next(
+            (
+                str(message.get("content") or "")
+                for message in reversed(previous_history or [])
+                if message.get("role") == "assistant"
+            ),
+            "",
+        )
+        return bool(
+            CHECKUP_PURCHASE_OBJECT.search(prior_assistant)
+            and (
+                re.search(
+                    r"\b(?:его|этот|эту|выбранн\w*|рекомендованн\w*)\b",
+                    compact, re.IGNORECASE,
+                )
+                or re.fullmatch(
+                    r"(?:да[,! ]*)?(?:хочу\s+|готов\w*\s+|давайте\s+)?"
+                    r"(?:купить|покупать|приобрест\w*|заказ\w*|оформ\w*|оплат\w*|беру|возьму)"
+                    r"[.! ]*",
+                    compact, re.IGNORECASE,
+                )
+            )
+        )
+
+    @staticmethod
+    def _mentioned_checkups(text: str, catalog: list[dict]) -> list[str]:
+        normalized = " ".join(str(text or "").casefold().replace("ё", "е").split())
+        matches = []
+        for item in catalog:
+            name = str(item.get("name") or "").strip()
+            comparable = " ".join(name.casefold().replace("ё", "е").split())
+            if comparable and comparable in normalized:
+                matches.append(name)
+        return matches[:3]
+
+    def _process_checkup_purchase(
+        self, conversation: dict, user_message: dict, previous_context: dict,
+        attachment_meta: list[dict], user_text: str,
+    ) -> ChatResponse:
+        conversation_id = str(conversation["id"])
+        previous_agent = str(conversation.get("active_agent") or "manager")
+        ticket = f"H-{secrets.token_hex(3).upper()}"
+        saved, created = db.confirm_human_chat(
+            conversation_id, ticket, recipient_role="manager",
+        )
+        if not saved:
+            raise ValueError("Диалог не найден")
+
+        names = self._mentioned_checkups(
+            user_text, list(conversation.get("_checkup_catalog") or []),
+        )
+        selected = f" «{'», «'.join(names)}»" if names else ""
+        answer = (
+            f"Поняла, вы хотите приобрести чекап{selected}. "
+            "Я передала заявку менеджеру и сохранила контекст разговора. "
+            "Менеджер ответит вам в этом чате и поможет оформить покупку."
+        )
+        context = normalize_context(previous_context)
+        context.update({
+            "current_topic": "покупка чекапа",
+            "topic_relation": "new",
+            "user_goal": "приобрести чекап через чат",
+            "open_questions": [],
+        })
+        fact = f"Пользователь хочет приобрести чекап{selected}"
+        context["known_facts"] = (list(context.get("known_facts") or []) + [fact])[-20:]
+        reason = "Пользователь подтвердил желание приобрести чекап"
+        if created and previous_agent != "manager":
+            db.add_handoff(conversation_id, previous_agent, "manager", reason)
+        metadata = {
+            "action": "checkup_purchase_handoff",
+            "human_escalation": False,
+            "human_ticket_id": saved.get("human_ticket_id"),
+            "human_channel": "chat",
+            "purchase_intent": True,
+            "checkup_names": names,
+            "checkup_purchase_cancel": True,
+            "attachments": attachment_meta,
+        }
+        assistant_message = db.add_message(
+            conversation_id, "assistant", answer, "manager", metadata,
+        )
+        db.update_conversation(
+            conversation_id, active_agent="manager",
+            context_summary=json.dumps(context, ensure_ascii=False),
+            status="waiting_human", human_status="pending",
+            human_ticket_id=saved.get("human_ticket_id"), human_channel="chat",
+            ai_enabled=False,
+        )
+        if created:
+            db.enqueue_manager_notifications(
+                "new_request", conversation_id,
+                message_id=int(user_message.get("id") or 0),
+                message_text=user_text,
+                request_kind="checkup_purchase",
+            )
+        return ChatResponse(
+            conversation_id=conversation_id,
+            user_message=user_message,
+            assistant_message=assistant_message,
+            agent="manager",
+            handoff_from=previous_agent if previous_agent != "manager" else None,
+            handoff_reason=reason,
+            action="checkup_purchase",
+            human_escalation=False,
+            human_ticket_id=saved.get("human_ticket_id"),
+            human_channel="chat",
+            context=context,
+            urgency="routine",
+            attachments=attachment_meta,
+            council_available=False,
+        )
+
+    @staticmethod
     def _wants_lab_interpretation(text: str, attachments: list[dict] | None = None) -> bool:
         return bool(
             not attachments
@@ -917,6 +1110,8 @@ class ConversationOrchestrator:
             raise ValueError("Диалог не найден")
         conversation["_memories"] = [{"category": item["category"], "content": item["content"]} for item in db.list_memories()[:20]]
         conversation["_profile"] = _profile_for_ai()
+        conversation["_health_passport"] = _health_passport_for_ai()
+        conversation["_checkup_catalog"] = _checkup_catalog_for_ai()
         conversation["_device"] = _device_for_ai()
         conversation["_messenger_access"] = _messenger_access_for_ai()
         conversation["_body_symptoms"] = db.list_body_symptoms(status="active", limit=20)
@@ -938,6 +1133,8 @@ class ConversationOrchestrator:
             raise ValueError("Диалог не найден")
         conversation["_memories"] = [{"category": item["category"], "content": item["content"]} for item in db.list_memories()[:20]]
         conversation["_profile"] = _profile_for_ai()
+        conversation["_health_passport"] = _health_passport_for_ai()
+        conversation["_checkup_catalog"] = _checkup_catalog_for_ai()
         conversation["_device"] = _device_for_ai()
         conversation["_messenger_access"] = _messenger_access_for_ai()
         conversation["_body_symptoms"] = db.list_body_symptoms(status="active", limit=20)

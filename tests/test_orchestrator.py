@@ -1,4 +1,5 @@
 import json
+import io
 import os
 import inspect
 import re
@@ -31,7 +32,8 @@ from backend.lab_result_valuation import (  # noqa: E402
     recognized_analytes,
 )
 from backend.llm import LLMProviderError, LLMService  # noqa: E402
-from backend.main import ConsiliumHandler, _chat_access_allowed, _lab_result_analytics_event, _result_entry_can_start, admin_token_valid  # noqa: E402
+from backend.health_passport import build_health_passport_pdf  # noqa: E402
+from backend.main import ConsiliumHandler, _chat_access_allowed, _lab_result_analytics_event, _normalize_health_passport, _result_entry_can_start, admin_token_valid  # noqa: E402
 from backend.orchestrator import ConversationOrchestrator  # noqa: E402
 from backend.onboarding import (  # noqa: E402
     EXAMINATION_UPGRADE_PAIRS, TEST_CATALOG, effective_examination_price, online_examination_price, examination_recommendation_copy,
@@ -259,6 +261,24 @@ class OrchestratorTests(unittest.TestCase):
         self.assertEqual(len(db.list_handoffs(first.conversation_id)), 1)
         self.assertEqual(fake.route_calls[1]["conversation"]["active_agent"], "neurologist")
         self.assertGreaterEqual(len(fake.route_calls[1]["history"]), 3)
+
+    def test_retry_reuses_last_unanswered_user_message(self):
+        conversation = db.create_conversation("Повтор сообщения")
+        original = db.add_message(
+            conversation["id"], "user", "Сообщение после ошибки",
+            metadata={"attachments": []},
+        )
+
+        result = ConversationOrchestrator(FakeLLM()).process(
+            conversation["id"], "Сообщение после ошибки", retry=True,
+        )
+        messages = db.list_messages(conversation["id"])
+
+        self.assertEqual(result.user_message["id"], original["id"])
+        self.assertEqual(
+            [item["content"] for item in messages if item["role"] == "user"],
+            ["Сообщение после ошибки"],
+        )
 
     def test_experiment_report_includes_selected_and_paid_amounts_by_variant(self):
         analytics.init_db()
@@ -935,6 +955,102 @@ class OrchestratorTests(unittest.TestCase):
         self.assertIsNone(saved["human_ticket_id"])
         self.assertTrue(saved["ai_enabled"])
         notify.assert_not_called()
+
+    def test_checkup_purchase_connects_manager_without_second_confirmation(self):
+        fake = FakeLLM()
+        service = ConversationOrchestrator(fake)
+        checkup_name = db.list_examinations()[0]["name"]
+        user_text = f"Хочу купить чекап «{checkup_name}»"
+
+        with patch.object(db, "enqueue_manager_notifications") as notify:
+            result = service.process(None, user_text)
+
+        self.assertEqual(result.action, "checkup_purchase")
+        self.assertFalse(result.human_escalation)
+        self.assertRegex(result.human_ticket_id, r"^H-[A-F0-9]{6}$")
+        self.assertIn(checkup_name, result.assistant_message["content"])
+        self.assertEqual(result.assistant_message["metadata"]["checkup_names"], [checkup_name])
+        self.assertTrue(result.assistant_message["metadata"]["checkup_purchase_cancel"])
+        self.assertFalse(fake.route_calls)
+        saved = db.get_conversation(result.conversation_id)
+        self.assertEqual(saved["status"], "waiting_human")
+        self.assertEqual(saved["human_status"], "pending")
+        self.assertFalse(saved["ai_enabled"])
+        notify.assert_called_once()
+        self.assertEqual(notify.call_args.args[:2], ("new_request", result.conversation_id))
+        self.assertEqual(notify.call_args.kwargs["request_kind"], "checkup_purchase")
+        self.assertEqual(notify.call_args.kwargs["message_text"], user_text)
+
+    def test_checkup_purchase_can_be_cancelled_and_ai_resumes(self):
+        with patch.object(db, "enqueue_manager_notifications"):
+            result = ConversationOrchestrator(FakeLLM()).process(
+                None, "Хочу купить чекап",
+            )
+
+        conversation, cancelled = db.cancel_checkup_purchase_request(result.conversation_id)
+        self.assertTrue(cancelled)
+        self.assertTrue(conversation["ai_enabled"])
+        self.assertEqual(conversation["status"], "active")
+        self.assertEqual(conversation["human_status"], "closed")
+        messages = db.list_messages(result.conversation_id)
+        handoff = next(
+            item for item in messages
+            if item["metadata"].get("action") == "checkup_purchase_handoff"
+        )
+        self.assertFalse(handoff["metadata"]["checkup_purchase_cancel"])
+        self.assertTrue(handoff["metadata"]["checkup_purchase_cancelled"])
+
+        repeated, cancelled_again = db.cancel_checkup_purchase_request(result.conversation_id)
+        self.assertFalse(cancelled_again)
+        self.assertTrue(repeated["ai_enabled"])
+
+    def test_checkup_purchase_negation_does_not_connect_manager(self):
+        fake = FakeLLM()
+        result = ConversationOrchestrator(fake).process(None, "Не хочу купить чекап")
+
+        self.assertNotEqual(result.action, "checkup_purchase")
+        self.assertTrue(fake.route_calls)
+        saved = db.get_conversation(result.conversation_id)
+        self.assertTrue(saved["ai_enabled"])
+        self.assertEqual(saved["human_status"], "none")
+
+    def test_short_purchase_confirmation_uses_previous_checkup_context(self):
+        history = [{
+            "role": "assistant",
+            "content": "По вашим ответам подходит чекап «Здоровье сердца и сосудов».",
+        }]
+        self.assertTrue(ConversationOrchestrator._wants_to_buy_checkup(
+            "Да, оформляйте", history,
+        ))
+        self.assertTrue(ConversationOrchestrator._wants_to_buy_checkup(
+            "Хочу его приобрести", history,
+        ))
+
+    def test_runtime_context_contains_current_checkup_catalog(self):
+        conversation = db.create_conversation("Подбор чекапа")
+        fake = FakeLLM()
+        ConversationOrchestrator(fake).process(conversation["id"], "Какой чекап мне подойдёт?")
+        runtime = json.loads(LLMService.runtime_context(
+            [], normalize_context(None), fake.route_calls[-1]["conversation"],
+        ))
+
+        self.assertTrue(runtime["checkup_catalog"])
+        self.assertEqual(
+            set(runtime["checkup_catalog"][0]),
+            {"id", "name", "description", "includes", "price_rub"},
+        )
+        self.assertIn("checkup_catalog", PROFILES["therapist"].prompt)
+
+    def test_checkup_purchase_cancel_button_and_endpoint_are_wired(self):
+        project_root = Path(__file__).resolve().parents[1]
+        script = (project_root / "static" / "app.js").read_text(encoding="utf-8")
+        backend = (project_root / "backend" / "main.py").read_text(encoding="utf-8")
+
+        self.assertIn("data-checkup-purchase-cancel", script)
+        self.assertIn("cancelCheckupPurchaseRequest", script)
+        self.assertIn("Отменить заявку менеджеру", script)
+        self.assertIn('path == "/api/checkup-purchase/cancel"', backend)
+        self.assertIn('"request_cancelled"', backend)
 
     def test_repeated_human_offer_still_does_not_create_request(self):
         service = ConversationOrchestrator(FakeLLM())
@@ -1951,13 +2067,30 @@ class OrchestratorTests(unittest.TestCase):
         chat_route = backend_source.split('if path != "/api/chat":', 1)[1].split(
             "    def _create_max_auth_link", 1,
         )[0]
-        process_message = script.split("async function processMessage(text)", 1)[1].split(
+        process_message = script.split("async function processMessage(text, options = {})", 1)[1].split(
             "function addSystemError", 1,
         )[0]
         self.assertNotIn("get_onboarding", chat_route)
         self.assertNotIn("_interpretation_profile_missing", chat_route)
         self.assertNotIn("interpretationProfileComplete", process_message)
         self.assertEqual(script.count("if (!interpretationProfileComplete())"), 3)
+
+    def test_failed_chat_message_has_inline_retry_action(self):
+        project_root = Path(__file__).resolve().parents[1]
+        script = (project_root / "static" / "app.js").read_text(encoding="utf-8")
+        styles = (project_root / "static" / "styles.css").read_text(encoding="utf-8")
+        process_message = script.split("async function processMessage(text, options = {})", 1)[1].split(
+            "function addSystemError", 1,
+        )[0]
+
+        self.assertIn("Ошибка отправки", script)
+        self.assertIn("data-message-retry", script)
+        self.assertIn("markMessageSendError(userMessageRow)", process_message)
+        self.assertNotIn("addSystemError(error.message)", process_message)
+        self.assertIn("retry: Boolean(options.existingRow)", process_message)
+        self.assertIn(".message-row.user.has-send-error", script)
+        self.assertIn("failedRow.dataset.messageId = String(message.id)", script)
+        self.assertIn(".message-send-error", styles)
 
     def test_ai_markdown_uses_shared_safe_rich_text_renderer(self):
         project_root = Path(__file__).resolve().parents[1]
@@ -2743,6 +2876,24 @@ class OrchestratorTests(unittest.TestCase):
             ))
             self.assertEqual(
                 db.enqueue_manager_notifications(
+                    "new_request", conversation["id"], message_id=88,
+                    message_text="Хочу купить чекап Здоровье сердца и сосудов",
+                    request_kind="checkup_purchase",
+                ),
+                1,
+            )
+            purchase_item = next(
+                item for item in db.claim_manager_notifications("telegram")
+                if item["conversation_id"] == conversation["id"]
+            )
+            self.assertEqual(purchase_item["payload"]["request_kind"], "checkup_purchase")
+            self.assertEqual(purchase_item["payload"]["title"], "Пользователь хочет купить чекап")
+            self.assertIn("Здоровье сердца и сосудов", purchase_item["payload"]["body"])
+            self.assertTrue(db.acknowledge_manager_notification(
+                purchase_item["id"], purchase_item["lease_token"], True,
+            ))
+            self.assertEqual(
+                db.enqueue_manager_notifications(
                     "new_message", conversation["id"], message_id=77,
                     message_text="Проверка отложенной повторной доставки",
                 ),
@@ -2757,6 +2908,23 @@ class OrchestratorTests(unittest.TestCase):
             ))
             immediate = db.claim_manager_notifications("telegram")
             self.assertFalse(any(item["id"] == retry_item["id"] for item in immediate))
+            db.manager_close_conversation(conversation["id"], "Ирина Уведомления")
+            self.assertEqual(
+                db.enqueue_manager_notifications(
+                    "request_cancelled", conversation["id"], message_id=89,
+                    request_kind="checkup_purchase_cancelled",
+                ),
+                1,
+            )
+            cancelled_item = next(
+                item for item in db.claim_manager_notifications("telegram")
+                if item["conversation_id"] == conversation["id"]
+            )
+            self.assertEqual(cancelled_item["event_type"], "request_cancelled")
+            self.assertEqual(cancelled_item["payload"]["title"], "Заявка на чекап отменена")
+            self.assertEqual(
+                cancelled_item["payload"]["request_kind"], "checkup_purchase_cancelled",
+            )
         finally:
             db.set_current_chel_id("chel_test_default")
             db.admin_delete_staff(manager["id"])
@@ -3543,14 +3711,14 @@ class OrchestratorTests(unittest.TestCase):
         self.assertIn("controllerchange", script)
         self.assertIn("url.pathname.startsWith('/api/')", worker)
         self.assertIn("url.pathname.startsWith('/auth/')", worker)
-        self.assertIn("consilium-shell-v135", worker)
+        self.assertIn("consilium-shell-v146", worker)
         self.assertIn("fetch(request)", worker)
-        self.assertIn("/static/styles.css?v=20260930-compact-message-actions-v6", index)
+        self.assertIn("/static/styles.css?v=20261001-health-passport-metric2-v11", index)
         self.assertIn("/static/rich-text.2bf1f5fab764.css", index)
         self.assertTrue((project_root / "static" / "styles.07ffaefb4795.css").is_file())
         self.assertTrue((project_root / "static" / "rich-text.2bf1f5fab764.css").is_file())
-        self.assertIn("/static/app.js?v=20260930-compact-message-actions-v6", index)
-        self.assertIn("/static/metrika.js?v=20260930-compact-message-actions-v6", index)
+        self.assertIn("/static/app.js?v=20261001-health-passport-metric2-v11", index)
+        self.assertIn("/static/metrika.js?v=20261001-health-passport-metric2-v11", index)
         self.assertIn("Enter — новая строка · отправка — кнопкой", index)
         self.assertIn('enterkeyhint="enter"', index)
         self.assertNotIn("$('#chatForm').requestSubmit()", script)
@@ -3636,7 +3804,7 @@ class OrchestratorTests(unittest.TestCase):
         main = (project_root / "backend" / "main.py").read_text(encoding="utf-8")
         config = (project_root / "backend" / "config.py").read_text(encoding="utf-8")
 
-        self.assertIn('src="/static/metrika.js?v=20260930-compact-message-actions-v6"', index)
+        self.assertIn('src="/static/metrika.js?v=20261001-health-passport-metric2-v11"', index)
         self.assertIn('YANDEX_METRIKA_COUNTER_ID', config)
         self.assertIn('path == "/api/public-config"', main)
         self.assertIn('"metrika.js"', main)
@@ -5227,6 +5395,110 @@ class OrchestratorTests(unittest.TestCase):
             db.reset_current_user()
             db.ensure_user("chel_test_default")
             db.set_current_chel_id("chel_test_default")
+
+    def test_health_passport_offer_persistence_pdf_and_ai_context(self):
+        chel_id = "chel_health_passport_test"
+        db.ensure_user(chel_id)
+        try:
+            db.set_current_chel_id(chel_id)
+            db.save_profile({
+                "preferred_name": "Анна", "age": 42, "sex": "female",
+                "height_cm": 168, "weight_kg": 72, "fatigue": "yes",
+                "conditions": [], "medications": [], "allergies": [],
+            })
+            db.save_onboarding(
+                status="complete", selected_tests=[], payment_status="skipped",
+                intro_seen=True, questionnaire_skipped=True,
+            )
+            self.assertFalse(db.get_health_passport()["should_offer"])
+            db.save_onboarding(
+                status="complete", selected_tests=[], payment_status="skipped",
+                intro_seen=True, questionnaire_skipped=False,
+            )
+            initial = db.get_health_passport()
+            self.assertEqual(initial["status"], "not_created")
+            self.assertTrue(initial["should_offer"])
+
+            declined = db.decline_health_passport()
+            self.assertEqual(declined["status"], "declined")
+            self.assertFalse(declined["should_offer"])
+
+            db.begin_health_passport_generation()
+            content = _normalize_health_passport({
+                "overview": "По анкете есть несколько направлений для спокойной профилактической проверки.",
+                "metrics": [{"label": "ИМТ", "value": "25,5 кг/м²", "note": "Расчётный ориентир"}],
+                "attention_points": [{
+                    "title": "Утомляемость", "reason": "Отмечена длительная усталость.",
+                    "action": "Обсудить возможные причины со специалистом.",
+                }],
+                "protective_factors": ["Анкета заполнена заранее"],
+                "next_steps": ["Обсудить утомляемость на профилактическом приёме"],
+                "questions": [
+                    "Какие причины усталости стоит исключить в первую очередь?",
+                    "Нужны ли дополнительные анализы с учётом моих ответов?",
+                    "Какую нагрузку можно считать подходящей для меня?",
+                    "Этот четвёртый вопрос не должен попасть в паспорт.",
+                ],
+                "recommended_checkups": [
+                    {"id": "fatigue_basic", "reason": "Поможет проверить частые причины утомляемости."},
+                    {"id": "iron", "reason": "Уточняет возможный дефицит железа."},
+                    {"id": "kidneys", "reason": "Третья рекомендация не должна попасть в паспорт."},
+                ],
+                "disclaimer": "Паспорт основан на анкете и не заменяет консультацию врача.",
+            })
+            ready = db.save_health_passport(content)
+            self.assertEqual(ready["status"], "ready")
+            self.assertEqual(len(ready["content"]["questions"]), 3)
+            self.assertEqual(
+                [item["id"] for item in ready["content"]["recommended_checkups"]],
+                ["fatigue_basic", "iron"],
+            )
+            self.assertFalse(ready["should_offer"])
+            self.assertEqual(db.health_passport_ai_context()["status"], "ready")
+            self.assertIn("Мои данные", db.health_passport_ai_context()["available_in"])
+
+            pdf = build_health_passport_pdf(
+                {**ready["content"], "generated_at": ready["generated_at"]},
+                db.get_profile(),
+            )
+            self.assertTrue(pdf.startswith(b"%PDF-"))
+            self.assertGreater(len(pdf), 10_000)
+            from pypdf import PdfReader
+            extracted = "\n".join(page.extract_text() or "" for page in PdfReader(io.BytesIO(pdf)).pages)
+            self.assertIn("Паспорт здоровья", extracted)
+            self.assertIn("Утомляемость", extracted)
+        finally:
+            db.reset_current_user()
+            db.ensure_user("chel_test_default")
+            db.set_current_chel_id("chel_test_default")
+
+    def test_health_passport_ui_and_agent_guide_are_wired(self):
+        project_root = Path(__file__).resolve().parents[1]
+        index = (project_root / "index.html").read_text(encoding="utf-8")
+        app = (project_root / "static" / "app.js").read_text(encoding="utf-8")
+        main = (project_root / "backend" / "main.py").read_text(encoding="utf-8")
+        prompt = (project_root / "backend" / "prompts.py").read_text(encoding="utf-8")
+        self.assertIn('id="healthPassportModal"', index)
+        self.assertIn('id="profileHealthPassport"', index)
+        self.assertIn("HEALTH_PASSPORT_PROGRESS", app)
+        self.assertIn("askHealthPassportQuestion", app)
+        self.assertIn("await processMessage(question)", app)
+        self.assertIn("data-health-passport-view", app)
+        self.assertIn("data-health-passport-download", app)
+        self.assertIn("data-health-passport-checkups", app)
+        self.assertIn("openHealthPassportCheckups", app)
+        exam_selection = app.split("function renderExamSelection(", 1)[1].split(
+            "function renderExamSkipConfirmation", 1
+        )[0]
+        self.assertIn("const repeatedSelection = Boolean(state.returnToChatAfterExaminations)", exam_selection)
+        self.assertIn('data-onboarding-action="close-current-exams">Закрыть', exam_selection)
+        self.assertIn("signature !== '%PDF-'", app)
+        open_passport = app.split("async function openHealthPassport()", 1)[1].split(
+            "async function declineHealthPassport", 1
+        )[0]
+        self.assertIn("closeProfileModal()", open_passport)
+        self.assertIn("/api/health-passport/pdf", app + main)
+        self.assertIn("«Мои данные» → «Паспорт здоровья»", prompt)
 
 
 if __name__ == "__main__":

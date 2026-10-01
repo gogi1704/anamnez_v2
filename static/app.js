@@ -55,6 +55,10 @@ const state = {
   weightDiaryEditingId: null,
   weightDiaryEditingDate: '',
   weightBodyMeasurements: null,
+  healthPassport: null,
+  healthPassportOfferHandled: false,
+  healthPassportProgressTimer: null,
+  healthPassportCheckupMetric2: false,
 };
 
 const $ = selector => document.querySelector(selector);
@@ -339,11 +343,17 @@ function stopCheckupDwell({beacon = false} = {}) {
   reportCheckupDwell({beacon, force:true});
 }
 
+function onboardingMetric2Context(screen) {
+  return ['health_passport_offer','health_passport_ready','health_passport_checkups'].includes(screen)
+    ? 'onboarding'
+    : onboardingAnalyticsContext();
+}
+
 function trackOnboardingScreen(screen) {
   const previousScreen = currentOnboardingAnalyticsScreen;
   currentOnboardingAnalyticsScreen = screen;
   trackEvent('onboarding_screen_viewed', {
-    screen, previous_screen:previousScreen, context:onboardingAnalyticsContext(),
+    screen, previous_screen:previousScreen, context:onboardingMetric2Context(screen),
   });
   queueMarketerScreenGoal(screen, previousScreen);
   if (screen === 'exam_selection') startCheckupDwell();
@@ -353,7 +363,7 @@ function trackOnboardingScreen(screen) {
 function trackOnboardingAction(action, screen = currentOnboardingAnalyticsScreen) {
   if (!screen || !action) return;
   trackEvent('onboarding_screen_action', {
-    screen, action, context:onboardingAnalyticsContext(),
+    screen, action, context:onboardingMetric2Context(screen),
   });
 }
 
@@ -1717,6 +1727,7 @@ function selectExamination(id) {
 }
 
 function examSelectionAnalyticsScreen() {
+  if (state.healthPassportCheckupMetric2) return 'health_passport_checkups';
   return state.onboarding?.questionnaire_skipped
     ? 'exam_selection_no_questionnaire'
     : 'exam_selection';
@@ -1948,14 +1959,20 @@ function renderExamSelection(scrollPosition = null) {
   const total = state.onboarding.tests.filter(test => state.selectedTests.has(test.id)).reduce((sum,test) => sum + examinationEffectivePrice(test), 0);
   const copy = state.onboarding.examination_recommendation_copy || {};
   const questionnaireSkipped = Boolean(state.onboarding.questionnaire_skipped);
-  const selectionHeader = questionnaireSkipped
+  const repeatedSelection = Boolean(state.returnToChatAfterExaminations);
+  const selectionHeader = repeatedSelection
+    ? `<span class="onboarding-kicker">Ваши обследования</span><h1>Выберите чекапы</h1><p class="onboarding-lead">Проверьте выбор и при необходимости измените его. Рекомендованные варианты уже отмечены.</p>`
+    : questionnaireSkipped
     ? `<span class="onboarding-kicker">Дополнительные услуги</span><h1>Выберите дополнительные обследования</h1><p class="onboarding-lead">Анкета не заполнена, поэтому подбор не персонализирован. Выберите нужные обследования из общего списка.</p>`
     : `<span class="onboarding-kicker">После анкеты</span><h1>${escapeHtml(copy.title || 'Дополнительные обследования для вас')}</h1><p class="onboarding-lead">${escapeHtml(copy.description || 'Рекомендации отмечены по ответам анкеты и не являются назначением.')}</p>`;
   const resultsBenefit = `<div class="exam-ai-note"><span aria-hidden="true">🩺</span><div><p><strong>После результатов — рекомендации медицинского ИИ и чат с врачом прямо в личном кабинете.</strong></p><button type="button" data-onboarding-action="open-results-preview">Что вы получите →</button></div></div>`;
-  const selectionBenefits = questionnaireSkipped
+  const selectionBenefits = repeatedSelection ? '' : questionnaireSkipped
     ? `<div class="exam-selection-benefits"><div class="exam-blood-note"><span aria-hidden="true">＋</span><p>Состав и стоимость указаны в каждой карточке. Вы можете выбрать один или несколько подходящих вариантов.</p></div>${resultsBenefit}</div>`
     : `<div class="exam-selection-benefits"><div class="exam-blood-note"><span aria-hidden="true">🩸</span><p>Во время медосмотра у вас в любом случае возьмут кровь на общий анализ — за счёт работодателя. Дополнительные чек-апы делаются из той же пробы, без нового укола.</p></div>${resultsBenefit}</div>`;
-  $('#onboardingContent').innerHTML = `${selectionHeader}${selectionBenefits}<div class="exam-list">${cards}</div><div class="exam-total"><span>Выбрано: ${state.selectedTests.size}</span><strong>${total.toLocaleString('ru')} ₽</strong></div><div class="onboarding-actions"><button type="button" class="onboarding-back" data-onboarding-action="exam-offer">Назад</button><button type="button" class="onboarding-next" data-onboarding-action="continue-payment" ${state.selectedTests.size ? '' : 'disabled'}>Далее</button></div><button type="button" class="exam-skip" data-onboarding-action="review-exam-skip">Ничего не выбирать</button>`;
+  const selectionActions = repeatedSelection
+    ? `<div class="onboarding-actions"><button type="button" class="onboarding-next" data-onboarding-action="continue-payment" ${state.selectedTests.size ? '' : 'disabled'}>Далее</button></div><button type="button" class="exam-skip" data-onboarding-action="close-current-exams">Закрыть</button>`
+    : `<div class="onboarding-actions"><button type="button" class="onboarding-back" data-onboarding-action="exam-offer">Назад</button><button type="button" class="onboarding-next" data-onboarding-action="continue-payment" ${state.selectedTests.size ? '' : 'disabled'}>Далее</button></div><button type="button" class="exam-skip" data-onboarding-action="review-exam-skip">Ничего не выбирать</button>`;
+  $('#onboardingContent').innerHTML = `${selectionHeader}${selectionBenefits}<div class="exam-list">${cards}</div><div class="exam-total"><span>Выбрано: ${state.selectedTests.size}</span><strong>${total.toLocaleString('ru')} ₽</strong></div>${selectionActions}`;
   if (scrollPosition) {
     const examList = $('#onboardingContent .exam-list');
     const onboarding = $('#onboarding');
@@ -2571,7 +2588,7 @@ function renderExamCompletion() {
         <button type="button" class="exam-later-button" data-onboarding-action="later-after-exams">Установлю позже</button>
       </div>
     </div>`;
-  if (state.messengerLinkJustCompleted) {
+  if (state.messengerLinkJustCompleted && !passportOffered) {
     const provider = state.messengerLinkJustCompleted;
     state.messengerLinkJustCompleted = '';
     requestAnimationFrame(() => openMessengerLinkModal({source:'exam_completion', justLinked:provider}));
@@ -2639,6 +2656,7 @@ async function finishExamOnboarding(installApp = false) {
 
 async function loadOnboarding({ openCompletedMessengerAccount = false, initialOnboarding = null } = {}) {
   state.returnToChatAfterExaminations = false;
+  state.healthPassportCheckupMetric2 = false;
   state.paymentReviewSource = '';
   state.paymentReviewOrderId = '';
   state.paymentReceiptEmail = '';
@@ -2712,15 +2730,17 @@ function renderRequiredStandardOnboarding() {
 async function openMainApp({ skipIntro = false, allowIncompleteOnboarding = false } = {}) {
   if (!allowIncompleteOnboarding && renderRequiredStandardOnboarding()) return false;
   state.returnToChatAfterExaminations = false;
+  state.healthPassportCheckupMetric2 = false;
   $('#onboarding').classList.add('hidden');
   $('#appShell').classList.remove('hidden');
   if (!state.mainInitialized) await initMainApp();
   trackEvent('chat_opened', { screen:'chat' });
+  const passportOffered = await maybeOfferHealthPassport();
   if (!skipIntro && !state.onboarding?.intro_seen) {
     installAfterCapabilities = false;
     requestAnimationFrame(openCapabilities);
   }
-  else scheduleInstallOffer();
+  else if (!passportOffered) scheduleInstallOffer();
   if (state.messengerLinkJustCompleted) {
     const provider = state.messengerLinkJustCompleted;
     state.messengerLinkJustCompleted = '';
@@ -2872,7 +2892,12 @@ $('#onboardingContent').addEventListener('click', async event => {
   else if (action === 'continue-after-payment') await finishPaymentSuccess(false);
   else if (action === 'check-payment') { const orderId = event.target.closest('[data-order-id]')?.dataset.orderId; if (orderId) { const url = new URL(location.href); url.searchParams.set('payment_return', orderId); if (state.returnToChatAfterExaminations) url.searchParams.set('return_to_chat', '1'); history.replaceState({}, '', url); handlePaymentReturn(); } }
   else if (action === 'edit-current-exams') { trackEvent('funnel_action', {stage:'chat_examinations',action:'edit_selection'}); renderExamSelection(); }
-  else if (action === 'close-current-exams') openMainApp({ skipIntro:true });
+  else if (action === 'close-current-exams') {
+    if (state.healthPassportCheckupMetric2) {
+      trackOnboardingAction('close', 'health_passport_checkups');
+    }
+    openMainApp({ skipIntro:true });
+  }
   else if (action === 'open-app') openMainApp();
   else if (action === 'install-after-exams') { trackOnboardingAction('install', 'completion'); trackEvent('install_clicked', { screen:'exam_completion' }); finishExamOnboarding(true); }
   else if (action === 'later-after-exams') { trackOnboardingAction('later', 'completion'); trackEvent('install_dismissed', { screen:'exam_completion' }); finishExamOnboarding(false); }
@@ -3027,10 +3052,16 @@ function addMessage(sender, text, agentId = state.active, urgent = false, create
         <button type="button" class="message-meal-edit" data-weight-meal-edit>Исправить или добавить</button>
       </div>`
     : '';
+  const checkupPurchaseCancelAction = sender === 'agent'
+      && metadata.action === 'checkup_purchase_handoff'
+      && metadata.checkup_purchase_cancel !== false
+      && !metadata.checkup_purchase_cancelled
+    ? '<div class="message-messenger-actions message-checkup-purchase-actions"><button type="button" class="message-messenger-dismiss" data-checkup-purchase-cancel>Отменить заявку менеджеру</button></div>'
+    : '';
   const userTextMarkup = String(text || '').trim() ? `<p>${escapeHtml(text)}</p>` : '';
   wrapper.innerHTML = sender === 'user'
-    ? `<div class="bubble user-bubble">${attachmentMarkup}${userTextMarkup}<span>${time}</span></div>`
-    : `<div class="message-avatar">${humanManager ? (metadata.staff_role === 'doctor' ? 'В' : 'Ч') : agent.initials}</div><div><div class="message-author"><strong>${humanManager ? escapeHtml(metadata.manager_name || humanRole) : agent.name}</strong><span>${humanManager ? humanRole : agent.role}</span>${cached}</div><div class="bubble agent-bubble">${assistantContent}${labDocuments}${reofferAction}${reminderAction}${messengerLinkAction}${bodyParametersAction}${mealConfirmationAction}<span>${time}</span></div></div>`;
+    ? `<div class="bubble user-bubble">${attachmentMarkup}${userTextMarkup}<span>${time}</span></div><div class="message-send-error hidden" role="status"><span>Ошибка отправки</span><button type="button" data-message-retry>Повторить</button></div>`
+    : `<div class="message-avatar">${humanManager ? (metadata.staff_role === 'doctor' ? 'В' : 'Ч') : agent.initials}</div><div><div class="message-author"><strong>${humanManager ? escapeHtml(metadata.manager_name || humanRole) : agent.name}</strong><span>${humanManager ? humanRole : agent.role}</span>${cached}</div><div class="bubble agent-bubble">${assistantContent}${labDocuments}${reofferAction}${reminderAction}${messengerLinkAction}${bodyParametersAction}${mealConfirmationAction}${checkupPurchaseCancelAction}<span>${time}</span></div></div>`;
   messages.appendChild(wrapper);
   scrollChatToBottom();
   return wrapper;
@@ -3116,26 +3147,53 @@ function showHandoff(fromId, toId) {
   $('#handoffBanner').classList.add('hidden');
 }
 
-async function processMessage(text) {
+function clearMessageSendError(messageRow) {
+  if (!messageRow) return;
+  messageRow.classList.remove('has-send-error');
+  messageRow.querySelector('.message-send-error')?.classList.add('hidden');
+}
+
+function markMessageSendError(messageRow) {
+  if (!messageRow) return;
+  messageRow.classList.add('has-send-error');
+  messageRow.querySelector('.message-send-error')?.classList.remove('hidden');
+  scrollChatToBottom();
+}
+
+async function processMessage(text, options = {}) {
   if (state.processing) return;
   state.processing = true;
   beginUserProgress('Готовим ответ…');
   $('#taskStatus').textContent = 'Ольга изучает вопрос';
   $('#suggestions').classList.add('hidden');
-  const outgoingAttachments = [...state.attachments];
-  addMessage('user', text, state.active, false, null, { attachments: outgoingAttachments });
-  clearAttachments();
+  const outgoingAttachments = options.attachments
+    ? [...options.attachments]
+    : [...state.attachments];
+  const userMessageRow = options.existingRow || addMessage(
+    'user', text, state.active, false, null, { attachments: outgoingAttachments },
+  );
+  userMessageRow._retryPayload = {text, attachments:outgoingAttachments};
+  clearMessageSendError(userMessageRow);
+  if (!options.existingRow) clearAttachments();
   addTimeline('manager', 'Изучаю вопрос', 'Учитываю контекст и выбираю, кто лучше поможет');
   showTyping('manager');
 
   try {
     const result = await api('/api/chat', {
       method: 'POST',
-      body: JSON.stringify({ conversation_id: state.conversationId, message: text, attachments: outgoingAttachments }),
+      body: JSON.stringify({
+        conversation_id: state.conversationId,
+        message: text,
+        attachments: outgoingAttachments,
+        retry: Boolean(options.existingRow),
+      }),
     });
     $('#typing')?.remove();
     state.conversationId = result.conversation_id;
     localStorage.setItem('consilium_conversation_id', state.conversationId);
+    if (result.user_message?.id) {
+      userMessageRow.dataset.messageId = String(result.user_message.id);
+    }
     state.lastMessageId = Math.max(
       state.lastMessageId,
       Number(result.user_message?.id || 0),
@@ -3162,6 +3220,9 @@ async function processMessage(text) {
       addTimeline('manager', 'Сообщение передано', 'Медицинский специалист увидит его в своей очереди', 'active');
     } else if (result.action === 'human_preference') {
       $('#taskStatus').textContent = 'Сообщения ждут ответа медицинского специалиста';
+    } else if (result.action === 'checkup_purchase') {
+      $('#taskStatus').textContent = 'Заявка на чекап передана менеджеру';
+      addTimeline('manager', 'Заявка на чекап передана', 'Менеджер поможет оформить покупку в этом диалоге', 'active');
     } else if (result.action === 'lab_results_prompt') {
       await openLabResults();
       $('#taskStatus').textContent = 'Укажите номер пробирки';
@@ -3175,7 +3236,7 @@ async function processMessage(text) {
     await loadConversationList();
   } catch (error) {
     $('#typing')?.remove();
-    addSystemError(error.message);
+    markMessageSendError(userMessageRow);
     $('#taskStatus').textContent = 'Ошибка подключения';
   } finally {
     state.processing = false;
@@ -3311,6 +3372,20 @@ async function syncConversationUpdates() {
       state.lastMessageId = Math.max(state.lastMessageId, Number(message.id || 0));
       const exists = messages.querySelector(`[data-message-id="${message.id}"]`);
       if (exists) continue;
+      if (message.role === 'user') {
+        const attachmentKey = items => JSON.stringify((items || []).map(item => ({
+          name:String(item.name || ''), type:String(item.type || ''),
+        })));
+        const failedRow = [...messages.querySelectorAll('.message-row.user.has-send-error')]
+          .reverse()
+          .find(row => !row.dataset.messageId
+            && row._retryPayload?.text === message.content
+            && attachmentKey(row._retryPayload?.attachments) === attachmentKey(message.metadata?.attachments));
+        if (failedRow) {
+          failedRow.dataset.messageId = String(message.id);
+          continue;
+        }
+      }
       if (message.metadata?.action === 'council' && message.metadata?.opinions) {
         addCouncilResult({
           agents: message.metadata.agents || [],
@@ -4379,6 +4454,10 @@ async function closeCapabilities({ suppressFollowup = false } = {}) {
       state.onboarding = await api('/api/onboarding/intro-seen', { method:'POST', body:'{}' });
     } catch (error) { console.warn('Не удалось сохранить просмотр возможностей', error); }
   }
+  if (await maybeOfferHealthPassport()) {
+    installAfterCapabilities = false;
+    return;
+  }
   if (suppressFollowup) {
     installAfterCapabilities = false;
   } else if (installAfterCapabilities) {
@@ -4455,6 +4534,324 @@ async function loadProfile() {
   renderProfileStatus();
 }
 
+const HEALTH_PASSPORT_PROGRESS = [
+  'Изучаю ответы анкеты',
+  'Считаю индекс массы тела',
+  'Сопоставляю показатели и привычки',
+  'Выделяю важное без лишней тревоги',
+  'Формулирую вопросы специалисту',
+  'Собираю паспорт здоровья',
+];
+
+async function loadHealthPassport() {
+  try { state.healthPassport = await api('/api/health-passport'); }
+  catch { state.healthPassport = null; }
+  renderProfileHealthPassport();
+  return state.healthPassport;
+}
+
+function renderProfileHealthPassport() {
+  const card = $('#profileHealthPassport');
+  if (!card) return;
+  const passport = state.healthPassport;
+  const ready = passport?.status === 'ready';
+  const generating = passport?.status === 'generating';
+  card.classList.toggle('hidden', !ready && !passport?.eligible);
+  $('#profileHealthPassportStatus').textContent = ready
+    ? 'Готов · персональное резюме и вопросы специалисту'
+    : generating ? 'Формируется — можно открыть и проверить'
+    : 'Персональное резюме по вашей анкете';
+  $('#profileHealthPassportOpen').textContent = ready
+    ? 'Открыть' : generating ? 'Проверить' : 'Создать бесплатно';
+  $('#profileHealthPassportDownload').classList.toggle('hidden', !ready);
+}
+
+function stopHealthPassportProgress() {
+  if (state.healthPassportProgressTimer) clearInterval(state.healthPassportProgressTimer);
+  state.healthPassportProgressTimer = null;
+}
+
+function showHealthPassportModal() {
+  $('#healthPassportModal').classList.remove('hidden');
+}
+
+function closeHealthPassportModal({showMessengerFollowup = true} = {}) {
+  stopHealthPassportProgress();
+  $('#healthPassportModal').classList.add('hidden');
+  if (showMessengerFollowup && state.messengerLinkJustCompleted) {
+    const provider = state.messengerLinkJustCompleted;
+    state.messengerLinkJustCompleted = '';
+    requestAnimationFrame(() => openMessengerLinkModal({source:'return', justLinked:provider}));
+  }
+}
+
+function healthPassportMetric2Active() {
+  const modal = $('#healthPassportModal');
+  return modal.dataset.metric2Flow === 'true' && modal.dataset.metric2Screen === 'ready';
+}
+
+function closeHealthPassportFromUser() {
+  if (healthPassportMetric2Active()) {
+    trackOnboardingAction('close', 'health_passport_ready');
+    $('#healthPassportModal').dataset.metric2Flow = 'false';
+  }
+  closeHealthPassportModal();
+}
+
+function renderHealthPassportOffer({manual = false} = {}) {
+  $('#healthPassportModal').dataset.metric2Offer = manual ? 'false' : 'true';
+  $('#healthPassportModal').dataset.metric2Flow = manual ? 'false' : 'true';
+  $('#healthPassportModal').dataset.metric2Screen = manual ? '' : 'offer';
+  $('#healthPassportClose').classList.add('hidden');
+  $('#healthPassportContent').innerHTML = `
+    <div class="health-passport-offer">
+      <div class="health-passport-icon" aria-hidden="true">▤</div>
+      <span class="health-passport-kicker">Бесплатно по вашей анкете</span>
+      <h2 id="healthPassportTitle">Получить паспорт здоровья?</h2>
+      <p>Соберём ответы анкеты в короткий и понятный документ: покажем ключевые показатели, зоны внимания и безопасные следующие шаги.</p>
+      <ul><li>важное — без медицинской воды и запугивания;</li><li>вопросы, которые можно сразу обсудить со специалистом;</li><li>PDF можно скачать и позже найти в разделе «Мои данные».</li></ul>
+      <p class="health-passport-privacy">Паспорт основан только на ваших ответах и не является диагнозом.</p>
+      <div class="health-passport-offer-actions">
+        <button type="button" class="primary-button" data-health-passport-generate>Да, получить</button>
+        <button type="button" class="secondary-button" ${manual ? 'data-health-passport-close' : 'data-health-passport-decline'}>${manual ? 'Закрыть' : 'Не интересно'}</button>
+      </div>
+    </div>`;
+}
+
+function renderHealthPassportProgress() {
+  stopHealthPassportProgress();
+  let index = 0;
+  $('#healthPassportClose').classList.add('hidden');
+  $('#healthPassportContent').innerHTML = `
+    <div class="health-passport-loading">
+      <div class="health-passport-spinner" aria-hidden="true"></div>
+      <span class="health-passport-kicker">Персональный анализ</span>
+      <h2 id="healthPassportTitle">Формирую паспорт здоровья</h2>
+      <p id="healthPassportProgressText">${HEALTH_PASSPORT_PROGRESS[0]}</p>
+      <div class="health-passport-progress" aria-hidden="true"><i id="healthPassportProgressBar"></i></div>
+      <small>Обычно это занимает меньше минуты. Окно можно оставить открытым.</small>
+    </div>`;
+  state.healthPassportProgressTimer = setInterval(() => {
+    index = (index + 1) % HEALTH_PASSPORT_PROGRESS.length;
+    const text = $('#healthPassportProgressText');
+    const bar = $('#healthPassportProgressBar');
+    if (text) text.textContent = HEALTH_PASSPORT_PROGRESS[index];
+    if (bar) bar.style.width = `${Math.min(94, 18 + index * 15)}%`;
+  }, 1400);
+}
+
+function healthPassportList(items, className = '') {
+  if (!items?.length) return '';
+  return `<ul class="${className}">${items.map(item => `<li>${escapeHtml(item)}</li>`).join('')}</ul>`;
+}
+
+function healthPassportRecommendedCheckups(content = state.healthPassport?.content || {}) {
+  const explicit = (content.recommended_checkups || []).map(item => ({
+    id:String(item.id || ''), reason:String(item.reason || ''),
+  }));
+  const fallback = (state.onboarding?.recommended_test_ids || []).map(id => ({
+    id:String(id),
+    reason:'Подходит по ответам вашей анкеты и данным паспорта здоровья.',
+  }));
+  const result = [];
+  const families = new Set();
+  for (const item of (explicit.length ? explicit : fallback)) {
+    const family = EXAMINATION_BASIC_BY_EXTENDED[item.id] || item.id;
+    if (!item.id || families.has(family)) continue;
+    families.add(family);
+    result.push(item);
+    if (result.length === 2) break;
+  }
+  return result;
+}
+
+function renderHealthPassportReady(passport = state.healthPassport) {
+  stopHealthPassportProgress();
+  const content = passport?.content || {};
+  const questions = (content.questions || []).slice(0, 3).map((question, index) => `
+    <button type="button" data-health-passport-question="${index}"><span>${index + 1}</span>${escapeHtml(question)}<b>→</b></button>`).join('');
+  const availableCheckups = new Map(
+    (state.onboarding?.tests || []).map(item => [String(item.id), item]),
+  );
+  const recommendedCheckups = healthPassportRecommendedCheckups(content)
+    .map(item => ({...item, test:availableCheckups.get(String(item.id || ''))}))
+    .filter(item => item.test);
+  const checkups = recommendedCheckups.length ? `
+    <section class="health-passport-checkups">
+      <h3>Рекомендованные чекапы</h3>
+      <p>Подобрали по данным паспорта не больше двух наиболее подходящих вариантов.</p>
+      <div>${recommendedCheckups.map(item => `<article><span>✓</span><div><strong>${escapeHtml(item.test.name || '')}</strong><small>${escapeHtml(item.reason || item.test.description || '')}</small></div></article>`).join('')}</div>
+      <button type="button" class="primary-button" data-health-passport-checkups>Выбрать чекапы</button>
+    </section>` : '';
+  $('#healthPassportClose').classList.remove('hidden');
+  $('#healthPassportContent').innerHTML = `
+    <div class="health-passport-ready">
+      <header><div class="health-passport-icon" aria-hidden="true">✓</div><div><span class="health-passport-kicker">Готово</span><h2 id="healthPassportTitle">Паспорт здоровья сформирован</h2></div></header>
+      <div class="health-passport-document-ready"><strong>Документ готов</strong><p>Его можно просмотреть сейчас или скачать в формате PDF. Позже паспорт будет доступен в разделе «Мои данные».</p><div><button type="button" class="primary-button" data-health-passport-view>Просмотреть</button><button type="button" class="secondary-button" data-health-passport-download>Скачать PDF</button></div><small class="hidden" id="healthPassportPdfStatus" role="status"></small></div>
+      <section class="health-passport-questions"><h3>Главные вопросы специалисту</h3><p>Выбрали не больше трёх самых важных вопросов по вашей анкете. Нажмите на вопрос — он сразу отправится в чат.</p><div>${questions}</div></section>
+      ${checkups}
+      <div class="health-passport-ready-actions"><button type="button" class="secondary-button" data-health-passport-close>Закрыть</button></div>
+    </div>`;
+}
+
+function openHealthPassportCheckups() {
+  const recommendations = healthPassportRecommendedCheckups()
+    .map(item => String(item.id || ''));
+  const availableIds = new Set((state.onboarding?.tests || []).map(item => String(item.id)));
+  const selected = new Set(state.onboarding?.selected_tests || []);
+  recommendations.forEach(id => { if (availableIds.has(id)) selected.add(id); });
+  state.selectedTests = selected;
+  normalizeSelectedTestPairs();
+  if (healthPassportMetric2Active()) {
+    trackOnboardingAction('choose_checkups', 'health_passport_ready');
+    state.healthPassportCheckupMetric2 = true;
+    $('#healthPassportModal').dataset.metric2Flow = 'false';
+  }
+  state.returnToChatAfterExaminations = true;
+  closeHealthPassportModal({showMessengerFollowup:false});
+  $('#appShell').classList.add('hidden');
+  $('#onboarding').classList.remove('hidden');
+  renderExamSelection();
+  trackEvent('health_passport_checkups_opened', {
+    recommended_count:recommendations.filter(id => availableIds.has(id)).length,
+  });
+}
+
+async function openHealthPassportPdf(mode = 'view') {
+  if (healthPassportMetric2Active()) {
+    trackOnboardingAction(mode === 'download' ? 'download_pdf' : 'view_pdf', 'health_passport_ready');
+  }
+  const status = $('#healthPassportPdfStatus');
+  const viewer = mode === 'view' ? window.open('', '_blank') : null;
+  if (viewer) {
+    viewer.document.title = 'Паспорт здоровья';
+    viewer.document.body.textContent = 'Открываем паспорт здоровья…';
+  }
+  if (status) {
+    status.textContent = mode === 'view' ? 'Открываем документ…' : 'Готовим файл…';
+    status.classList.remove('hidden', 'error');
+  }
+  try {
+    const response = await fetch('/api/health-passport/pdf', {
+      credentials:'same-origin', headers:{Accept:'application/pdf'},
+    });
+    const buffer = await response.arrayBuffer();
+    const signature = String.fromCharCode(...new Uint8Array(buffer.slice(0, 5)));
+    if (!response.ok || !String(response.headers.get('Content-Type') || '').includes('application/pdf') || signature !== '%PDF-') {
+      let detail = 'Не удалось сформировать PDF. Попробуйте ещё раз.';
+      try { detail = JSON.parse(new TextDecoder().decode(buffer)).detail || detail; } catch {}
+      throw new Error(detail);
+    }
+    const url = URL.createObjectURL(new Blob([buffer], {type:'application/pdf'}));
+    if (mode === 'view') {
+      if (viewer) viewer.location.replace(url);
+      else {
+        const link = document.createElement('a'); link.href = url; link.target = '_blank'; link.rel = 'noopener'; link.click();
+      }
+    } else {
+      const link = document.createElement('a');
+      link.href = url; link.download = 'Паспорт-здоровья.pdf';
+      document.body.appendChild(link); link.click(); link.remove();
+    }
+    if (status) status.classList.add('hidden');
+    setTimeout(() => URL.revokeObjectURL(url), 60000);
+  } catch (error) {
+    if (viewer) viewer.close();
+    if (status) {
+      status.textContent = error.message;
+      status.classList.add('error');
+      status.classList.remove('hidden');
+    }
+  }
+}
+
+function renderHealthPassportError(message) {
+  stopHealthPassportProgress();
+  $('#healthPassportClose').classList.remove('hidden');
+  $('#healthPassportContent').innerHTML = `
+    <div class="health-passport-error">
+      <div class="health-passport-icon" aria-hidden="true">!</div>
+      <h2 id="healthPassportTitle">Не удалось создать паспорт</h2>
+      <p>${escapeHtml(message || 'Попробуйте ещё раз через минуту.')}</p>
+      <div class="health-passport-offer-actions"><button type="button" class="primary-button" data-health-passport-generate>Попробовать ещё раз</button><button type="button" class="secondary-button" data-health-passport-close>Закрыть</button></div>
+    </div>`;
+}
+
+async function maybeOfferHealthPassport() {
+  if (state.healthPassportOfferHandled) return false;
+  const passport = await loadHealthPassport();
+  if (!passport?.should_offer) return false;
+  state.healthPassportOfferHandled = true;
+  renderHealthPassportOffer();
+  showHealthPassportModal();
+  trackOnboardingScreen('health_passport_offer');
+  trackEvent('health_passport_offer_viewed', {screen:'chat'});
+  return true;
+}
+
+async function openHealthPassport() {
+  closeFunctionMenu();
+  closeProfileModal();
+  $('#healthPassportModal').dataset.metric2Offer = 'false';
+  $('#healthPassportModal').dataset.metric2Flow = 'false';
+  $('#healthPassportModal').dataset.metric2Screen = '';
+  const passport = await loadHealthPassport();
+  if (passport?.status === 'ready') renderHealthPassportReady(passport);
+  else if (passport?.status === 'generating') renderHealthPassportProgress();
+  else renderHealthPassportOffer({manual:true});
+  showHealthPassportModal();
+}
+
+async function declineHealthPassport() {
+  if ($('#healthPassportModal').dataset.metric2Offer === 'true') {
+    trackOnboardingAction('decline', 'health_passport_offer');
+    $('#healthPassportModal').dataset.metric2Offer = 'false';
+    $('#healthPassportModal').dataset.metric2Flow = 'false';
+    $('#healthPassportModal').dataset.metric2Screen = '';
+  }
+  try {
+    state.healthPassport = await api('/api/health-passport/decline', {method:'POST', body:'{}'});
+    renderProfileHealthPassport();
+  } catch (error) { console.warn('Не удалось сохранить отказ от паспорта', error); }
+  closeHealthPassportModal();
+}
+
+async function generateHealthPassport() {
+  const metric2Flow = $('#healthPassportModal').dataset.metric2Flow === 'true';
+  if ($('#healthPassportModal').dataset.metric2Offer === 'true') {
+    trackOnboardingAction('accept', 'health_passport_offer');
+    $('#healthPassportModal').dataset.metric2Offer = 'false';
+  }
+  renderHealthPassportProgress();
+  trackEvent('health_passport_generation_requested', {screen:'health_passport'});
+  try {
+    state.healthPassport = await api('/api/health-passport/generate', {method:'POST', body:'{}'});
+    renderProfileHealthPassport();
+    renderHealthPassportReady(state.healthPassport);
+    if (metric2Flow) {
+      $('#healthPassportModal').dataset.metric2Screen = 'ready';
+      trackOnboardingScreen('health_passport_ready');
+    }
+  } catch (error) {
+    state.healthPassport = null;
+    renderProfileHealthPassport();
+    renderHealthPassportError(error.message);
+  }
+}
+
+async function askHealthPassportQuestion(index) {
+  const question = state.healthPassport?.content?.questions?.[Number(index)];
+  if (!question || state.processing) return;
+  if (healthPassportMetric2Active()) {
+    trackOnboardingAction('ask_question', 'health_passport_ready');
+    $('#healthPassportModal').dataset.metric2Flow = 'false';
+  }
+  closeHealthPassportModal({showMessengerFollowup:false});
+  closeProfileModal();
+  if (state.conversationType !== 'general' || !state.aiEnabled) newConversation();
+  await processMessage(question);
+}
+
 function profileCompletion(profile = state.profile) {
   if (!profile) return 0;
   const checks = [profile.company_inn, profile.age, profile.sex, profile.height_cm, profile.weight_kg,
@@ -4476,6 +4873,7 @@ function renderProfileStatus() {
 
 async function openProfile() {
   await loadMemories();
+  await loadHealthPassport();
   const profile = state.profile || {};
   $('#profileChelId').value = profile.chel_id || '';
   $('#profileCompanyInn').value = profile.company_inn || '';
@@ -5375,6 +5773,7 @@ function closeVisibleModal() {
     case 'consultationsModal': closeConsultations(); break;
     case 'bodyMapModal': closeBodyMap(); break;
     case 'healthHistoryModal': closeHealthHistory(); break;
+    case 'healthPassportModal': closeHealthPassportModal(); break;
     case 'profileModal': closeProfileModal(); break;
     case 'labResultsModal': closeLabResults(); break;
     case 'interpretationProfileModal': closeInterpretationProfileModal(); break;
@@ -5506,6 +5905,21 @@ $('#healthHistoryButton').addEventListener('click', () => openHealthHistory());
 $('#profileClose').addEventListener('click', closeProfileModal);
 $('#profileModal').addEventListener('click', event => { if (event.target.id === 'profileModal') closeProfileModal(); });
 $('#saveProfileButton').addEventListener('click', saveProfile);
+$('#profileHealthPassportOpen').addEventListener('click', openHealthPassport);
+$('#profileHealthPassportDownload').addEventListener('click', () => openHealthPassportPdf('download'));
+$('#healthPassportClose').addEventListener('click', closeHealthPassportFromUser);
+$('#healthPassportContent').addEventListener('click', event => {
+  if (event.target.closest('[data-health-passport-generate]')) generateHealthPassport();
+  else if (event.target.closest('[data-health-passport-decline]')) declineHealthPassport();
+  else if (event.target.closest('[data-health-passport-close]')) closeHealthPassportFromUser();
+  else if (event.target.closest('[data-health-passport-view]')) openHealthPassportPdf('view');
+  else if (event.target.closest('[data-health-passport-download]')) openHealthPassportPdf('download');
+  else if (event.target.closest('[data-health-passport-checkups]')) openHealthPassportCheckups();
+  else {
+    const question = event.target.closest('[data-health-passport-question]');
+    if (question) askHealthPassportQuestion(question.dataset.healthPassportQuestion);
+  }
+});
 $('#labResultsClose').addEventListener('click', closeLabResults);
 $('#labResultsModal').addEventListener('click', event => { if (event.target.id === 'labResultsModal') closeLabResults(); });
 $('#interpretationProfileClose').addEventListener('click', closeInterpretationProfileModal);
@@ -5550,7 +5964,51 @@ async function snoozeWeightBodyPrompt(button) {
     addSystemError(error.message);
   }
 }
+async function cancelCheckupPurchaseRequest(button) {
+  const actions = button.closest('.message-checkup-purchase-actions');
+  button.disabled = true;
+  button.textContent = 'Отменяем…';
+  try {
+    const result = await api('/api/checkup-purchase/cancel', {
+      method:'POST', body:JSON.stringify({conversation_id:state.conversationId}),
+    });
+    if (actions) actions.innerHTML = '<small>Заявка менеджеру отменена</small>';
+    updateChatMode(true, 'closed', result.human_ticket_id);
+    if (result.assistant_message) {
+      addMessage(
+        'agent', result.assistant_message.content, 'manager', false,
+        result.assistant_message.created_at,
+        { ...(result.assistant_message.metadata || {}), _message_id:result.assistant_message.id },
+      );
+      state.lastMessageId = Math.max(state.lastMessageId, Number(result.assistant_message.id || 0));
+    }
+    $('#taskStatus').textContent = 'Заявка отменена · ИИ снова отвечает';
+    await loadConversationList();
+    focusChatInput();
+  } catch (error) {
+    button.disabled = false;
+    button.textContent = 'Отменить заявку менеджеру';
+    addSystemError(error.message);
+  }
+}
 function handleLabInterpretClick(event) {
+  const retryButton = event.target.closest('[data-message-retry]');
+  if (retryButton) {
+    const messageRow = retryButton.closest('.message-row.user');
+    const retryPayload = messageRow?._retryPayload;
+    if (retryPayload && !state.processing) {
+      processMessage(retryPayload.text, {
+        existingRow:messageRow,
+        attachments:retryPayload.attachments,
+      });
+    }
+    return;
+  }
+  const checkupPurchaseCancelButton = event.target.closest('[data-checkup-purchase-cancel]');
+  if (checkupPurchaseCancelButton) {
+    cancelCheckupPurchaseRequest(checkupPurchaseCancelButton);
+    return;
+  }
   const mealConfirmButton = event.target.closest('[data-weight-meal-confirm]');
   if (mealConfirmButton) {
     mealConfirmButton.closest('.message-meal-confirmation-actions')?.querySelectorAll('button').forEach(button => { button.disabled = true; });

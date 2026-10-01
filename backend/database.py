@@ -1173,6 +1173,7 @@ def reset_current_user(preserve_identity: bool = False) -> None:
         conn.execute("DELETE FROM body_symptoms WHERE chel_id = ?", (chel_id,))
         conn.execute("DELETE FROM lab_interpretations WHERE chel_id = ?", (chel_id,))
         conn.execute("DELETE FROM lab_result_subscriptions WHERE chel_id = ?", (chel_id,))
+        conn.execute("DELETE FROM health_passports WHERE chel_id = ?", (chel_id,))
         conn.execute("DELETE FROM user_profile WHERE chel_id = ?", (chel_id,))
         conn.execute("DELETE FROM onboarding_state WHERE chel_id = ?", (chel_id,))
         conn.execute("DELETE FROM payment_orders WHERE chel_id = ?", (chel_id,))
@@ -1194,7 +1195,7 @@ def admin_delete_user_data(chel_id: str) -> dict:
     # cascading foreign keys.
     owned_tables = (
         "conversations", "memories", "body_symptoms", "lab_interpretations", "lab_result_subscriptions",
-        "user_result_notification_outbox",
+        "user_result_notification_outbox", "health_passports",
         "user_profile", "onboarding_state", "payment_orders", "user_device_stats", "ai_usage",
         "login_tokens", "auth_intents", "user_sessions", "external_identities",
         "users",
@@ -2579,8 +2580,9 @@ def bind_staff_messenger(
 def enqueue_manager_notifications(
     event_type: str, conversation_id: str, *, message_id: int = 0,
     message_text: str = "", recipient_role: str | None = None,
+    request_kind: str = "",
 ) -> int:
-    if event_type not in {"new_request", "new_message"}:
+    if event_type not in {"new_request", "new_message", "request_cancelled"}:
         raise ValueError("Неизвестный тип уведомления")
     now = utc_now()
     with _write_lock, connection() as conn:
@@ -2597,7 +2599,11 @@ def enqueue_manager_notifications(
         recipient_role = _staff_role(recipient_role or conversation["human_recipient_role"])
         manager_url = f"{settings.public_base_url}/manager?conversation={conversation_id}"
         name = conversation["preferred_name"] or f"Пользователь {conversation['chel_id'][-6:]}"
-        if event_type == "new_request":
+        if event_type == "request_cancelled":
+            title = "Заявка на чекап отменена"
+            body = f"{name} отменил заявку на приобретение чекапа."
+            preference = "notify_new_requests"
+        elif event_type == "new_request":
             if recipient_role == "doctor":
                 if conversation["human_channel"] == "paid_consultation":
                     title = "Оплачена консультация врача"
@@ -2612,11 +2618,18 @@ def enqueue_manager_notifications(
                         f"Обращение {conversation['human_ticket_id'] or conversation_id[:8]}."
                     )
             else:
-                title = "Новое обращение в Консилиуме"
-                body = (
-                    f"{name} просит подключить человека. "
-                    f"Обращение {conversation['human_ticket_id'] or conversation_id[:8]}."
-                )
+                if request_kind == "checkup_purchase":
+                    title = "Пользователь хочет купить чекап"
+                    excerpt = " ".join(str(message_text or "").split())[:240]
+                    body = f"{name} хочет приобрести чекап."
+                    if excerpt:
+                        body += f" Сообщение: «{excerpt}»."
+                else:
+                    title = "Новое обращение в Консилиуме"
+                    body = (
+                        f"{name} просит подключить человека. "
+                        f"Обращение {conversation['human_ticket_id'] or conversation_id[:8]}."
+                    )
             preference = "notify_new_requests"
         else:
             title = "Новое сообщение пользователя"
@@ -2636,6 +2649,7 @@ def enqueue_manager_notifications(
             "conversation_id": conversation_id,
             "ticket_id": conversation["human_ticket_id"] or "",
             "recipient_role": recipient_role,
+            "request_kind": str(request_kind or ""),
         }, ensure_ascii=False)
         for staff in recipients:
             for provider, recipient in (
@@ -2680,9 +2694,13 @@ def claim_manager_notifications(provider: str, limit: int = 20) -> list[dict]:
                 JOIN conversations AS conversation ON conversation.id = outbox.conversation_id
                 WHERE staff.id = outbox.staff_user_id AND staff.is_active = 1
                   AND staff.role = COALESCE(conversation.human_recipient_role, 'manager')
-                  AND COALESCE(conversation.human_status, 'closed') <> 'closed'
+                  AND (
+                    outbox.event_type = 'request_cancelled'
+                    OR COALESCE(conversation.human_status, 'closed') <> 'closed'
+                  )
                   AND (
                     (outbox.event_type = 'new_request' AND staff.notify_new_requests = 1)
+                    OR (outbox.event_type = 'request_cancelled' AND staff.notify_new_requests = 1)
                     OR (outbox.event_type = 'new_message' AND staff.notify_new_messages = 1)
                   )
               )
@@ -4480,6 +4498,18 @@ def init_db() -> None:
                 updated_at TEXT NOT NULL
             );
 
+            CREATE TABLE IF NOT EXISTS health_passports (
+                chel_id TEXT PRIMARY KEY,
+                status TEXT NOT NULL DEFAULT 'offered'
+                    CHECK(status IN ('offered','declined','generating','ready','failed')),
+                content_json TEXT NOT NULL DEFAULT '{}',
+                last_error TEXT NOT NULL DEFAULT '',
+                generated_at TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY(chel_id) REFERENCES users(chel_id) ON DELETE CASCADE
+            );
+
             CREATE TABLE IF NOT EXISTS weight_control_states (
                 conversation_id TEXT PRIMARY KEY,
                 chel_id TEXT NOT NULL,
@@ -5300,6 +5330,7 @@ def init_db() -> None:
         )
         conn.execute("CREATE INDEX IF NOT EXISTS idx_ai_usage_created_at ON ai_usage(created_at)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_ai_usage_model ON ai_usage(model, created_at)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_health_passports_status ON health_passports(status, updated_at)")
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_payment_orders_user "
             "ON payment_orders(chel_id, created_at DESC)"
@@ -7411,6 +7442,70 @@ def confirm_human_chat(
         ).fetchone()
     return (dict(saved) if saved else None), not already_requested
 
+
+def cancel_checkup_purchase_request(conversation_id: str) -> tuple[dict | None, bool]:
+    """Cancel only a user-owned checkup purchase handoff and resume its AI chat."""
+    owner = current_chel_id()
+    now = utc_now()
+    with _write_lock, connection() as conn:
+        conversation = conn.execute(
+            "SELECT * FROM conversations WHERE id = ? AND chel_id = ?",
+            (conversation_id, owner),
+        ).fetchone()
+        if not conversation:
+            return None, False
+        message_rows = conn.execute(
+            """SELECT id, metadata FROM messages
+            WHERE conversation_id = ? AND role = 'assistant' ORDER BY id DESC""",
+            (conversation_id,),
+        ).fetchall()
+        purchase_message = None
+        purchase_metadata = None
+        for row in message_rows:
+            try:
+                metadata = json.loads(row["metadata"] or "{}")
+            except json.JSONDecodeError:
+                metadata = {}
+            if metadata.get("action") == "checkup_purchase_handoff":
+                purchase_message = row
+                purchase_metadata = metadata
+                break
+        if purchase_message is None:
+            raise ValueError("Заявка на приобретение чекапа не найдена")
+        if purchase_metadata.get("checkup_purchase_cancelled"):
+            result = dict(conversation)
+            result["ai_enabled"] = bool(result["ai_enabled"])
+            return result, False
+        if conversation["human_status"] not in {"pending", "connected"}:
+            raise ValueError("Заявка на приобретение чекапа уже закрыта")
+
+        purchase_metadata["checkup_purchase_cancel"] = False
+        purchase_metadata["checkup_purchase_cancelled"] = True
+        conn.execute(
+            "UPDATE messages SET metadata = ? WHERE id = ?",
+            (json.dumps(purchase_metadata, ensure_ascii=False), purchase_message["id"]),
+        )
+        conn.execute(
+            """UPDATE conversations SET ai_enabled = 1, human_status = 'closed',
+            status = 'active', updated_at = ? WHERE id = ? AND chel_id = ?""",
+            (now, conversation_id, owner),
+        )
+        conn.execute(
+            """UPDATE manager_notification_outbox SET status = 'cancelled',
+            lease_token = NULL, leased_at = NULL, next_attempt_at = NULL
+            WHERE conversation_id = ? AND status <> 'sent'""",
+            (conversation_id,),
+        )
+        conn.commit()
+        saved = conn.execute(
+            "SELECT * FROM conversations WHERE id = ? AND chel_id = ?",
+            (conversation_id, owner),
+        ).fetchone()
+    result = dict(saved) if saved else None
+    if result:
+        result["ai_enabled"] = bool(result["ai_enabled"])
+    return result, True
+
 def set_human_channel(conversation_id: str, channel: str, phone: str | None = None) -> dict | None:
     if channel not in {"chat", "call"}:
         raise ValueError("Неизвестный способ связи")
@@ -7655,6 +7750,123 @@ def get_profile() -> dict:
         except json.JSONDecodeError:
             result[key] = []
     return result
+
+
+def health_passport_eligible() -> bool:
+    """A passport is offered only after the full standard questionnaire flow."""
+    onboarding = get_onboarding()
+    profile = get_profile()
+    return bool(
+        onboarding.get("status") == "complete"
+        and onboarding.get("intro_seen")
+        and not onboarding.get("questionnaire_skipped")
+        and profile.get("updated_at")
+    )
+
+
+def get_health_passport() -> dict:
+    with connection() as conn:
+        row = conn.execute(
+            "SELECT * FROM health_passports WHERE chel_id=?",
+            (current_chel_id(),),
+        ).fetchone()
+    eligible = health_passport_eligible()
+    if not row:
+        return {
+            "status": "not_created", "content": {}, "generated_at": None,
+            "updated_at": None, "eligible": eligible, "should_offer": eligible,
+        }
+    result = dict(row)
+    result.pop("chel_id", None)
+    try:
+        content = json.loads(result.pop("content_json") or "{}")
+    except json.JSONDecodeError:
+        content = {}
+    result["content"] = content if isinstance(content, dict) else {}
+    result["eligible"] = eligible
+    result["should_offer"] = bool(
+        eligible and result["status"] in {"offered", "failed"}
+    )
+    return result
+
+
+def decline_health_passport() -> dict:
+    if not health_passport_eligible():
+        raise ValueError("Сначала завершите анкету")
+    now = utc_now()
+    with _write_lock, connection() as conn:
+        conn.execute(
+            """INSERT INTO health_passports
+            (chel_id,status,content_json,last_error,created_at,updated_at)
+            VALUES (?,'declined','{}','',?,?)
+            ON CONFLICT(chel_id) DO UPDATE SET
+              status=CASE WHEN health_passports.status='ready' THEN 'ready' ELSE 'declined' END,
+              last_error='',updated_at=excluded.updated_at""",
+            (current_chel_id(), now, now),
+        )
+        conn.commit()
+    return get_health_passport()
+
+
+def begin_health_passport_generation() -> dict:
+    if not health_passport_eligible():
+        raise ValueError("Сначала завершите анкету")
+    existing = get_health_passport()
+    if existing.get("status") == "ready":
+        return existing
+    now = utc_now()
+    with _write_lock, connection() as conn:
+        conn.execute(
+            """INSERT INTO health_passports
+            (chel_id,status,content_json,last_error,created_at,updated_at)
+            VALUES (?,'generating','{}','',?,?)
+            ON CONFLICT(chel_id) DO UPDATE SET
+              status='generating',last_error='',updated_at=excluded.updated_at""",
+            (current_chel_id(), now, now),
+        )
+        conn.commit()
+    return get_health_passport()
+
+
+def save_health_passport(content: dict) -> dict:
+    if not isinstance(content, dict):
+        raise ValueError("Некорректный формат паспорта")
+    now = utc_now()
+    serialized = json.dumps(content, ensure_ascii=False, separators=(",", ":"))
+    with _write_lock, connection() as conn:
+        conn.execute(
+            """INSERT INTO health_passports
+            (chel_id,status,content_json,last_error,generated_at,created_at,updated_at)
+            VALUES (?,'ready',?,'',?,?,?)
+            ON CONFLICT(chel_id) DO UPDATE SET status='ready',content_json=excluded.content_json,
+              last_error='',generated_at=excluded.generated_at,updated_at=excluded.updated_at""",
+            (current_chel_id(), serialized, now, now, now),
+        )
+        conn.commit()
+    return get_health_passport()
+
+
+def fail_health_passport_generation(error: str) -> dict:
+    now = utc_now()
+    with _write_lock, connection() as conn:
+        conn.execute(
+            """UPDATE health_passports SET status='failed',last_error=?,updated_at=?
+            WHERE chel_id=? AND status='generating'""",
+            (str(error or "")[:500], now, current_chel_id()),
+        )
+        conn.commit()
+    return get_health_passport()
+
+
+def health_passport_ai_context() -> dict:
+    passport = get_health_passport()
+    content = passport.get("content") or {}
+    return {
+        "status": passport.get("status"),
+        "available_in": "Мои данные → Паспорт здоровья",
+        "overview": str(content.get("overview") or "")[:1_000],
+        "questions": list(content.get("questions") or [])[:5],
+    }
 
 
 def save_profile(profile: dict) -> dict:

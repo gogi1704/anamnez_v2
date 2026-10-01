@@ -134,6 +134,9 @@ ALLOWED_EVENTS = {
     "checkup_reoffer_candidate", "checkup_reoffer_sent",
     "checkup_reoffer_messenger_queued", "checkup_reoffer_messenger_delivered",
     "checkup_reoffer_clicked",
+    "health_passport_offer_viewed", "health_passport_generation_requested",
+    "health_passport_generation_started", "health_passport_generated",
+    "health_passport_declined", "health_passport_checkups_opened",
     "api_error", "javascript_error", "performance_measured",
 }
 REGISTRATION_METHODS = {"anonymous", "max", "telegram", "result"}
@@ -148,6 +151,7 @@ ALLOWED_PROPERTIES = {
     "selection_id", "exam_name", "context", "linked_count",
     "experiment_key", "experiment_variant", "funnel_version",
     "reoffer_id", "duration_bucket", "active_seconds", "examination_date", "provider_count",
+    "question_count", "recommended_count",
 }
 
 FUNNEL_BREAKDOWNS = {
@@ -546,6 +550,72 @@ def _metric2_screen_definitions() -> list[dict]:
                 {"id": "install", "label": "Установить приложение", "target_label": "Установка приложения", "legacy": [_metric2_spec("install_clicked", screen="exam_skip_completion")]},
                 {"id": "continue", "label": "Перейти в Консилиум", "target_label": "Переход в сервис", "terminal_outcome": True, "legacy": [_metric2_spec("install_dismissed", screen="exam_skip_completion")]},
                 {"id": "link_messenger", "label": "Привязать мессенджер", "target_label": "Привязка мессенджера", "legacy": [_metric2_spec("messenger_link_modal_viewed", source="exam_skip_completion")]},
+            ],
+        },
+        {
+            "id": "health_passport_offer",
+            "title": "Предложение паспорта здоровья",
+            "stage": "Чат · финальный экран",
+            "kind": "health_passport_offer",
+            "description": "Первое окно в чате после завершённой анкеты и выбора обследований. Предлагает бесплатно сформировать паспорт здоровья.",
+            "parent_id": "completion",
+            "legacy_reach": [_metric2_spec("health_passport_offer_viewed")],
+            "actions": [
+                {
+                    "id": "accept", "label": "Да, получить",
+                    "target": "health_passport_ready",
+                    "legacy": [],
+                },
+                {
+                    "id": "decline", "label": "Не интересно",
+                    "target_label": "Переход в чат", "terminal_outcome": True,
+                    "legacy": [_metric2_spec("health_passport_declined")],
+                },
+            ],
+        },
+        {
+            "id": "health_passport_ready",
+            "title": "Паспорт здоровья сформирован",
+            "stage": "Чат · паспорт здоровья",
+            "kind": "health_passport_ready",
+            "description": "Готовый документ, основные вопросы специалисту и персональные рекомендации по чекапам.",
+            "parent_id": "health_passport_offer",
+            "legacy_reach": [],
+            "actions": [
+                {"id": "view_pdf", "label": "Просмотреть", "interaction": True, "legacy": []},
+                {"id": "download_pdf", "label": "Скачать PDF", "interaction": True, "legacy": []},
+                {
+                    "id": "ask_question", "label": "Задать вопрос специалисту",
+                    "target_label": "Вопрос отправлен в чат", "terminal_outcome": True, "legacy": [],
+                },
+                {
+                    "id": "choose_checkups", "label": "Выбрать чекапы",
+                    "target": "health_passport_checkups", "legacy": [],
+                },
+                {
+                    "id": "close", "label": "Закрыть",
+                    "target_label": "Переход в чат", "terminal_outcome": True, "legacy": [],
+                },
+            ],
+        },
+        {
+            "id": "health_passport_checkups",
+            "title": "Выбор чекапов из паспорта",
+            "stage": "Чат · рекомендованные чекапы",
+            "kind": "health_passport_checkups",
+            "description": "Повторный выбор чекапов с уже отмеченными рекомендациями из паспорта здоровья.",
+            "parent_id": "health_passport_ready",
+            "legacy_reach": [],
+            "actions": [
+                {"id": "select_exam", "label": "Выбрать ещё чекап", "interaction": True, "legacy": []},
+                {
+                    "id": "continue", "label": "Далее",
+                    "target_label": "Переход к оформлению", "terminal_outcome": True, "legacy": [],
+                },
+                {
+                    "id": "close", "label": "Закрыть",
+                    "target_label": "Возврат в чат", "terminal_outcome": True, "legacy": [],
+                },
             ],
         },
     ])
@@ -2367,7 +2437,11 @@ def _metric2_report_uncached(
                 "stopped_users": stopped_users,
                 "stopped_percent_of_screen": round(stopped_users / len(reached) * 100, 1) if reached else 0.0,
                 "stopped_percent_of_start": round(stopped_users / start_users * 100, 1) if start_users else 0.0,
-                "terminal": screen_id in {"completion", "completion_skipped", "result_existing", "result_found", "result_notification"},
+                "terminal": screen_id in {
+                    "completion", "completion_skipped", "health_passport_offer",
+                    "health_passport_ready", "health_passport_checkups",
+                    "result_existing", "result_found", "result_notification",
+                },
                 "incoming_transitions": incoming,
                 "outgoing_transitions": outgoing,
                 "actions": actions,

@@ -17,12 +17,13 @@ from urllib.parse import parse_qs, quote, urlparse
 
 from . import analytics, checkup_reoffers, company_suggestions, database as db, examination_schedule, funnel_monitor, splitter_tracking, weight_reminders
 from .config import BASE_DIR, settings
-from .llm import LLMNotConfigured
+from .health_passport import build_health_passport_pdf
+from .llm import LLMNotConfigured, LLMProviderError
 from .lab_results import LabResultsUnavailable, lookup_lab_results
 from .lab_result_valuation import schedule_estimate as schedule_lab_result_value_estimate
 from . import bitrix_payments, yookassa
 from .orchestrator import orchestrator
-from .onboarding import normalize_examination_selection, public_onboarding
+from .onboarding import gender_incompatible_test_ids, normalize_examination_selection, public_onboarding
 from .prompts import public_agents
 
 
@@ -36,6 +37,72 @@ ALLOWED_STATIC = {
 }
 SERVER_ERROR_LOG = settings.log_path
 MANAGER_SESSION_COOKIE = "consilium_manager_session"
+
+
+def _normalize_health_passport(
+    value: dict, examinations: list[dict] | None = None, profile: dict | None = None,
+) -> dict:
+    """Bound model output before it is persisted or rendered."""
+    if not isinstance(value, dict):
+        raise ValueError("ИИ вернул некорректный паспорт")
+
+    def text(item, limit: int) -> str:
+        return " ".join(str(item or "").split())[:limit]
+
+    metrics = []
+    for item in value.get("metrics") or []:
+        if not isinstance(item, dict):
+            continue
+        label, metric_value = text(item.get("label"), 80), text(item.get("value"), 180)
+        if label and metric_value:
+            metrics.append({"label": label, "value": metric_value, "note": text(item.get("note"), 220)})
+    points = []
+    for item in value.get("attention_points") or []:
+        if not isinstance(item, dict):
+            continue
+        title = text(item.get("title"), 120)
+        if title:
+            points.append({
+                "title": title, "reason": text(item.get("reason"), 420),
+                "action": text(item.get("action"), 320),
+            })
+    available_checkups = {
+        str(item.get("id") or ""): item
+        for item in (examinations or db.list_examinations())
+        if str(item.get("id") or "")
+    }
+    incompatible = set(gender_incompatible_test_ids(profile or {}))
+    recommended_checkups = []
+    seen_checkups = set()
+    for item in value.get("recommended_checkups") or []:
+        if not isinstance(item, dict):
+            continue
+        checkup_id = text(item.get("id"), 80)
+        if (
+            not checkup_id or checkup_id in seen_checkups
+            or checkup_id not in available_checkups or checkup_id in incompatible
+        ):
+            continue
+        seen_checkups.add(checkup_id)
+        recommended_checkups.append({
+            "id": checkup_id,
+            "reason": text(item.get("reason"), 260),
+        })
+        if len(recommended_checkups) == 2:
+            break
+    result = {
+        "overview": text(value.get("overview"), 1_000),
+        "metrics": metrics[:8],
+        "attention_points": points[:5],
+        "protective_factors": [text(item, 260) for item in (value.get("protective_factors") or []) if text(item, 260)][:5],
+        "next_steps": [text(item, 320) for item in (value.get("next_steps") or []) if text(item, 320)][:6],
+        "questions": [text(item, 320) for item in (value.get("questions") or []) if text(item, 320)][:3],
+        "recommended_checkups": recommended_checkups,
+        "disclaimer": text(value.get("disclaimer"), 360),
+    }
+    if not result["overview"] or len(result["questions"]) < 3:
+        raise ValueError("ИИ вернул неполный паспорт. Попробуйте ещё раз")
+    return result
 
 
 def _fulfill_consultation_payment(order: dict | None) -> dict | None:
@@ -571,6 +638,24 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
             })
         if path == "/api/memories":
             return self._json(200, db.list_memories())
+        if path == "/api/health-passport":
+            return self._json(200, db.get_health_passport())
+        if path == "/api/health-passport/pdf":
+            passport = db.get_health_passport()
+            if passport.get("status") != "ready":
+                return self._json(404, {"detail": "Паспорт здоровья ещё не создан"})
+            try:
+                pdf = build_health_passport_pdf(
+                    {**passport.get("content", {}), "generated_at": passport.get("generated_at")},
+                    db.get_profile(),
+                )
+                return self._bytes(
+                    200, pdf, "application/pdf",
+                    disposition="attachment; filename=health-passport.pdf; filename*=UTF-8''%D0%9F%D0%B0%D1%81%D0%BF%D0%BE%D1%80%D1%82-%D0%B7%D0%B4%D0%BE%D1%80%D0%BE%D0%B2%D1%8C%D1%8F.pdf",
+                )
+            except Exception:
+                _record_server_error("Ошибка формирования PDF паспорта здоровья")
+                return self._json(500, {"detail": "Не удалось сформировать PDF. Попробуйте ещё раз"})
         if path == "/api/profile":
             return self._json(200, db.get_profile())
         if path == "/api/body-symptoms":
@@ -1552,6 +1637,42 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                 return self._json(201, db.add_memory(str(payload.get("content", "")), str(payload.get("category", "preference"))))
             except ValueError as exc:
                 return self._json(422, {"detail": str(exc)})
+        if path == "/api/health-passport/decline":
+            try:
+                result = db.decline_health_passport()
+                self._track_analytics("health_passport_declined")
+                return self._json(200, result)
+            except ValueError as exc:
+                return self._json(422, {"detail": str(exc)})
+        if path == "/api/health-passport/generate":
+            existing = db.get_health_passport()
+            if existing.get("status") == "ready":
+                return self._json(200, existing)
+            try:
+                db.begin_health_passport_generation()
+                self._track_analytics("health_passport_generation_started")
+                content = orchestrator.llm.generate_health_passport(
+                    db.get_profile(), db.get_onboarding(),
+                    db.list_body_symptoms(status="active", limit=20),
+                    db.list_examinations(),
+                )
+                profile = db.get_profile()
+                examinations = db.list_examinations()
+                result = db.save_health_passport(_normalize_health_passport(
+                    content, examinations, profile,
+                ))
+                self._track_analytics("health_passport_generated", {
+                    "question_count": len(result.get("content", {}).get("questions", [])),
+                })
+                return self._json(200, result)
+            except (LLMNotConfigured, LLMProviderError, ValueError) as exc:
+                db.fail_health_passport_generation(str(exc))
+                status = 503 if isinstance(exc, (LLMNotConfigured, LLMProviderError)) else 422
+                return self._json(status, {"detail": str(exc)})
+            except Exception as exc:
+                db.fail_health_passport_generation(str(exc))
+                _record_server_error("Ошибка создания паспорта здоровья")
+                return self._json(502, {"detail": "Не удалось создать паспорт здоровья. Попробуйте ещё раз"})
         if path == "/api/profile":
             try:
                 previous_tube = str(db.get_profile().get("tube_number", "")).strip()
@@ -1882,6 +2003,40 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                 return self._set_human_preference(self._read_json())
             except (json.JSONDecodeError, UnicodeDecodeError):
                 return self._json(400, {"detail": "Некорректный JSON"})
+        if path == "/api/checkup-purchase/cancel":
+            try:
+                payload = self._read_json()
+                conversation_id = str(payload.get("conversation_id", "")).strip()
+                conversation, cancelled = db.cancel_checkup_purchase_request(conversation_id)
+                if not conversation:
+                    return self._json(404, {"detail": "Диалог не найден"})
+                message = None
+                if cancelled:
+                    message = db.add_message(
+                        conversation_id, "assistant",
+                        "Заявка менеджеру отменена. ИИ снова отвечает в этом диалоге — можете продолжить общение здесь.",
+                        "manager",
+                        {
+                            "action": "checkup_purchase_cancelled",
+                            "human_ticket_id": conversation.get("human_ticket_id"),
+                        },
+                    )
+                    db.enqueue_manager_notifications(
+                        "request_cancelled", conversation_id,
+                        message_id=message["id"],
+                        request_kind="checkup_purchase_cancelled",
+                    )
+                    self._track_analytics("checkup_purchase_request_cancelled")
+                return self._json(200, {
+                    "conversation_id": conversation_id,
+                    "cancelled": cancelled,
+                    "ai_enabled": True,
+                    "human_status": "closed",
+                    "human_ticket_id": conversation.get("human_ticket_id"),
+                    "assistant_message": message,
+                })
+            except (ValueError, TypeError) as exc:
+                return self._json(422, {"detail": str(exc)})
         if path.startswith("/api/conversations/") and path.endswith("/read"):
             conversation_id = path.removeprefix("/api/conversations/").removesuffix("/read").strip("/")
             result = db.mark_conversation_read(conversation_id)
@@ -1935,7 +2090,10 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                         for item in attachments
                     ],
                 })
-            result = orchestrator.process(payload.get("conversation_id"), message, attachments)
+            result = orchestrator.process(
+                payload.get("conversation_id"), message, attachments,
+                retry=payload.get("retry") is True,
+            )
             response = result.to_dict()
             saved = db.get_conversation(result.conversation_id) or {}
             response["ai_enabled"] = bool(saved.get("ai_enabled", 1))
@@ -2455,6 +2613,20 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
         self._send_pending_user_session_cookie()
         self._send_cleared_user_session_cookie()
         self._send_manager_cookie()
+        self.end_headers()
+        self.wfile.write(body)
+
+    def _bytes(
+        self, status: int, body: bytes, content_type: str, *, disposition: str = "",
+    ) -> None:
+        self.send_response(status)
+        self._send_security_headers()
+        self.send_header("Content-Type", content_type)
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "private, no-store")
+        if disposition:
+            self.send_header("Content-Disposition", disposition)
+        self._send_identity_cookie()
         self.end_headers()
         self.wfile.write(body)
 
