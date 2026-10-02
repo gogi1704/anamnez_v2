@@ -1018,6 +1018,19 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
             db.revoke_staff_session(token)
             self._clear_manager_session = True
             return self._json(200, {"status": "logged_out"})
+        if path == "/api/logout":
+            if self.headers.get("X-Consilium-Action") != "logout":
+                return self._json(403, {"detail": "Подтвердите выход из аккаунта"})
+            db.revoke_user_session(self._user_session_cookie())
+            new_chel_id = f"chel_{secrets.token_hex(16)}"
+            db.ensure_user(new_chel_id, pending=True)
+            db.set_current_chel_id(new_chel_id)
+            self._identity_cookie_required = True
+            self._clear_user_session = True
+            return self._json(200, {
+                "status": "logged_out",
+                "chel_id": new_chel_id,
+            })
         if path == "/api/admin/managers":
             if not self._admin_authorized():
                 return
@@ -2518,6 +2531,15 @@ small{{display:block;color:#82918c;text-align:center;margin-top:18px}}
         except CookieError:
             return ""
         value = cookie.get(MANAGER_SESSION_COOKIE)
+        return value.value if value else ""
+
+    def _user_session_cookie(self) -> str:
+        cookie = SimpleCookie()
+        try:
+            cookie.load(self.headers.get("Cookie", ""))
+        except CookieError:
+            return ""
+        value = cookie.get(settings.session_cookie_name)
         return value.value if value else ""
 
     def _manager_authorized(self) -> dict | None:

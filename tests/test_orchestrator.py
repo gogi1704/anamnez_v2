@@ -3615,6 +3615,30 @@ class OrchestratorTests(unittest.TestCase):
         self.assertIn(".capability-danger-zone", styles)
         self.assertIn(".delete-my-data-modal", styles)
 
+    def test_capabilities_offer_confirmed_current_device_logout(self):
+        project_root = Path(__file__).resolve().parents[1]
+        index = (project_root / "index.html").read_text(encoding="utf-8")
+        script = (project_root / "static" / "app.js").read_text(encoding="utf-8")
+        styles = (project_root / "static" / "styles.css").read_text(encoding="utf-8")
+        main_source = (project_root / "backend" / "main.py").read_text(encoding="utf-8")
+
+        capabilities = index.split('id="capabilitiesModal"', 1)[1].split(
+            'id="installAppModal"', 1,
+        )[0]
+        self.assertIn('id="capabilityLogout"', capabilities)
+        self.assertLess(
+            capabilities.index('id="capabilityLogout"'),
+            capabilities.index('id="capabilityDeleteData"'),
+        )
+        self.assertIn('id="logoutModal"', index)
+        self.assertIn("Вход завершится только на этом устройстве", index)
+        self.assertIn("получите новую ссылку в том же Telegram или MAX", index)
+        self.assertIn("/api/logout", script)
+        self.assertIn("'X-Consilium-Action':'logout'", script)
+        self.assertIn('path == "/api/logout"', main_source)
+        self.assertIn("db.revoke_user_session(self._user_session_cookie())", main_source)
+        self.assertIn(".capability-account-actions", styles)
+
     def test_exam_selection_opens_directly_and_confirms_skipping(self):
         project_root = Path(__file__).resolve().parents[1]
         index = (project_root / "index.html").read_text(encoding="utf-8")
@@ -3711,14 +3735,14 @@ class OrchestratorTests(unittest.TestCase):
         self.assertIn("controllerchange", script)
         self.assertIn("url.pathname.startsWith('/api/')", worker)
         self.assertIn("url.pathname.startsWith('/auth/')", worker)
-        self.assertIn("consilium-shell-v146", worker)
+        self.assertIn("consilium-shell-v147", worker)
         self.assertIn("fetch(request)", worker)
-        self.assertIn("/static/styles.css?v=20261001-health-passport-metric2-v11", index)
+        self.assertIn("/static/styles.css?v=20261002-account-logout-v12", index)
         self.assertIn("/static/rich-text.2bf1f5fab764.css", index)
         self.assertTrue((project_root / "static" / "styles.07ffaefb4795.css").is_file())
         self.assertTrue((project_root / "static" / "rich-text.2bf1f5fab764.css").is_file())
-        self.assertIn("/static/app.js?v=20261001-health-passport-metric2-v11", index)
-        self.assertIn("/static/metrika.js?v=20261001-health-passport-metric2-v11", index)
+        self.assertIn("/static/app.js?v=20261002-account-logout-v12", index)
+        self.assertIn("/static/metrika.js?v=20261002-account-logout-v12", index)
         self.assertIn("Enter — новая строка · отправка — кнопкой", index)
         self.assertIn('enterkeyhint="enter"', index)
         self.assertNotIn("$('#chatForm').requestSubmit()", script)
@@ -3804,7 +3828,7 @@ class OrchestratorTests(unittest.TestCase):
         main = (project_root / "backend" / "main.py").read_text(encoding="utf-8")
         config = (project_root / "backend" / "config.py").read_text(encoding="utf-8")
 
-        self.assertIn('src="/static/metrika.js?v=20261001-health-passport-metric2-v11"', index)
+        self.assertIn('src="/static/metrika.js?v=20261002-account-logout-v12"', index)
         self.assertIn('YANDEX_METRIKA_COUNTER_ID', config)
         self.assertIn('path == "/api/public-config"', main)
         self.assertIn('"metrika.js"', main)
@@ -3971,6 +3995,24 @@ class OrchestratorTests(unittest.TestCase):
         finally:
             db.ensure_user("chel_test_default")
             db.set_current_chel_id("chel_test_default")
+
+    def test_logout_revokes_only_current_device_session(self):
+        first_login = db.create_messenger_login(
+            "max", "max-two-device-user", chat_id="700001",
+        )
+        first_session = db.consume_login_token(first_login["token"])
+        second_login = db.create_messenger_login(
+            "max", "max-two-device-user", chat_id="700002",
+        )
+        second_session = db.consume_login_token(second_login["token"])
+
+        self.assertEqual(first_session["chel_id"], second_session["chel_id"])
+        self.assertTrue(db.revoke_user_session(first_session["session"]))
+        self.assertIsNone(db.get_session_chel_id(first_session["session"]))
+        self.assertEqual(
+            db.get_session_chel_id(second_session["session"]),
+            first_session["chel_id"],
+        )
 
     def test_max_identity_cannot_be_rebound_to_another_user(self):
         first = db.create_max_login(910000001, 55001)

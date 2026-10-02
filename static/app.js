@@ -4385,6 +4385,45 @@ function openDeleteMyDataConfirmation() {
   requestAnimationFrame(() => $('#deleteMyDataCancel').focus());
 }
 
+function openLogoutConfirmation() {
+  const error = $('#logoutError');
+  error.textContent = '';
+  error.classList.add('hidden');
+  $('#logoutConfirm').disabled = false;
+  $('#logoutConfirm').textContent = 'Выйти';
+  $('#capabilitiesModal').classList.add('hidden');
+  $('#logoutModal').classList.remove('hidden');
+  requestAnimationFrame(() => $('#logoutCancel').focus());
+}
+
+function closeLogoutConfirmation() {
+  if ($('#logoutConfirm').disabled) return;
+  $('#logoutModal').classList.add('hidden');
+}
+
+async function logoutCurrentDevice() {
+  const confirmButton = $('#logoutConfirm');
+  const errorBox = $('#logoutError');
+  confirmButton.disabled = true;
+  confirmButton.textContent = 'Выходим…';
+  errorBox.textContent = '';
+  errorBox.classList.add('hidden');
+  try {
+    await api('/api/logout', {
+      method:'POST',
+      headers:{'X-Consilium-Action':'logout'},
+      body:JSON.stringify({confirmation:'logout'}),
+    });
+    await clearLocalUserData();
+    window.location.replace('/');
+  } catch (error) {
+    errorBox.textContent = `Не удалось выйти: ${error.message}`;
+    errorBox.classList.remove('hidden');
+    confirmButton.disabled = false;
+    confirmButton.textContent = 'Выйти';
+  }
+}
+
 function closeDeleteMyDataConfirmation() {
   if ($('#deleteMyDataConfirm').disabled) return;
   $('#deleteMyDataModal').classList.add('hidden');
@@ -5854,6 +5893,13 @@ $('#capabilityLabResults').addEventListener('click', () => { closeCapabilities()
 $('#capabilityBodyMap').addEventListener('click', () => { closeCapabilities(); openBodyMap(); });
 $('#capabilityHealthHistory').addEventListener('click', () => { closeCapabilities(); openHealthHistory(); });
 $('#capabilityExaminations').addEventListener('click', openExaminationsFromCapabilities);
+$('#capabilityLogout').addEventListener('click', openLogoutConfirmation);
+$('#logoutClose').addEventListener('click', closeLogoutConfirmation);
+$('#logoutCancel').addEventListener('click', closeLogoutConfirmation);
+$('#logoutConfirm').addEventListener('click', logoutCurrentDevice);
+$('#logoutModal').addEventListener('click', event => {
+  if (event.target.id === 'logoutModal') closeLogoutConfirmation();
+});
 $('#capabilityDeleteData').addEventListener('click', openDeleteMyDataConfirmation);
 $('#deleteMyDataClose').addEventListener('click', closeDeleteMyDataConfirmation);
 $('#deleteMyDataCancel').addEventListener('click', closeDeleteMyDataConfirmation);

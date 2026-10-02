@@ -17,7 +17,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/static/styles.css?v=20261001-health-passport-metric2-v11">
+  <link rel="stylesheet" href="/static/styles.css?v=20261002-account-logout-v12">
   <link rel="stylesheet" href="/static/rich-text.2bf1f5fab764.css">
 </head>
 <body>
@@ -338,11 +338,32 @@
         <article class="capability-card"><i>☰</i><span><strong>Меню функций</strong><small>Диалоги, мои данные, результаты и связь с человеком</small></span></article>
       </div>
       <div class="capability-danger-zone">
-        <p class="capability-group-title">Управление данными</p>
-        <button class="capability-delete-data" id="capabilityDeleteData" type="button">
-          <i aria-hidden="true">×</i>
-          <span><strong>Удалить мои данные</strong><small>Полностью очистить профиль и начать заново</small></span>
-        </button>
+        <p class="capability-group-title">Управление аккаунтом</p>
+        <div class="capability-account-actions">
+          <button class="capability-logout" id="capabilityLogout" type="button">
+            <i aria-hidden="true">↪</i>
+            <span><strong>Выйти из аккаунта</strong><small>Данные сохранятся, завершится только вход на этом устройстве</small></span>
+          </button>
+          <button class="capability-delete-data" id="capabilityDeleteData" type="button">
+            <i aria-hidden="true">×</i>
+            <span><strong>Удалить мои данные</strong><small>Полностью очистить профиль и начать заново</small></span>
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal-backdrop hidden" id="logoutModal" role="dialog" aria-modal="true" aria-labelledby="logoutTitle" aria-describedby="logoutDescription">
+    <div class="modal delete-my-data-modal logout-modal">
+      <button class="modal-close" id="logoutClose" type="button" aria-label="Закрыть">×</button>
+      <div class="delete-my-data-icon logout-icon" aria-hidden="true">↪</div>
+      <h2 id="logoutTitle">Выйти из аккаунта?</h2>
+      <p id="logoutDescription">Вход завершится только на этом устройстве. Ваш профиль, анкета, диалоги и привязанные мессенджеры сохранятся.</p>
+      <p class="logout-note">Чтобы снова открыть этот аккаунт на любом устройстве, получите новую ссылку в том же Telegram или MAX.</p>
+      <p class="delete-my-data-error hidden" id="logoutError" role="alert"></p>
+      <div class="delete-my-data-actions">
+        <button class="secondary-button" id="logoutCancel" type="button">Остаться</button>
+        <button class="primary-button logout-confirm" id="logoutConfirm" type="button">Выйти</button>
       </div>
     </div>
   </div>
@@ -730,9 +751,9 @@
     </div>
   </div>
 
-  <script src="/static/metrika.js?v=20261001-health-passport-metric2-v11"></script>
-  <script src="/static/agents.js?v=20261001-health-passport-metric2-v11"></script>
+  <script src="/static/metrika.js?v=20261002-account-logout-v12"></script>
+  <script src="/static/agents.js?v=20261002-account-logout-v12"></script>
   <script src="/static/rich-text.js?v=20260929-loose-lists-v1"></script>
-  <script src="/static/app.js?v=20261001-health-passport-metric2-v11"></script>
+  <script src="/static/app.js?v=20261002-account-logout-v12"></script>
 </body>
 </html>

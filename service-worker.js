@@ -1,5 +1,5 @@
-const CACHE_NAME = 'consilium-shell-v146';
-const ASSET_VERSION = '20261001-health-passport-metric2-v11';
+const CACHE_NAME = 'consilium-shell-v147';
+const ASSET_VERSION = '20261002-account-logout-v12';
 const APP_SHELL = [
   '/',
   '/manifest.webmanifest',

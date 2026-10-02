@@ -1497,6 +1497,20 @@ def get_session_chel_id(session_value: str) -> str | None:
     return session["chel_id"]
 
 
+def revoke_user_session(session_value: str) -> bool:
+    """Revoke only the browser session represented by the supplied cookie."""
+    if not session_value:
+        return False
+    with _write_lock, connection() as conn:
+        updated = conn.execute(
+            """UPDATE user_sessions SET revoked_at = ?
+            WHERE session_hash = ? AND revoked_at IS NULL""",
+            (utc_now(), _token_hash(session_value)),
+        )
+        conn.commit()
+    return updated.rowcount == 1
+
+
 def create_linked_user_session(chel_id: str) -> dict:
     """Create a browser session for a user reached through an opaque service link."""
     now = datetime.now(timezone.utc)
