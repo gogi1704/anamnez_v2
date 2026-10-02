@@ -10,6 +10,7 @@ import threading
 import time
 import traceback
 import webbrowser
+from html import escape
 from http.cookies import CookieError, SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -271,7 +272,9 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
         parsed = urlparse(self.path)
         path = parsed.path
         if path in {"/auth/max", "/auth/messenger"}:
-            return self._consume_messenger_login(parse_qs(parsed.query).get("t", [""])[0])
+            return self._show_messenger_login_confirmation(
+                path, parse_qs(parsed.query).get("t", [""])[0],
+            )
         if path == "/api/health":
             return self._json(200, {"status": "ok"})
         if path == "/api/public-config":
@@ -765,6 +768,18 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         path = urlparse(self.path).path
+        if path in {"/auth/max", "/auth/messenger"}:
+            try:
+                length = int(self.headers.get("Content-Length", "0"))
+            except (TypeError, ValueError):
+                length = 0
+            if length <= 0 or length > 4_000:
+                return self._json(400, {"detail": "Некорректное подтверждение входа"})
+            try:
+                payload = parse_qs(self.rfile.read(length).decode("utf-8"))
+            except (UnicodeDecodeError, ValueError):
+                return self._json(400, {"detail": "Некорректное подтверждение входа"})
+            return self._consume_messenger_login(payload.get("t", [""])[0])
         if path == "/api/integrations/ikp/access":
             if not ikp_token_valid(self.headers.get("Authorization", "")):
                 return self._json(401, {"detail": "Неверные данные интеграции ИКП"})
@@ -2253,6 +2268,29 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
             ),
         )
         self.end_headers()
+
+    def _show_messenger_login_confirmation(self, path: str, token: str) -> None:
+        """Do not consume one-time links on GET: messengers may prefetch them."""
+        safe_path = "/auth/max" if path == "/auth/max" else "/auth/messenger"
+        safe_token = escape(str(token or ""), quote=True)
+        if not safe_token:
+            return self._json(400, {
+                "detail": "Ссылка недействительна. Вернитесь в мессенджер и получите новую.",
+            })
+        body = f"""<!doctype html>
+<html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Вход в Консилиум</title><style>
+body{{margin:0;background:#f3f8f5;color:#17231f;font:16px/1.5 Arial,sans-serif;display:grid;min-height:100vh;place-items:center}}
+main{{box-sizing:border-box;width:min(92vw,520px);padding:34px;border:1px solid #d8e5df;border-radius:28px;background:#fff;box-shadow:0 18px 50px #1232}}
+span{{display:inline-grid;width:58px;height:58px;border-radius:18px;background:#e7f5ef;place-items:center;color:#176f57;font-size:30px}}
+h1{{font-size:28px;line-height:1.2;margin:22px 0 12px}}p{{color:#60716b;margin:0 0 24px}}
+button{{width:100%;border:0;border-radius:16px;background:#1f8063;color:#fff;font:700 18px Arial,sans-serif;padding:16px;cursor:pointer}}
+small{{display:block;color:#82918c;text-align:center;margin-top:18px}}
+</style></head><body><main><span>✓</span><h1>Подтвердите вход</h1>
+<p>Нажмите кнопку, чтобы открыть свой аккаунт Консилиума на этом устройстве.</p>
+<form method="post" action="{safe_path}"><input type="hidden" name="t" value="{safe_token}"><button type="submit">Войти в Консилиум</button></form>
+<small>Ссылка одноразовая. Консилиум не получает пароль от мессенджера.</small></main></body></html>"""
+        return self._bytes(200, body.encode("utf-8"), "text/html; charset=utf-8")
 
     def _set_human_preference(self, payload: dict) -> None:
         conversation_id = str(payload.get("conversation_id", "")).strip()

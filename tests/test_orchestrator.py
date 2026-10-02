@@ -4264,6 +4264,40 @@ class OrchestratorTests(unittest.TestCase):
             )
         self.assertNotIn("another-secret", output.call_args.args[0])
 
+    def test_messenger_login_get_requires_user_confirmation_before_consuming_token(self):
+        class FakeHandler:
+            response = None
+
+            def _bytes(self, status, body, content_type):
+                self.response = (status, body.decode("utf-8"), content_type)
+
+        handler = FakeHandler()
+        ConsiliumHandler._show_messenger_login_confirmation(
+            handler, "/auth/messenger", 'fresh-token"><script>',
+        )
+        status, body, content_type = handler.response
+        self.assertEqual(status, 200)
+        self.assertEqual(content_type, "text/html; charset=utf-8")
+        self.assertIn('method="post" action="/auth/messenger"', body)
+        self.assertIn("Войти в Консилиум", body)
+        self.assertNotIn('value="fresh-token"><script>"', body)
+
+    def test_messenger_login_post_consumes_token_after_confirmation(self):
+        encoded = b"t=fresh-login-token"
+
+        class FakeHandler:
+            path = "/auth/messenger"
+            headers = {"Content-Length": str(len(encoded))}
+            rfile = io.BytesIO(encoded)
+            consumed = ""
+
+            def _consume_messenger_login(self, token):
+                self.consumed = token
+
+        handler = FakeHandler()
+        ConsiliumHandler.do_POST(handler)
+        self.assertEqual(handler.consumed, "fresh-login-token")
+
     def test_onboarding_state_and_lifestyle_profile_are_persisted(self):
         appearance = db.save_onboarding(status="questionnaire", font_size="large")
         self.assertEqual(appearance["font_size"], "large")
