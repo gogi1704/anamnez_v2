@@ -5663,6 +5663,17 @@ class OrchestratorTests(unittest.TestCase):
             extracted = "\n".join(page.extract_text() or "" for page in PdfReader(io.BytesIO(pdf)).pages)
             self.assertIn("Паспорт здоровья", extracted)
             self.assertIn("Утомляемость", extracted)
+
+            split_steps = _normalize_health_passport({
+                **content,
+                "next_steps": [
+                    "1. Вести дневник давления. 2. Обсудить показатели с врачом."
+                ],
+            }, db.list_examinations(), db.get_profile())
+            self.assertEqual(
+                split_steps["next_steps"],
+                ["Вести дневник давления.", "Обсудить показатели с врачом."],
+            )
         finally:
             db.reset_current_user()
             db.ensure_user("chel_test_default")

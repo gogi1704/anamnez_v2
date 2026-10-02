@@ -120,13 +120,24 @@ def build_health_passport_pdf(passport: dict, profile: dict) -> bytes:
 
     strengths = passport.get("protective_factors") or []
     if strengths:
-        story.append(Paragraph("Что уже работает в вашу пользу", heading))
-        story.extend(bullet(item) for item in strengths[:5])
+        strength_items = [bullet(item) for item in strengths[:5]]
+        story.append(KeepTogether([
+            Paragraph("Что уже работает в вашу пользу", heading),
+            strength_items[0],
+        ]))
+        story.extend(strength_items[1:])
 
     next_steps = passport.get("next_steps") or []
     if next_steps:
-        story.append(Paragraph("Следующие шаги", heading))
-        story.extend(Paragraph(f"{index}.&nbsp;&nbsp;{escape(str(item))}", body) for index, item in enumerate(next_steps[:6], 1))
+        step_items = [
+            Paragraph(f"{index}.&nbsp;&nbsp;{escape(str(item))}", body)
+            for index, item in enumerate(next_steps[:6], 1)
+        ]
+        story.append(KeepTogether([
+            Paragraph("Следующие шаги", heading),
+            step_items[0],
+        ]))
+        story.extend(step_items[1:])
 
     questions = passport.get("questions") or []
     if questions:

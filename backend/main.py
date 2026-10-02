@@ -91,12 +91,24 @@ def _normalize_health_passport(
         })
         if len(recommended_checkups) == 2:
             break
+    next_steps = []
+    for item in value.get("next_steps") or []:
+        # Some models occasionally put two numbered actions into one array item.
+        # Split those markers so the PDF cannot render consecutive steps inline.
+        for part in re.split(r"\s+(?=\d{1,2}[.)]\s+)", text(item, 1_000)):
+            normalized = re.sub(r"^\d{1,2}[.)]\s+", "", part).strip()
+            if normalized:
+                next_steps.append(text(normalized, 320))
+            if len(next_steps) == 6:
+                break
+        if len(next_steps) == 6:
+            break
     result = {
         "overview": text(value.get("overview"), 1_000),
         "metrics": metrics[:8],
         "attention_points": points[:5],
         "protective_factors": [text(item, 260) for item in (value.get("protective_factors") or []) if text(item, 260)][:5],
-        "next_steps": [text(item, 320) for item in (value.get("next_steps") or []) if text(item, 320)][:6],
+        "next_steps": next_steps,
         "questions": [text(item, 320) for item in (value.get("questions") or []) if text(item, 320)][:3],
         "recommended_checkups": recommended_checkups,
         "disclaimer": text(value.get("disclaimer"), 360),
