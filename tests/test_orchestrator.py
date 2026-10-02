@@ -969,6 +969,10 @@ class OrchestratorTests(unittest.TestCase):
         self.assertFalse(result.human_escalation)
         self.assertRegex(result.human_ticket_id, r"^H-[A-F0-9]{6}$")
         self.assertIn(checkup_name, result.assistant_message["content"])
+        self.assertIn(
+            "сдать чекап сейчас можно только во время медосмотра",
+            result.assistant_message["content"].casefold(),
+        )
         self.assertEqual(result.assistant_message["metadata"]["checkup_names"], [checkup_name])
         self.assertTrue(result.assistant_message["metadata"]["checkup_purchase_cancel"])
         self.assertFalse(fake.route_calls)
@@ -1040,6 +1044,10 @@ class OrchestratorTests(unittest.TestCase):
             {"id", "name", "description", "includes", "price_rub"},
         )
         self.assertIn("checkup_catalog", PROFILES["therapist"].prompt)
+        self.assertIn(
+            "Сдать чекап сейчас можно только во время медосмотра",
+            " ".join(PROFILES["therapist"].prompt.split()),
+        )
 
     def test_checkup_purchase_cancel_button_and_endpoint_are_wired(self):
         project_root = Path(__file__).resolve().parents[1]
