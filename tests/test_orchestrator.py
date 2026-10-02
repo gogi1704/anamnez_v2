@@ -660,10 +660,11 @@ class OrchestratorTests(unittest.TestCase):
             program = db.ensure_weight_control_program(conversation["id"])
             self.assertTrue(program["started_at"])
             today = datetime.now(db.MOSCOW_TZ).date().isoformat()
-            db.create_weight_control_diary_meal(
-                conversation["id"], entry_date=today,
-                description="Овсянка, овощной салат и курица",
-            )
+            for meal_number in range(20):
+                db.create_weight_control_diary_meal(
+                    conversation["id"], entry_date=today,
+                    description=f"Подтверждённый приём пищи {meal_number + 1}",
+                )
             with db.connection() as conn:
                 past = (datetime.now(timezone.utc) - timedelta(minutes=1)).isoformat()
                 conn.execute(
@@ -769,13 +770,19 @@ class OrchestratorTests(unittest.TestCase):
                 conn.commit()
             db.set_current_chel_id("chel_test_default")
 
-    def test_unused_weight_program_does_not_send_completion_notifications(self):
+    def test_weight_program_below_twenty_entries_has_no_analysis_or_notification(self):
         chel_id = "chel_weight_unused_completion"
         db.ensure_user(chel_id)
         db.set_current_chel_id(chel_id)
         try:
             conversation = db.create_or_get_weight_control_conversation()
             db.ensure_weight_control_program(conversation["id"])
+            today = datetime.now(db.MOSCOW_TZ).date().isoformat()
+            for meal_number in range(19):
+                db.create_weight_control_diary_meal(
+                    conversation["id"], entry_date=today,
+                    description=f"Подтверждённый приём пищи {meal_number + 1}",
+                )
             with db.connection() as conn:
                 conn.execute(
                     "UPDATE weight_control_states SET program_ends_at=? WHERE conversation_id=?",
@@ -786,7 +793,10 @@ class OrchestratorTests(unittest.TestCase):
             diary = db.weight_control_diary(conversation["id"])
             self.assertTrue(diary["completed"])
             self.assertFalse(diary["analysis_available"])
-            with self.assertRaisesRegex(ValueError, "хотя бы одна запись"):
+            self.assertEqual(diary["meal_count"], 19)
+            self.assertEqual(diary["analysis_minimum_meals"], 20)
+            self.assertEqual(diary["analysis_missing_meals"], 1)
+            with self.assertRaisesRegex(ValueError, "не менее 20 подтверждённых"):
                 db.begin_weight_control_conclusion(conversation["id"])
         finally:
             with db.connection() as conn:
@@ -1702,7 +1712,8 @@ class OrchestratorTests(unittest.TestCase):
         self.assertIn("отдельный закреплённый диалог «Контроль питания»", manager_prompt)
         self.assertIn("Кнопка с символом весов в шапке этого диалога", manager_prompt)
         self.assertIn("«Параметры тела» с", manager_prompt)
-        self.assertIn("Через 14 дней в дневнике", manager_prompt)
+        self.assertIn("Через 14 дней при наличии не", manager_prompt)
+        self.assertIn("20 подтверждённых записей", manager_prompt)
         self.assertIn("кнопка «Анализ питания»", manager_prompt)
         weight_prompt = inspect.getsource(LLMService.weight_control_turn)
         self.assertIn("говори тепло, доброжелательно и по-человечески", weight_prompt)
@@ -2089,10 +2100,15 @@ class OrchestratorTests(unittest.TestCase):
                 "model": "gpt-5.6-luna",
                 "text": {"format": {"name": "route_decision"}},
             })
+            service._request({
+                "model": "gpt-5.6-luna",
+                "text": {"format": {"name": "health_passport"}},
+            })
         costs = db.admin_ai_costs("all")
-        self.assertEqual(costs["all_time"]["requests"], before + 1)
+        self.assertEqual(costs["all_time"]["requests"], before + 2)
         self.assertTrue(any(item["model"] == "gpt-5.6-luna" for item in costs["by_model"]))
         self.assertTrue(any(item["operation"] == "routing" for item in costs["by_operation"]))
+        self.assertTrue(any(item["operation"] == "health_passport" for item in costs["by_operation"]))
         self.assertTrue(costs["pricing"])
 
     def test_gender_choices_are_limited_to_female_and_male(self):
@@ -3839,14 +3855,14 @@ class OrchestratorTests(unittest.TestCase):
         self.assertIn("controllerchange", script)
         self.assertIn("url.pathname.startsWith('/api/')", worker)
         self.assertIn("url.pathname.startsWith('/auth/')", worker)
-        self.assertIn("consilium-shell-v148", worker)
+        self.assertIn("consilium-shell-v149", worker)
         self.assertIn("fetch(request)", worker)
-        self.assertIn("/static/styles.css?v=20261002-weight-finish-v13", index)
+        self.assertIn("/static/styles.css?v=20261002-weight-analysis-v14", index)
         self.assertIn("/static/rich-text.2bf1f5fab764.css", index)
         self.assertTrue((project_root / "static" / "styles.07ffaefb4795.css").is_file())
         self.assertTrue((project_root / "static" / "rich-text.2bf1f5fab764.css").is_file())
-        self.assertIn("/static/app.js?v=20261002-weight-finish-v13", index)
-        self.assertIn("/static/metrika.js?v=20261002-weight-finish-v13", index)
+        self.assertIn("/static/app.js?v=20261002-weight-analysis-v14", index)
+        self.assertIn("/static/metrika.js?v=20261002-weight-analysis-v14", index)
         self.assertIn("Enter — новая строка · отправка — кнопкой", index)
         self.assertIn('enterkeyhint="enter"', index)
         self.assertNotIn("$('#chatForm').requestSubmit()", script)
@@ -3932,7 +3948,7 @@ class OrchestratorTests(unittest.TestCase):
         main = (project_root / "backend" / "main.py").read_text(encoding="utf-8")
         config = (project_root / "backend" / "config.py").read_text(encoding="utf-8")
 
-        self.assertIn('src="/static/metrika.js?v=20261002-weight-finish-v13"', index)
+        self.assertIn('src="/static/metrika.js?v=20261002-weight-analysis-v14"', index)
         self.assertIn('YANDEX_METRIKA_COUNTER_ID', config)
         self.assertIn('path == "/api/public-config"', main)
         self.assertIn('"metrika.js"', main)

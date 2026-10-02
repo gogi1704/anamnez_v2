@@ -3591,8 +3591,8 @@ function renderWeightDiary(data) {
   $('#weightDiaryNote').textContent = data.conclusion_ready
     ? 'Программа завершена. Итоговое заключение находится в диалоге «Контроль питания».'
     : data.completed && !data.analysis_available
-      ? 'Программа завершена, но для персонального анализа нужна хотя бы одна подтверждённая запись о питании.'
-      : 'Добавляйте каждый приём пищи текстом или фотографией. После 14 дней здесь можно будет получить персональный анализ.';
+      ? `Программа завершена. Анализ станет доступен после ${Number(data.analysis_minimum_meals || 20)} подтверждённых записей о питании. Сейчас: ${Number(data.meal_count || 0)}.`
+      : `Добавляйте каждый приём пищи текстом или фотографией. После 14 дней и при наличии не менее ${Number(data.analysis_minimum_meals || 20)} подтверждённых записей здесь можно будет получить персональный анализ.`;
   if (data.analysis_available) {
     analysisSection.classList.remove('hidden');
     if (data.conclusion_ready) {

@@ -18,6 +18,7 @@ _write_lock = threading.Lock()
 _current_chel_id: ContextVar[str] = ContextVar("current_chel_id", default="chel_test_default")
 MOSCOW_TZ = timezone(timedelta(hours=3), "Europe/Moscow")
 TEST_COMPANY_INN = "123123"
+WEIGHT_ANALYSIS_MIN_CONFIRMED_MEALS = 20
 
 
 def normalize_tube_number(value: object) -> str:
@@ -6672,6 +6673,8 @@ def weight_control_diary(conversation_id: str, *, require_owner: bool = True) ->
             "completed": False,
             "conclusion_ready": False,
             "analysis_available": False,
+            "analysis_minimum_meals": WEIGHT_ANALYSIS_MIN_CONFIRMED_MEALS,
+            "analysis_missing_meals": WEIGHT_ANALYSIS_MIN_CONFIRMED_MEALS,
             "conclusion_status": "idle",
             "conclusion_error": "",
             "days": [],
@@ -6716,7 +6719,13 @@ def weight_control_diary(conversation_id: str, *, require_owner: bool = True) ->
         "remaining_days": max(0, 14 - elapsed_days),
         "completed": completed,
         "conclusion_ready": conclusion_ready,
-        "analysis_available": bool(completed and confirmed_count),
+        "analysis_available": bool(
+            completed and confirmed_count >= WEIGHT_ANALYSIS_MIN_CONFIRMED_MEALS
+        ),
+        "analysis_minimum_meals": WEIGHT_ANALYSIS_MIN_CONFIRMED_MEALS,
+        "analysis_missing_meals": max(
+            0, WEIGHT_ANALYSIS_MIN_CONFIRMED_MEALS - confirmed_count,
+        ),
         "conclusion_status": conclusion_status,
         "conclusion_error": str(state.get("conclusion_error") or ""),
         "days": days,
@@ -6735,12 +6744,15 @@ def queue_due_weight_control_completions(public_url: str, limit: int = 50) -> in
             """SELECT s.conversation_id,s.chel_id FROM weight_control_states s
             WHERE s.program_ends_at IS NOT NULL AND s.program_ends_at<=?
               AND s.completion_notified_at IS NULL
-              AND EXISTS (
-                SELECT 1 FROM weight_control_meals m
+              AND (
+                SELECT COUNT(*) FROM weight_control_meals m
                 WHERE m.conversation_id=s.conversation_id AND m.status='confirmed'
-              )
+              ) >= ?
             ORDER BY s.program_ends_at LIMIT ?""",
-            (now, max(1, min(100, int(limit)))),
+            (
+                now, WEIGHT_ANALYSIS_MIN_CONFIRMED_MEALS,
+                max(1, min(100, int(limit))),
+            ),
         ).fetchall()
         for row in rows:
             cursor = conn.execute(
@@ -6777,8 +6789,11 @@ def begin_weight_control_conclusion(conversation_id: str) -> dict:
     diary = weight_control_diary(conversation_id)
     if not diary.get("completed"):
         raise ValueError("Анализ питания будет доступен после завершения 14 дней")
-    if not diary.get("meal_count"):
-        raise ValueError("Для анализа нужна хотя бы одна запись о питании")
+    if int(diary.get("meal_count") or 0) < WEIGHT_ANALYSIS_MIN_CONFIRMED_MEALS:
+        raise ValueError(
+            "Для анализа нужно не менее "
+            f"{WEIGHT_ANALYSIS_MIN_CONFIRMED_MEALS} подтверждённых записей о питании"
+        )
     now = utc_now()
     with _write_lock, connection() as conn:
         row = conn.execute(

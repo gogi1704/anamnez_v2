@@ -25,7 +25,8 @@ const registrationNames = {
 const operationNames = {
   routing:'Выбор специалиста', agent_response:'Ответ ИИ-агента',
   lab_interpretation:'Расшифровка анализов', council_opinion:'Мнение консилиума',
-  council_summary:'Итог консилиума', other:'Другой запрос',
+  council_summary:'Итог консилиума', health_passport:'Паспорт здоровья',
+  other:'Другой запрос',
 };
 const searchAliases = {
   'завершена':'complete','завершено':'complete','анкета':'questionnaire',

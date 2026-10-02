@@ -41,6 +41,8 @@ def operation_from_payload(payload: dict) -> str:
         return "council_opinion"
     if format_name == "agent_result":
         return "agent_response"
+    if format_name == "health_passport":
+        return "health_passport"
     instructions = str(payload.get("instructions", "")).casefold()
     if "ведущий консилиума" in instructions:
         return "council_summary"
