@@ -566,17 +566,23 @@ Input contract: Вход — JSON runtime_context. latest_user_message и histor
         safe_profile = {
             key: value for key, value in profile.items()
             if key not in {"chel_id", "company_inn", "tube_number", "tube_linked_at"}
+            and value not in (None, "", [], {})
         }
+        compact = lambda value, limit=220: re.sub(
+            r"\s+", " ", str(value or "").strip(),
+        )[:limit]
         selected_ids = set(onboarding.get("selected_tests") or [])
         selected_examinations = [
-            {"id": item.get("id"), "name": item.get("name"), "description": item.get("description", "")}
+            {
+                "id": item.get("id"), "name": compact(item.get("name"), 100),
+                "description": compact(item.get("description")),
+            }
             for item in examinations if item.get("id") in selected_ids
         ]
         available_examinations = [
             {
-                "id": item.get("id"), "name": item.get("name"),
-                "description": item.get("description", ""),
-                "includes": item.get("includes", ""),
+                "id": item.get("id"), "name": compact(item.get("name"), 100),
+                "description": compact(item.get("description")),
             }
             for item in examinations
         ]
@@ -588,14 +594,15 @@ Input contract: Вход — JSON runtime_context. latest_user_message и histor
                     "region": item.get("region"), "symptom_type": item.get("symptom_type"),
                     "intensity": item.get("intensity"), "duration": item.get("duration"),
                 }
-                for item in body_symptoms[:20]
+                for item in body_symptoms[:12]
             ],
             "selected_examinations": selected_examinations,
             "available_examinations": available_examinations,
         }
         response = self._request({
-            "model": settings.specialist_model,
-            "reasoning": {"effort": "medium"},
+            "model": settings.health_passport_model,
+            "reasoning": {"effort": "low"},
+            "max_output_tokens": 3000,
             "store": False,
             "instructions": """Ты составляешь персональный «Паспорт здоровья» только по данным заполненной анкеты пользователя.
 
@@ -615,7 +622,7 @@ Input contract: Вход — JSON runtime_context. latest_user_message и histor
 - disclaimer: одна короткая фраза о том, что паспорт основан на анкете, не является диагнозом и не заменяет консультацию врача.
 
 Верни только данные по заданной JSON-схеме.""",
-            "input": json.dumps(runtime, ensure_ascii=False, indent=2),
+            "input": json.dumps(runtime, ensure_ascii=False, separators=(",", ":")),
             "text": {
                 "format": {
                     "type": "json_schema", "name": "health_passport",

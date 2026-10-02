@@ -34,6 +34,11 @@ class Settings:
     openai_api_key: str = os.getenv("OPENAI_API_KEY", "")
     orchestrator_model: str = os.getenv("ORCHESTRATOR_MODEL", "gpt-5.6-luna")
     specialist_model: str = os.getenv("SPECIALIST_MODEL", "gpt-5.6-sol")
+    # A passport is a short structured summary, so it does not need the more
+    # expensive specialist model used for free-form medical answers.
+    health_passport_model: str = os.getenv(
+        "HEALTH_PASSPORT_MODEL", "gpt-5.6-luna",
+    )
     database_path: Path = Path(os.getenv("DATABASE_PATH", BASE_DIR / "data" / "consilium.db"))
     analytics_database_path: Path = Path(os.getenv(
         "ANALYTICS_DATABASE_PATH", BASE_DIR / "data" / "analytics.db",

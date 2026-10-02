@@ -5668,6 +5668,56 @@ class OrchestratorTests(unittest.TestCase):
             db.ensure_user("chel_test_default")
             db.set_current_chel_id("chel_test_default")
 
+    def test_health_passport_uses_low_cost_bounded_request(self):
+        service = LLMService()
+        generated = {
+            "overview": "Краткое резюме.",
+            "metrics": [], "attention_points": [], "protective_factors": [],
+            "next_steps": [],
+            "questions": ["Вопрос 1?", "Вопрос 2?", "Вопрос 3?"],
+            "recommended_checkups": [],
+            "disclaimer": "Не является диагнозом.",
+        }
+        response = {
+            "output": [{
+                "type": "message",
+                "content": [{
+                    "type": "output_text",
+                    "text": json.dumps(generated, ensure_ascii=False),
+                }],
+            }],
+        }
+        examinations = [{
+            "id": "heart", "name": "Здоровье сердца",
+            "description": "Очень подробное описание " * 30,
+            "includes": "Не должно передаваться " * 30,
+        }]
+        symptoms = [{"region": f"region-{index}"} for index in range(15)]
+        with (
+            patch(
+                "backend.llm.settings",
+                SimpleNamespace(health_passport_model="gpt-5.6-luna"),
+            ),
+            patch.object(service, "_request", return_value=response) as request,
+        ):
+            result = service.generate_health_passport(
+                {"age": 40, "notes": "", "conditions": []},
+                {"selected_tests": []}, symptoms, examinations,
+            )
+
+        self.assertEqual(result["overview"], "Краткое резюме.")
+        payload = request.call_args.args[0]
+        self.assertEqual(payload["model"], "gpt-5.6-luna")
+        self.assertEqual(payload["reasoning"], {"effort": "low"})
+        self.assertEqual(payload["max_output_tokens"], 3000)
+        runtime = json.loads(payload["input"])
+        self.assertEqual(runtime["questionnaire"], {"age": 40})
+        self.assertEqual(len(runtime["body_symptoms"]), 12)
+        self.assertNotIn("includes", runtime["available_examinations"][0])
+        self.assertLessEqual(
+            len(runtime["available_examinations"][0]["description"]), 220,
+        )
+
     def test_health_passport_ui_and_agent_guide_are_wired(self):
         project_root = Path(__file__).resolve().parents[1]
         index = (project_root / "index.html").read_text(encoding="utf-8")
