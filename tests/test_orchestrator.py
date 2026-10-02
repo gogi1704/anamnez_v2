@@ -1619,12 +1619,26 @@ class OrchestratorTests(unittest.TestCase):
         self.assertIn("Установить приложение", manager_prompt)
         self.assertIn("ярлыке, рабочем столе", ORCHESTRATOR_PROMPT)
         self.assertIn("отдельный закреплённый диалог «Контроль питания»", manager_prompt)
-        self.assertIn("пункт «Контроль веса» показывает дни", manager_prompt)
+        self.assertIn("Кнопка с символом весов в шапке этого диалога", manager_prompt)
+        self.assertIn("«Параметры тела» с", manager_prompt)
         self.assertIn("Через 14 дней сервис", manager_prompt)
         weight_prompt = inspect.getsource(LLMService.weight_control_turn)
         self.assertIn("говори тепло, доброжелательно и по-человечески", weight_prompt)
         self.assertIn("без стыда, давления", weight_prompt)
         self.assertIn("body_measurements", weight_prompt)
+
+    def test_all_agents_can_explain_and_reasonably_recommend_weight_control(self):
+        for profile in PROFILES.values():
+            with self.subTest(profile=profile.id):
+                prompt = " ".join(profile.prompt.split())
+                self.assertIn("«Новый диалог» → «Контроль питания»", prompt)
+                self.assertIn("кнопка с символом весов", prompt)
+                self.assertIn("«Контроль веса»", prompt)
+                self.assertIn("«Время питания»", prompt)
+                self.assertIn("«Параметры тела»", prompt)
+                self.assertIn("14 дней", prompt)
+                self.assertIn("Обоснованно предложи чат", prompt)
+                self.assertIn("Не предлагай чат механически", prompt)
 
     def test_agents_can_explain_messenger_linking_with_current_status(self):
         manager_prompt = PROFILES["manager"].prompt
