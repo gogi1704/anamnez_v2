@@ -2596,7 +2596,10 @@ def enqueue_manager_notifications(
     message_text: str = "", recipient_role: str | None = None,
     request_kind: str = "",
 ) -> int:
-    if event_type not in {"new_request", "new_message", "request_cancelled"}:
+    if event_type not in {
+        "new_request", "new_message", "request_cancelled",
+        "weight_program_completed",
+    }:
         raise ValueError("Неизвестный тип уведомления")
     now = utc_now()
     with _write_lock, connection() as conn:
@@ -2613,7 +2616,14 @@ def enqueue_manager_notifications(
         recipient_role = _staff_role(recipient_role or conversation["human_recipient_role"])
         manager_url = f"{settings.public_base_url}/manager?conversation={conversation_id}"
         name = conversation["preferred_name"] or f"Пользователь {conversation['chel_id'][-6:]}"
-        if event_type == "request_cancelled":
+        if event_type == "weight_program_completed":
+            title = "Завершён марафон контроля питания"
+            body = (
+                f"{name} завершил 14-дневный марафон. "
+                "Откройте чат, чтобы увидеть дневник и дальнейшее общение."
+            )
+            preference = "notify_new_requests"
+        elif event_type == "request_cancelled":
             title = "Заявка на чекап отменена"
             body = f"{name} отменил заявку на приобретение чекапа."
             preference = "notify_new_requests"
@@ -2659,7 +2669,12 @@ def enqueue_manager_notifications(
         payload = json.dumps({
             "title": title, "body": body, "manager_url": manager_url,
             "action_url": manager_url,
-            "action_label": "Открыть чат пользователя" if recipient_role == "doctor" else "Открыть диалог",
+            "action_label": (
+                "Открыть чат"
+                if event_type == "weight_program_completed"
+                else "Открыть чат пользователя" if recipient_role == "doctor"
+                else "Открыть диалог"
+            ),
             "conversation_id": conversation_id,
             "ticket_id": conversation["human_ticket_id"] or "",
             "recipient_role": recipient_role,
@@ -2709,12 +2724,13 @@ def claim_manager_notifications(provider: str, limit: int = 20) -> list[dict]:
                 WHERE staff.id = outbox.staff_user_id AND staff.is_active = 1
                   AND staff.role = COALESCE(conversation.human_recipient_role, 'manager')
                   AND (
-                    outbox.event_type = 'request_cancelled'
+                    outbox.event_type IN ('request_cancelled','weight_program_completed')
                     OR COALESCE(conversation.human_status, 'closed') <> 'closed'
                   )
                   AND (
                     (outbox.event_type = 'new_request' AND staff.notify_new_requests = 1)
                     OR (outbox.event_type = 'request_cancelled' AND staff.notify_new_requests = 1)
+                    OR (outbox.event_type = 'weight_program_completed' AND staff.notify_new_requests = 1)
                     OR (outbox.event_type = 'new_message' AND staff.notify_new_messages = 1)
                   )
               )
@@ -4537,6 +4553,9 @@ def init_db() -> None:
                 onboarding_shown_at TEXT,
                 messenger_prompt_last_shown_on TEXT,
                 messenger_prompt_dismissed_at TEXT,
+                completion_notified_at TEXT,
+                conclusion_status TEXT NOT NULL DEFAULT 'idle',
+                conclusion_error TEXT NOT NULL DEFAULT '',
                 conclusion_message_id INTEGER,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
@@ -5125,6 +5144,9 @@ def init_db() -> None:
             ("onboarding_shown_at", "TEXT"),
             ("messenger_prompt_last_shown_on", "TEXT"),
             ("messenger_prompt_dismissed_at", "TEXT"),
+            ("completion_notified_at", "TEXT"),
+            ("conclusion_status", "TEXT NOT NULL DEFAULT 'idle'"),
+            ("conclusion_error", "TEXT NOT NULL DEFAULT ''"),
             ("conclusion_message_id", "INTEGER"),
         ):
             if name not in weight_state_columns:
@@ -6649,6 +6671,9 @@ def weight_control_diary(conversation_id: str, *, require_owner: bool = True) ->
             "remaining_days": 14,
             "completed": False,
             "conclusion_ready": False,
+            "analysis_available": False,
+            "conclusion_status": "idle",
+            "conclusion_error": "",
             "days": [],
             "meal_count": 0,
         }
@@ -6676,6 +6701,12 @@ def weight_control_diary(conversation_id: str, *, require_owner: bool = True) ->
             "meals": by_date.get(day_date.isoformat(), []),
         })
     elapsed_days = max(1, min(14, (today - started.date()).days + 1))
+    confirmed_count = len([row for row in meals if row["status"] == "confirmed"])
+    completed = datetime.now(timezone.utc) >= datetime.fromisoformat(ends_raw)
+    conclusion_ready = bool(state.get("conclusion_message_id"))
+    conclusion_status = "ready" if conclusion_ready else str(
+        state.get("conclusion_status") or "idle"
+    )
     return {
         "conversation_id": conversation_id,
         "program_started": True,
@@ -6683,23 +6714,110 @@ def weight_control_diary(conversation_id: str, *, require_owner: bool = True) ->
         "ends_at": ends_raw,
         "elapsed_days": elapsed_days,
         "remaining_days": max(0, 14 - elapsed_days),
-        "completed": datetime.now(timezone.utc) >= datetime.fromisoformat(ends_raw),
-        "conclusion_ready": bool(state.get("conclusion_message_id")),
+        "completed": completed,
+        "conclusion_ready": conclusion_ready,
+        "analysis_available": bool(completed and confirmed_count),
+        "conclusion_status": conclusion_status,
+        "conclusion_error": str(state.get("conclusion_error") or ""),
         "days": days,
-        "meal_count": len([row for row in meals if row["status"] == "confirmed"]),
+        "meal_count": confirmed_count,
     }
 
 
-def due_weight_control_conclusions(limit: int = 10) -> list[dict]:
-    with connection() as conn:
+def queue_due_weight_control_completions(public_url: str, limit: int = 50) -> int:
+    """Queue one completion notice when a used fourteen-day diary ends."""
+    now_dt = datetime.now(timezone.utc)
+    now = now_dt.isoformat()
+    local_time = now_dt.astimezone(MOSCOW_TZ).strftime("%H:%M")
+    queued: list[str] = []
+    with _write_lock, connection() as conn:
         rows = conn.execute(
-            """SELECT conversation_id,chel_id FROM weight_control_states
-            WHERE program_ends_at IS NOT NULL AND program_ends_at<=?
-              AND conclusion_message_id IS NULL
-            ORDER BY program_ends_at LIMIT ?""",
-            (utc_now(), max(1, min(50, int(limit)))),
+            """SELECT s.conversation_id,s.chel_id FROM weight_control_states s
+            WHERE s.program_ends_at IS NOT NULL AND s.program_ends_at<=?
+              AND s.completion_notified_at IS NULL
+              AND EXISTS (
+                SELECT 1 FROM weight_control_meals m
+                WHERE m.conversation_id=s.conversation_id AND m.status='confirmed'
+              )
+            ORDER BY s.program_ends_at LIMIT ?""",
+            (now, max(1, min(100, int(limit)))),
         ).fetchall()
-    return [dict(row) for row in rows]
+        for row in rows:
+            cursor = conn.execute(
+                """UPDATE weight_control_states SET completion_notified_at=?,updated_at=?
+                WHERE conversation_id=? AND completion_notified_at IS NULL""",
+                (now, now, row["conversation_id"]),
+            )
+            if not cursor.rowcount:
+                continue
+            conn.execute(
+                """INSERT INTO weight_control_reminders
+                (conversation_id,chel_id,reminder_type,title,message,time_local,
+                 weekdays,timezone,interval_days,one_off,enabled,next_run_at,
+                 created_at,updated_at)
+                VALUES (?,?,'program_complete',?,?,?,?,?,0,1,1,?,?,?)""",
+                (
+                    row["conversation_id"], row["chel_id"],
+                    "14-дневный марафон завершён",
+                    "Поздравляем! Получите персональный анализ питания и рекомендации по вашему дневнику.",
+                    local_time, "[]", "Europe/Moscow", now, now, now,
+                ),
+            )
+            queued.append(str(row["conversation_id"]))
+        conn.commit()
+    for conversation_id in queued:
+        enqueue_manager_notifications(
+            "weight_program_completed", conversation_id, recipient_role="manager",
+        )
+    return len(queued)
+
+
+def begin_weight_control_conclusion(conversation_id: str) -> dict:
+    """Reserve user-triggered conclusion generation and prevent duplicate requests."""
+    diary = weight_control_diary(conversation_id)
+    if not diary.get("completed"):
+        raise ValueError("Анализ питания будет доступен после завершения 14 дней")
+    if not diary.get("meal_count"):
+        raise ValueError("Для анализа нужна хотя бы одна запись о питании")
+    now = utc_now()
+    with _write_lock, connection() as conn:
+        row = conn.execute(
+            """SELECT conclusion_status,conclusion_message_id,updated_at
+            FROM weight_control_states WHERE conversation_id=? AND chel_id=?""",
+            (conversation_id, current_chel_id()),
+        ).fetchone()
+        if not row:
+            raise ValueError("Дневник питания не найден")
+        if row["conclusion_message_id"]:
+            return {"status": "ready", "message_id": int(row["conclusion_message_id"])}
+        if row["conclusion_status"] == "generating":
+            try:
+                still_running = datetime.fromisoformat(str(row["updated_at"])) > (
+                    datetime.now(timezone.utc) - timedelta(minutes=15)
+                )
+            except (TypeError, ValueError):
+                still_running = False
+            if still_running:
+                return {"status": "generating", "message_id": None}
+        conn.execute(
+            """UPDATE weight_control_states
+            SET conclusion_status='generating',conclusion_error='',updated_at=?
+            WHERE conversation_id=? AND chel_id=?""",
+            (now, conversation_id, current_chel_id()),
+        )
+        conn.commit()
+    return {"status": "started", "message_id": None}
+
+
+def fail_weight_control_conclusion(conversation_id: str, error: str) -> None:
+    with _write_lock, connection() as conn:
+        conn.execute(
+            """UPDATE weight_control_states
+            SET conclusion_status='failed',conclusion_error=?,updated_at=?
+            WHERE conversation_id=? AND chel_id=? AND conclusion_message_id IS NULL""",
+            (str(error or "")[:500], utc_now(), conversation_id, current_chel_id()),
+        )
+        conn.commit()
 
 
 def complete_weight_control_conclusion(conversation_id: str, content: str) -> dict | None:
@@ -6727,7 +6845,8 @@ def complete_weight_control_conclusion(conversation_id: str, content: str) -> di
         )
         message_id = int(cursor.lastrowid)
         conn.execute(
-            """UPDATE weight_control_states SET conclusion_message_id=?,updated_at=?
+            """UPDATE weight_control_states SET conclusion_message_id=?,
+            conclusion_status='ready',conclusion_error='',updated_at=?
             WHERE conversation_id=?""",
             (message_id, now, conversation_id),
         )
@@ -6786,6 +6905,7 @@ def list_weight_control_reminders(conversation_id: str) -> dict:
         rows = conn.execute(
             """SELECT * FROM weight_control_reminders
             WHERE conversation_id=? AND chel_id=?
+              AND reminder_type<>'program_complete'
               AND (one_off=0 OR enabled=1)
             ORDER BY enabled DESC,time_local,id""",
             (conversation_id, current_chel_id()),
@@ -7071,7 +7191,11 @@ def dispatch_due_weight_control_reminders(public_url: str) -> int:
             )
             if cursor.rowcount:
                 run_id = int(cursor.lastrowid)
-                content = f"⏰ **{row['title']}**\n\n{row['message']}"
+                program_complete = row["reminder_type"] == "program_complete"
+                content = (
+                    f"🎉 **{row['title']}**\n\n{row['message']}"
+                    if program_complete else f"⏰ **{row['title']}**\n\n{row['message']}"
+                )
                 identities = conn.execute(
                     """SELECT provider,provider_user_id,chat_id FROM external_identities
                     WHERE chel_id=? AND access_status='active' AND provider IN ('telegram','max')""",
@@ -7092,9 +7216,17 @@ def dispatch_due_weight_control_reminders(public_url: str) -> int:
                     and str(prompt_state["messenger_prompt_last_shown_on"] or "") != today_moscow
                 )
                 message_metadata = {
-                    "action": "weight_reminder", "reminder_id": int(row["id"]),
+                    "action": (
+                        "weight_program_completed" if program_complete else "weight_reminder"
+                    ),
+                    "reminder_id": int(row["id"]),
                     "reminder_type": row["reminder_type"],
                 }
+                if program_complete:
+                    message_metadata.update({
+                        "weight_diary_open": True,
+                        "action_label": "Открыть дневник и получить анализ",
+                    })
                 if row["reminder_type"] in {"body_measurement", "body_prompt_once"}:
                     message_metadata.update({
                         "weight_body_prompt": True,
@@ -7133,13 +7265,20 @@ def dispatch_due_weight_control_reminders(public_url: str) -> int:
                 )
                 conversation_url = (
                     f"{str(public_url or '').rstrip('/')}/?conversation={row['conversation_id']}"
+                    + ("&weight_diary=1" if program_complete else "")
                 )
                 payload = {
-                    "title": f"Напоминание: {row['title']}", "body": row["message"],
-                    "kind": "weight_control_reminder",
+                    "title": row["title"] if program_complete else f"Напоминание: {row['title']}",
+                    "body": row["message"],
+                    "kind": (
+                        "weight_program_completed" if program_complete
+                        else "weight_control_reminder"
+                    ),
                     "conversation_id": row["conversation_id"],
                     "action_url": conversation_url,
-                    "action_label": "Открыть чат",
+                    "action_label": (
+                        "Получить анализ питания" if program_complete else "Открыть чат"
+                    ),
                 }
                 for identity in identities:
                     recipient = _external_identity_recipient(identity)

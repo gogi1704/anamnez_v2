@@ -1511,6 +1511,20 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                 return self._json(201, entry)
             except (ValueError, TypeError, json.JSONDecodeError, UnicodeDecodeError) as exc:
                 return self._json(422, {"detail": str(exc)})
+        if path == "/api/weight-control/conclusion":
+            try:
+                payload = self._read_json(max_bytes=2_000)
+                result = weight_reminders.generate_conclusion_now(
+                    str(payload.get("conversation_id", "")),
+                )
+                return self._json(202 if result.get("status") == "generating" else 200, result)
+            except ValueError as exc:
+                return self._json(422, {"detail": str(exc)})
+            except (LLMNotConfigured, LLMProviderError) as exc:
+                return self._json(502, {"detail": str(exc)})
+            except Exception as exc:
+                _record_server_error(f"weight-control-conclusion: {exc}")
+                return self._json(500, {"detail": "Не удалось подготовить анализ питания"})
         if path == "/api/weight-control/body-measurements":
             try:
                 payload = self._read_json(max_bytes=5_000)

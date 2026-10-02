@@ -460,7 +460,7 @@ class OrchestratorTests(unittest.TestCase):
             self.assertIn("**«Контроль веса»**", response.assistant_message["content"])
             self.assertIn("**«Время питания»**", response.assistant_message["content"])
             self.assertIn("**«Параметры тела»**", response.assistant_message["content"])
-            self.assertIn("**итоговое заключение**", response.assistant_message["content"])
+            self.assertIn("**«Анализ питания»**", response.assistant_message["content"])
             self.assertEqual(saved["stage"], "analysis")
             self.assertTrue(db.weight_control_diary(first["id"])["program_started"])
             self.assertIn("недостаток сна", saved["analysis"]["factors"])
@@ -643,19 +643,38 @@ class OrchestratorTests(unittest.TestCase):
                 conn.commit()
             db.set_current_chel_id("chel_test_default")
 
-    def test_weight_control_conclusion_is_created_after_fourteen_days(self):
+    def test_weight_control_completion_notifies_and_analysis_requires_user_click(self):
         chel_id = "chel_weight_conclusion_test"
+        manager = db.admin_create_staff(
+            "Менеджер марафона", "weight.finish.manager", "123456",
+            notify_new_requests=True,
+        )
+        manager_token = db.create_staff_messenger_token(manager["id"], "telegram")
+        db.bind_staff_messenger(
+            manager_token["token"], "telegram", "881122", "881122",
+        )
         db.ensure_user(chel_id)
         db.set_current_chel_id(chel_id)
         try:
             conversation = db.create_or_get_weight_control_conversation()
             program = db.ensure_weight_control_program(conversation["id"])
             self.assertTrue(program["started_at"])
+            today = datetime.now(db.MOSCOW_TZ).date().isoformat()
+            db.create_weight_control_diary_meal(
+                conversation["id"], entry_date=today,
+                description="Овсянка, овощной салат и курица",
+            )
             with db.connection() as conn:
                 past = (datetime.now(timezone.utc) - timedelta(minutes=1)).isoformat()
                 conn.execute(
                     "UPDATE weight_control_states SET program_ends_at=? WHERE conversation_id=?",
                     (past, conversation["id"]),
+                )
+                conn.execute(
+                    """INSERT INTO external_identities
+                    (provider,provider_user_id,chat_id,chel_id,access_status,created_at,last_login_at)
+                    VALUES ('telegram','771155','771155',?,'active',?,?)""",
+                    (chel_id, db.utc_now(), db.utc_now()),
                 )
                 conn.commit()
 
@@ -666,20 +685,44 @@ class OrchestratorTests(unittest.TestCase):
                 return_value=conclusion,
             ) as generate:
                 self.assertEqual(weight_reminders.dispatch_due_conclusions(), 1)
+                self.assertEqual(weight_reminders.dispatch_due_conclusions(), 0)
+                generate.assert_not_called()
+                self.assertEqual(
+                    db.dispatch_due_weight_control_reminders("https://example.test"), 1,
+                )
+                result = weight_reminders.generate_conclusion_now(conversation["id"])
 
             generate.assert_called_once()
+            self.assertEqual(result["status"], "ready")
             messages = db.list_messages(conversation["id"])
             self.assertEqual(messages[-1]["content"], conclusion)
             self.assertEqual(
                 messages[-1]["metadata"]["action"], "weight_program_conclusion",
             )
             self.assertTrue(db.weight_control_diary(conversation["id"])["conclusion_ready"])
-            self.assertEqual(weight_reminders.dispatch_due_conclusions(), 0)
+            user_notice = next(
+                item for item in db.claim_weight_reminder_notifications("telegram")
+                if item["payload"].get("kind") == "weight_program_completed"
+            )
+            self.assertEqual(user_notice["recipient_id"], "771155")
+            self.assertEqual(user_notice["payload"]["action_label"], "Получить анализ питания")
+            self.assertIn(
+                f"conversation={conversation['id']}&weight_diary=1",
+                user_notice["payload"]["action_url"],
+            )
+            manager_notice = next(
+                item for item in db.claim_manager_notifications("telegram")
+                if item["conversation_id"] == conversation["id"]
+            )
+            self.assertEqual(manager_notice["event_type"], "weight_program_completed")
+            self.assertEqual(manager_notice["recipient_id"], "881122")
+            self.assertIn("manager?conversation=", manager_notice["payload"]["action_url"])
         finally:
             with db.connection() as conn:
                 conn.execute("DELETE FROM users WHERE chel_id=?", (chel_id,))
                 conn.commit()
             db.set_current_chel_id("chel_test_default")
+            db.admin_delete_staff(manager["id"])
 
     def test_weight_diary_allows_past_entries_but_rejects_future_days(self):
         chel_id = "chel_weight_manual_diary_test"
@@ -725,6 +768,44 @@ class OrchestratorTests(unittest.TestCase):
                 conn.execute("DELETE FROM users WHERE chel_id=?", (chel_id,))
                 conn.commit()
             db.set_current_chel_id("chel_test_default")
+
+    def test_unused_weight_program_does_not_send_completion_notifications(self):
+        chel_id = "chel_weight_unused_completion"
+        db.ensure_user(chel_id)
+        db.set_current_chel_id(chel_id)
+        try:
+            conversation = db.create_or_get_weight_control_conversation()
+            db.ensure_weight_control_program(conversation["id"])
+            with db.connection() as conn:
+                conn.execute(
+                    "UPDATE weight_control_states SET program_ends_at=? WHERE conversation_id=?",
+                    ((datetime.now(timezone.utc) - timedelta(minutes=1)).isoformat(), conversation["id"]),
+                )
+                conn.commit()
+            self.assertEqual(db.queue_due_weight_control_completions("https://example.test"), 0)
+            diary = db.weight_control_diary(conversation["id"])
+            self.assertTrue(diary["completed"])
+            self.assertFalse(diary["analysis_available"])
+            with self.assertRaisesRegex(ValueError, "хотя бы одна запись"):
+                db.begin_weight_control_conclusion(conversation["id"])
+        finally:
+            with db.connection() as conn:
+                conn.execute("DELETE FROM users WHERE chel_id=?", (chel_id,))
+                conn.commit()
+            db.set_current_chel_id("chel_test_default")
+
+    def test_weight_analysis_button_and_completion_deep_link_are_wired(self):
+        project_root = Path(__file__).resolve().parents[1]
+        index = (project_root / "index.html").read_text(encoding="utf-8")
+        script = (project_root / "static" / "app.js").read_text(encoding="utf-8")
+        styles = (project_root / "static" / "styles.css").read_text(encoding="utf-8")
+        self.assertIn('id="weightDiaryAnalysisButton"', index)
+        self.assertIn("Анализ питания", index)
+        self.assertIn("/api/weight-control/conclusion", script)
+        self.assertIn("weight_diary", script)
+        self.assertIn("weight_program_conclusion", script)
+        self.assertIn("data-weight-diary-open", script)
+        self.assertIn(".weight-conclusion-card", styles)
 
     def test_weight_photo_is_saved_without_technical_error_when_ai_is_unavailable(self):
         class UnavailableWeightLLM(WeightControlLLM):
@@ -1621,7 +1702,8 @@ class OrchestratorTests(unittest.TestCase):
         self.assertIn("отдельный закреплённый диалог «Контроль питания»", manager_prompt)
         self.assertIn("Кнопка с символом весов в шапке этого диалога", manager_prompt)
         self.assertIn("«Параметры тела» с", manager_prompt)
-        self.assertIn("Через 14 дней сервис", manager_prompt)
+        self.assertIn("Через 14 дней в дневнике", manager_prompt)
+        self.assertIn("кнопка «Анализ питания»", manager_prompt)
         weight_prompt = inspect.getsource(LLMService.weight_control_turn)
         self.assertIn("говори тепло, доброжелательно и по-человечески", weight_prompt)
         self.assertIn("без стыда, давления", weight_prompt)
@@ -3757,14 +3839,14 @@ class OrchestratorTests(unittest.TestCase):
         self.assertIn("controllerchange", script)
         self.assertIn("url.pathname.startsWith('/api/')", worker)
         self.assertIn("url.pathname.startsWith('/auth/')", worker)
-        self.assertIn("consilium-shell-v147", worker)
+        self.assertIn("consilium-shell-v148", worker)
         self.assertIn("fetch(request)", worker)
-        self.assertIn("/static/styles.css?v=20261002-account-logout-v12", index)
+        self.assertIn("/static/styles.css?v=20261002-weight-finish-v13", index)
         self.assertIn("/static/rich-text.2bf1f5fab764.css", index)
         self.assertTrue((project_root / "static" / "styles.07ffaefb4795.css").is_file())
         self.assertTrue((project_root / "static" / "rich-text.2bf1f5fab764.css").is_file())
-        self.assertIn("/static/app.js?v=20261002-account-logout-v12", index)
-        self.assertIn("/static/metrika.js?v=20261002-account-logout-v12", index)
+        self.assertIn("/static/app.js?v=20261002-weight-finish-v13", index)
+        self.assertIn("/static/metrika.js?v=20261002-weight-finish-v13", index)
         self.assertIn("Enter — новая строка · отправка — кнопкой", index)
         self.assertIn('enterkeyhint="enter"', index)
         self.assertNotIn("$('#chatForm').requestSubmit()", script)
@@ -3850,7 +3932,7 @@ class OrchestratorTests(unittest.TestCase):
         main = (project_root / "backend" / "main.py").read_text(encoding="utf-8")
         config = (project_root / "backend" / "config.py").read_text(encoding="utf-8")
 
-        self.assertIn('src="/static/metrika.js?v=20261002-account-logout-v12"', index)
+        self.assertIn('src="/static/metrika.js?v=20261002-weight-finish-v13"', index)
         self.assertIn('YANDEX_METRIKA_COUNTER_ID', config)
         self.assertIn('path == "/api/public-config"', main)
         self.assertIn('"metrika.js"', main)

@@ -3013,7 +3013,8 @@ function addMessage(sender, text, agentId = state.active, urgent = false, create
   const humanRole = metadata.staff_role === 'doctor' ? 'Врач-специалист' : 'Менеджер';
   const wrapper = document.createElement('div');
   const labInterpretation = sender === 'agent' && metadata.action === 'lab_interpretation';
-  wrapper.className = `message-row ${sender}${urgent ? ' urgent' : ''}${humanManager ? ' human-manager' : ''}${labInterpretation ? ' lab-interpretation' : ''}`;
+  const weightConclusion = sender === 'agent' && metadata.action === 'weight_program_conclusion';
+  wrapper.className = `message-row ${sender}${urgent ? ' urgent' : ''}${humanManager ? ' human-manager' : ''}${labInterpretation ? ' lab-interpretation' : ''}${weightConclusion ? ' weight-conclusion' : ''}`;
   if (messageId) wrapper.dataset.messageId = String(messageId);
   const date = createdAt ? new Date(createdAt) : new Date();
   const time = new Intl.DateTimeFormat('ru', { hour: '2-digit', minute: '2-digit' }).format(date);
@@ -3033,12 +3034,17 @@ function addMessage(sender, text, agentId = state.active, urgent = false, create
       ) : '';
   const assistantContent = labInterpretation
     ? labInterpretationMarkup(text, metadata)
-    : formatAssistantText(text);
+    : weightConclusion
+      ? `<article class="weight-conclusion-card"><header><i>✓</i><div><strong>Ваш анализ питания готов</strong><small>Итоги 14-дневного марафона</small></div></header><div class="weight-conclusion-content">${formatAssistantText(text)}</div></article>`
+      : formatAssistantText(text);
   const reofferAction = sender === 'agent' && metadata.action === 'checkup_reoffer'
     ? `<button type="button" class="message-checkup-reoffer" data-checkup-reoffer="${escapeAttr(metadata.access_token || '')}">${escapeHtml(metadata.action_label || 'Выбрать чек-апы →')}</button>`
     : '';
   const reminderAction = sender === 'agent' && metadata.action === 'weight_reminder_setup'
     ? `<button type="button" class="message-checkup-reoffer message-reminder-setup" data-weight-reminder-setup="${escapeAttr(metadata.reminder_type || 'custom')}">⏰ ${escapeHtml(metadata.action_label || 'Настроить напоминание')}</button>`
+    : '';
+  const weightDiaryAction = sender === 'agent' && metadata.weight_diary_open
+    ? `<button type="button" class="message-checkup-reoffer" data-weight-diary-open>${escapeHtml(metadata.action_label || 'Открыть дневник')}</button>`
     : '';
   const messengerLinkAction = sender === 'agent' && (metadata.action === 'weight_messenger_link' || metadata.weight_messenger_link)
     ? `<div class="message-messenger-actions"><button type="button" class="message-checkup-reoffer message-messenger-link" data-weight-messenger-link>↗ ${escapeHtml(metadata.weight_messenger_label || (metadata.action === 'weight_messenger_link' ? metadata.action_label : '') || 'Привязать мессенджер')}</button>${metadata.weight_messenger_dismiss ? '<button type="button" class="message-messenger-dismiss" data-weight-messenger-dismiss>Больше не предлагать</button>' : ''}</div>`
@@ -3061,7 +3067,7 @@ function addMessage(sender, text, agentId = state.active, urgent = false, create
   const userTextMarkup = String(text || '').trim() ? `<p>${escapeHtml(text)}</p>` : '';
   wrapper.innerHTML = sender === 'user'
     ? `<div class="bubble user-bubble">${attachmentMarkup}${userTextMarkup}<span>${time}</span></div><div class="message-send-error hidden" role="status"><span>Ошибка отправки</span><button type="button" data-message-retry>Повторить</button></div>`
-    : `<div class="message-avatar">${humanManager ? (metadata.staff_role === 'doctor' ? 'В' : 'Ч') : agent.initials}</div><div><div class="message-author"><strong>${humanManager ? escapeHtml(metadata.manager_name || humanRole) : agent.name}</strong><span>${humanManager ? humanRole : agent.role}</span>${cached}</div><div class="bubble agent-bubble">${assistantContent}${labDocuments}${reofferAction}${reminderAction}${messengerLinkAction}${bodyParametersAction}${mealConfirmationAction}${checkupPurchaseCancelAction}<span>${time}</span></div></div>`;
+    : `<div class="message-avatar">${humanManager ? (metadata.staff_role === 'doctor' ? 'В' : 'Ч') : agent.initials}</div><div><div class="message-author"><strong>${humanManager ? escapeHtml(metadata.manager_name || humanRole) : agent.name}</strong><span>${humanManager ? humanRole : agent.role}</span>${cached}</div><div class="bubble agent-bubble">${assistantContent}${labDocuments}${reofferAction}${reminderAction}${weightDiaryAction}${messengerLinkAction}${bodyParametersAction}${mealConfirmationAction}${checkupPurchaseCancelAction}<span>${time}</span></div></div>`;
   messages.appendChild(wrapper);
   scrollChatToBottom();
   return wrapper;
@@ -3556,6 +3562,14 @@ function weightDiaryMealMeta(item) {
 
 function renderWeightDiary(data) {
   state.weightDiary = data;
+  const analysisSection = $('#weightDiaryAnalysis');
+  const analysisButton = $('#weightDiaryAnalysisButton');
+  const analysisText = $('#weightDiaryAnalysisText');
+  const analysisError = $('#weightDiaryAnalysisError');
+  analysisSection.classList.add('hidden');
+  analysisError.classList.add('hidden');
+  analysisButton.disabled = false;
+  analysisButton.textContent = 'Анализ питания';
   if (!data.program_started) {
     $('#weightDiaryProgressLabel').textContent = 'Программа ещё не началась';
     $('#weightDiaryMealCount').textContent = 'Сначала закончим короткую анкету';
@@ -3573,10 +3587,29 @@ function renderWeightDiary(data) {
   $('#weightDiaryProgressBar').style.width = `${Math.round(elapsed / 14 * 100)}%`;
   $('#weightDiarySubtitle').textContent = data.conclusion_ready
     ? 'Итоговое заключение готово в чате'
-    : data.completed ? 'Готовим итоговое заключение' : `До итога осталось ${data.remaining_days} дн.`;
+    : data.completed ? 'Марафон завершён' : `До итога осталось ${data.remaining_days} дн.`;
   $('#weightDiaryNote').textContent = data.conclusion_ready
     ? 'Программа завершена. Итоговое заключение находится в диалоге «Контроль питания».'
-    : 'Добавляйте каждый приём пищи текстом или фотографией. После 14 дней в чате появится итоговое заключение.';
+    : data.completed && !data.analysis_available
+      ? 'Программа завершена, но для персонального анализа нужна хотя бы одна подтверждённая запись о питании.'
+      : 'Добавляйте каждый приём пищи текстом или фотографией. После 14 дней здесь можно будет получить персональный анализ.';
+  if (data.analysis_available) {
+    analysisSection.classList.remove('hidden');
+    if (data.conclusion_ready) {
+      analysisText.textContent = 'Анализ уже готов и сохранён в диалоге «Контроль питания».';
+      analysisButton.textContent = 'Открыть анализ в чате';
+    } else if (data.conclusion_status === 'generating') {
+      analysisText.textContent = 'Анализ формируется. Это может занять немного времени.';
+      analysisButton.textContent = 'Анализ формируется…';
+      analysisButton.disabled = true;
+    } else {
+      analysisText.textContent = 'Разберём качество и регулярность питания, заметим устойчивые привычки и подготовим конкретные рекомендации.';
+      if (data.conclusion_status === 'failed' && data.conclusion_error) {
+        analysisError.textContent = 'Предыдущая попытка не завершилась. Нажмите кнопку, чтобы повторить.';
+        analysisError.classList.remove('hidden');
+      }
+    }
+  }
   $('#weightDiaryDays').innerHTML = (data.days || []).map(day => {
     const meals = day.meals || [];
     const status = day.status === 'today' ? 'Сегодня' : day.status === 'future' ? 'Впереди' : (meals.length ? 'Заполнен' : 'Нет записей');
@@ -3670,6 +3703,51 @@ async function deleteWeightDiaryEntry(mealId) {
 async function reloadWeightDiary() {
   const data = await api(`/api/weight-control/diary?conversation_id=${encodeURIComponent(state.conversationId)}`);
   renderWeightDiary(data);
+}
+
+async function analyzeWeightDiary() {
+  if (!state.weightDiary?.analysis_available) return;
+  if (state.weightDiary.conclusion_ready) {
+    closeWeightDiary();
+    await openConversation(state.conversationId);
+    scrollChatToBottom();
+    return;
+  }
+  const button = $('#weightDiaryAnalysisButton');
+  const error = $('#weightDiaryAnalysisError');
+  const labels = [
+    'Изучаем дневник…', 'Сравниваем дни…',
+    'Ищем устойчивые привычки…', 'Готовим рекомендации…',
+  ];
+  let labelIndex = 0;
+  button.disabled = true;
+  button.textContent = labels[0];
+  error.classList.add('hidden');
+  const labelTimer = setInterval(() => {
+    labelIndex = (labelIndex + 1) % labels.length;
+    button.textContent = labels[labelIndex];
+  }, 1800);
+  try {
+    const result = await api('/api/weight-control/conclusion', {
+      method:'POST', body:JSON.stringify({conversation_id:state.conversationId}),
+    });
+    if (result.status === 'generating') {
+      await reloadWeightDiary();
+      return;
+    }
+    closeWeightDiary();
+    await openConversation(state.conversationId);
+    scrollChatToBottom();
+  } catch (requestError) {
+    error.textContent = requestError.message === 'Failed to fetch'
+      ? 'Не удалось связаться с сервером. Попробуйте ещё раз.'
+      : requestError.message;
+    error.classList.remove('hidden');
+    button.disabled = false;
+    button.textContent = 'Повторить анализ';
+  } finally {
+    clearInterval(labelTimer);
+  }
 }
 
 async function openWeightDiary() {
@@ -6055,6 +6133,11 @@ function handleLabInterpretClick(event) {
     cancelCheckupPurchaseRequest(checkupPurchaseCancelButton);
     return;
   }
+  const weightDiaryButton = event.target.closest('[data-weight-diary-open]');
+  if (weightDiaryButton) {
+    openWeightDiary();
+    return;
+  }
   const mealConfirmButton = event.target.closest('[data-weight-meal-confirm]');
   if (mealConfirmButton) {
     mealConfirmButton.closest('.message-meal-confirmation-actions')?.querySelectorAll('button').forEach(button => { button.disabled = true; });
@@ -6205,6 +6288,7 @@ $('#weightDiaryDays').addEventListener('click', event => {
 });
 $('#weightDiaryEditorCancel').addEventListener('click', closeWeightDiaryEditor);
 $('#weightDiaryEntrySave').addEventListener('click', saveWeightDiaryEntry);
+$('#weightDiaryAnalysisButton').addEventListener('click', analyzeWeightDiary);
 $('#weightDiaryReminderButton').addEventListener('click', () => {
   closeWeightDiary();
   openWeightReminders();
@@ -6264,13 +6348,18 @@ async function initMainApp() {
   const query = new URLSearchParams(location.search);
   const requestedConversation = query.get('conversation')
     || localStorage.getItem(REQUESTED_CONVERSATION_KEY) || '';
+  const openRequestedWeightDiary = query.get('weight_diary') === '1';
   const validRequestedConversation = /^[0-9a-f-]{36}$/i.test(requestedConversation)
     ? requestedConversation : '';
   if (validRequestedConversation) {
     await openConversation(validRequestedConversation);
     if (state.conversationId === validRequestedConversation) {
       localStorage.removeItem(REQUESTED_CONVERSATION_KEY);
+      if (openRequestedWeightDiary && state.conversationType === 'weight_control') {
+        await openWeightDiary();
+      }
       query.delete('conversation');
+      query.delete('weight_diary');
       const cleanQuery = query.toString();
       history.replaceState({}, '', `${location.pathname}${cleanQuery ? `?${cleanQuery}` : ''}`);
     }
