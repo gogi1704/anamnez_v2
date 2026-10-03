@@ -33,6 +33,36 @@ class IkpAccessTests(unittest.TestCase):
         self.assertEqual(report['links'][0]['company'], 'ООО Ромашка новое имя')
         self.assertEqual(report['users'][0]['visit_count'], 2)
 
+    def test_masterclass_link_tracks_unique_users_and_continuation(self):
+        token = 'm' * 43
+        first = db.provision_masterclass_access(
+            '7707083893', 'ООО Ромашка', 'masterclass_1', token,
+        )
+        repeated = db.provision_masterclass_access(
+            '7707083893', 'ООО Ромашка новое имя', 'masterclass_1', 'n' * 43,
+        )
+        other_class = db.provision_masterclass_access(
+            '7707083893', 'ООО Ромашка новое имя', 'masterclass_2', 'o' * 43,
+        )
+        self.assertEqual(first['id'], repeated['id'])
+        self.assertEqual(repeated['access_token'], token)
+        self.assertNotEqual(first['id'], other_class['id'])
+        db.ensure_user('chel_masterclass_0001', pending=True)
+        db.record_masterclass_access(token, 'chel_masterclass_0001')
+        db.record_masterclass_access(token, 'chel_masterclass_0001')
+        previous_chel_id = db.current_chel_id()
+        try:
+            db.set_current_chel_id('chel_masterclass_0001')
+            entry = db.current_masterclass_access()
+            self.assertEqual(entry['masterclass_name'], 'Мастер-класс 1')
+            db.mark_current_masterclass_continued()
+        finally:
+            db.set_current_chel_id(previous_chel_id)
+        report = db.admin_masterclass_report()
+        first_row = next(item for item in report['enterprises'] if item['masterclass_code'] == 'masterclass_1')
+        self.assertEqual(first_row['company'], 'ООО Ромашка новое имя')
+        self.assertEqual((first_row['visit_count'], first_row['users'], first_row['continued_users']), (2, 1, 1))
+
 
 if __name__ == '__main__':
     unittest.main()

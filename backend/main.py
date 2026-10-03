@@ -217,6 +217,14 @@ def _ikp_access_token(source_key: str) -> str:
     return base64.urlsafe_b64encode(token_digest).decode("ascii").rstrip("=")
 
 
+def _masterclass_access_token(source_key: str) -> str:
+    token_digest = hmac.new(
+        settings.ikp_integration_secret.encode("utf-8"),
+        f"consilium-masterclass:{source_key}".encode("utf-8"), hashlib.sha256,
+    ).digest()
+    return base64.urlsafe_b64encode(token_digest).decode("ascii").rstrip("=")
+
+
 def _record_startup_event(message: str) -> None:
     line = f"[{db.utc_now()}] {message}\n"
     try:
@@ -359,6 +367,18 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                 return self._json(404, {"detail": str(exc)})
             db.record_device_access(self.headers.get("User-Agent", ""))
             return self._send_file(BASE_DIR / "index.html", "text/html; charset=utf-8")
+        if path.startswith("/masterclass/"):
+            access_token = path.removeprefix("/masterclass/").strip("/")
+            self._ensure_user_context()
+            try:
+                db.record_masterclass_access(access_token, db.current_chel_id())
+            except ValueError as exc:
+                return self._json(404, {"detail": str(exc)})
+            db.record_device_access(self.headers.get("User-Agent", ""))
+            return self._send_file(
+                BASE_DIR / "index.html", "text/html; charset=utf-8",
+                allow_metrika_frame=True,
+            )
         if path == "/api/ready":
             database_ready = False
             try:
@@ -531,6 +551,8 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                     )
                     report["examinations"] = db.list_examinations()
                     report["marketer_examination_texts"] = db.admin_marketer_examination_texts()
+                    if report.get("flow") == "masterclass":
+                        report["masterclasses"] = db.admin_masterclass_report()
                     return self._json(200, report)
                 except analytics.ReportBuilding:
                     return self._json(202, {"status": "building", "retry_after_ms": 750})
@@ -655,6 +677,11 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
             return self._json(200, db.list_memories())
         if path == "/api/health-passport":
             return self._json(200, db.get_health_passport())
+        if path == "/api/masterclass-entry":
+            entry = db.current_masterclass_access()
+            if not entry:
+                return self._json(404, {"detail": "Ссылка мастер-класса не найдена"})
+            return self._json(200, entry)
         if path == "/api/health-passport/pdf":
             passport = db.get_health_passport()
             if passport.get("status") != "ready":
@@ -805,6 +832,27 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                 return self._json(200, {
                     "id": link["id"], "inn": link["inn"], "company": link["company"],
                     "url": f"{settings.public_base_url}/ikp/{link['access_token']}",
+                })
+            except (ValueError, TypeError, json.JSONDecodeError, UnicodeDecodeError) as exc:
+                return self._json(422, {"detail": str(exc)})
+        if path == "/api/integrations/ikp/masterclass":
+            if not ikp_token_valid(self.headers.get("Authorization", "")):
+                return self._json(401, {"detail": "Неверные данные интеграции ИКП"})
+            try:
+                payload = self._read_json(max_bytes=4_000)
+                source_key, inn, company, code, name = db.normalize_masterclass_identity(
+                    payload.get("inn", ""), payload.get("company", ""),
+                    payload.get("masterclass_code", ""),
+                )
+                access_token = _masterclass_access_token(source_key)
+                link = db.provision_masterclass_access(
+                    inn, company, code, access_token,
+                )
+                return self._json(200, {
+                    "id": link["id"], "inn": link["inn"],
+                    "company": link["company"],
+                    "masterclass_code": code, "masterclass_name": name,
+                    "url": f"{settings.public_base_url}/masterclass/{link['access_token']}",
                 })
             except (ValueError, TypeError, json.JSONDecodeError, UnicodeDecodeError) as exc:
                 return self._json(422, {"detail": str(exc)})
@@ -1683,6 +1731,12 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                     "registration_method": user["registration_method"],
                     "result_entry_at": user["result_entry_at"],
                 })
+            except ValueError as exc:
+                return self._json(422, {"detail": str(exc)})
+        if path == "/api/masterclass-entry/start":
+            try:
+                entry = db.mark_current_masterclass_continued()
+                return self._json(200, {"status": "continued", **entry})
             except ValueError as exc:
                 return self._json(422, {"detail": str(exc)})
         if path == "/api/memories":

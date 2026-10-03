@@ -1210,6 +1210,42 @@ class AnalyticsTests(unittest.TestCase):
         self.assertEqual(screens["registration"]["percent_of_start"], 100.0)
         self.assertTrue(all(item["percent_of_start"] <= 100 for item in report["screens"]))
 
+    def test_metric2_masterclass_flow_counts_only_qr_cohort(self):
+        conn = sqlite3.connect(settings.database_path)
+        try:
+            conn.execute("""CREATE TABLE masterclass_access_users (
+                link_id TEXT NOT NULL, chel_id TEXT NOT NULL,
+                first_seen_at TEXT, last_seen_at TEXT, continued_at TEXT,
+                visit_count INTEGER NOT NULL DEFAULT 1
+            )""")
+            conn.execute(
+                "INSERT INTO masterclass_access_users VALUES (?,?,?,?,?,?)",
+                ('link-1', 'CHEL-MASTERCLASS', '2026-10-03', '2026-10-03', '2026-10-03', 1),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+        analytics.record_events('CHEL-MASTERCLASS', [
+            {'event_id':'masterclass-view-0001', 'session_id':'masterclass-session',
+             'event_name':'onboarding_screen_viewed',
+             'properties':{'screen':'masterclass_landing', 'context':'masterclass'}},
+            {'event_id':'masterclass-action-01', 'session_id':'masterclass-session',
+             'event_name':'onboarding_screen_action',
+             'properties':{'screen':'masterclass_landing', 'action':'continue', 'context':'masterclass'}},
+        ])
+        analytics.record_events('CHEL-ORDINARY', [{
+            'event_id':'ordinary-masterclass-view', 'session_id':'ordinary-session',
+            'event_name':'onboarding_screen_viewed',
+            'properties':{'screen':'masterclass_landing', 'context':'masterclass'},
+        }])
+
+        report = analytics.metric2_report('30', flow='masterclass')
+        self.assertEqual(report['flow'], 'masterclass')
+        self.assertEqual(report['summary']['start_users'], 1)
+        self.assertEqual(report['summary']['reached_completion'], 1)
+        self.assertEqual(report['screens'][0]['id'], 'masterclass_landing')
+        self.assertEqual(report['screens'][0]['actions'][0]['users'], 1)
+
     def test_reports_support_inclusive_custom_date_range(self):
         for index in range(2):
             analytics.record_events(f"CHEL-DATE-{index}", [{

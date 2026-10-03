@@ -246,6 +246,22 @@ def _metric2_spec(event: str, **properties) -> dict:
     return {"event": event, "properties": properties}
 
 
+def _masterclass_cohort_chel_ids() -> set[str]:
+    main_conn = None
+    try:
+        main_conn = sqlite3.connect(settings.database_path, timeout=5)
+        return {
+            str(row[0]) for row in main_conn.execute(
+                "SELECT DISTINCT chel_id FROM masterclass_access_users"
+            ).fetchall()
+        }
+    except sqlite3.Error:
+        return set()
+    finally:
+        if main_conn is not None:
+            main_conn.close()
+
+
 def _metric2_screen_definitions() -> list[dict]:
     online_payment_enabled = bool(
         settings.online_payments_enabled
@@ -619,6 +635,26 @@ def _metric2_screen_definitions() -> list[dict]:
             ],
         },
     ])
+    screens.append({
+        "id": "masterclass_landing",
+        "title": "Посадочная страница мастер-класса",
+        "stage": "Мастер-класс · вход",
+        "kind": "masterclass_landing",
+        "description": (
+            "Отдельный вход по QR-коду предприятия с названием мастер-класса. "
+            "После кнопки пользователь переходит к входу в Консилиум."
+        ),
+        "root": True,
+        "flow": "masterclass",
+        "legacy_reach": [],
+        "actions": [{
+            "id": "continue",
+            "label": "Открыть Консилиум",
+            "target_label": "Вход и дальнейшая работа в Консилиуме",
+            "terminal_outcome": True,
+            "legacy": [],
+        }],
+    })
     screens.extend([
         {
             "id": "result_welcome", "title": "Получение результатов", "stage": "Результаты · начало",
@@ -1910,11 +1946,17 @@ def _metric2_report_uncached(
     false incomplete edge ``C -> D``.
     """
     flow = str(flow or "standard").strip().lower()
-    if flow not in {"standard", "result", "experiment", "reoffer"}:
+    if flow not in {"standard", "result", "experiment", "reoffer", "masterclass"}:
         raise ValueError("Неизвестная ветка Метрики 2.0")
-    screen_flow = flow if flow in {"result", "reoffer"} else "standard"
-    expected_context = "result" if flow == "result" else "reoffer" if flow == "reoffer" else "onboarding"
+    screen_flow = flow if flow in {"result", "reoffer", "masterclass"} else "standard"
+    expected_context = (
+        "result" if flow == "result"
+        else "reoffer" if flow == "reoffer"
+        else "masterclass" if flow == "masterclass"
+        else "onboarding"
+    )
     where, params = _filters(period, device, method, source, date_from, date_to)
+    masterclass_ids = sorted(_masterclass_cohort_chel_ids())
     if flow == "experiment":
         cohort_ids = sorted(_experiment_cohort_chel_ids("marketer"))
         if cohort_ids:
@@ -1922,18 +1964,28 @@ def _metric2_report_uncached(
             params.extend(cohort_ids)
         else:
             where += " AND 0"
+        if masterclass_ids:
+            where += " AND e.chel_id NOT IN (" + ",".join("?" for _ in masterclass_ids) + ")"
+            params.extend(masterclass_ids)
     elif flow == "standard":
         cohort_ids = sorted(_experiment_cohort_chel_ids("marketer"))
         if cohort_ids:
             where += " AND e.chel_id NOT IN (" + ",".join("?" for _ in cohort_ids) + ")"
             params.extend(cohort_ids)
+        if masterclass_ids:
+            where += " AND e.chel_id NOT IN (" + ",".join("?" for _ in masterclass_ids) + ")"
+            params.extend(masterclass_ids)
+    elif flow == "masterclass":
+        if masterclass_ids:
+            where += " AND e.chel_id IN (" + ",".join("?" for _ in masterclass_ids) + ")"
+            params.extend(masterclass_ids)
+        else:
+            where += " AND 0"
     join = " FROM analytics_events e LEFT JOIN analytics_sessions s ON s.session_id=e.session_id "
     definitions = [
         definition for definition in _metric2_screen_definitions()
         if (
-            "result" if definition.get("flow") == "result"
-            else "reoffer" if definition.get("flow") == "reoffer"
-            else "standard"
+            definition.get("flow") or "standard"
         ) == screen_flow
     ]
     if flow == "experiment":
@@ -2515,6 +2567,18 @@ def _metric2_report_uncached(
                 "WHERE IS_STATS_USER(chel_id) = 1 AND entry_source<>'' ORDER BY entry_source LIMIT 100"
             ) if row[0]],
         }
+    completed_user_ids = set().union(*(
+        screen_users.get(item["id"], set())
+        for item in result_screens if item.get("terminal")
+    ))
+    if flow == "masterclass":
+        completed_user_ids |= {
+            chel_id
+            for (screen_id, group_id, chel_id), (_, action_id)
+            in final_group_action.items()
+            if screen_id == "masterclass_landing"
+            and group_id == "final_transition" and action_id == "continue"
+        }
     return {
         "generated_at": _now(), "period": period, "date_from": date_from, "date_to": date_to,
         "flow": flow,
@@ -2522,17 +2586,13 @@ def _metric2_report_uncached(
             "Получение результатов" if flow == "result"
             else "Новое предложение marketer" if flow == "experiment"
             else "Повторное предложение" if flow == "reoffer"
+            else "Мастер-классы" if flow == "masterclass"
             else "Обычный путь"
         ),
         "summary": {
             "start_users": start_users,
             "screens": len(result_screens),
-            "reached_completion": len(
-                set().union(*(
-                    screen_users.get(item["id"], set())
-                    for item in result_screens if item.get("terminal")
-                ))
-            ),
+            "reached_completion": len(completed_user_ids),
             "unique_transitions": sum(len(users) for users in edge_users.values()),
             "reoffer": reoffer_summary,
         },

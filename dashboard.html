@@ -11,7 +11,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/static/dashboard.css?v=20260929-experiment-revenue-v1">
+  <link rel="stylesheet" href="/static/dashboard.css?v=20261003-masterclass-v1">
 </head>
 <body>
   <main class="dashboard-shell">
@@ -259,6 +259,7 @@
           <div class="metric2-flow-tabs" role="tablist" aria-label="Ветка Метрики 2.0">
             <button class="active" id="metric2StandardFlow" type="button" role="tab" aria-selected="true">Обычная ссылка</button>
             <button id="metric2ResultFlow" type="button" role="tab" aria-selected="false">Ссылка result</button>
+            <button id="metric2MasterclassFlow" type="button" role="tab" aria-selected="false">Мастер-классы</button>
             <button id="metric2ExperimentFlow" type="button" role="tab" aria-selected="false">Эксперимент</button>
             <button id="metric2ReofferFlow" type="button" role="tab" aria-selected="false">Повторное предложение</button>
           </div>
@@ -274,6 +275,10 @@
           <p class="analytics-date-note">Если указаны даты «с» или «по», они заменяют готовый период выше. Дата «по» включается целиком.</p>
         </article>
         <section class="metric2-summary" id="metric2Summary"></section>
+        <article class="panel metric2-masterclass-stats hidden" id="metric2MasterclassStats">
+          <div class="panel-heading"><div><p class="eyebrow">QR-коды предприятий</p><h2>Новые пользователи по предприятиям</h2><p>Уникальные посетители считаются по ИНН, названию предприятия и выбранному мастер-классу.</p></div></div>
+          <div class="table-scroll"><table><thead><tr><th>Предприятие</th><th>ИНН</th><th>Мастер-класс</th><th>Новые пользователи</th><th>Продолжили</th><th>Все открытия QR</th></tr></thead><tbody id="metric2MasterclassTable"></tbody></table></div>
+        </article>
         <article class="metric2-experiment-note hidden" id="metric2ExperimentNote">
           <strong>Ссылка для демонстрации воронки маркетолога</strong>
           <p>Всегда открывает путь пользователя в варианте «маркетолог», независимо от очереди распределения. Не влияет на статистику эксперимента — переходы по ней нигде не сохраняются как назначение.</p>
@@ -736,6 +741,6 @@
       </div>
     </section>
   </div>
-<script src="/static/dashboard.js?v=20261002-health-passport-cost-v3" defer></script>
+<script src="/static/dashboard.js?v=20261003-masterclass-v1" defer></script>
 </body>
 </html>

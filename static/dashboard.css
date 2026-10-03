@@ -122,7 +122,7 @@ button:hover,.button:hover { background:var(--green-dark); }
 .monitor-status-panel dl { display:grid; gap:10px; margin:0; }.monitor-status-panel dl > div { display:grid; grid-template-columns:1fr; gap:3px; padding-bottom:9px; border-bottom:1px solid var(--line); }.monitor-status-panel dt { color:var(--muted); font-size:9px; }.monitor-status-panel dd { margin:0; font-size:11px; font-weight:700; overflow-wrap:anywhere; }
 .monitor-privacy { padding:13px; border-radius:14px; color:#53665d; background:#eef6f2; font-size:10px; line-height:1.5; }.monitor-privacy p { margin:5px 0 0; }
 .monitor-preview-panel pre { max-height:620px; margin:14px 0 0; padding:16px; overflow:auto; border:1px solid var(--line); border-radius:15px; color:#2e463b; background:#f7fbf9; font:11px/1.55 ui-monospace,SFMono-Regular,Consolas,monospace; white-space:pre-wrap; }
-.metric2-flow-tabs { display:grid; grid-template-columns:repeat(4,1fr); gap:6px; max-width:820px; margin:18px 0 4px; padding:6px; border:1px solid var(--line); border-radius:16px; background:#f3f8f5; }
+.metric2-flow-tabs { display:grid; grid-template-columns:repeat(5,1fr); gap:6px; max-width:980px; margin:18px 0 4px; padding:6px; border:1px solid var(--line); border-radius:16px; background:#f3f8f5; }
 .metric2-flow-tabs button { min-height:46px; padding:10px 16px; color:var(--muted); border:0; border-radius:11px; background:transparent; box-shadow:none; }
 .metric2-flow-tabs button:hover { color:var(--green-dark); background:#e8f3ed; }
 .metric2-flow-tabs button.active { color:#fff; background:var(--green); box-shadow:0 7px 18px rgba(24,126,92,.2); }
@@ -155,6 +155,9 @@ button:hover,.button:hover { background:var(--green-dark); }
 .payment-analytics-panel { display:grid; gap:18px; }.payment-analytics-summary { display:grid; grid-template-columns:repeat(6,minmax(0,1fr)); gap:10px; }.payment-analytics-summary article { display:grid; gap:5px; min-width:0; padding:14px; border:1px solid var(--line); border-radius:15px; background:#f8fbf9; }.payment-analytics-summary span,.payment-analytics-summary small { color:var(--muted); font-size:10px; line-height:1.4; }.payment-analytics-summary strong { color:var(--green-dark); font-size:23px; overflow-wrap:anywhere; }.payment-analytics-grid { display:grid; grid-template-columns:1fr 1fr; gap:16px; }.payment-analytics-grid > section { min-width:0; padding:15px; border:1px solid var(--line); border-radius:16px; background:#fbfdfc; }.payment-analytics-grid h3 { margin:0 0 12px; font-size:14px; }.payment-test-note { margin:-8px 0 0; padding:10px 12px; border-radius:11px; color:#7b6539; background:#fff8e7; font-size:11px; }.payment-recent-table { max-height:420px; }
 .metric2-heading-panel .panel-heading p:last-child,.metric2-flow-panel .panel-heading p:last-child { max-width:900px; margin:8px 0 0; color:var(--muted); font-size:12px; line-height:1.55; }
 .metric2-summary { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; }
+.metric2-masterclass-stats { display:grid; gap:16px; }
+.metric2-masterclass-stats .panel-heading { margin:0; }
+.metric2-masterclass-stats td:nth-child(4),.metric2-masterclass-stats td:nth-child(5),.metric2-masterclass-stats td:nth-child(6) { color:var(--green-dark); font-weight:800; }
 .metric2-flow { display:grid; gap:0; margin-top:14px; }
 .metric2-screen-row { display:grid; grid-template-columns:38px 230px minmax(0,1fr); align-items:center; gap:24px; min-height:405px; padding:18px 12px; border-radius:22px; }
 .metric2-screen-row:hover { background:#f8fbf9; }

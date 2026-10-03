@@ -1409,6 +1409,7 @@ function metric2PreviewMarkup(screen, large = false, suppliedData = null) {
     .reduce((result,[key,replacement]) => result.replaceAll(`{${key}}`,String(replacement)),String(value || ''));
   let content = '';
   if (kind === 'welcome') content = `<div class="metric2-mock-brand"><span>К</span><div><strong>Консилиум</strong><small>Забота о здоровье начинается здесь</small></div></div><small>● ПЛАНОВЫЙ МЕДОСМОТР</small><b>Вам предстоит плановый медицинский осмотр</b><p>Анкетирование — обязательный этап медосмотра. Оно займёт не более 10 минут и поможет точнее оценить ваше состояние.</p><p>После этого вы сможете выбрать дополнительные обследования — они помогают обнаружить то, что обычно остаётся незамеченным.</p><span class="metric2-mock-pulse">⌁</span><span class="metric2-mock-welcome-highlight">☆ &nbsp; Все, кто пройдёт анкету до конца, получат <b>бесплатный доступ к новому сервису</b> — медицинскому ИИ-помощнику.</span><em class="metric2-mock-welcome-closing">Пройдите осмотр осознанно, с полной картиной своего здоровья — и без лишних переживаний.</em>${action('Начать анкету →')}<span class="metric2-mock-time">Анкета займёт около 10 минут</span>`;
+  else if (kind === 'masterclass_landing') content = `<small>● ЗДОРОВЬЕ НА ВАШЕМ ПРЕДПРИЯТИИ</small><b>Мастер-класс 1</b><p>Добро пожаловать! Здесь начинается практическая встреча о здоровье, привычках и простых действиях, которые помогают чувствовать себя лучше каждый день.</p><span class="metric2-mock-info"><b>Понятно · Практично · Персонально</b><small>После встречи можно продолжить работу в Консилиуме.</small></span>${action('Открыть Консилиум →')}`;
   else if (kind === 'registration') content = `<div class="metric2-mock-brand"><span>К</span><div><strong>Консилиум</strong><small>Ваше личное пространство здоровья</small></div></div><small>БЕЗ ПАРОЛЯ</small><b>Войдите через удобный мессенджер</b><p>Так анкета, история диалогов и результаты останутся доступны на другом устройстве и после очистки браузера.</p>${messengerAction('➤','Продолжить с Telegram')}${messengerAction('М','Продолжить с MAX')}<span class="metric2-mock-link">Войти анонимно</span><p class="metric2-mock-note">Консилиум не получает пароль от мессенджера. Сохраняется только его технический ID для восстановления доступа.</p>`;
   else if (kind === 'warning') content = `<div class="metric2-mock-modal"><span class="metric2-mock-close">×</span><span class="metric2-mock-icon">!</span><b>Продолжить без мессенджера?</b><p>Данные будут связаны только с этим браузером.</p><ul><li>после очистки cookies доступ может потеряться;</li><li>на другом телефоне или компьютере история не откроется;</li><li>восстановить анонимный профиль служба поддержки не сможет.</li></ul><p class="metric2-mock-note">Мессенджер можно будет привязать позже без повторного заполнения анкеты.</p><div class="metric2-mock-actions">${action('Назад',true)}${action('Понимаю, продолжить')}</div></div>`;
   else if (kind === 'appearance') content = `<small>ПЕРЕД НАЧАЛОМ</small><b>Какой размер текста вам удобен?</b><p>Вы увидите изменение сразу. Позже размер можно поменять через меню функций.</p><span class="metric2-mock-choice"><b>Аа &nbsp; Обычный</b><small>Чуть крупнее базового интерфейса</small></span><span class="metric2-mock-choice"><b>Аа &nbsp; Крупный</b><small>Комфортно для большинства экранов</small></span><span class="metric2-mock-choice selected"><b>Аа &nbsp; Очень крупный</b><small>Максимальная читаемость</small></span>${action('Продолжить')}`;
@@ -1514,7 +1515,7 @@ function metric2PreviewMarkup(screen, large = false, suppliedData = null) {
   else if (kind === 'result_notification') content = `<span class="metric2-mock-icon">✓</span><small>ЗАПРОС СОХРАНЁН</small><b>Сообщим, когда результаты появятся</b><p>Уведомление будет связано с номером пробирки и вашим профилем.</p>${action('Перейти в чат')}`;
   else content = `<small>${escapeHtml(screen.stage || '')}</small><b>${escapeHtml(screen.title)}</b><p>${escapeHtml(screen.description || '')}</p>`;
 
-  const standalone = ['welcome','registration','warning'].includes(kind);
+  const standalone = ['welcome','registration','warning','masterclass_landing'].includes(kind);
   const questionIndex = metric2QuestionContent.findIndex(item => item.key === screen.question_key);
   const stage = kind === 'appearance' ? 'Настройка'
     : kind === 'not_medical_exam_info' ? 'Анкета'
@@ -1553,29 +1554,35 @@ function renderMetric2(data) {
       : screen),
   };
   latestMetric2Data = data;
-  metric2ActiveFlow = ['result','experiment','reoffer'].includes(data.flow) ? data.flow : 'standard';
+  metric2ActiveFlow = ['result','experiment','reoffer','masterclass'].includes(data.flow) ? data.flow : 'standard';
   const resultFlow = metric2ActiveFlow === 'result';
   const experimentFlow = metric2ActiveFlow === 'experiment';
   const reofferFlow = metric2ActiveFlow === 'reoffer';
-  $('#metric2StandardFlow').classList.toggle('active', !resultFlow && !experimentFlow && !reofferFlow);
-  $('#metric2StandardFlow').setAttribute('aria-selected', String(!resultFlow && !experimentFlow && !reofferFlow));
+  const masterclassFlow = metric2ActiveFlow === 'masterclass';
+  $('#metric2StandardFlow').classList.toggle('active', !resultFlow && !experimentFlow && !reofferFlow && !masterclassFlow);
+  $('#metric2StandardFlow').setAttribute('aria-selected', String(!resultFlow && !experimentFlow && !reofferFlow && !masterclassFlow));
   $('#metric2ResultFlow').classList.toggle('active', resultFlow);
   $('#metric2ResultFlow').setAttribute('aria-selected', String(resultFlow));
   $('#metric2ExperimentFlow').classList.toggle('active', experimentFlow);
   $('#metric2ExperimentFlow').setAttribute('aria-selected', String(experimentFlow));
   $('#metric2ReofferFlow').classList.toggle('active', reofferFlow);
   $('#metric2ReofferFlow').setAttribute('aria-selected', String(reofferFlow));
+  $('#metric2MasterclassFlow').classList.toggle('active', masterclassFlow);
+  $('#metric2MasterclassFlow').setAttribute('aria-selected', String(masterclassFlow));
   $('#metric2ExperimentNote').classList.toggle('hidden', !experimentFlow);
   $('#metric2ReofferDiagnostics').classList.toggle('hidden', !reofferFlow);
+  $('#metric2MasterclassStats').classList.toggle('hidden', !masterclassFlow);
   if (experimentFlow) {
     const link = `${location.origin}/?preview_funnel=marketer`;
     $('#metric2ExperimentLink').textContent = link;
     $('#metric2ExperimentLink').dataset.link = link;
   }
-  $('#metric2FlowEyebrow').textContent = resultFlow ? 'Ссылка /result' : experimentFlow ? 'Вариант эксперимента' : reofferFlow ? 'Повторное предложение' : 'Обычная ссылка';
-  $('#metric2FlowTitle').textContent = resultFlow ? 'Получение результатов анализов' : experimentFlow ? 'Новое предложение marketer' : reofferFlow ? 'Напоминание перед медосмотром' : 'Основной вариант анкеты';
+  $('#metric2FlowEyebrow').textContent = resultFlow ? 'Ссылка /result' : masterclassFlow ? 'QR-коды мастер-классов' : experimentFlow ? 'Вариант эксперимента' : reofferFlow ? 'Повторное предложение' : 'Обычная ссылка';
+  $('#metric2FlowTitle').textContent = resultFlow ? 'Получение результатов анализов' : masterclassFlow ? 'Посадочная страница мастер-класса' : experimentFlow ? 'Новое предложение marketer' : reofferFlow ? 'Напоминание перед медосмотром' : 'Основной вариант анкеты';
   $('#metric2FlowDescription').textContent = resultFlow
     ? 'Отдельная воронка для пользователей, которые пришли по специальной ссылке за результатами. Обычное анкетирование сюда не входит.'
+    : masterclassFlow
+    ? 'Отдельная ветка пользователей, которые отсканировали QR-код конкретного предприятия и мастер-класса.'
     : experimentFlow
     ? 'Путь варианта marketer: новый экран предложения чек-апов, экран удержания, выбор оплаты и финальный результат. Считаются только пользователи этого варианта.'
     : reofferFlow
@@ -1583,12 +1590,22 @@ function renderMetric2(data) {
     : 'Основная воронка новых пользователей: приветствие, регистрация, анкета, обследования и завершение. Переходы по ссылке /result сюда не входят.';
   const summary = $('#metric2Summary');
   summary.innerHTML = [
-    [resultFlow ? 'Пришли по пути result' : experimentFlow ? 'Попали в вариант «маркетолог»' : reofferFlow ? 'Получили повторное предложение' : 'На первом экране',data.summary?.start_users || 0,'100% — база этой ветки'],
-    [resultFlow ? 'Получили результат пути' : 'Дошли до завершения',data.summary?.reached_completion || 0,'уникальных пользователей'],
+    [resultFlow ? 'Пришли по пути result' : masterclassFlow ? 'Открыли страницу мастер-класса' : experimentFlow ? 'Попали в вариант «маркетолог»' : reofferFlow ? 'Получили повторное предложение' : 'На первом экране',data.summary?.start_users || 0,'100% — база этой ветки'],
+    [resultFlow ? 'Получили результат пути' : masterclassFlow ? 'Открыли Консилиум' : 'Дошли до завершения',data.summary?.reached_completion || 0,'уникальных пользователей'],
   ].map(([label,value,note]) => `<article class="analytics-metric"><span>${label}</span><strong>${Number(value).toLocaleString('ru-RU')}</strong><small>${note}</small></article>`).join('');
   if (reofferFlow) {
     const reoffer = data.summary?.reoffer || {};
     summary.innerHTML += (reoffer.duration_buckets || []).map(item => `<article class="analytics-metric"><span>${escapeHtml(item.label)}</span><strong>${Number(item.users || 0).toLocaleString('ru-RU')}</strong><small>активное время на экране предложения</small></article>`).join('');
+  }
+  if (masterclassFlow) {
+    const table = $('#metric2MasterclassTable');
+    table.replaceChildren();
+    for (const item of data.masterclasses?.enterprises || []) {
+      const row = document.createElement('tr');
+      [item.company || '—',item.inn || '—',item.masterclass_name || item.masterclass_code || '—',item.users || 0,item.continued_users || 0,item.visit_count || 0].forEach(value => textCell(row,String(value)));
+      table.append(row);
+    }
+    if (!(data.masterclasses?.enterprises || []).length) emptyTable(table,6);
   }
   const root = $('#metric2Flow');
   root.replaceChildren();
@@ -1753,7 +1770,7 @@ function closeMetric2Modal() {
 }
 
 async function loadMetric2(flow = metric2ActiveFlow) {
-  metric2ActiveFlow = ['result','experiment','reoffer'].includes(flow) ? flow : 'standard';
+  metric2ActiveFlow = ['result','experiment','reoffer','masterclass'].includes(flow) ? flow : 'standard';
   closeMetric2Modal();
   return withPanelLoading('#metric2AdminView', async () => {
     const params = new URLSearchParams({period:$('#metric2Period').value,flow:metric2ActiveFlow});
@@ -1769,6 +1786,7 @@ async function loadMetric2(flow = metric2ActiveFlow) {
       if (requestedFlow === 'reoffer') await loadCheckupReofferDiagnostics();
     }
   }, metric2ActiveFlow === 'result' ? 'Строим путь получения результатов…'
+    : metric2ActiveFlow === 'masterclass' ? 'Строим путь мастер-классов…'
     : metric2ActiveFlow === 'experiment' ? 'Строим путь воронки маркетолога…'
     : metric2ActiveFlow === 'reoffer' ? 'Строим путь повторного предложения…' : 'Строим обычный стартовый путь…');
 }
@@ -2644,6 +2662,9 @@ $('#metric2StandardFlow').addEventListener('click', () => {
 });
 $('#metric2ResultFlow').addEventListener('click', () => {
   if (metric2ActiveFlow !== 'result') loadMetric2('result').catch(showDashboardError);
+});
+$('#metric2MasterclassFlow').addEventListener('click', () => {
+  if (metric2ActiveFlow !== 'masterclass') loadMetric2('masterclass').catch(showDashboardError);
 });
 $('#metric2ExperimentFlow').addEventListener('click', () => {
   if (metric2ActiveFlow !== 'experiment') loadMetric2('experiment').catch(showDashboardError);

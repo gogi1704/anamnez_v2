@@ -935,6 +935,154 @@ def current_user_is_ikp() -> bool:
         ).fetchone())
 
 
+MASTERCLASS_OPTIONS = (
+    ("masterclass_1", "Мастер-класс 1"),
+    ("masterclass_2", "Мастер-класс 2"),
+    ("masterclass_3", "Мастер-класс 3"),
+    ("masterclass_4", "Мастер-класс 4"),
+    ("masterclass_5", "Мастер-класс 5"),
+)
+MASTERCLASS_LABELS = dict(MASTERCLASS_OPTIONS)
+
+
+def normalize_masterclass_identity(
+    inn: str, company: str, masterclass_code: str,
+) -> tuple[str, str, str, str, str]:
+    _, normalized_inn, normalized_company = normalize_ikp_identity(inn, company)
+    code = str(masterclass_code or "").strip().lower()
+    if code not in MASTERCLASS_LABELS:
+        raise ValueError("Выберите мастер-класс из списка")
+    source_key = f"inn:{normalized_inn}:masterclass:{code}"
+    return source_key, normalized_inn, normalized_company, code, MASTERCLASS_LABELS[code]
+
+
+def provision_masterclass_access(
+    inn: str, company: str, masterclass_code: str, access_token: str,
+) -> dict:
+    source_key, normalized_inn, normalized_company, code, label = (
+        normalize_masterclass_identity(inn, company, masterclass_code)
+    )
+    if not access_token or len(access_token) < 32:
+        raise ValueError("Некорректный токен ссылки")
+    now = utc_now()
+    with _write_lock, connection() as conn:
+        existing = conn.execute(
+            "SELECT id,created_at,access_token FROM masterclass_access_links WHERE source_key=?",
+            (source_key,),
+        ).fetchone()
+        link_id = existing["id"] if existing else str(uuid.uuid4())
+        created_at = existing["created_at"] if existing else now
+        stored_token = existing["access_token"] if existing else access_token
+        stored_hash = hashlib.sha256(stored_token.encode("utf-8")).hexdigest()
+        conn.execute(
+            """INSERT INTO masterclass_access_links
+               (id,source_key,inn,company,masterclass_code,masterclass_name,
+                access_token,token_hash,created_at,updated_at)
+               VALUES (?,?,?,?,?,?,?,?,?,?)
+               ON CONFLICT(source_key) DO UPDATE SET
+                 company=excluded.company,
+                 masterclass_name=excluded.masterclass_name,
+                 updated_at=excluded.updated_at""",
+            (
+                link_id, source_key, normalized_inn, normalized_company, code,
+                label, stored_token, stored_hash, created_at, now,
+            ),
+        )
+        conn.commit()
+    return {
+        "id": link_id, "inn": normalized_inn, "company": normalized_company,
+        "masterclass_code": code, "masterclass_name": label,
+        "access_token": stored_token,
+    }
+
+
+def record_masterclass_access(access_token: str, chel_id: str) -> dict:
+    token_hash = hashlib.sha256(str(access_token or "").encode("utf-8")).hexdigest()
+    now = utc_now()
+    with _write_lock, connection() as conn:
+        link = conn.execute(
+            "SELECT * FROM masterclass_access_links WHERE token_hash=?", (token_hash,),
+        ).fetchone()
+        if not link:
+            raise ValueError("Ссылка мастер-класса не найдена")
+        conn.execute(
+            """UPDATE masterclass_access_links SET visit_count=visit_count+1,
+               last_accessed_at=? WHERE id=?""", (now, link["id"]),
+        )
+        conn.execute(
+            """INSERT INTO masterclass_access_users
+               (link_id,chel_id,first_seen_at,last_seen_at,visit_count)
+               VALUES (?,?,?,?,1)
+               ON CONFLICT(link_id,chel_id) DO UPDATE SET
+                 last_seen_at=excluded.last_seen_at,
+                 visit_count=masterclass_access_users.visit_count+1""",
+            (link["id"], chel_id, now, now),
+        )
+        conn.commit()
+    return dict(link)
+
+
+def current_masterclass_access() -> dict | None:
+    with connection() as conn:
+        row = conn.execute(
+            """SELECT l.id,l.inn,l.company,l.masterclass_code,l.masterclass_name,
+                      u.first_seen_at,u.last_seen_at,u.continued_at
+               FROM masterclass_access_users u
+               JOIN masterclass_access_links l ON l.id=u.link_id
+               WHERE u.chel_id=? ORDER BY u.last_seen_at DESC LIMIT 1""",
+            (current_chel_id(),),
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def mark_current_masterclass_continued() -> dict:
+    now = utc_now()
+    chel_id = current_chel_id()
+    with _write_lock, connection() as conn:
+        row = conn.execute(
+            """SELECT link_id FROM masterclass_access_users
+               WHERE chel_id=? ORDER BY last_seen_at DESC LIMIT 1""", (chel_id,),
+        ).fetchone()
+        if not row:
+            raise ValueError("Сначала откройте ссылку мастер-класса")
+        conn.execute(
+            """UPDATE masterclass_access_users
+               SET continued_at=COALESCE(continued_at,?),last_seen_at=?
+               WHERE link_id=? AND chel_id=?""",
+            (now, now, row["link_id"], chel_id),
+        )
+        conn.commit()
+    return current_masterclass_access() or {}
+
+
+def admin_masterclass_report() -> dict:
+    with connection() as conn:
+        links = [dict(row) for row in conn.execute(
+            """SELECT l.id,l.inn,l.company,l.masterclass_code,l.masterclass_name,
+                      l.created_at,l.last_accessed_at,l.visit_count,
+                      COUNT(DISTINCT u.chel_id) AS users,
+                      COUNT(DISTINCT CASE WHEN u.continued_at IS NOT NULL THEN u.chel_id END) AS continued_users
+               FROM masterclass_access_links l
+               LEFT JOIN masterclass_access_users u ON u.link_id=l.id
+               GROUP BY l.id ORDER BY COALESCE(l.last_accessed_at,l.created_at) DESC"""
+        ).fetchall()]
+        totals = conn.execute(
+            """SELECT COUNT(DISTINCT chel_id) AS users,
+                      COUNT(DISTINCT CASE WHEN continued_at IS NOT NULL THEN chel_id END) AS continued_users
+               FROM masterclass_access_users"""
+        ).fetchone()
+    return {
+        "summary": {
+            "links": len(links),
+            "visits": sum(int(item["visit_count"] or 0) for item in links),
+            "users": int(totals["users"] or 0),
+            "continued_users": int(totals["continued_users"] or 0),
+        },
+        "enterprises": links,
+        "generated_at": utc_now(),
+    }
+
+
 def admin_ikp_report() -> dict:
     with connection() as conn:
         links = [dict(row) for row in conn.execute(
@@ -4245,6 +4393,33 @@ def init_db() -> None:
                 FOREIGN KEY(chel_id) REFERENCES users(chel_id) ON DELETE CASCADE
             );
 
+            CREATE TABLE IF NOT EXISTS masterclass_access_links (
+                id TEXT PRIMARY KEY,
+                source_key TEXT NOT NULL UNIQUE,
+                inn TEXT NOT NULL,
+                company TEXT NOT NULL DEFAULT '',
+                masterclass_code TEXT NOT NULL,
+                masterclass_name TEXT NOT NULL,
+                access_token TEXT NOT NULL UNIQUE,
+                token_hash TEXT NOT NULL UNIQUE,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                last_accessed_at TEXT,
+                visit_count INTEGER NOT NULL DEFAULT 0
+            );
+
+            CREATE TABLE IF NOT EXISTS masterclass_access_users (
+                link_id TEXT NOT NULL,
+                chel_id TEXT NOT NULL,
+                first_seen_at TEXT NOT NULL,
+                last_seen_at TEXT NOT NULL,
+                continued_at TEXT,
+                visit_count INTEGER NOT NULL DEFAULT 1,
+                PRIMARY KEY(link_id,chel_id),
+                FOREIGN KEY(link_id) REFERENCES masterclass_access_links(id) ON DELETE CASCADE,
+                FOREIGN KEY(chel_id) REFERENCES users(chel_id) ON DELETE CASCADE
+            );
+
             CREATE TABLE IF NOT EXISTS user_device_stats (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 chel_id TEXT NOT NULL,
@@ -5306,6 +5481,7 @@ def init_db() -> None:
         conn.execute("CREATE INDEX IF NOT EXISTS idx_conversations_chel_id ON conversations(chel_id, updated_at)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_users_registered_at ON users(registered_at)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_ikp_access_users_chel_id ON ikp_access_users(chel_id,last_seen_at)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_masterclass_access_users_chel_id ON masterclass_access_users(chel_id,last_seen_at)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_users_last_seen_at ON users(last_seen_at)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_conversations_updated_at ON conversations(updated_at)")
         conn.execute(

@@ -124,6 +124,8 @@ function analyticsAttribution() {
       ? 'diagnostic'
       : state.checkupReoffer?.active
       ? 'checkup_reoffer'
+      : isMasterclassEntryUrl()
+      ? 'masterclass'
       : isResultEntryUrl()
       ? 'result'
       : params.get('splitter_source') || params.get('utm_source') || params.get('source') || '',
@@ -700,6 +702,78 @@ function isResultEntryUrl() {
     || params.has('result')
     || params.get('flow') === 'result'
     || params.get('source') === 'result';
+}
+
+function isMasterclassEntryUrl() {
+  return window.location.pathname.replace(/\/+$/, '').startsWith('/masterclass/');
+}
+
+function masterclassContinuationKey() {
+  const token = window.location.pathname.replace(/\/+$/, '').split('/').pop() || '';
+  return `consilium_masterclass_continued_${token.slice(0,80)}`;
+}
+
+function trackMasterclassScreen() {
+  currentOnboardingAnalyticsScreen = 'masterclass_landing';
+  trackEvent('onboarding_screen_viewed', {
+    screen:'masterclass_landing', previous_screen:'', context:'masterclass',
+  });
+}
+
+function trackMasterclassAction(action) {
+  trackEvent('onboarding_screen_action', {
+    screen:'masterclass_landing', action, context:'masterclass',
+  });
+}
+
+function renderMasterclassLanding(entry) {
+  hideEntryScreens();
+  $('#onboarding').classList.remove('hidden');
+  setOnboardingMeta('Мастер-класс', 100);
+  $('#onboardingContent').innerHTML = `<div class="masterclass-landing">
+    <div class="masterclass-landing-orbit" aria-hidden="true"><i></i><i></i><i></i></div>
+    <span class="onboarding-kicker">Здоровье на вашем предприятии</span>
+    <h1>${escapeHtml(entry.masterclass_name || 'Мастер-класс')}</h1>
+    <p class="masterclass-company">${escapeHtml(entry.company || `Предприятие · ИНН ${entry.inn || ''}`)}</p>
+    <p class="onboarding-lead">Добро пожаловать! Здесь начинается практическая встреча о здоровье, привычках и простых действиях, которые помогают чувствовать себя лучше каждый день.</p>
+    <div class="masterclass-topics">
+      <article><i>01</i><strong>Понятно</strong><span>Без сложных терминов и длинных лекций</span></article>
+      <article><i>02</i><strong>Практично</strong><span>Идеи, которые можно применить сразу</span></article>
+      <article><i>03</i><strong>Персонально</strong><span>После встречи можно продолжить в Консилиуме</span></article>
+    </div>
+    <div class="masterclass-invitation"><b>Ваш следующий шаг</b><span>Откройте Консилиум, чтобы сохранить доступ к материалам и возможностям сервиса.</span></div>
+    <div class="onboarding-actions"><button type="button" class="onboarding-next" data-masterclass-action="continue">Открыть Консилиум →</button></div>
+  </div>`;
+  $('#onboarding').scrollTop = 0;
+  trackMasterclassScreen();
+}
+
+async function continueMasterclassEntry() {
+  const button = $('#onboardingContent [data-masterclass-action="continue"]');
+  if (button) button.disabled = true;
+  try {
+    await api('/api/masterclass-entry/start', {method:'POST', body:'{}'});
+    localStorage.setItem(masterclassContinuationKey(), '1');
+    trackMasterclassAction('continue');
+    if (state.identity?.authenticated) await enterKnownUser();
+    else showAuthGate();
+  } catch (error) {
+    showOnboardingError(error.message);
+    if (button) button.disabled = false;
+  }
+}
+
+async function enterMasterclassFlow() {
+  const entry = await api('/api/masterclass-entry');
+  if (entry.continued_at || localStorage.getItem(masterclassContinuationKey()) === '1') {
+    if (!entry.continued_at) {
+      await api('/api/masterclass-entry/start', {method:'POST', body:'{}'});
+    }
+    if (state.identity?.authenticated) await enterKnownUser();
+    else showAuthGate();
+    return;
+  }
+  renderMasterclassLanding(entry);
 }
 
 function readResultFlow() {
@@ -2750,6 +2824,11 @@ async function openMainApp({ skipIntro = false, allowIncompleteOnboarding = fals
 }
 
 $('#onboardingContent').addEventListener('click', async event => {
+  const masterclassAction = event.target.closest('[data-masterclass-action]')?.dataset.masterclassAction;
+  if (masterclassAction === 'continue') {
+    await continueMasterclassEntry();
+    return;
+  }
   const resultAction = event.target.closest('[data-result-action]')?.dataset.resultAction;
   if (resultAction) {
     if (resultAction === 'begin') {
@@ -6403,6 +6482,7 @@ async function init() {
     const messengerLoginCompleted = entryParams.get('auth') === 'messenger_login';
     const forceWelcomePreview = entryParams.get('welcome') === '1';
     const resultEntryRequested = isResultEntryUrl();
+    const masterclassEntryRequested = isMasterclassEntryUrl();
     const pendingResultFlow = readResultFlow();
     if (messengerLoginCompleted) {
       entryParams.delete('auth');
@@ -6411,6 +6491,10 @@ async function init() {
     }
     if ((resultEntryRequested || pendingResultFlow) && !messengerLoginRequired) {
       await enterResultFlow({explicit:resultEntryRequested && !pendingResultFlow});
+      return;
+    }
+    if (masterclassEntryRequested && !messengerLoginRequired) {
+      await enterMasterclassFlow();
       return;
     }
     if (entryParams.get('checkup_reoffer') && !messengerLoginRequired) {
