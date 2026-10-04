@@ -97,6 +97,118 @@ MARKETER_RULE_TEST_IDS = {
 }
 
 
+# Variant C evaluates every applicable signal and lets the editable marketer
+# configuration choose the two highest-priority ones.  Keep this mapping free
+# of tumour markers: the result screen must never recommend them without an
+# individual clinician indication.
+MARKETER_RESULT_RULE_TEST_IDS = {
+    1: ("fatigue_basic", "iron", "vitamin_d"),
+    2: ("fatigue_basic", "vitamin_d"),
+    3: ("kidneys", "thyroid", "lipids"),
+    4: ("weight_basic", "lipids", "liver_basic"),
+    5: ("liver_basic", "kidneys"),
+    6: ("joints", "inflammation"),
+    7: ("female_hormones", "thyroid"),
+    8: ("male_health", "lipids"),
+    10: ("liver_basic", "kidneys", "vitamin_d"),
+}
+
+
+def marketer_result_context(
+    profile: dict, available_ids: set[str],
+    body_symptoms: list[dict] | None = None,
+    tests: list[dict] | None = None,
+) -> dict:
+    """Return all applicable questionnaire signals for marketer variant C.
+
+    Priority is intentionally applied in the browser from the editable public
+    configuration.  Returning every matched rule means changing that priority
+    does not require the questionnaire to be submitted again.
+    """
+    height = float(profile.get("height_cm") or 0)
+    weight = float(profile.get("weight_kg") or 0)
+    bmi = weight / ((height / 100) ** 2) if height else 0
+    sex = str(profile.get("sex") or "").strip().lower()
+    try:
+        age = int(profile.get("age") or 0)
+    except (TypeError, ValueError):
+        age = 0
+
+    matched: list[int] = []
+    if profile.get("fatigue") == "yes" and sex == "female":
+        matched.append(1)
+    if profile.get("fatigue") == "yes" and sex == "male":
+        matched.append(2)
+    if profile.get("blood_pressure") in {"high", "unstable"}:
+        matched.append(3)
+    if bmi >= 30:
+        matched.append(4)
+    if profile.get("alcohol") == "often":
+        matched.append(5)
+    if profile.get("joint_pain") == "yes":
+        matched.append(6)
+    if sex == "female" and age >= 45:
+        matched.append(7)
+    if sex == "male" and age >= 40:
+        matched.append(8)
+
+    notes = str(profile.get("notes") or "").strip().lower()
+    active_body_symptoms = [
+        item for item in (body_symptoms or [])
+        if str(item.get("status") or "active").lower() == "active"
+    ]
+    no_complaint_answers = {
+        "", "нет", "нет жалоб", "жалоб нет", "не беспокоит", "ничего",
+    }
+    if not matched and (
+        notes not in no_complaint_answers or active_body_symptoms
+    ):
+        matched.append(9)
+    if not matched:
+        matched.append(10)
+
+    rule_test_ids = {
+        str(rule_id): [
+            test_id for test_id in test_ids if test_id in available_ids
+        ]
+        for rule_id, test_ids in MARKETER_RESULT_RULE_TEST_IDS.items()
+    }
+    # Free-text complaints and saved body-map symptoms reuse the existing
+    # deterministic complaint routing.  This keeps rule 9 aligned with the
+    # packages a user actually sees on the following screen.
+    complaint_profile = dict(profile)
+    if active_body_symptoms:
+        symptom_text = " ".join(
+            " ".join(str(item.get(key) or "") for key in ("region", "symptom_type", "notes"))
+            for item in active_body_symptoms
+        ).strip()
+        complaint_profile["notes"] = " ".join(
+            part for part in (str(profile.get("notes") or "").strip(), symptom_text)
+            if part
+        )
+    rule_test_ids["9"] = [
+        test_id for test_id in featured_test_ids(complaint_profile)
+        if test_id in available_ids and test_id not in {"ca125", "ca153", "ca199"}
+    ][:3]
+
+    catalog_by_id = {
+        str(item.get("id") or ""): item
+        for item in (TEST_CATALOG if tests is None else tests)
+    }
+    primary_rule_9 = catalog_by_id.get(rule_test_ids["9"][0], {}) \
+        if rule_test_ids["9"] else {}
+    rule_9_checks = [
+        item.strip() for item in str(primary_rule_9.get("includes") or "").split(",")
+        if item.strip()
+    ][:3]
+    return {
+        "matched_rule_ids": matched,
+        "rule_test_ids": rule_test_ids,
+        "rule_check_lines": {"9": rule_9_checks},
+        "bmi": round(bmi, 1) if bmi else None,
+    }
+
+
 def gender_incompatible_test_ids(profile: dict) -> list[str]:
     sex = str(profile.get("sex") or "").strip().lower()
     if sex not in {"female", "male"}:
@@ -288,6 +400,7 @@ def marketer_offer_context(profile: dict, available_ids: set[str]) -> dict:
 
 def public_onboarding(
     state: dict, profile: dict, tests: list[dict] | None = None,
+    body_symptoms: list[dict] | None = None,
 ) -> dict:
     catalog = TEST_CATALOG if tests is None else tests
     available_ids = {item["id"] for item in catalog}
@@ -320,4 +433,7 @@ def public_onboarding(
         "featured_test_ids": [item for item in featured_test_ids(profile) if item in available_ids],
         "examination_recommendation_copy": examination_recommendation_copy(profile),
         "marketer_offer": marketer_offer_context(profile, marketer_available_ids),
+        "marketer_result": marketer_result_context(
+            profile, marketer_available_ids, body_symptoms, catalog,
+        ),
     }

@@ -299,9 +299,11 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
             return self._json(200, {"status": "ok"})
         if path == "/api/public-config":
             self._ensure_user_context()
-            preview_variant = parse_qs(parsed.query).get("preview_funnel", [""])[0]
+            public_query = parse_qs(parsed.query)
+            preview_variant = public_query.get("preview_funnel", [""])[0]
+            preview_marketer_variant = public_query.get("preview_marketer_variant", [""])[0]
             experiment = (
-                db.experiment_preview_assignment(preview_variant)
+                db.experiment_preview_assignment(preview_variant, preview_marketer_variant)
                 if preview_variant in ("marketer", "control")
                 else db.current_experiment_assignment()
             )
@@ -707,6 +709,7 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
         if path == "/api/onboarding":
             return self._json(200, public_onboarding(
                 db.get_onboarding(), db.get_profile(), db.list_examinations(),
+                db.list_body_symptoms(status="active", limit=20),
             ))
         if path == "/api/purchases":
             return self._json(200, {"purchases": db.list_payment_orders()})
@@ -1517,6 +1520,7 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                     "test": bool(result.get("is_test")),
                     "onboarding": public_onboarding(
                         db.get_onboarding(), db.get_profile(), db.list_examinations(),
+                        db.list_body_symptoms(status="active", limit=20),
                     ),
                 })
             except (ValueError, TypeError, json.JSONDecodeError, UnicodeDecodeError) as exc:
@@ -1979,6 +1983,7 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
             self._track_analytics("not_medical_exam_selected")
             return self._json(200, public_onboarding(
                 state, db.get_profile(), db.list_examinations(),
+                db.list_body_symptoms(status="active", limit=20),
             ))
         if path == "/api/onboarding/not-medical-exam/back":
             state = db.save_onboarding(
@@ -1988,6 +1993,7 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
             self._track_analytics("not_medical_exam_returned")
             return self._json(200, public_onboarding(
                 state, db.get_profile(), db.list_examinations(),
+                db.list_body_symptoms(status="active", limit=20),
             ))
         if path == "/api/onboarding/not-medical-exam/continue":
             state = db.save_onboarding(
@@ -1997,20 +2003,28 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
             self._track_analytics("not_medical_exam_services_offered")
             return self._json(200, public_onboarding(
                 state, db.get_profile(), db.list_examinations(),
+                db.list_body_symptoms(status="active", limit=20),
             ))
         if path == "/api/onboarding/profile":
             try:
                 profile = db.save_profile(self._validate_profile(self._read_json(), required=True))
                 state = db.save_onboarding(
                     status="exams", selected_tests=[], payment_status="none",
-                    questionnaire_skipped=False,
+                    questionnaire_skipped=False, marketer_result_seen=False,
                 )
                 self._track_analytics("questionnaire_completed")
                 return self._json(200, public_onboarding(
                     state, profile, db.list_examinations(),
+                    db.list_body_symptoms(status="active", limit=20),
                 ))
             except (ValueError, TypeError) as exc:
                 return self._json(422, {"detail": str(exc)})
+        if path == "/api/onboarding/marketer-result-seen":
+            state = db.mark_marketer_result_seen()
+            return self._json(200, public_onboarding(
+                state, db.get_profile(), db.list_examinations(),
+                db.list_body_symptoms(status="active", limit=20),
+            ))
         if path == "/api/onboarding/appearance":
             try:
                 payload = self._read_json()
@@ -2023,6 +2037,7 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                 self._track_analytics("appearance_completed", {"font_size": font_size})
                 return self._json(200, public_onboarding(
                     state, db.get_profile(), db.list_examinations(),
+                    db.list_body_symptoms(status="active", limit=20),
                 ))
             except (ValueError, TypeError) as exc:
                 return self._json(422, {"detail": str(exc)})
@@ -2040,6 +2055,7 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                 )
                 priced_onboarding = public_onboarding(
                     state, db.get_profile(), db.list_examinations(),
+                    db.list_body_symptoms(status="active", limit=20),
                 )
                 examination_items = priced_onboarding["tests"]
                 total_price = sum(
@@ -2064,6 +2080,7 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                     self._track_analytics("onboarding_completed", {"result": "examinations_skipped"})
                 return self._json(200, public_onboarding(
                     state, db.get_profile(), db.list_examinations(),
+                    db.list_body_symptoms(status="active", limit=20),
                 ))
             except (ValueError, TypeError) as exc:
                 return self._json(422, {"detail": str(exc)})
@@ -2083,6 +2100,7 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                 self._track_analytics("onboarding_completed", {"result": "examinations_selected"})
                 return self._json(200, public_onboarding(
                     state, db.get_profile(), db.list_examinations(),
+                    db.list_body_symptoms(status="active", limit=20),
                 ))
             except (ValueError, TypeError) as exc:
                 return self._json(422, {"detail": str(exc)})
@@ -2093,6 +2111,7 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
             state = db.save_onboarding(status="complete", intro_seen=True)
             return self._json(200, public_onboarding(
                 state, db.get_profile(), db.list_examinations(),
+                db.list_body_symptoms(status="active", limit=20),
             ))
         if path == "/api/context":
             try:

@@ -59,6 +59,7 @@
       experiment: {
         key:String(experiment.key || '').slice(0,50),
         variant:String(experiment.variant || '').slice(0,20),
+        marketer_variant:String(experiment.marketer_variant || '').slice(0,8),
         version:String(experiment.version || '').slice(0,40),
         event:String(goal || '').slice(0,80),
         screen:String(details.screen || '').slice(0,80),
@@ -69,7 +70,7 @@
 
   function safeOfferParams(details = {}) {
     const allowed = {
-      variant:40, sex:20, age_group:20, pressure:40, sugar:40,
+      variant:40, marketer_variant:8, sex:20, age_group:20, pressure:40, sugar:40,
       smoking:40, complaints:8, is_test:8, recommended_package:80,
       rule_id:8, package:80, selected:8, source:20, packages:400,
     };
@@ -154,6 +155,8 @@
   const publicConfigUrl = new URL('/api/public-config', location.origin);
   const previewFunnel = new URLSearchParams(location.search).get('preview_funnel');
   if (previewFunnel) publicConfigUrl.searchParams.set('preview_funnel', previewFunnel);
+  const previewMarketerVariant = new URLSearchParams(location.search).get('preview_marketer_variant');
+  if (previewMarketerVariant) publicConfigUrl.searchParams.set('preview_marketer_variant', previewMarketerVariant);
   fetch(publicConfigUrl, { credentials: 'same-origin', cache: 'no-store' })
     .then(response => response.ok ? response.json() : {})
     .then(config => {

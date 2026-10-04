@@ -173,6 +173,68 @@ MARKETER_EXAMINATION_TEXT_DEFAULTS = {
     "personal_rule_8": "{имя}, после 45 самочувствие часто меняется из-за гормонального фона. Лучше увидеть картину целиком, чем списывать всё на возраст",
     "personal_rule_9": "{имя}, после 40 заболевания простаты встречаются часто, а на ранних стадиях проявляются слабо. Чем раньше контролируются такие показатели, тем спокойнее и понятнее ситуация",
     "personal_rule_10": "{имя}, жалоб нет — это как раз хорошо. Многие изменения долго не дают ярких симптомов, поэтому профилактическая проверка и важна. Можно начать с самого базового",
+    "result_signal_priority": "1,2,3,4,5,6,7,8,9,10",
+    "result_progress_label": "Анкета заполнена · спасибо, что уделили время",
+    "result_title_template": "{имя}, вот что показали ваши ответы",
+    "result_title_without_name": "Вот что показали ваши ответы",
+    "result_bridge": "Анкета — не формальность: по ответам видно, на что врач обратил бы внимание в первую очередь.",
+    "result_detected_title": "Вы отметили",
+    "result_explanation_title": "С чем это часто связано",
+    "result_prevention_explanation_title": "Что это значит",
+    "result_checks_title": "Что стоит проверить",
+    "result_prevention_checks_title": "Что обычно проверяют для профилактики",
+    "result_doctor_initials": "ТВ",
+    "result_doctor_signature": "Татьяна Витальевна, врач высшей категории",
+    "result_decision_title": "Это можно сдать прямо на медосмотре",
+    "result_decision_body": "Из той же пробы, что возьмут на осмотре — без записи и отдельной поездки.",
+    "result_privacy": "Конфиденциально: ваш выбор и результаты анализов видите только вы.",
+    "result_primary_cta": "Выбрать анализы",
+    "result_decline_link": "Завершить без дополнительных анализов",
+    "result_disclaimer": "Это не диагноз, а то, на что стоит обратить внимание. Добавлять анализы не обязательно.",
+    "selection_title": "Анализы к медосмотру",
+    "selection_personal_template": "{имя}, эти анализы покажут, {phrase1}{phrase2_part}.",
+    "result_rule_1_chip": "усталость, которая не проходит после отдыха",
+    "result_rule_1_explanation": "У женщин слабость и снижение энергии очень часто связаны с дефицитом железа. Это частая находка, и хорошая новость в том, что она обычно корректируется.",
+    "result_rule_1_checks": "Запасы железа · ферритин, железо\nЩитовидную железу · ТТГ\nВитамин D",
+    "result_rule_1_phrase": "связана ли ваша усталость с нехваткой железа",
+    "result_rule_2_chip": "усталость, которая не проходит после отдыха",
+    "result_rule_2_explanation": "Длительная усталость часто связана с дефицитом витамина D и работой щитовидной железы. Это частая и корректируемая причина, её удобно исключить одной проверкой.",
+    "result_rule_2_checks": "Витамин D\nЩитовидную железу · ТТГ\nЗапасы железа · ферритин",
+    "result_rule_2_phrase": "связана ли ваша усталость с нехваткой витамина D",
+    "result_rule_3_chip": "давление бывает повышенным",
+    "result_rule_3_explanation": "Повышенное давление бывает не само по себе — оно может быть связано с работой почек и щитовидной железы. Важно вовремя увидеть причины и не пропустить риски для сосудов и сердца.",
+    "result_rule_3_checks": "Работу почек · креатинин, мочевина\nЩитовидную железу · ТТГ\nХолестерин · ЛПНП, ЛПВП",
+    "result_rule_3_phrase": "связано ли давление с почками и щитовидной железой",
+    "result_rule_4_chip": "вес выше нормы для вашего роста",
+    "result_rule_4_explanation": "По сочетанию роста и веса организму сейчас непросто справляться с обменной нагрузкой. Это не про внешность, а про здоровье: важно понять причины и проверить, не страдают ли уже органы.",
+    "result_rule_4_checks": "Щитовидную железу · ТТГ, Т3, Т4\nПечень · АЛТ, АСТ\nХолестерин · ЛПНП, ЛПВП",
+    "result_rule_4_phrase": "есть ли обменные причины набора веса",
+    "result_rule_5_chip": "алкоголь чаще раза в неделю",
+    "result_rule_5_explanation": "Даже если пока ничего не беспокоит, алкоголь часто отражается на функции печени и почек. Многие изменения долго никак себя не проявляют — анализы помогают увидеть их раньше симптомов.",
+    "result_rule_5_checks": "Печень · АЛТ, АСТ, билирубин\nПоджелудочную · альфа-амилаза\nРаботу почек · креатинин",
+    "result_rule_5_phrase": "как справляются печень и почки",
+    "result_rule_6_chip": "боли или отёчность суставов",
+    "result_rule_6_explanation": "Боль в суставах бывает по разным причинам: иногда это возрастные изменения, иногда воспалительный процесс. Проверка помогает не гадать и понять, нужен ли ревматолог.",
+    "result_rule_6_checks": "Признаки воспаления · СРБ\nМочевую кислоту\nРевматоидный фактор",
+    "result_rule_6_phrase": "есть ли воспалительный процесс в суставах",
+    "result_rule_7_chip": "{возраст} лет",
+    "result_rule_7_explanation": "После 45 самочувствие часто меняется из-за гормонального фона. Лучше увидеть картину целиком, чем списывать всё на возраст.",
+    "result_rule_7_checks": "Гормональный фон · ФСГ, ЛГ, эстрадиол\nЩитовидную железу · ТТГ",
+    "result_rule_7_phrase": "в порядке ли гормональный фон",
+    "result_rule_8_chip": "{возраст} лет",
+    "result_rule_8_explanation": "После 40 заболевания простаты встречаются часто, а на ранних стадиях проявляются слабо. Чем раньше контролируются такие показатели, тем спокойнее и понятнее ситуация.",
+    "result_rule_8_checks": "Мужское здоровье · тестостерон, ПСА\nХолестерин · ЛПНП, ЛПВП",
+    "result_rule_8_phrase": "в порядке ли мужское здоровье",
+    "result_rule_9_chip": "есть жалобы",
+    "result_rule_9_explanation": "Вы описали жалобы — по ним есть обследования, которые помогут найти причину. Это поможет не гадать, а понимать, с чего начать.",
+    "result_rule_9_checks": "Показатели рекомендуемого пакета",
+    "result_rule_9_phrase": "что стоит за вашими жалобами",
+    "result_rule_10_chip": "жалоб нет",
+    "result_rule_10_chip_pressure": "давление в норме",
+    "result_rule_10_chip_no_smoking": "не курите",
+    "result_rule_10_explanation": "Тревожных сигналов в ответах нет — и это хорошо. Многие изменения долго не дают ярких симптомов, поэтому профилактическая проверка и важна: по самочувствию не всегда видно реальную картину.",
+    "result_rule_10_checks": "Работу печени · АЛТ, АСТ, билирубин\nРаботу почек · креатинин, мочевина\nВитамин D",
+    "result_rule_10_phrase": "всё ли в порядке по базовым показателям",
 }
 
 
@@ -237,6 +299,13 @@ def admin_update_marketer_examination_texts(payload: dict) -> dict:
             raise ValueError(f"Поле {key} не может быть пустым")
         if len(value) > 2000:
             raise ValueError(f"Поле {key} слишком длинное")
+        if key == "result_signal_priority":
+            try:
+                priority = [int(item.strip()) for item in value.split(",")]
+            except ValueError:
+                raise ValueError("Приоритет сигналов должен содержать номера через запятую") from None
+            if sorted(priority) != list(range(1, 11)):
+                raise ValueError("В приоритете должны быть все номера от 1 до 10 без повторов")
         current[key] = value
     now = utc_now()
     with _write_lock, connection() as conn:
@@ -375,7 +444,7 @@ def current_experiment_assignment() -> dict:
                 (key, chel_id, variant, version, assigned_at),
             )
             conn.commit()
-    return {
+    result = {
         "enabled": True, "key": key, "name": config["name"],
         "variant": variant, "version": version,
         "assigned_at": assigned_at,
@@ -383,9 +452,43 @@ def current_experiment_assignment() -> dict:
         "yandex_enabled": config["yandex_enabled"],
         "yandex_goal_prefix": config["yandex_goal_prefix"],
     }
+    if variant == "marketer":
+        result.update(current_marketer_variant_assignment(key))
+    return result
 
 
-def experiment_preview_assignment(variant: str) -> dict:
+def current_marketer_variant_assignment(experiment_key: str) -> dict:
+    """Split the marketer cohort evenly and persist the B/C assignment."""
+    chel_id = current_chel_id()
+    with _write_lock, connection() as conn:
+        row = conn.execute(
+            "SELECT variant,assigned_at FROM marketer_variant_assignments "
+            "WHERE experiment_key=? AND chel_id=?",
+            (experiment_key, chel_id),
+        ).fetchone()
+        if row:
+            variant, assigned_at = row["variant"], row["assigned_at"]
+        else:
+            assigned_count = conn.execute(
+                "SELECT COUNT(*) FROM marketer_variant_assignments WHERE experiment_key=?",
+                (experiment_key,),
+            ).fetchone()[0]
+            variant = "b" if int(assigned_count or 0) % 2 == 0 else "c"
+            assigned_at = utc_now()
+            conn.execute(
+                """INSERT INTO marketer_variant_assignments
+                   (experiment_key,chel_id,variant,assigned_at) VALUES (?,?,?,?)""",
+                (experiment_key, chel_id, variant, assigned_at),
+            )
+            conn.commit()
+    return {
+        "marketer_variant": variant,
+        "marketer_variant_version": f"marketer_{variant}_v1",
+        "marketer_variant_assigned_at": assigned_at,
+    }
+
+
+def experiment_preview_assignment(variant: str, marketer_variant: str = "") -> dict:
     """Force a specific experiment variant for a demo/QA link.
 
     Never touches experiment_assignments, so opening the link repeatedly
@@ -394,13 +497,20 @@ def experiment_preview_assignment(variant: str) -> dict:
     config = admin_experiment_settings()
     variant = variant if variant in ("control", "marketer") else "control"
     version = config["marketer_version"] if variant == "marketer" else config["control_version"]
-    return {
+    result = {
         "enabled": True, "key": config["experiment_key"], "name": config["name"],
         "variant": variant, "version": version, "preview": True,
         "marketer_percent": config["marketer_percent"],
         "yandex_enabled": config["yandex_enabled"],
         "yandex_goal_prefix": config["yandex_goal_prefix"],
     }
+    if variant == "marketer":
+        nested = marketer_variant if marketer_variant in {"b", "c"} else "b"
+        result.update({
+            "marketer_variant": nested,
+            "marketer_variant_version": f"marketer_{nested}_v1",
+        })
+    return result
 
 
 def admin_experiment_report(period: str = "30") -> dict:
@@ -4614,6 +4724,7 @@ def init_db() -> None:
                 selected_tests TEXT NOT NULL DEFAULT '[]',
                 payment_status TEXT NOT NULL DEFAULT 'none',
                 questionnaire_skipped INTEGER NOT NULL DEFAULT 0,
+                marketer_result_seen INTEGER NOT NULL DEFAULT 0,
                 intro_seen INTEGER NOT NULL DEFAULT 0,
                 font_size TEXT NOT NULL DEFAULT 'extra',
                 updated_at TEXT NOT NULL,
@@ -4697,6 +4808,18 @@ def init_db() -> None:
 
             CREATE INDEX IF NOT EXISTS idx_experiment_assignments_variant_time
             ON experiment_assignments(experiment_key,variant,assigned_at);
+
+            CREATE TABLE IF NOT EXISTS marketer_variant_assignments (
+                experiment_key TEXT NOT NULL,
+                chel_id TEXT NOT NULL,
+                variant TEXT NOT NULL CHECK(variant IN ('b','c')),
+                assigned_at TEXT NOT NULL,
+                PRIMARY KEY(experiment_key,chel_id),
+                FOREIGN KEY(chel_id) REFERENCES users(chel_id) ON DELETE CASCADE
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_marketer_variant_assignments_variant_time
+            ON marketer_variant_assignments(experiment_key,variant,assigned_at);
 
             CREATE TABLE IF NOT EXISTS content_text_settings (
                 section_id TEXT PRIMARY KEY,
@@ -5447,6 +5570,7 @@ def init_db() -> None:
                     selected_tests TEXT NOT NULL DEFAULT '[]',
                     payment_status TEXT NOT NULL DEFAULT 'none',
                     questionnaire_skipped INTEGER NOT NULL DEFAULT 0,
+                    marketer_result_seen INTEGER NOT NULL DEFAULT 0,
                     intro_seen INTEGER NOT NULL DEFAULT 0,
                     font_size TEXT NOT NULL DEFAULT 'standard',
                     updated_at TEXT NOT NULL,
@@ -5467,6 +5591,8 @@ def init_db() -> None:
             conn.execute("ALTER TABLE onboarding_state ADD COLUMN font_size TEXT NOT NULL DEFAULT 'standard'")
         if "questionnaire_skipped" not in onboarding_columns:
             conn.execute("ALTER TABLE onboarding_state ADD COLUMN questionnaire_skipped INTEGER NOT NULL DEFAULT 0")
+        if "marketer_result_seen" not in onboarding_columns:
+            conn.execute("ALTER TABLE onboarding_state ADD COLUMN marketer_result_seen INTEGER NOT NULL DEFAULT 0")
 
         payment_columns = {row[1] for row in conn.execute("PRAGMA table_info(payment_orders)").fetchall()}
         if "hidden_at" not in payment_columns:
@@ -8684,7 +8810,7 @@ def get_onboarding() -> dict:
             (current_chel_id(),),
         ).fetchone()
     if not row:
-        return {"status": "appearance", "selected_tests": [], "payment_status": "none", "questionnaire_skipped": False, "intro_seen": False, "font_size": "extra", "updated_at": None}
+        return {"status": "appearance", "selected_tests": [], "payment_status": "none", "questionnaire_skipped": False, "marketer_result_seen": False, "intro_seen": False, "font_size": "extra", "updated_at": None}
     result = dict(row)
     try:
         result["selected_tests"] = json.loads(result["selected_tests"] or "[]")
@@ -8692,6 +8818,7 @@ def get_onboarding() -> dict:
         result["selected_tests"] = []
     result["intro_seen"] = bool(result.get("intro_seen"))
     result["questionnaire_skipped"] = bool(result.get("questionnaire_skipped"))
+    result["marketer_result_seen"] = bool(result.get("marketer_result_seen"))
     if result.get("font_size") not in {"standard", "large", "extra"}:
         result["font_size"] = "standard"
     return result
@@ -8701,6 +8828,7 @@ def save_onboarding(
     *, status: str, selected_tests: list[str] | None = None,
     payment_status: str | None = None, intro_seen: bool | None = None,
     font_size: str | None = None, questionnaire_skipped: bool | None = None,
+    marketer_result_seen: bool | None = None,
 ) -> dict:
     current = get_onboarding()
     selected = current["selected_tests"] if selected_tests is None else selected_tests
@@ -8708,17 +8836,30 @@ def save_onboarding(
     seen = current.get("intro_seen", False) if intro_seen is None else intro_seen
     size = current.get("font_size", "extra") if font_size is None else font_size
     skipped = current.get("questionnaire_skipped", False) if questionnaire_skipped is None else questionnaire_skipped
+    result_seen = current.get("marketer_result_seen", False) if marketer_result_seen is None else marketer_result_seen
     if size not in {"standard", "large", "extra"}:
         raise ValueError("Некорректный размер текста")
     with _write_lock, connection() as conn:
         conn.execute(
-            """INSERT INTO onboarding_state (chel_id, status, selected_tests, payment_status, questionnaire_skipped, intro_seen, font_size, updated_at)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(chel_id) DO UPDATE SET status=excluded.status,
+            """INSERT INTO onboarding_state (chel_id, status, selected_tests, payment_status, questionnaire_skipped, marketer_result_seen, intro_seen, font_size, updated_at)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(chel_id) DO UPDATE SET status=excluded.status,
             selected_tests=excluded.selected_tests, payment_status=excluded.payment_status,
-            questionnaire_skipped=excluded.questionnaire_skipped, intro_seen=excluded.intro_seen,
+            questionnaire_skipped=excluded.questionnaire_skipped, marketer_result_seen=excluded.marketer_result_seen,
+            intro_seen=excluded.intro_seen,
             font_size=excluded.font_size, updated_at=excluded.updated_at""",
             (current_chel_id(), status, json.dumps(selected, ensure_ascii=False), payment,
-             int(bool(skipped)), int(bool(seen)), size, utc_now()),
+             int(bool(skipped)), int(bool(result_seen)), int(bool(seen)), size, utc_now()),
+        )
+        conn.commit()
+    return get_onboarding()
+
+
+def mark_marketer_result_seen() -> dict:
+    """Persist completion of the one-time variant-C questionnaire summary."""
+    with _write_lock, connection() as conn:
+        conn.execute(
+            "UPDATE onboarding_state SET marketer_result_seen=1,updated_at=? WHERE chel_id=?",
+            (utc_now(), current_chel_id()),
         )
         conn.commit()
     return get_onboarding()

@@ -38,7 +38,7 @@ from backend.orchestrator import ConversationOrchestrator  # noqa: E402
 from backend.onboarding import (  # noqa: E402
     EXAMINATION_UPGRADE_PAIRS, TEST_CATALOG, effective_examination_price, online_examination_price, examination_recommendation_copy,
     featured_test_ids, gender_incompatible_test_ids, normalize_examination_selection, public_onboarding,
-    recommend_test_ids,
+    recommend_test_ids, marketer_result_context,
 )
 from backend.prompts import ORCHESTRATOR_PROMPT, PROFILES  # noqa: E402
 from backend.schemas import AgentResult, RouteDecision, normalize_context  # noqa: E402
@@ -279,6 +279,103 @@ class OrchestratorTests(unittest.TestCase):
             [item["content"] for item in messages if item["role"] == "user"],
             ["Сообщение после ошибки"],
         )
+
+    def test_marketer_result_context_combines_signals_and_excludes_tumour_markers(self):
+        available = {item["id"] for item in TEST_CATALOG}
+        result = marketer_result_context({
+            "sex": "female", "age": 47, "height_cm": 165, "weight_kg": 84,
+            "fatigue": "yes", "blood_pressure": "high", "alcohol": "rarely",
+            "joint_pain": "no", "notes": "",
+        }, available)
+
+        self.assertEqual(result["matched_rule_ids"], [1, 3, 4, 7])
+        self.assertEqual(result["rule_test_ids"]["1"][:2], ["fatigue_basic", "iron"])
+        self.assertTrue({"ca125", "ca153", "ca199"}.isdisjoint(
+            item for values in result["rule_test_ids"].values() for item in values
+        ))
+
+    def test_marketer_result_context_uses_free_text_then_prevention_fallback(self):
+        available = {item["id"] for item in TEST_CATALOG}
+        complaint = marketer_result_context({
+            "sex": "female", "age": 30, "height_cm": 170, "weight_kg": 60,
+            "fatigue": "no", "blood_pressure": "normal", "alcohol": "rarely",
+            "joint_pain": "no", "notes": "Беспокоит кожа",
+        }, available)
+        prevention = marketer_result_context({
+            "sex": "female", "age": 30, "height_cm": 170, "weight_kg": 60,
+            "fatigue": "no", "blood_pressure": "normal", "alcohol": "rarely",
+            "joint_pain": "no", "notes": "Нет жалоб",
+        }, available)
+
+        self.assertEqual(complaint["matched_rule_ids"], [9])
+        self.assertEqual(prevention["matched_rule_ids"], [10])
+
+    def test_marketer_result_context_uses_saved_body_map_symptoms_for_rule_nine(self):
+        available = {item["id"] for item in TEST_CATALOG}
+        result = marketer_result_context({
+            "sex": "female", "age": 30, "height_cm": 170, "weight_kg": 60,
+            "fatigue": "no", "blood_pressure": "normal", "alcohol": "rarely",
+            "joint_pain": "no", "notes": "Нет жалоб",
+        }, available, [{
+            "region": "Левая нога", "symptom_type": "Боль",
+            "notes": "Болит колено", "status": "active",
+        }], TEST_CATALOG)
+
+        self.assertEqual(result["matched_rule_ids"], [9])
+        self.assertEqual(result["rule_test_ids"]["9"][0], "joints")
+        self.assertEqual(
+            result["rule_check_lines"]["9"],
+            [
+                "Мочевая кислота",
+                "С-реактивный белок (СРБ)",
+                "ревматоидный фактор (РФ)",
+            ],
+        )
+
+    def test_marketer_result_rule_nine_ignores_resolved_body_map_symptoms(self):
+        available = {item["id"] for item in TEST_CATALOG}
+        result = marketer_result_context({
+            "sex": "female", "age": 30, "height_cm": 170, "weight_kg": 60,
+            "fatigue": "no", "blood_pressure": "normal", "alcohol": "rarely",
+            "joint_pain": "no", "notes": "Нет жалоб",
+        }, available, [{
+            "region": "Голова", "symptom_type": "Боль", "status": "resolved",
+        }], TEST_CATALOG)
+
+        self.assertEqual(result["matched_rule_ids"], [10])
+
+    def test_marketer_nested_assignment_is_stable_and_even(self):
+        experiment_key = "test_marketer_bc"
+        chel_ids = [f"chel_marketer_bc_{index}" for index in range(4)]
+        try:
+            with db.connection() as conn:
+                conn.execute(
+                    "DELETE FROM marketer_variant_assignments WHERE experiment_key=?",
+                    (experiment_key,),
+                )
+                conn.commit()
+            variants = []
+            for chel_id in chel_ids:
+                db.ensure_user(chel_id)
+                token = db._current_chel_id.set(chel_id)
+                try:
+                    first = db.current_marketer_variant_assignment(experiment_key)
+                    second = db.current_marketer_variant_assignment(experiment_key)
+                finally:
+                    db._current_chel_id.reset(token)
+                self.assertEqual(first["marketer_variant"], second["marketer_variant"])
+                variants.append(first["marketer_variant"])
+            self.assertEqual(variants, ["b", "c", "b", "c"])
+        finally:
+            with db.connection() as conn:
+                conn.execute(
+                    "DELETE FROM marketer_variant_assignments WHERE experiment_key=?",
+                    (experiment_key,),
+                )
+                conn.execute(
+                    "DELETE FROM users WHERE chel_id LIKE 'chel_marketer_bc_%'",
+                )
+                conn.commit()
 
     def test_experiment_report_includes_selected_and_paid_amounts_by_variant(self):
         analytics.init_db()
@@ -3777,7 +3874,8 @@ class OrchestratorTests(unittest.TestCase):
         self.assertNotIn("function renderExamOffer()", script)
         self.assertIn("trackEvent('examinations_opened', { screen:'examinations' })", script)
         self.assertIn("state.profile = state.onboarding.profile;\n    trackEvent('examinations_opened'", script)
-        self.assertIn("else if (state.onboarding.status === 'exams') renderExamSelection()", script)
+        self.assertIn("if (isMarketerVariantC() && !state.onboarding.marketer_result_seen", script)
+        self.assertIn("else renderExamSelection();", script)
         self.assertIn("Во время медосмотра у вас в любом случае возьмут кровь", script)
         self.assertIn("После результатов — рекомендации медицинского ИИ", script)
         self.assertIn("function renderExamCatalogInfo()", script)
@@ -3855,14 +3953,14 @@ class OrchestratorTests(unittest.TestCase):
         self.assertIn("controllerchange", script)
         self.assertIn("url.pathname.startsWith('/api/')", worker)
         self.assertIn("url.pathname.startsWith('/auth/')", worker)
-        self.assertIn("consilium-shell-v150", worker)
+        self.assertIn("consilium-shell-v152", worker)
         self.assertIn("fetch(request)", worker)
-        self.assertIn("/static/styles.css?v=20261003-masterclass-v1", index)
+        self.assertIn("/static/styles.css?v=20261004-marketer-c-v3", index)
         self.assertIn("/static/rich-text.2bf1f5fab764.css", index)
         self.assertTrue((project_root / "static" / "styles.07ffaefb4795.css").is_file())
         self.assertTrue((project_root / "static" / "rich-text.2bf1f5fab764.css").is_file())
-        self.assertIn("/static/app.js?v=20261003-masterclass-v1", index)
-        self.assertIn("/static/metrika.js?v=20261003-masterclass-v1", index)
+        self.assertIn("/static/app.js?v=20261004-marketer-c-v3", index)
+        self.assertIn("/static/metrika.js?v=20261004-marketer-c-v3", index)
         self.assertIn("Enter — новая строка · отправка — кнопкой", index)
         self.assertIn('enterkeyhint="enter"', index)
         self.assertNotIn("$('#chatForm').requestSubmit()", script)
@@ -3948,7 +4046,7 @@ class OrchestratorTests(unittest.TestCase):
         main = (project_root / "backend" / "main.py").read_text(encoding="utf-8")
         config = (project_root / "backend" / "config.py").read_text(encoding="utf-8")
 
-        self.assertIn('src="/static/metrika.js?v=20261003-masterclass-v1"', index)
+        self.assertIn('src="/static/metrika.js?v=20261004-marketer-c-v3"', index)
         self.assertIn('YANDEX_METRIKA_COUNTER_ID', config)
         self.assertIn('path == "/api/public-config"', main)
         self.assertIn('"metrika.js"', main)

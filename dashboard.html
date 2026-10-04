@@ -11,7 +11,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/static/dashboard.css?v=20261003-masterclass-v1">
+  <link rel="stylesheet" href="/static/dashboard.css?v=20261004-marketer-c-v3">
 </head>
 <body>
   <main class="dashboard-shell">
@@ -260,7 +260,8 @@
             <button class="active" id="metric2StandardFlow" type="button" role="tab" aria-selected="true">Обычная ссылка</button>
             <button id="metric2ResultFlow" type="button" role="tab" aria-selected="false">Ссылка result</button>
             <button id="metric2MasterclassFlow" type="button" role="tab" aria-selected="false">Мастер-классы</button>
-            <button id="metric2ExperimentFlow" type="button" role="tab" aria-selected="false">Эксперимент</button>
+            <button id="metric2ExperimentFlow" type="button" role="tab" aria-selected="false">Маркетолог B</button>
+            <button id="metric2MarketerCFlow" type="button" role="tab" aria-selected="false">Маркетолог C</button>
             <button id="metric2ReofferFlow" type="button" role="tab" aria-selected="false">Повторное предложение</button>
           </div>
           <div class="analytics-filters metric2-filters">
@@ -280,10 +281,11 @@
           <div class="table-scroll"><table><thead><tr><th>Предприятие</th><th>ИНН</th><th>Мастер-класс</th><th>Новые пользователи</th><th>Продолжили</th><th>Все открытия QR</th></tr></thead><tbody id="metric2MasterclassTable"></tbody></table></div>
         </article>
         <article class="metric2-experiment-note hidden" id="metric2ExperimentNote">
-          <strong>Ссылка для демонстрации воронки маркетолога</strong>
-          <p>Всегда открывает путь пользователя в варианте «маркетолог», независимо от очереди распределения. Не влияет на статистику эксперимента — переходы по ней нигде не сохраняются как назначение.</p>
+          <strong id="metric2ExperimentLinkTitle">Тестовая ссылка ветки маркетолога</strong>
+          <p id="metric2ExperimentLinkDescription">Открывает выбранную ветку независимо от очереди распределения. Тестовый переход не меняет закреплённый за пользователем вариант.</p>
           <div class="metric2-experiment-link-row">
             <code id="metric2ExperimentLink"></code>
+            <a id="metric2ExperimentLinkOpen" href="/" target="_blank" rel="noopener">Открыть тестовую ветку</a>
             <button type="button" id="metric2ExperimentLinkCopy">Скопировать</button>
           </div>
         </article>
@@ -323,11 +325,12 @@
           <div class="panel-heading"><div><p class="eyebrow">Контент без публикации кода</p><h2>Изменение текстов</h2><p>Выберите экран и измените его тексты без публикации новой версии приложения.</p></div></div>
           <div class="content-text-tabs" role="tablist" aria-label="Редактируемый экран">
             <button class="active" type="button" role="tab" aria-selected="true" data-content-text-tab="offer">Экран дополнительных обследований</button>
+            <button type="button" role="tab" aria-selected="false" data-content-text-tab="result">Результаты анкеты C</button>
             <button type="button" role="tab" aria-selected="false" data-content-text-tab="retention">Экран удержания</button>
           </div>
         </article>
         <form class="panel content-text-form" id="marketerExaminationTextsForm">
-          <div class="panel-heading"><div><p class="eyebrow">Вариант marketer</p><h2 id="contentTextsScreenTitle">Предложение после анкеты</h2><p>Плейсхолдеры в фигурных скобках сохраняйте: <code>{имя}</code>, <code>{count}</code>, <code>{amount}</code>, <code>{discount}</code>, <code>{days}</code>, <code>{package}</code>, <code>{price}</code>, <code>{online}</code>, <code>{full}</code>.</p></div></div>
+          <div class="panel-heading"><div><p class="eyebrow">Вариант marketer</p><h2 id="contentTextsScreenTitle">Предложение после анкеты</h2><p>Плейсхолдеры в фигурных скобках сохраняйте: <code>{имя}</code>, <code>{возраст}</code>, <code>{phrase1}</code>, <code>{phrase2_part}</code>, <code>{count}</code>, <code>{amount}</code>, <code>{discount}</code>, <code>{days}</code>, <code>{package}</code>, <code>{price}</code>, <code>{online}</code>, <code>{full}</code>.</p></div></div>
           <aside class="content-text-preview" aria-label="Предпросмотр экрана">
             <div class="content-text-preview-heading"><div><p class="eyebrow">Предпросмотр</p><h3 id="contentTextPreviewTitle">Экран дополнительных обследований</h3></div><span>Обновляется при вводе</span></div>
             <label class="content-text-preview-rule" id="contentTextPreviewRuleWrap">Пример условия
@@ -389,6 +392,25 @@
             <label>Предупреждение о скидке<textarea rows="2" maxlength="2000" data-text-key="retention_discount_note" required></textarea></label>
             <label>Кнопка возврата<input type="text" maxlength="500" data-text-key="retention_back_template" required></label>
             <label>Окончательный отказ<input type="text" maxlength="200" data-text-key="retention_decline" required></label>
+          </fieldset>
+          <fieldset class="hidden" data-content-text-panel="result"><legend>Экран результатов анкеты — вариант C</legend>
+            <label>Приоритет сигналов<input type="text" maxlength="100" data-text-key="result_signal_priority" required><small>Номера от 1 до 10 через запятую. Выбираются первые два сработавших правила.</small></label>
+            <label>Строка завершения анкеты<input type="text" maxlength="500" data-text-key="result_progress_label" required></label>
+            <label>Заголовок с именем<input type="text" maxlength="500" data-text-key="result_title_template" required></label>
+            <label>Заголовок без имени<input type="text" maxlength="500" data-text-key="result_title_without_name" required></label>
+            <label>Переходный текст<textarea rows="2" maxlength="2000" data-text-key="result_bridge" required></textarea></label>
+            <label>Заголовок плашек<input type="text" maxlength="300" data-text-key="result_detected_title" required></label>
+            <div class="content-text-pair"><label>Заголовок объяснения<input type="text" maxlength="300" data-text-key="result_explanation_title" required></label><label>Заголовок профилактики<input type="text" maxlength="300" data-text-key="result_prevention_explanation_title" required></label></div>
+            <div class="content-text-pair"><label>Что проверить<input type="text" maxlength="300" data-text-key="result_checks_title" required></label><label>Профилактическая проверка<input type="text" maxlength="300" data-text-key="result_prevention_checks_title" required></label></div>
+            <div class="content-text-pair"><label>Инициалы специалиста<input type="text" maxlength="20" data-text-key="result_doctor_initials" required></label><label>Подпись специалиста<input type="text" maxlength="500" data-text-key="result_doctor_signature" required></label></div>
+            <label>Заголовок решения<input type="text" maxlength="500" data-text-key="result_decision_title" required></label>
+            <label>Пояснение решения<textarea rows="2" maxlength="2000" data-text-key="result_decision_body" required></textarea></label>
+            <label>Конфиденциальность<textarea rows="2" maxlength="2000" data-text-key="result_privacy" required></textarea></label>
+            <div class="content-text-pair"><label>Основная кнопка<input type="text" maxlength="300" data-text-key="result_primary_cta" required></label><label>Ссылка отказа<input type="text" maxlength="500" data-text-key="result_decline_link" required></label></div>
+            <label>Дисклеймер<textarea rows="2" maxlength="2000" data-text-key="result_disclaimer" required></textarea></label>
+            <label>Заголовок выбора анализов<input type="text" maxlength="500" data-text-key="selection_title" required></label>
+            <label>Персональная строка выбора<input type="text" maxlength="1000" data-text-key="selection_personal_template" required></label>
+            <div class="content-result-rules" id="marketerResultRulesFields"></div>
           </fieldset>
           <fieldset data-content-text-panel="offer"><legend>Персональные строки по приоритету</legend>
             <label>1. Повышенное или нестабильное давление<textarea rows="3" maxlength="2000" data-text-key="personal_rule_2" required></textarea></label>
@@ -741,6 +763,6 @@
       </div>
     </section>
   </div>
-<script src="/static/dashboard.js?v=20261003-masterclass-v1" defer></script>
+  <script src="/static/dashboard.js?v=20261004-marketer-c-v3" defer></script>
 </body>
 </html>

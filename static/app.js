@@ -47,6 +47,7 @@ const state = {
   marketerAllPackagesExpanded: false,
   marketerExpandedTests: new Set(),
   marketerOfferObserver: null,
+  marketerResultObserver: null,
   offerViewGoalTracked: false,
   metrikaVisitParamsSent: false,
   paymentSuccessGoalOrders: new Set(),
@@ -205,12 +206,18 @@ function experimentAnalyticsProperties() {
     experiment_key:String(experiment.key || ''),
     experiment_variant:String(experiment.variant || ''),
     funnel_version:String(experiment.version || ''),
+    marketer_variant:String(experiment.marketer_variant || ''),
   };
 }
 
 function isMarketerFunnel() {
   return state.publicConfig?.experiment?.enabled
     && state.publicConfig.experiment.variant === 'marketer';
+}
+
+function isMarketerVariantC() {
+  return isMarketerFunnel()
+    && state.publicConfig?.experiment?.marketer_variant === 'c';
 }
 
 function hasDedicatedMarketerMetrika() {
@@ -1542,7 +1549,8 @@ async function nextQuestion() {
     state.onboarding = await api('/api/onboarding/profile', { method:'POST', body:JSON.stringify(payload) });
     state.profile = state.onboarding.profile;
     trackEvent('examinations_opened', { screen:'examinations' });
-    renderExamSelection();
+    if (isMarketerVariantC()) renderMarketerQuestionnaireResult();
+    else renderExamSelection();
   } catch (error) {
     const question = activeOnboardingQuestions()[state.onboardingStep];
     trackEvent('question_validation_error', {
@@ -1826,6 +1834,102 @@ function offerTemplate(value, replacements = {}) {
   return result;
 }
 
+function marketerResultContext() {
+  const texts = marketerOfferTexts();
+  const source = state.onboarding?.marketer_result || {};
+  const matched = (source.matched_rule_ids || []).map(Number).filter(Number.isFinite);
+  const configuredPriority = String(texts.result_signal_priority || '1,2,3,4,5,6,7,8,9,10')
+    .split(',').map(value => Number(value.trim())).filter(value => value >= 1 && value <= 10);
+  const priority = [...new Set([...configuredPriority,...matched])];
+  const ordered = matched.slice().sort((left,right) => priority.indexOf(left) - priority.indexOf(right));
+  const explanationRuleIds = ordered.slice(0,2);
+  const chipRuleIds = [...explanationRuleIds];
+  const ageRule = ordered.find(ruleId => [7,8].includes(ruleId));
+  if (ageRule && !chipRuleIds.includes(ageRule) && chipRuleIds.length < 3) chipRuleIds.push(ageRule);
+  const packageLists = explanationRuleIds.map(ruleId => (
+    source.rule_test_ids?.[String(ruleId)] || []
+  ).filter(testId => !['ca125','ca153','ca199'].includes(testId)));
+  const packageOrder = packageLists.length > 1
+    ? [packageLists[0][0],...packageLists[1],...packageLists[0].slice(1)]
+    : (packageLists[0] || []);
+  const packageIds = packageOrder.filter((testId,index,list) => testId && list.indexOf(testId) === index);
+  const checks = [];
+  explanationRuleIds.forEach((ruleId,index) => {
+    const dynamicRows = source.rule_check_lines?.[String(ruleId)];
+    const rows = Array.isArray(dynamicRows) && dynamicRows.length
+      ? dynamicRows.map(item => String(item || '').trim()).filter(Boolean)
+      : String(texts[`result_rule_${ruleId}_checks`] || '').split('\n').map(item => item.trim()).filter(Boolean);
+    const limit = explanationRuleIds.length === 1 ? 3 : index === 0 ? 2 : 1;
+    for (const row of rows.slice(0,limit)) {
+      if (!checks.includes(row) && checks.length < 3) checks.push(row);
+    }
+  });
+  return {matched,explanationRuleIds,chipRuleIds,packageIds:packageIds.slice(0,3),checks};
+}
+
+function marketerResultChips(context) {
+  const texts = marketerOfferTexts();
+  if (!context.chipRuleIds.includes(10)) {
+    const age = String(state.profile?.age || state.onboarding?.profile?.age || '').trim();
+    return context.chipRuleIds.map(ruleId => offerTemplate(
+      texts[`result_rule_${ruleId}_chip`] || '',{'возраст':age},
+    )).filter(Boolean);
+  }
+  const profile = state.profile || state.onboarding?.profile || {};
+  const chips = [];
+  const notes = String(profile.notes || '').trim().toLowerCase();
+  if (!notes || ['нет','нет жалоб','жалоб нет','не беспокоит','ничего'].includes(notes)) {
+    chips.push(texts.result_rule_10_chip || 'жалоб нет');
+  }
+  if (profile.blood_pressure === 'normal') chips.push(texts.result_rule_10_chip_pressure || 'давление в норме');
+  if (profile.smoking === 'never') chips.push(texts.result_rule_10_chip_no_smoking || 'не курите');
+  return chips.slice(0,3).length ? chips.slice(0,3) : [texts.result_rule_10_chip || 'жалоб нет'];
+}
+
+function marketerResultCheckMarkup(value) {
+  const [label,...details] = String(value || '').split('·').map(item => item.trim()).filter(Boolean);
+  return `<li><span>✓</span><b>${escapeHtml(label || '')}</b>${details.length ? `<small>${escapeHtml(details.join(' · '))}</small>` : ''}</li>`;
+}
+
+function setupMarketerResultObserver() {
+  state.marketerResultObserver?.disconnect?.();
+  const main = $('#marketerResultMainCta');
+  const sticky = $('#marketerResultStickyCta');
+  if (!main || !sticky || !('IntersectionObserver' in window)) return;
+  state.marketerResultObserver = new IntersectionObserver(entries => {
+    sticky.classList.toggle('hidden',entries.some(entry => entry.isIntersecting));
+  },{threshold:.2});
+  state.marketerResultObserver.observe(main);
+}
+
+function renderMarketerQuestionnaireResult() {
+  const texts = marketerOfferTexts();
+  const context = marketerResultContext();
+  const name = String(state.profile?.preferred_name || '').trim();
+  const title = name
+    ? offerTemplate(texts.result_title_template || '{имя}, вот что показали ваши ответы',{имя:name})
+    : (texts.result_title_without_name || 'Вот что показали ваши ответы');
+  const chips = marketerResultChips(context);
+  const prevention = context.explanationRuleIds[0] === 10;
+  const explanations = context.explanationRuleIds.map(ruleId => `<p>${escapeHtml(texts[`result_rule_${ruleId}_explanation`] || '')}</p>`).join('');
+  trackOnboardingScreen('questionnaire_results');
+  setOnboardingMeta('Ваши ответы',100);
+  $('#onboardingContent').innerHTML = `<div class="marketer-result-screen">
+    <small class="marketer-result-progress">${escapeHtml(texts.result_progress_label || '')}</small>
+    <h1>${escapeHtml(title)}</h1>
+    <p class="marketer-result-bridge">${escapeHtml(texts.result_bridge || '')}</p>
+    <section class="marketer-result-signals"><h2>${escapeHtml(texts.result_detected_title || 'Вы отметили')}</h2><div>${chips.map(chip => `<span>${escapeHtml(chip)}</span>`).join('')}</div></section>
+    <section class="marketer-result-explanation"><h2>${escapeHtml(prevention ? texts.result_prevention_explanation_title : texts.result_explanation_title)}</h2>${explanations}<small class="marketer-result-doctor"><i>${escapeHtml(texts.result_doctor_initials || 'ТВ')}</i>${escapeHtml(texts.result_doctor_signature || '')}</small></section>
+    <section class="marketer-result-checks"><h2>${escapeHtml(prevention ? texts.result_prevention_checks_title : texts.result_checks_title)}</h2><ul>${context.checks.map(marketerResultCheckMarkup).join('')}</ul></section>
+    <section class="marketer-result-decision"><h2>${escapeHtml(texts.result_decision_title || '')}</h2><p>${escapeHtml(texts.result_decision_body || '')}</p><small><span>🔒</span>${escapeHtml(texts.result_privacy || '')}</small></section>
+    <button id="marketerResultMainCta" type="button" class="marketer-primary-cta" data-onboarding-action="marketer-result-continue">${escapeHtml(texts.result_primary_cta || 'Выбрать анализы')}</button>
+    <button type="button" class="marketer-decline-link" data-onboarding-action="marketer-result-decline">${escapeHtml(texts.result_decline_link || '')}</button>
+    <p class="marketer-fine-print">${escapeHtml(texts.result_disclaimer || '')}</p>
+    <button id="marketerResultStickyCta" type="button" class="marketer-sticky-cta" data-onboarding-action="marketer-result-continue">${escapeHtml(texts.result_primary_cta || 'Выбрать анализы')}</button>
+  </div>`;
+  requestAnimationFrame(setupMarketerResultObserver);
+}
+
 function examinationOnlinePrice(test) {
   const value = Number(test?.online_price);
   if (Number.isFinite(value)) return Math.max(0,value);
@@ -1847,6 +1951,7 @@ function offerMetrikaDetails(extra = {}) {
   const complaints = notes && !['нет','нет жалоб','жалоб нет','не беспокоит','ничего'].includes(notes) ? 'yes' : 'no';
   return {
     variant:String(state.publicConfig?.experiment?.variant || ''),
+    marketer_variant:String(state.publicConfig?.experiment?.marketer_variant || ''),
     sex:String(profile.sex || ''),
     age_group:ageGroup,
     pressure:String(profile.blood_pressure || ''),
@@ -1914,6 +2019,34 @@ function marketerOfferCard(test, {primary = false, visible = false, recommended 
   </label>`;
 }
 
+function marketerOfferCardC(test, {primary = false, recommended = false} = {}) {
+  const selected = state.selectedTests.has(test.id);
+  const expanded = primary || selected || state.marketerExpandedTests.has(test.id);
+  const extendedId = EXAMINATION_UPGRADE_PAIRS[test.id];
+  const disabled = Boolean(extendedId && state.selectedTests.has(extendedId));
+  const indicators = String(test.includes || '').split(',').map(item => item.trim()).filter(Boolean).slice(0,3);
+  return `<article class="marketer-package-card marketer-package-card-c${primary ? ' primary' : ''}${expanded ? ' expanded' : ' compact'}${selected ? ' selected' : ''}${disabled ? ' disabled-by-upgrade' : ''}" ${disabled ? 'aria-disabled="true"' : ''}>
+    <label class="marketer-package-toggle" data-test-card="${escapeAttr(test.id)}" aria-label="${selected ? 'Убрать' : 'Выбрать'} ${escapeAttr(test.name)}">
+      <input type="checkbox" ${selected ? 'checked' : ''} ${disabled ? 'disabled' : ''}>
+      <span class="marketer-package-check">✓</span>
+    </label>
+    ${primary || recommended ? `<small class="marketer-recommended-badge">${escapeHtml(marketerOfferTexts().recommended_badge || 'Рекомендуем по вашим ответам')}</small>` : ''}
+    <button type="button" class="marketer-package-heading" data-onboarding-action="toggle-marketer-card" data-test-id="${escapeAttr(test.id)}" aria-expanded="${expanded}"><strong>${escapeHtml(test.name)}</strong>${marketerPriceMarkup(test)}</button>
+    ${expanded ? `<span class="marketer-package-details"><small>${escapeHtml(test.description || '')}</small>${indicators.length ? `<em>${indicators.map(item => `<i>${escapeHtml(item)}</i>`).join('')}</em>` : `<em>${escapeHtml(test.includes || '')}</em>`}</span>` : ''}
+  </article>`;
+}
+
+function marketerSelectionPersonalText(context) {
+  const texts = marketerOfferTexts();
+  const phrases = context.explanationRuleIds.map(ruleId => texts[`result_rule_${ruleId}_phrase`] || '').filter(Boolean);
+  if (!phrases.length) return '';
+  const name = String(state.profile?.preferred_name || '').trim();
+  return offerTemplate(texts.selection_personal_template || '{имя}, эти анализы покажут, {phrase1}{phrase2_part}.',{
+    имя:name || 'По вашим ответам',phrase1:phrases[0],
+    phrase2_part:phrases[1] ? `, а ${phrases[1]}` : '',
+  }).replace(/^По вашим ответам,\s*/,'Эти анализы покажут, ');
+}
+
 function setupMarketerOfferObserver() {
   state.marketerOfferObserver?.disconnect?.();
   const main = $('#marketerOfferMainCta');
@@ -1946,11 +2079,16 @@ function renderMarketerExamSelection(scrollPosition = null) {
   const tests = (state.onboarding?.tests || []).filter(test => !genderIncompatible.has(test.id));
   genderIncompatible.forEach(id => state.selectedTests.delete(id));
   const byId = new Map(tests.map(test => [test.id,test]));
-  const context = state.onboarding?.marketer_offer || {};
-  const scenarioIds = (context.recommended_test_ids || context.visible_recommended_test_ids || []).filter(id => byId.has(id));
+  const variantC = isMarketerVariantC();
+  const resultContext = marketerResultContext();
+  const context = variantC ? {} : (state.onboarding?.marketer_offer || {});
+  const configuredScenarioIds = variantC
+    ? resultContext.packageIds
+    : (context.recommended_test_ids || context.visible_recommended_test_ids || []);
+  const scenarioIds = configuredScenarioIds.filter(id => byId.has(id));
   const scenarioSet = new Set(scenarioIds);
   const scenarioOrder = new Map(scenarioIds.map((id,index) => [id,index]));
-  const visibleIds = (context.visible_recommended_test_ids || state.onboarding?.featured_test_ids || []).filter(id => byId.has(id));
+  const visibleIds = (variantC ? scenarioIds : (context.visible_recommended_test_ids || state.onboarding?.featured_test_ids || [])).filter(id => byId.has(id));
   const primaryId = context.primary_test_id || visibleIds[0] || tests[0]?.id || '';
   if (!state.marketerOfferInitialized) {
     state.marketerOfferInitialized = true;
@@ -1979,20 +2117,20 @@ function renderMarketerExamSelection(scrollPosition = null) {
     count:totals.selected.length,amount,discount:totals.discount.toLocaleString('ru-RU'),
   });
   const finePrint = offerTemplate(texts.fine_print_template || '',{days:Number(texts.result_days || 14)});
-  const otherCards = recommendedExtras.map(test => marketerOfferCard(test,{visible:true,recommended:true})).join('');
-  const restCards = rest.map(test => marketerOfferCard(test,{recommended:scenarioSet.has(test.id)})).join('');
+  const renderCard = variantC ? marketerOfferCardC : marketerOfferCard;
+  const otherCards = recommendedExtras.map(test => renderCard(test,{visible:true,recommended:true})).join('');
+  const restCards = rest.map(test => renderCard(test,{recommended:scenarioSet.has(test.id)})).join('');
   $('#onboardingContent').innerHTML = `<div class="marketer-offer-screen">
-    <small class="marketer-offer-progress-label">${escapeHtml(texts.progress_label || 'Шаг 20 из 20 · последний шаг')}</small>
-    <h1>${escapeHtml(texts.headline || '')}</h1>
-    <p class="marketer-personal-copy">${escapeHtml(marketerPersonalText())}</p>
-    <p class="marketer-zero-effort"><span aria-hidden="true">🩸</span>${escapeHtml(texts.zero_effort || '')}</p>
-    ${primary ? marketerOfferCard(primary,{primary:true}) : ''}
+    ${variantC ? `<small class="marketer-offer-progress-label">${escapeHtml(texts.selection_title || 'Анализы к медосмотру')}</small>` : `<small class="marketer-offer-progress-label">${escapeHtml(texts.progress_label || 'Шаг 20 из 20 · последний шаг')}</small><h1>${escapeHtml(texts.headline || '')}</h1>`}
+    <p class="marketer-personal-copy">${escapeHtml(variantC ? marketerSelectionPersonalText(resultContext) : marketerPersonalText())}</p>
+    ${variantC ? '' : `<p class="marketer-zero-effort"><span aria-hidden="true">🩸</span>${escapeHtml(texts.zero_effort || '')}</p>`}
+    ${primary ? renderCard(primary,{primary:true}) : ''}
     ${otherCards ? `<section class="marketer-recommended-extras">${otherCards}</section>` : ''}
     ${rest.length ? `<section class="marketer-all-packages"><button type="button" data-onboarding-action="toggle-marketer-all" aria-expanded="${state.marketerAllPackagesExpanded}"><span>${escapeHtml(state.marketerAllPackagesExpanded ? texts.hide_all_packages : texts.show_all_packages)}</span><b>${state.marketerAllPackagesExpanded ? '−' : '+'}</b></button>${state.marketerAllPackagesExpanded ? `<div class="marketer-all-package-list"><h2>${escapeHtml(texts.all_packages_title || '')}</h2>${restCards}</div>` : ''}</section>` : ''}
     <section class="marketer-benefits"><ul><li>✓ <span>${escapeHtml(texts.benefit_results || '')}</span></li><li>✓ <span>${escapeHtml(texts.benefit_doctor || '')}</span></li><li>✓ <span>${escapeHtml(texts.benefit_visit || '')}</span></li></ul><button type="button" data-onboarding-action="open-results-preview">${escapeHtml(texts.benefits_link || '')}</button></section>
     <div class="marketer-offer-total"><strong>${escapeHtml(totalText)}</strong><small>${escapeHtml(texts.discount_note || '')}</small></div>
     ${!hasSelection ? `<p class="marketer-empty-warning">${escapeHtml(texts.empty_warning || '')}</p>` : ''}
-    <div class="marketer-offer-actions"><button type="button" class="onboarding-back" data-onboarding-action="exam-offer">Назад</button>${mainButton}</div>
+    <div class="marketer-offer-actions"><button type="button" class="onboarding-back" data-onboarding-action="${variantC ? 'marketer-result-back' : 'exam-offer'}">Назад</button>${mainButton}</div>
     ${hasSelection ? `<button type="button" class="marketer-decline-link" data-onboarding-action="review-exam-skip" data-decline-source="link">${escapeHtml(texts.decline_link || '')}</button>` : ''}
     <p class="marketer-fine-print">${escapeHtml(finePrint)}</p>
     ${stickyButton}
@@ -2062,7 +2200,8 @@ function renderExamSelection(scrollPosition = null) {
 function renderExamSkipConfirmation() {
   trackEvent('examinations_objection_viewed', { screen:'examinations_skip' });
   trackOnboardingScreen('exam_objection');
-  const primaryId = state.onboarding?.marketer_offer?.primary_test_id
+  const primaryId = (isMarketerVariantC() ? marketerResultContext().packageIds[0] : '')
+    || state.onboarding?.marketer_offer?.primary_test_id
     || state.onboarding?.featured_test_ids?.[0] || state.onboarding?.recommended_test_ids?.[0] || '';
   const primary = state.onboarding?.tests?.find(test => test.id === primaryId);
   if (marketerOfferActive() && primary) {
@@ -2776,7 +2915,11 @@ async function loadOnboarding({ openCompletedMessengerAccount = false, initialOn
   if (state.onboarding.status === 'appearance') renderAppearance();
   else if (state.onboarding.status === 'not_medical_exam') renderNotMedicalExamExplanation();
   else if (state.onboarding.status === 'payment') renderPayment();
-  else if (state.onboarding.status === 'exams') renderExamSelection();
+  else if (state.onboarding.status === 'exams') {
+    if (isMarketerVariantC() && !state.onboarding.marketer_result_seen
+      && !state.onboarding.questionnaire_skipped) renderMarketerQuestionnaireResult();
+    else renderExamSelection();
+  }
   else renderQuestion();
 }
 
@@ -2796,7 +2939,11 @@ function renderRequiredStandardOnboarding() {
   } else if (onboarding.status === 'appearance') renderAppearance();
   else if (onboarding.status === 'not_medical_exam') renderNotMedicalExamExplanation();
   else if (onboarding.status === 'payment') renderPayment();
-  else if (onboarding.status === 'exams') renderExamSelection();
+  else if (onboarding.status === 'exams') {
+    if (isMarketerVariantC() && !onboarding.marketer_result_seen
+      && !onboarding.questionnaire_skipped) renderMarketerQuestionnaireResult();
+    else renderExamSelection();
+  }
   else renderQuestion();
   return true;
 }
@@ -2902,6 +3049,28 @@ $('#onboardingContent').addEventListener('click', async event => {
   const action = event.target.closest('[data-onboarding-action]')?.dataset.onboardingAction;
   if (!action) return;
   if (action === 'next') nextQuestion();
+  else if (action === 'marketer-result-continue') {
+    trackOnboardingAction('continue','questionnaire_results');
+    state.onboarding = await api('/api/onboarding/marketer-result-seen',{method:'POST',body:'{}'});
+    state.profile = state.onboarding.profile;
+    renderExamSelection();
+  }
+  else if (action === 'marketer-result-decline') {
+    trackOnboardingAction('decline','questionnaire_results');
+    state.onboarding = await api('/api/onboarding/marketer-result-seen',{method:'POST',body:'{}'});
+    state.profile = state.onboarding.profile;
+    renderExamSkipConfirmation();
+  }
+  else if (action === 'marketer-result-back') renderMarketerQuestionnaireResult();
+  else if (action === 'toggle-marketer-card') {
+    const testId = event.target.closest('[data-test-id]')?.dataset.testId;
+    if (testId) {
+      if (state.marketerExpandedTests.has(testId)) state.marketerExpandedTests.delete(testId);
+      else state.marketerExpandedTests.add(testId);
+      trackOnboardingAction('toggle_details',examSelectionAnalyticsScreen());
+      renderExamSelection({onboarding:$('#onboarding').scrollTop || 0});
+    }
+  }
   else if (action === 'not-medical-exam-back') await returnFromNotMedicalExam();
   else if (action === 'not-medical-exam-continue') await continueFromNotMedicalExam();
   else if (action === 'back') { const question = activeOnboardingQuestions()[state.onboardingStep]; try { captureQuestionAnswer({trackAction:false}); } catch {} trackOnboardingAction('back', `question_${question.key}`); trackEvent('question_back', { step_number:state.onboardingStep + 1 }); state.onboardingStep -= 1; renderQuestion(); }
@@ -6458,13 +6627,22 @@ async function init() {
   trackEvent('landing_viewed', {screen:'entry'});
   trackEvent('app_opened', {app_mode:isInstalledApp() ? 'standalone' : 'browser'});
   try {
-    const previewFunnel = new URLSearchParams(location.search).get('preview_funnel');
-    const publicConfigPath = ['marketer','control'].includes(previewFunnel)
-      ? `/api/public-config?preview_funnel=${previewFunnel}` : '/api/public-config';
+    const previewParams = new URLSearchParams(location.search);
+    const previewFunnel = previewParams.get('preview_funnel');
+    const publicConfigUrl = new URL('/api/public-config',location.origin);
+    if (['marketer','control'].includes(previewFunnel)) {
+      publicConfigUrl.searchParams.set('preview_funnel',previewFunnel);
+      const previewMarketerVariant = previewParams.get('preview_marketer_variant');
+      if (['b','c'].includes(previewMarketerVariant)) {
+        publicConfigUrl.searchParams.set('preview_marketer_variant',previewMarketerVariant);
+      }
+    }
+    const publicConfigPath = `${publicConfigUrl.pathname}${publicConfigUrl.search}`;
     state.publicConfig = await api(publicConfigPath);
     const experiment = state.publicConfig?.experiment;
     document.documentElement.dataset.experimentVariant = experiment?.enabled
       ? String(experiment.variant || 'control') : 'off';
+    document.documentElement.dataset.marketerVariant = String(experiment?.marketer_variant || '');
     document.body.classList.toggle('experiment-marketer',isMarketerFunnel());
     if (experiment?.enabled) {
       trackEvent('experiment_assigned', {screen:'entry'});

@@ -1430,6 +1430,12 @@ function metric2PreviewMarkup(screen, large = false, suppliedData = null) {
   } else if (kind === 'exam_catalog') {
     const cards = examinations.map(test => `<span class="metric2-mock-catalog-card"><header><strong>${escapeHtml(test.name)}</strong><em>${Number(test.price || 0).toLocaleString('ru-RU')} ₽</em></header><small>КОМУ ПОДХОДИТ</small><p>${escapeHtml(metric2ExamAudiences[test.id] || test.description || 'Тем, кто хочет получить больше информации о состоянии здоровья.')}</p><small>ДЛЯ ЧЕГО</small><p>${escapeHtml(test.description || 'Для дополнительной оценки показателей здоровья.')}</p><small>ЧТО ВХОДИТ</small><p>${escapeHtml(test.includes || 'Состав уточняется')}</p></span>`).join('');
     content = `<small>ДОСТУПНЫЕ ЧЕК-АПЫ</small><b>Что можно проверить</b><p>Краткое описание поможет сориентироваться. Необходимость обследований и интерпретацию результатов лучше обсуждать с врачом.</p>${cards}${action('Выбрать анализы')}${action('Вернуться к вопросу',true)}`;
+  } else if (kind === 'questionnaire_results_c') {
+    const texts = previewData.marketer_examination_texts || {};
+    const chip = texts[`result_rule_${previewRuleId}_chip`] || 'Профилактическая проверка';
+    const explanation = texts[`result_rule_${previewRuleId}_explanation`] || '';
+    const checks = String(texts[`result_rule_${previewRuleId}_checks`] || '').split('\n').filter(Boolean).slice(0,3);
+    content = `<small>${escapeHtml(texts.result_progress_label || 'АНКЕТА ЗАПОЛНЕНА')}</small><b>${escapeHtml(previewTemplate(texts.result_title_template || '{имя}, вот что показали ваши ответы',{имя:'Анна'}))}</b><p>${escapeHtml(texts.result_bridge || '')}</p><span class="metric2-mock-info"><b>${escapeHtml(texts.result_detected_title || 'Вы отметили')}</b><small>${escapeHtml(chip)}</small></span><span class="metric2-mock-info"><b>${escapeHtml(previewRuleId === 10 ? texts.result_prevention_explanation_title : texts.result_explanation_title)}</b><small>${escapeHtml(explanation)}</small><small>${escapeHtml(texts.result_doctor_initials || 'ТВ')} · ${escapeHtml(texts.result_doctor_signature || '')}</small></span><span class="metric2-mock-info"><b>${escapeHtml(previewRuleId === 10 ? texts.result_prevention_checks_title : texts.result_checks_title)}</b><small>${checks.map(escapeHtml).join(' · ')}</small></span><span class="metric2-mock-info"><b>${escapeHtml(texts.result_decision_title || '')}</b><small>${escapeHtml(texts.result_decision_body || '')}</small><small>🔒 ${escapeHtml(texts.result_privacy || '')}</small></span>${action(texts.result_primary_cta || 'Выбрать анализы')}${action(texts.result_decline_link || 'Завершить без дополнительных анализов',true)}<p>${escapeHtml(texts.result_disclaimer || '')}</p>`;
   } else if (kind === 'exam_objection_marketer') {
     const texts = previewData.marketer_examination_texts || {};
     const first = marketerScenario[0] || examinations[0] || {};
@@ -1440,7 +1446,8 @@ function metric2PreviewMarkup(screen, large = false, suppliedData = null) {
     const benefits = [1,2,3,4].map(index => `<span class="metric2-mock-benefit"><b>✓ ${escapeHtml(texts[`retention_benefit_${index}_title`] || '')}</b><small>${escapeHtml(texts[`retention_benefit_${index}_body`] || '')}</small></span>`).join('');
     content = `<small>${escapeHtml(texts.retention_kicker || 'ПЕРЕД ТЕМ КАК ПРОДОЛЖИТЬ')}</small><b>${escapeHtml(texts.retention_title || '')}</b><span class="metric2-mock-retention-intro"><p>${escapeHtml(texts.retention_body_1 || '')}</p><p>${escapeHtml(texts.retention_body_2 || '')}</p><p>${escapeHtml(texts.retention_body_3 || '')}</p></span>${benefits}<p class="metric2-mock-note">${escapeHtml(texts.retention_voluntary_note || '')}</p><span class="metric2-mock-warning">${escapeHtml(texts.retention_discount_note || '')}</span>${action(backLabel)}${action(texts.retention_decline || 'Всё равно отказаться',true)}`;
   } else if (kind === 'exam_objection') content = `<small>ПЕРЕД ТЕМ КАК ПРОДОЛЖИТЬ</small><b>После обследований вы получите больше, чем результаты</b><p>Врач высшей категории <strong>Татьяна Витальевна</strong> подготовит подробную расшифровку сложных показателей.</p><p>И самое главное — вы получите <strong>бесплатную консультацию</strong> по результатам.</p><p>Всё будет доступно в этом сервисе — без очередей и доплат за расшифровку.</p><span class="metric2-mock-benefit"><b>✓ Ничего дополнительно делать не нужно</b><small>Выберите обследования сейчас, а в день медосмотра сдайте всё вместе.</small></span><span class="metric2-mock-benefit"><b>✓ Один визит вместо отдельной поездки</b><small>Вы уже будете на осмотре — дополнительные анализы можно сдать за один раз.</small></span><span class="metric2-mock-benefit"><b>✓ Бесплатная консультация специалиста</b><small>После готовности дополнительных анализов врач высшей категории поможет разобраться в результатах.</small></span><span class="metric2-mock-benefit"><b>✓ Не придётся записываться отдельно</b><small>Если отложить обследования, позже могут потребоваться отдельная запись и поездка.</small></span><p class="metric2-mock-note">Дополнительные обследования добровольны — окончательное решение остаётся за вами.</p>${action('Выбрать обследования')}${action('Всё равно отказаться',true)}`;
-  else if (kind === 'exam_selection_marketer') {
+  else if (kind === 'exam_selection_marketer' || kind === 'exam_selection_marketer_c') {
+    const variantC = kind === 'exam_selection_marketer_c';
     const texts = previewData.marketer_examination_texts || {};
     const genderSpecificIds = new Set(['female_hormones','ca125','ca153','male_health']);
     const compatibleExaminations = examinations.filter(test => !genderSpecificIds.has(test.id));
@@ -1452,17 +1459,20 @@ function metric2PreviewMarkup(screen, large = false, suppliedData = null) {
       const caption = previewTemplate(texts.price_caption_template || 'При оплате онлайн',{
         online:online.toLocaleString('ru-RU'),full:full.toLocaleString('ru-RU'),
       });
-      return `<span class="metric2-mock-test"><i class="metric2-mock-checkbox${selected ? ' checked' : ''}">${selected ? '✓' : ''}</i>${expanded ? `<mark>${escapeHtml(texts.recommended_badge || 'РЕКОМЕНДУЕМ ПО ВАШИМ ОТВЕТАМ')}</mark>` : ''}<strong>${escapeHtml(test.name || '')}</strong><span class="metric2-mock-pricing"><small><s>${full.toLocaleString('ru-RU')} ₽</s></small><b>${online.toLocaleString('ru-RU')} ₽</b><small>${escapeHtml(caption)}</small></span>${expanded ? `<small>${escapeHtml(test.description || '')}</small><em>${escapeHtml(test.includes || '')}</em>` : `<small>${escapeHtml(texts.package_add_label || '+ добавить')}</small>`}</span>`;
+      return `<span class="metric2-mock-test"><i class="metric2-mock-checkbox${selected ? ' checked' : ''}">${selected ? '✓' : ''}</i>${expanded ? `<mark>${escapeHtml(texts.recommended_badge || 'РЕКОМЕНДУЕМ ПО ВАШИМ ОТВЕТАМ')}</mark>` : ''}<strong>${escapeHtml(test.name || '')}</strong><span class="metric2-mock-pricing"><small><s>${full.toLocaleString('ru-RU')} ₽</s></small><b>${online.toLocaleString('ru-RU')} ₽</b><small>${escapeHtml(caption)}</small></span>${expanded ? `<small>${escapeHtml(test.description || '')}</small><em>${escapeHtml(test.includes || '')}</em>` : variantC ? '' : `<small>${escapeHtml(texts.package_add_label || '+ добавить')}</small>`}</span>`;
     };
     const full = Number(primary?.price || 0);
     const total = Math.round(full * .9);
     const discount = full - total;
     const formatted = {count:1,amount:total.toLocaleString('ru-RU'),discount:discount.toLocaleString('ru-RU'),days:Number(texts.result_days || 14)};
-    const personal = previewTemplate(texts[`personal_rule_${previewRuleId}`] || texts.personal_rule_10 || '',{'имя':'Анна'});
+    const resultPhrase = texts[`result_rule_${previewRuleId}_phrase`] || texts.result_rule_10_phrase || '';
+    const personal = variantC
+      ? previewTemplate(texts.selection_personal_template || '{имя}, эти анализы покажут, {phrase1}{phrase2_part}.',{'имя':'Анна',phrase1:resultPhrase,phrase2_part:''})
+      : previewTemplate(texts[`personal_rule_${previewRuleId}`] || texts.personal_rule_10 || '',{'имя':'Анна'});
     const totalLabel = previewTemplate(texts.total_template || 'Выбрано: {count} · {amount} ₽',formatted);
     const primaryLabel = previewTemplate(texts.primary_cta_template || 'Добавить к медосмотру — {amount} ₽',formatted);
     const finePrint = previewTemplate(texts.fine_print_template || '',formatted);
-    content = `<small>${escapeHtml(texts.progress_label || 'ШАГ 20 ИЗ 20 · ПОСЛЕДНИЙ ШАГ')}</small><b>${escapeHtml(texts.headline || '')}</b><p class="metric2-mock-alert">${escapeHtml(personal)}</p><span class="metric2-mock-info metric2-mock-blood"><small>${escapeHtml(texts.zero_effort || '')}</small></span>${card(primary,true,true)}${extras.slice(0,2).map(test => card(test)).join('')}<span class="metric2-mock-info"><b>${escapeHtml(texts.show_all_packages || 'Показать все чек-апы')} ＋</b></span><span class="metric2-mock-benefit"><small>✓ ${escapeHtml(texts.benefit_results || '')}<br>✓ ${escapeHtml(texts.benefit_doctor || '')}<br>✓ ${escapeHtml(texts.benefit_visit || '')}</small><i class="metric2-mock-inline-action">${escapeHtml(texts.benefits_link || '')}</i></span><span class="metric2-mock-total"><b>${escapeHtml(totalLabel)}</b><small>${escapeHtml(texts.discount_note || '')}</small></span><div class="metric2-mock-actions">${action('Назад',true)}${action(primaryLabel)}</div>${action(texts.decline_link || 'Продолжить без дополнительных обследований',true)}<p class="metric2-mock-note">${escapeHtml(finePrint)}</p>`;
+    content = `${variantC ? `<small>${escapeHtml(texts.selection_title || 'Анализы к медосмотру')}</small>` : `<small>${escapeHtml(texts.progress_label || 'ШАГ 20 ИЗ 20 · ПОСЛЕДНИЙ ШАГ')}</small><b>${escapeHtml(texts.headline || '')}</b>`}<p class="metric2-mock-alert">${escapeHtml(personal)}</p>${variantC ? '' : `<span class="metric2-mock-info metric2-mock-blood"><small>${escapeHtml(texts.zero_effort || '')}</small></span>`}${card(primary,true,true)}${extras.slice(0,2).map(test => card(test)).join('')}<span class="metric2-mock-info"><b>${escapeHtml(texts.show_all_packages || 'Показать все чек-апы')} ＋</b></span><span class="metric2-mock-benefit"><small>✓ ${escapeHtml(texts.benefit_results || '')}<br>✓ ${escapeHtml(texts.benefit_doctor || '')}<br>✓ ${escapeHtml(texts.benefit_visit || '')}</small><i class="metric2-mock-inline-action">${escapeHtml(texts.benefits_link || '')}</i></span><span class="metric2-mock-total"><b>${escapeHtml(totalLabel)}</b><small>${escapeHtml(texts.discount_note || '')}</small></span><div class="metric2-mock-actions">${action('Назад',true)}${action(primaryLabel)}</div>${action(texts.decline_link || 'Продолжить без дополнительных обследований',true)}<p class="metric2-mock-note">${escapeHtml(finePrint)}</p>`;
   }
   else if (kind === 'exam_selection' || kind === 'exam_selection_no_questionnaire') {
     const questionnaireSkipped = kind === 'exam_selection_no_questionnaire';
@@ -1521,7 +1531,8 @@ function metric2PreviewMarkup(screen, large = false, suppliedData = null) {
     : kind === 'not_medical_exam_info' ? 'Анкета'
     : kind.startsWith('question_') ? 'Анкета'
     : kind === 'exam_catalog' ? 'Описание чек-апов'
-    : ['exam_objection','exam_objection_marketer','exam_selection','exam_selection_marketer','exam_selection_no_questionnaire','exam_results_preview'].includes(kind) ? 'Обследования'
+    : kind === 'questionnaire_results_c' ? 'Результаты анкеты'
+    : ['exam_objection','exam_objection_marketer','exam_selection','exam_selection_marketer','exam_selection_marketer_c','exam_selection_no_questionnaire','exam_results_preview'].includes(kind) ? 'Обследования'
     : ['payment','payment_processing','payment_success','payment_result','payment_unavailable'].includes(kind) ? 'Оплата'
     : ['health_passport_offer','health_passport_ready','health_passport_checkups'].includes(kind) ? 'Паспорт здоровья'
     : ['completion','completion_skipped'].includes(kind) ? 'Готово'
@@ -1530,8 +1541,9 @@ function metric2PreviewMarkup(screen, large = false, suppliedData = null) {
   const progress = kind === 'appearance' ? 2
     : kind === 'not_medical_exam_info' ? 8
     : kind.startsWith('question_') ? 5 + Math.round((Math.max(0,questionIndex) / metric2QuestionContent.length) * 60)
+    : kind === 'questionnaire_results_c' ? 100
     : ['exam_catalog','exam_objection','exam_objection_marketer'].includes(kind) ? 76
-    : ['exam_selection','exam_selection_marketer','exam_selection_no_questionnaire','exam_results_preview'].includes(kind) ? 80
+    : ['exam_selection','exam_selection_marketer','exam_selection_marketer_c','exam_selection_no_questionnaire','exam_results_preview'].includes(kind) ? 80
     : kind === 'payment' ? 92
     : kind === 'payment_processing' ? 96
     : kind === 'payment_result' ? 96
@@ -1554,17 +1566,21 @@ function renderMetric2(data) {
       : screen),
   };
   latestMetric2Data = data;
-  metric2ActiveFlow = ['result','experiment','reoffer','masterclass'].includes(data.flow) ? data.flow : 'standard';
+  metric2ActiveFlow = ['result','experiment','marketer_b','marketer_c','reoffer','masterclass'].includes(data.flow) ? data.flow : 'standard';
   const resultFlow = metric2ActiveFlow === 'result';
-  const experimentFlow = metric2ActiveFlow === 'experiment';
+  const marketerBFlow = ['experiment','marketer_b'].includes(metric2ActiveFlow);
+  const marketerCFlow = metric2ActiveFlow === 'marketer_c';
+  const experimentFlow = marketerBFlow || marketerCFlow;
   const reofferFlow = metric2ActiveFlow === 'reoffer';
   const masterclassFlow = metric2ActiveFlow === 'masterclass';
   $('#metric2StandardFlow').classList.toggle('active', !resultFlow && !experimentFlow && !reofferFlow && !masterclassFlow);
   $('#metric2StandardFlow').setAttribute('aria-selected', String(!resultFlow && !experimentFlow && !reofferFlow && !masterclassFlow));
   $('#metric2ResultFlow').classList.toggle('active', resultFlow);
   $('#metric2ResultFlow').setAttribute('aria-selected', String(resultFlow));
-  $('#metric2ExperimentFlow').classList.toggle('active', experimentFlow);
-  $('#metric2ExperimentFlow').setAttribute('aria-selected', String(experimentFlow));
+  $('#metric2ExperimentFlow').classList.toggle('active', marketerBFlow);
+  $('#metric2ExperimentFlow').setAttribute('aria-selected', String(marketerBFlow));
+  $('#metric2MarketerCFlow').classList.toggle('active', marketerCFlow);
+  $('#metric2MarketerCFlow').setAttribute('aria-selected', String(marketerCFlow));
   $('#metric2ReofferFlow').classList.toggle('active', reofferFlow);
   $('#metric2ReofferFlow').setAttribute('aria-selected', String(reofferFlow));
   $('#metric2MasterclassFlow').classList.toggle('active', masterclassFlow);
@@ -1573,18 +1589,28 @@ function renderMetric2(data) {
   $('#metric2ReofferDiagnostics').classList.toggle('hidden', !reofferFlow);
   $('#metric2MasterclassStats').classList.toggle('hidden', !masterclassFlow);
   if (experimentFlow) {
-    const link = `${location.origin}/?preview_funnel=marketer`;
+    const link = `${location.origin}/?preview_funnel=marketer&preview_marketer_variant=${marketerCFlow ? 'c' : 'b'}`;
     $('#metric2ExperimentLink').textContent = link;
     $('#metric2ExperimentLink').dataset.link = link;
+    $('#metric2ExperimentLinkOpen').href = link;
+    $('#metric2ExperimentLinkOpen').textContent = marketerCFlow ? 'Открыть тестовую ветку C' : 'Открыть тестовую ветку B';
+    $('#metric2ExperimentLinkTitle').textContent = marketerCFlow
+      ? 'Тестовая ссылка новой ветки C'
+      : 'Тестовая ссылка текущей ветки B';
+    $('#metric2ExperimentLinkDescription').textContent = marketerCFlow
+      ? 'Открывает новый экран результатов анкеты и следующий за ним выбор анализов. Ссылка обходит распределение 50/50 и не меняет закреплённый вариант пользователя.'
+      : 'Открывает текущую ветку маркетолога B. Ссылка обходит распределение 50/50 и не меняет закреплённый вариант пользователя.';
   }
-  $('#metric2FlowEyebrow').textContent = resultFlow ? 'Ссылка /result' : masterclassFlow ? 'QR-коды мастер-классов' : experimentFlow ? 'Вариант эксперимента' : reofferFlow ? 'Повторное предложение' : 'Обычная ссылка';
-  $('#metric2FlowTitle').textContent = resultFlow ? 'Получение результатов анализов' : masterclassFlow ? 'Посадочная страница мастер-класса' : experimentFlow ? 'Новое предложение marketer' : reofferFlow ? 'Напоминание перед медосмотром' : 'Основной вариант анкеты';
+  $('#metric2FlowEyebrow').textContent = resultFlow ? 'Ссылка /result' : masterclassFlow ? 'QR-коды мастер-классов' : marketerCFlow ? 'Ветка маркетолога C' : marketerBFlow ? 'Ветка маркетолога B' : reofferFlow ? 'Повторное предложение' : 'Обычная ссылка';
+  $('#metric2FlowTitle').textContent = resultFlow ? 'Получение результатов анализов' : masterclassFlow ? 'Посадочная страница мастер-класса' : marketerCFlow ? 'Результаты анкеты и выбор анализов' : marketerBFlow ? 'Текущее предложение marketer' : reofferFlow ? 'Напоминание перед медосмотром' : 'Основной вариант анкеты';
   $('#metric2FlowDescription').textContent = resultFlow
     ? 'Отдельная воронка для пользователей, которые пришли по специальной ссылке за результатами. Обычное анкетирование сюда не входит.'
     : masterclassFlow
     ? 'Отдельная ветка пользователей, которые отсканировали QR-код конкретного предприятия и мастер-класса.'
-    : experimentFlow
-    ? 'Путь варианта marketer: новый экран предложения чек-апов, экран удержания, выбор оплаты и финальный результат. Считаются только пользователи этого варианта.'
+    : marketerCFlow
+    ? 'Новый путь C: результаты анкеты, персональный выбор анализов, удержание, оплата и финальный результат. Считаются только закреплённые за C пользователи.'
+    : marketerBFlow
+    ? 'Текущий путь B: предложение чек-апов, экран удержания, выбор оплаты и финальный результат. Считаются только закреплённые за B пользователи.'
     : reofferFlow
     ? 'Путь основного варианта: от сообщения за день до медосмотра до выбора обследований и финального решения. Вариант «маркетолог» сюда не входит.'
     : 'Основная воронка новых пользователей: приветствие, регистрация, анкета, обследования и завершение. Переходы по ссылке /result сюда не входят.';
@@ -1593,6 +1619,15 @@ function renderMetric2(data) {
     [resultFlow ? 'Пришли по пути result' : masterclassFlow ? 'Открыли страницу мастер-класса' : experimentFlow ? 'Попали в вариант «маркетолог»' : reofferFlow ? 'Получили повторное предложение' : 'На первом экране',data.summary?.start_users || 0,'100% — база этой ветки'],
     [resultFlow ? 'Получили результат пути' : masterclassFlow ? 'Открыли Консилиум' : 'Дошли до завершения',data.summary?.reached_completion || 0,'уникальных пользователей'],
   ].map(([label,value,note]) => `<article class="analytics-metric"><span>${label}</span><strong>${Number(value).toLocaleString('ru-RU')}</strong><small>${note}</small></article>`).join('');
+  if (marketerBFlow || marketerCFlow) {
+    const business = data.summary?.marketer_business || {};
+    summary.innerHTML += [
+      ['Выбрали анализы',business.selected_users || 0,'уникальных пользователей'],
+      ['Сумма выбранного',`${Number(business.selected_amount || 0).toLocaleString('ru-RU')} ₽`,'по текущему прайсу'],
+      ['Успешно оплатили',business.paid_users || 0,'онлайн-плательщиков'],
+      ['Онлайн-выручка',`${Number(business.online_revenue || 0).toLocaleString('ru-RU')} ₽`,'успешные нетестовые оплаты'],
+    ].map(([label,value,note]) => `<article class="analytics-metric"><span>${label}</span><strong>${typeof value === 'number' ? Number(value).toLocaleString('ru-RU') : escapeHtml(value)}</strong><small>${note}</small></article>`).join('');
+  }
   if (reofferFlow) {
     const reoffer = data.summary?.reoffer || {};
     summary.innerHTML += (reoffer.duration_buckets || []).map(item => `<article class="analytics-metric"><span>${escapeHtml(item.label)}</span><strong>${Number(item.users || 0).toLocaleString('ru-RU')}</strong><small>активное время на экране предложения</small></article>`).join('');
@@ -1770,7 +1805,7 @@ function closeMetric2Modal() {
 }
 
 async function loadMetric2(flow = metric2ActiveFlow) {
-  metric2ActiveFlow = ['result','experiment','reoffer','masterclass'].includes(flow) ? flow : 'standard';
+  metric2ActiveFlow = ['result','experiment','marketer_b','marketer_c','reoffer','masterclass'].includes(flow) ? flow : 'standard';
   closeMetric2Modal();
   return withPanelLoading('#metric2AdminView', async () => {
     const params = new URLSearchParams({period:$('#metric2Period').value,flow:metric2ActiveFlow});
@@ -1787,7 +1822,7 @@ async function loadMetric2(flow = metric2ActiveFlow) {
     }
   }, metric2ActiveFlow === 'result' ? 'Строим путь получения результатов…'
     : metric2ActiveFlow === 'masterclass' ? 'Строим путь мастер-классов…'
-    : metric2ActiveFlow === 'experiment' ? 'Строим путь воронки маркетолога…'
+    : ['experiment','marketer_b','marketer_c'].includes(metric2ActiveFlow) ? 'Строим путь воронки маркетолога…'
     : metric2ActiveFlow === 'reoffer' ? 'Строим путь повторного предложения…' : 'Строим обычный стартовый путь…');
 }
 
@@ -2041,6 +2076,26 @@ function showContentTextsStatus(message = '', error = false) {
   node.classList.toggle('error', error);
 }
 
+function ensureMarketerResultRuleFields() {
+  const root = $('#marketerResultRulesFields');
+  if (!root || root.childElementCount) return;
+  const labels = [
+    'Усталость у женщины','Усталость у мужчины','Повышенное или нестабильное давление',
+    'ИМТ от 30','Алкоголь чаще раза в неделю','Боли или отёчность суставов',
+    'Женщина от 45 лет','Мужчина от 40 лет','Жалобы в свободном поле','Профилактический сценарий',
+  ];
+  root.innerHTML = labels.map((label,index) => {
+    const rule = index + 1;
+    return `<section class="content-result-rule"><h3>${rule}. ${escapeHtml(label)}</h3>
+      <label>Плашка<input type="text" maxlength="500" data-text-key="result_rule_${rule}_chip" required></label>
+      <label>Объяснение<textarea rows="3" maxlength="2000" data-text-key="result_rule_${rule}_explanation" required></textarea></label>
+      <label>Что проверить<textarea rows="3" maxlength="2000" data-text-key="result_rule_${rule}_checks" required></textarea><small>Каждый пункт с новой строки.</small></label>
+      <label>Фраза на экране выбора<input type="text" maxlength="1000" data-text-key="result_rule_${rule}_phrase" required></label>
+      ${rule === 10 ? '<label>Чип «давление в норме»<input type="text" maxlength="500" data-text-key="result_rule_10_chip_pressure" required></label><label>Чип «не курите»<input type="text" maxlength="500" data-text-key="result_rule_10_chip_no_smoking" required></label>' : ''}
+    </section>`;
+  }).join('');
+}
+
 function fillContentTexts(values = {}) {
   document.querySelectorAll('#marketerExaminationTextsForm [data-text-key]').forEach(input => {
     const value = values[input.dataset.textKey];
@@ -2061,11 +2116,12 @@ function renderContentTextPreview(values = contentTextDraftValues()) {
   const preview = $('#contentTextPreviewPhone');
   if (!preview) return;
   const retention = activeContentTextPanel === 'retention';
+  const result = activeContentTextPanel === 'result';
   const ruleId = Number($('#contentTextPreviewRule')?.value || 10);
   const screen = {
-    kind: retention ? 'exam_objection_marketer' : 'exam_selection_marketer',
+    kind: retention ? 'exam_objection_marketer' : result ? 'questionnaire_results_c' : 'exam_selection_marketer',
     stage: String(values.stage_label || 'Обследования'),
-    title: retention ? 'Удержание после отказа' : 'Новое предложение чек-апов',
+    title: retention ? 'Удержание после отказа' : result ? 'Результаты анкеты' : 'Новое предложение чек-апов',
   };
   preview.innerHTML = metric2PreviewMarkup(screen,true,{
     examinations: contentTextPreviewExaminations,
@@ -2073,12 +2129,32 @@ function renderContentTextPreview(values = contentTextDraftValues()) {
     marketer_preview_rule_id: ruleId,
   });
   const title = $('#contentTextPreviewTitle');
-  if (title) title.textContent = retention ? 'Экран удержания' : 'Экран дополнительных обследований';
+  if (title) title.textContent = retention ? 'Экран удержания' : result ? 'Результаты анкеты C' : 'Экран дополнительных обследований';
   $('#contentTextPreviewRuleWrap')?.classList.toggle('hidden',retention);
 }
 
+function syncContentTextPreviewRules(panelId = activeContentTextPanel) {
+  const select = $('#contentTextPreviewRule');
+  if (!select) return;
+  const previous = Number(select.value || 10);
+  const resultRules = [
+    [1,'Усталость у женщины'],[2,'Усталость у мужчины'],[3,'Повышенное или нестабильное давление'],
+    [4,'ИМТ от 30'],[5,'Алкоголь чаще раза в неделю'],[6,'Боли или отёчность суставов'],
+    [7,'Женщина от 45 лет'],[8,'Мужчина от 40 лет'],[9,'Жалобы в свободном поле'],
+    [10,'Профилактический сценарий'],
+  ];
+  const offerRules = [
+    [2,'Повышенное или нестабильное давление'],[3,'ИМТ от 30'],[4,'Алкоголь чаще раза в неделю'],
+    [5,'Усталость у женщины'],[6,'Усталость у мужчины'],[7,'Боли в суставах'],
+    [8,'Женщина от 45 лет'],[9,'Мужчина от 40 лет'],[10,'Профилактический вариант'],
+  ];
+  const rules = panelId === 'result' ? resultRules : offerRules;
+  select.innerHTML = rules.map(([value,label]) => `<option value="${value}">${escapeHtml(label)}</option>`).join('');
+  select.value = String(rules.some(([value]) => value === previous) ? previous : 10);
+}
+
 function selectContentTextPanel(panelId = 'offer') {
-  const activeId = panelId === 'retention' ? 'retention' : 'offer';
+  const activeId = ['offer','result','retention'].includes(panelId) ? panelId : 'offer';
   activeContentTextPanel = activeId;
   document.querySelectorAll('[data-content-text-tab]').forEach(button => {
     const active = button.dataset.contentTextTab === activeId;
@@ -2089,11 +2165,14 @@ function selectContentTextPanel(panelId = 'offer') {
     panel.classList.toggle('hidden', panel.dataset.contentTextPanel !== activeId);
   });
   const title = $('#contentTextsScreenTitle');
-  if (title) title.textContent = activeId === 'retention' ? 'Удержание после отказа' : 'Предложение после анкеты';
+  if (title) title.textContent = activeId === 'retention' ? 'Удержание после отказа' : activeId === 'result' ? 'Результаты анкеты — вариант C' : 'Предложение после анкеты';
+  syncContentTextPreviewRules(activeId);
   renderContentTextPreview();
 }
 
 async function loadContentTexts() {
+  ensureMarketerResultRuleFields();
+  syncContentTextPreviewRules();
   return withPanelLoading('#contentTextsAdminView', async () => {
     const data = await adminFetch('/api/admin/content-texts');
     const section = (data.sections || []).find(item => item.id === 'marketer_examinations');
@@ -2667,7 +2746,10 @@ $('#metric2MasterclassFlow').addEventListener('click', () => {
   if (metric2ActiveFlow !== 'masterclass') loadMetric2('masterclass').catch(showDashboardError);
 });
 $('#metric2ExperimentFlow').addEventListener('click', () => {
-  if (metric2ActiveFlow !== 'experiment') loadMetric2('experiment').catch(showDashboardError);
+  if (metric2ActiveFlow !== 'marketer_b') loadMetric2('marketer_b').catch(showDashboardError);
+});
+$('#metric2MarketerCFlow').addEventListener('click', () => {
+  if (metric2ActiveFlow !== 'marketer_c') loadMetric2('marketer_c').catch(showDashboardError);
 });
 $('#metric2ExperimentLinkCopy').addEventListener('click', async () => {
   const link = $('#metric2ExperimentLink').dataset.link || '';

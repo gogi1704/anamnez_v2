@@ -699,12 +699,22 @@ class AnalyticsTests(unittest.TestCase):
                 CREATE TABLE experiment_assignments (
                     experiment_key TEXT NOT NULL, chel_id TEXT NOT NULL, variant TEXT NOT NULL
                 );
+                CREATE TABLE marketer_variant_assignments (
+                    experiment_key TEXT NOT NULL, chel_id TEXT NOT NULL, variant TEXT NOT NULL
+                );
             """)
             main_conn.executemany(
                 "INSERT INTO experiment_assignments (experiment_key,chel_id,variant) VALUES (?,?,?)",
                 [
                     ("marketer_funnel_2026", "CHEL-MARKETER-BRANCH", "marketer"),
                     ("marketer_funnel_2026", "CHEL-CONTROL-BRANCH", "control"),
+                ],
+            )
+            main_conn.commit()
+            main_conn.executemany(
+                "INSERT INTO marketer_variant_assignments (experiment_key,chel_id,variant) VALUES (?,?,?)",
+                [
+                    ("marketer_funnel_2026", "CHEL-MARKETER-BRANCH", "c"),
                 ],
             )
             main_conn.commit()
@@ -725,6 +735,11 @@ class AnalyticsTests(unittest.TestCase):
         self.assertEqual(report["summary"]["start_users"], 1)
         self.assertIn("welcome", {item["id"] for item in report["screens"]})
         self.assertNotIn("result_welcome", {item["id"] for item in report["screens"]})
+
+        marketer_c = analytics.metric2_report("30", flow="marketer_c")
+        self.assertEqual(marketer_c["flow_label"], "Ветка marketer C")
+        self.assertEqual(marketer_c["summary"]["start_users"], 1)
+        self.assertIn("questionnaire_results", {item["id"] for item in marketer_c["screens"]})
 
         standard = analytics.metric2_report("30", flow="standard")
         self.assertEqual(standard["summary"]["start_users"], 1)

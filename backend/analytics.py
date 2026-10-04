@@ -99,6 +99,76 @@ def _experiment_cohort_chel_ids(variant: str) -> set[str]:
         if main_conn is not None:
             main_conn.close()
 
+
+def _marketer_variant_cohort_chel_ids(variant: str) -> set[str]:
+    """Load the persisted B/C subgroup inside the active marketer cohort."""
+    if variant not in {"b", "c"}:
+        return set()
+    main_conn = None
+    try:
+        main_conn = sqlite3.connect(settings.database_path, timeout=5)
+        experiment_key = main_conn.execute(
+            "SELECT experiment_key FROM experiment_settings WHERE id = 1"
+        ).fetchone()
+        if not experiment_key:
+            return set()
+        return {
+            str(row[0]) for row in main_conn.execute(
+                "SELECT chel_id FROM marketer_variant_assignments "
+                "WHERE experiment_key=? AND variant=?",
+                (experiment_key[0], variant),
+            ).fetchall()
+        }
+    except sqlite3.Error:
+        return set()
+    finally:
+        if main_conn is not None:
+            main_conn.close()
+
+
+def _marketer_variant_business_metrics(chel_ids: set[str]) -> dict:
+    """Aggregate selected check-ups and successful online revenue for a cohort."""
+    if not chel_ids:
+        return {"selected_users": 0, "selected_amount": 0, "paid_users": 0, "online_revenue": 0}
+    main_conn = None
+    try:
+        main_conn = sqlite3.connect(settings.database_path, timeout=5)
+        placeholders = ",".join("?" for _ in chel_ids)
+        prices = {
+            str(row[0]): int(row[1] or 0)
+            for row in main_conn.execute("SELECT id,price FROM examination_catalog")
+        }
+        selected_users = 0
+        selected_amount = 0
+        for row in main_conn.execute(
+            f"SELECT selected_tests FROM onboarding_state WHERE chel_id IN ({placeholders})",
+            tuple(chel_ids),
+        ):
+            try:
+                selected = json.loads(row[0] or "[]")
+            except (json.JSONDecodeError, TypeError):
+                selected = []
+            if selected:
+                selected_users += 1
+                selected_amount += sum(prices.get(str(item), 0) for item in set(selected))
+        paid_row = main_conn.execute(
+            f"""SELECT COUNT(DISTINCT chel_id),COALESCE(SUM(amount_kopecks),0)
+            FROM payment_orders WHERE chel_id IN ({placeholders})
+              AND order_type='examinations' AND paid=1 AND test=0""",
+            tuple(chel_ids),
+        ).fetchone()
+        return {
+            "selected_users": selected_users,
+            "selected_amount": selected_amount,
+            "paid_users": int(paid_row[0] or 0),
+            "online_revenue": int(paid_row[1] or 0) / 100,
+        }
+    except sqlite3.Error:
+        return {"selected_users": 0, "selected_amount": 0, "paid_users": 0, "online_revenue": 0}
+    finally:
+        if main_conn is not None:
+            main_conn.close()
+
 ALLOWED_EVENTS = {
     "landing_viewed", "experiment_assigned", "welcome_viewed", "welcome_continued", "auth_gate_viewed",
     "registration_method_selected", "anonymous_warning_viewed", "anonymous_warning_cancelled",
@@ -149,7 +219,7 @@ ALLOWED_PROPERTIES = {
     "app_mode", "page_version", "connection_type", "conversation_count",
     "document_count", "cached", "reason", "font_size", "stage", "action",
     "selection_id", "exam_name", "context", "linked_count",
-    "experiment_key", "experiment_variant", "funnel_version",
+    "experiment_key", "experiment_variant", "funnel_version", "marketer_variant",
     "reoffer_id", "duration_bucket", "active_seconds", "examination_date", "provider_count",
     "question_count", "recommended_count",
 }
@@ -1946,7 +2016,7 @@ def _metric2_report_uncached(
     false incomplete edge ``C -> D``.
     """
     flow = str(flow or "standard").strip().lower()
-    if flow not in {"standard", "result", "experiment", "reoffer", "masterclass"}:
+    if flow not in {"standard", "result", "experiment", "marketer_b", "marketer_c", "reoffer", "masterclass"}:
         raise ValueError("Неизвестная ветка Метрики 2.0")
     screen_flow = flow if flow in {"result", "reoffer", "masterclass"} else "standard"
     expected_context = (
@@ -1957,8 +2027,12 @@ def _metric2_report_uncached(
     )
     where, params = _filters(period, device, method, source, date_from, date_to)
     masterclass_ids = sorted(_masterclass_cohort_chel_ids())
-    if flow == "experiment":
-        cohort_ids = sorted(_experiment_cohort_chel_ids("marketer"))
+    if flow in {"experiment", "marketer_b", "marketer_c"}:
+        cohort_ids = sorted(
+            _marketer_variant_cohort_chel_ids(flow[-1])
+            if flow in {"marketer_b", "marketer_c"}
+            else _experiment_cohort_chel_ids("marketer")
+        )
         if cohort_ids:
             where += " AND e.chel_id IN (" + ",".join("?" for _ in cohort_ids) + ")"
             params.extend(cohort_ids)
@@ -1988,14 +2062,14 @@ def _metric2_report_uncached(
             definition.get("flow") or "standard"
         ) == screen_flow
     ]
-    if flow == "experiment":
+    if flow in {"experiment", "marketer_b", "marketer_c"}:
         definitions = json.loads(json.dumps(definitions, ensure_ascii=False))
         for definition in definitions:
             if definition["id"] == "exam_selection":
                 definition.update({
                     "kind": "exam_selection_marketer",
-                    "title": "Новое предложение чек-апов",
-                    "description": "Один рекомендованный чек-ап выбран и раскрыт, ещё два показаны сразу, остальные открываются по кнопке.",
+                    "title": "Выбор анализов маркетолога",
+                    "description": "Основной рекомендованный чек-ап выбран и раскрыт, ещё два показаны сразу, остальные открываются по кнопке.",
                 })
                 definition["actions"] = [
                     {"id": "toggle_package", "label": "Добавили или убрали чек-ап", "interaction": True, "legacy": []},
@@ -2012,6 +2086,37 @@ def _metric2_report_uncached(
                     "title": "Удержание после отказа",
                     "description": "Повторно объясняет ценность расшифровки и скидки перед окончательным отказом.",
                 })
+        if flow == "marketer_c":
+            for definition in definitions:
+                if definition["id"] == "question_notes":
+                    for action in definition.get("actions", []):
+                        if action.get("id") in {"answer", "skip"}:
+                            action["target"] = "questionnaire_results"
+                elif definition["id"] == "exam_selection":
+                    definition.update({
+                        "kind": "exam_selection_marketer_c",
+                        "title": "Анализы к медосмотру",
+                        "description": "Персональный выбор после экрана результатов анкеты. Карточки управляются отдельными чекбоксами.",
+                    })
+                    for action in definition.get("actions", []):
+                        if action.get("id") == "back":
+                            action["target"] = "questionnaire_results"
+            result_screen = {
+                "id": "questionnaire_results",
+                "title": "Результаты анкеты",
+                "stage": "Анкета · результат",
+                "kind": "questionnaire_results_c",
+                "description": "Краткое персональное резюме, направления проверки и переход к анализам.",
+                "actions": [
+                    {"id": "continue", "label": "Выбрать анализы", "target": "exam_selection", "legacy": []},
+                    {"id": "decline", "label": "Завершить без дополнительных анализов", "target": "exam_objection", "legacy": []},
+                ],
+            }
+            exam_index = next(
+                index for index, definition in enumerate(definitions)
+                if definition["id"] == "exam_selection"
+            )
+            definitions.insert(exam_index, result_screen)
     relevant_events = {"onboarding_screen_viewed", "onboarding_screen_action"}
     for definition in definitions:
         relevant_events.update(
@@ -2579,11 +2684,17 @@ def _metric2_report_uncached(
             if screen_id == "masterclass_landing"
             and group_id == "final_transition" and action_id == "continue"
         }
+    marketer_business = (
+        _marketer_variant_business_metrics(set(start_cohort))
+        if flow in {"marketer_b", "marketer_c"} else None
+    )
     return {
         "generated_at": _now(), "period": period, "date_from": date_from, "date_to": date_to,
         "flow": flow,
         "flow_label": (
             "Получение результатов" if flow == "result"
+            else "Ветка marketer B" if flow == "marketer_b"
+            else "Ветка marketer C" if flow == "marketer_c"
             else "Новое предложение marketer" if flow == "experiment"
             else "Повторное предложение" if flow == "reoffer"
             else "Мастер-классы" if flow == "masterclass"
@@ -2595,6 +2706,7 @@ def _metric2_report_uncached(
             "reached_completion": len(completed_user_ids),
             "unique_transitions": sum(len(users) for users in edge_users.values()),
             "reoffer": reoffer_summary,
+            "marketer_business": marketer_business,
         },
         "screens": result_screens,
         "filter_options": filter_options,
