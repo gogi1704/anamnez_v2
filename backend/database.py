@@ -1422,6 +1422,115 @@ def admin_schedule_revenue_report(schedule_rows: list[dict], month: str) -> dict
     }
 
 
+def admin_sales_dynamics(granularity: str = "day") -> dict:
+    """Return checkup selections plus completed online and offline sale counts."""
+    if granularity not in {"day", "week", "month"}:
+        raise ValueError("Неизвестный срез динамики продаж")
+
+    moscow = timezone(timedelta(hours=3))
+    local_now = datetime.now(moscow)
+    local_today = local_now.replace(hour=0, minute=0, second=0, microsecond=0)
+
+    if granularity == "day":
+        starts = [local_today - timedelta(days=value) for value in range(29, -1, -1)]
+    elif granularity == "week":
+        current_week = local_today - timedelta(days=local_today.weekday())
+        starts = [current_week - timedelta(weeks=value) for value in range(11, -1, -1)]
+    else:
+        current_month_index = local_today.year * 12 + local_today.month - 1
+        starts = []
+        for offset in range(11, -1, -1):
+            month_index = current_month_index - offset
+            starts.append(datetime(
+                month_index // 12, month_index % 12 + 1, 1, tzinfo=moscow,
+            ))
+
+    def bucket_key(value: datetime) -> str:
+        if granularity == "day":
+            return value.strftime("%Y-%m-%d")
+        if granularity == "week":
+            return (value - timedelta(days=value.weekday())).strftime("%Y-%m-%d")
+        return value.strftime("%Y-%m")
+
+    buckets = {
+        bucket_key(start): {
+            "key": bucket_key(start),
+            "started_at": start.astimezone(timezone.utc).isoformat(),
+            "checkup_selections": 0,
+            "online_sales": 0,
+            "offline_sales": 0,
+        }
+        for start in starts
+    }
+    cutoff = starts[0].astimezone(timezone.utc).isoformat()
+
+    with connection() as conn:
+        application_rows = conn.execute(
+            """SELECT chel_id,updated_at
+               FROM onboarding_state
+               WHERE status='complete' AND updated_at>=?
+                 AND JSON_VALID(selected_tests)
+                 AND JSON_ARRAY_LENGTH(selected_tests)>0
+                 AND IS_STATS_USER(chel_id)=1""",
+            (cutoff,),
+        ).fetchall()
+        offline_rows = conn.execute(
+            """SELECT chel_id,tube_linked_at
+               FROM user_profile
+               WHERE TRIM(COALESCE(tube_number,''))<>''
+                 AND tube_linked_at>=?
+                 AND IS_STATS_USER(chel_id)=1""",
+            (cutoff,),
+        ).fetchall()
+        online_rows = conn.execute(
+            """SELECT id,chel_id,paid_at
+               FROM payment_orders
+               WHERE paid=1 AND test=0 AND order_type='examinations'
+                 AND paid_at>=? AND IS_STATS_USER(chel_id)=1""",
+            (cutoff,),
+        ).fetchall()
+
+    def local_datetime(value: str) -> datetime | None:
+        try:
+            parsed = datetime.fromisoformat(str(value or "").replace("Z", "+00:00"))
+        except ValueError:
+            return None
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=timezone.utc)
+        return parsed.astimezone(moscow)
+
+    for row in application_rows:
+        occurred_at = local_datetime(row["updated_at"])
+        item = buckets.get(bucket_key(occurred_at)) if occurred_at else None
+        if not item:
+            continue
+        item["checkup_selections"] += 1
+
+    for row in offline_rows:
+        occurred_at = local_datetime(row["tube_linked_at"])
+        item = buckets.get(bucket_key(occurred_at)) if occurred_at else None
+        if item:
+            item["offline_sales"] += 1
+
+    for row in online_rows:
+        occurred_at = local_datetime(row["paid_at"])
+        item = buckets.get(bucket_key(occurred_at)) if occurred_at else None
+        if item:
+            item["online_sales"] += 1
+
+    items = list(buckets.values())
+    return {
+        "granularity": granularity,
+        "buckets": items,
+        "summary": {
+            "checkup_selections": sum(item["checkup_selections"] for item in items),
+            "online_sales": sum(item["online_sales"] for item in items),
+            "offline_sales": sum(item["offline_sales"] for item in items),
+        },
+        "generated_at": utc_now(),
+    }
+
+
 def reset_current_user(preserve_identity: bool = False) -> None:
     """Remove user content; optionally preserve a verified external identity."""
     chel_id = current_chel_id()

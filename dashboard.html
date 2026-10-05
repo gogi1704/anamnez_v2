@@ -11,7 +11,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/static/dashboard.css?v=20261004-marketer-c-v3">
+  <link rel="stylesheet" href="/static/dashboard.css?v=20261005-sales-dynamics-v1">
 </head>
 <body>
   <main class="dashboard-shell">
@@ -172,6 +172,28 @@
       </section>
 
       <section class="schedule-revenue-admin hidden" id="scheduleRevenueAdminView">
+        <article class="panel sales-dynamics-panel">
+          <div class="panel-heading sales-dynamics-heading">
+            <div>
+              <p class="eyebrow">Продажи дополнительных обследований</p>
+              <h2>Динамика продаж</h2>
+              <p>Выбор чекапов, успешные онлайн-оплаты и пользователи, получившие результаты по привязанной пробирке.</p>
+            </div>
+            <label>Срез<select id="salesDynamicsGranularity">
+              <option value="day" selected>Дни · последние 30</option>
+              <option value="week">Недели · последние 12</option>
+              <option value="month">Месяцы · последние 12</option>
+            </select></label>
+          </div>
+          <div class="sales-dynamics-legend" aria-label="Обозначения графика">
+            <span class="online">Онлайн-продажи</span>
+            <span class="offline">Подтверждённые офлайн-продажи · получили результаты</span>
+            <span class="selections">Выбрали чекапы</span>
+          </div>
+          <div class="sales-dynamics-chart" id="salesDynamicsChart" aria-label="График динамики продаж"></div>
+          <p class="sales-dynamics-note" id="salesDynamicsNote"></p>
+        </article>
+
         <article class="panel schedule-revenue-heading">
           <div class="panel-heading">
             <div>
@@ -763,6 +785,6 @@
       </div>
     </section>
   </div>
-  <script src="/static/dashboard.js?v=20261004-marketer-c-v3" defer></script>
+  <script src="/static/dashboard.js?v=20261005-sales-dynamics-v1" defer></script>
 </body>
 </html>

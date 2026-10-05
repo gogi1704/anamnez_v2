@@ -3953,14 +3953,14 @@ class OrchestratorTests(unittest.TestCase):
         self.assertIn("controllerchange", script)
         self.assertIn("url.pathname.startsWith('/api/')", worker)
         self.assertIn("url.pathname.startsWith('/auth/')", worker)
-        self.assertIn("consilium-shell-v152", worker)
+        self.assertIn("consilium-shell-v154", worker)
         self.assertIn("fetch(request)", worker)
-        self.assertIn("/static/styles.css?v=20261004-marketer-c-v3", index)
+        self.assertIn("/static/styles.css?v=20261005-control-online-prices-v2", index)
         self.assertIn("/static/rich-text.2bf1f5fab764.css", index)
         self.assertTrue((project_root / "static" / "styles.07ffaefb4795.css").is_file())
         self.assertTrue((project_root / "static" / "rich-text.2bf1f5fab764.css").is_file())
-        self.assertIn("/static/app.js?v=20261004-marketer-c-v3", index)
-        self.assertIn("/static/metrika.js?v=20261004-marketer-c-v3", index)
+        self.assertIn("/static/app.js?v=20261005-control-online-prices-v2", index)
+        self.assertIn("/static/metrika.js?v=20261005-control-online-prices-v2", index)
         self.assertIn("Enter — новая строка · отправка — кнопкой", index)
         self.assertIn('enterkeyhint="enter"', index)
         self.assertNotIn("$('#chatForm').requestSubmit()", script)
@@ -4046,7 +4046,7 @@ class OrchestratorTests(unittest.TestCase):
         main = (project_root / "backend" / "main.py").read_text(encoding="utf-8")
         config = (project_root / "backend" / "config.py").read_text(encoding="utf-8")
 
-        self.assertIn('src="/static/metrika.js?v=20261004-marketer-c-v3"', index)
+        self.assertIn('src="/static/metrika.js?v=20261005-control-online-prices-v2"', index)
         self.assertIn('YANDEX_METRIKA_COUNTER_ID', config)
         self.assertIn('path == "/api/public-config"', main)
         self.assertIn('"metrika.js"', main)
@@ -4893,6 +4893,14 @@ class OrchestratorTests(unittest.TestCase):
         self.assertIn('class="exam-card-top"', script)
         self.assertIn(".exam-pricing", styles)
         self.assertIn(".exam-card-top { display:grid", styles)
+        control_selection = script.split("function renderExamSelection", 1)[1].split(
+            "function renderExamSkipConfirmation", 1,
+        )[0]
+        self.assertIn("${marketerPriceMarkup(test)}", control_selection)
+        self.assertIn("totals.online.toLocaleString('ru-RU')", control_selection)
+        self.assertIn("При оплате онлайн · скидка 10 %", control_selection)
+        self.assertIn(".exam-total-prices", styles)
+        self.assertIn(".exam-card-top > .marketer-price b { position:static", styles)
         self.assertIn("grid-template-columns:repeat(2,minmax(0,1fr))", styles)
         self.assertIn(".exam-pricing { display:grid; justify-items:start", styles)
         self.assertIn("border:1px solid #d7e5de", styles)
@@ -5287,6 +5295,96 @@ class OrchestratorTests(unittest.TestCase):
             with db.connection() as conn:
                 conn.execute("DELETE FROM users WHERE chel_id=?", (chel_id,))
                 conn.commit()
+
+    def test_sales_dynamics_counts_every_tube_as_confirmed_offline_sale(self):
+        baseline = db.admin_sales_dynamics("day")["summary"]
+        now = datetime.now(timezone.utc).isoformat()
+        online_user = "chel_sales_dynamics_online"
+        offline_user = "chel_sales_dynamics_offline"
+        unconfirmed_offline_user = "chel_sales_dynamics_offline_without_tube"
+        results_only_user = "chel_sales_dynamics_results_only"
+        try:
+            for chel_id in (
+                online_user, offline_user, unconfirmed_offline_user, results_only_user,
+            ):
+                db.ensure_user(chel_id)
+            with db.connection() as connection:
+                connection.executemany(
+                    """INSERT INTO onboarding_state
+                       (chel_id,status,selected_tests,payment_status,updated_at)
+                       VALUES (?, 'complete', '[\"lipids\"]', ?, ?)""",
+                    [
+                        (online_user, "paid_online", now),
+                        (offline_user, "pay_at_exam", now),
+                        (unconfirmed_offline_user, "pay_at_exam", now),
+                    ],
+                )
+                connection.execute(
+                    """INSERT INTO user_profile
+                       (chel_id,tube_number,tube_linked_at,updated_at)
+                       VALUES (?,?,?,?)""",
+                    (offline_user, "TUBE-SALES-1", now, now),
+                )
+                connection.execute(
+                    """INSERT INTO user_profile
+                       (chel_id,tube_number,tube_linked_at,updated_at)
+                       VALUES (?,?,?,?)""",
+                    (results_only_user, "TUBE-RESULTS-ONLY", now, now),
+                )
+                connection.execute(
+                    """INSERT INTO payment_orders
+                       (id,chel_id,idempotence_key,selection_fingerprint,status,
+                        amount_kopecks,items,paid,test,created_at,updated_at,paid_at)
+                       VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+                    ("sales-dynamics-order", online_user, "sales-dynamics-key", "fp",
+                     "succeeded", 135000, "[]", 1, 0, now, now, now),
+                )
+                connection.commit()
+
+            report = db.admin_sales_dynamics("day")
+            self.assertEqual(
+                report["summary"]["checkup_selections"]
+                - baseline["checkup_selections"], 3
+            )
+            self.assertEqual(
+                report["summary"]["online_sales"] - baseline["online_sales"], 1
+            )
+            self.assertEqual(
+                report["summary"]["offline_sales"] - baseline["offline_sales"], 2
+            )
+            with self.assertRaises(ValueError):
+                db.admin_sales_dynamics("quarter")
+        finally:
+            with db.connection() as connection:
+                connection.execute(
+                    "DELETE FROM payment_orders WHERE id='sales-dynamics-order'"
+                )
+                connection.execute(
+                    "DELETE FROM onboarding_state WHERE chel_id IN (?, ?, ?)",
+                    (online_user, offline_user, unconfirmed_offline_user),
+                )
+                connection.execute(
+                    "DELETE FROM users WHERE chel_id IN (?, ?, ?, ?)",
+                    (online_user, offline_user, unconfirmed_offline_user, results_only_user),
+                )
+                connection.commit()
+
+    def test_sales_dynamics_admin_ui_and_endpoint_are_present(self):
+        project_root = Path(__file__).resolve().parents[1]
+        dashboard = (project_root / "dashboard.html").read_text(encoding="utf-8")
+        script = (project_root / "static" / "dashboard.js").read_text(encoding="utf-8")
+        styles = (project_root / "static" / "dashboard.css").read_text(encoding="utf-8")
+        main = (project_root / "backend" / "main.py").read_text(encoding="utf-8")
+        self.assertLess(
+            dashboard.index('class="panel sales-dynamics-panel"'),
+            dashboard.index('class="panel schedule-revenue-heading"'),
+        )
+        self.assertIn('id="salesDynamicsGranularity"', dashboard)
+        self.assertIn('id="salesDynamicsChart"', dashboard)
+        self.assertIn("function renderSalesDynamics", script)
+        self.assertIn("/api/admin/sales-dynamics", script)
+        self.assertIn(".sales-dynamics-bars", styles)
+        self.assertIn('path == "/api/admin/sales-dynamics"', main)
 
     def test_upcoming_examination_uses_nearest_date_and_combines_brigades(self):
         db.replace_enterprise_examination_schedule([

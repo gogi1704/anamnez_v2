@@ -640,10 +640,20 @@ article.capability-card strong { font-weight:650; }
 .exam-card-top > strong:only-child { grid-column:1/-1; }
 .exam-card-top > .exam-pricing { align-self:start; }
 .exam-card-top + small { margin-top:16px; }
+.exam-card-top > .marketer-price { align-self:start; min-width:0; }
+.exam-card-top > .marketer-price b { position:static; inset:auto; display:inline; }
+.exam-total-online { align-items:center; }
+.exam-total-prices { display:grid; justify-items:end; gap:2px; text-align:right; }
+.exam-total-prices > span { display:flex; align-items:baseline; justify-content:flex-end; gap:7px; }
+.exam-total-prices s { color:#89938f; font-size:calc(9px + var(--text-bump)); font-weight:500; }
+.exam-total-prices strong { color:var(--green); font-size:calc(12px + var(--text-bump)); }
+.exam-total-prices small { color:#65756f; font-size:calc(7px + var(--text-bump)); line-height:1.3; }
 .exam-info-card header .exam-pricing { align-self:flex-start; }
 @media(max-width:720px) {
   .exam-card-top { grid-template-columns:1fr; gap:7px; }
   .exam-card-top > .exam-pricing { justify-items:start; }
+  .exam-card-top > .marketer-price { text-align:left; }
+  .exam-card-top > .marketer-price > span { justify-content:flex-start; }
   .exam-price-line { justify-content:flex-start; }
   .exam-info-card header .exam-pricing { justify-items:start; }
 }

@@ -448,6 +448,7 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
             "/api/admin/funnel-monitor", "/api/admin/funnel-monitor/preview",
             "/api/admin/checkup-reoffers",
             "/api/admin/schedule-revenue",
+            "/api/admin/sales-dynamics",
         }:
             if not self._admin_authorized():
                 return
@@ -495,6 +496,14 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                 except examination_schedule.ExaminationScheduleUnavailable as exc:
                     return self._json(503, {"detail": str(exc)})
                 except (ValueError, TypeError) as exc:
+                    return self._json(422, {"detail": str(exc)})
+            if path == "/api/admin/sales-dynamics":
+                query = parse_qs(parsed.query)
+                try:
+                    return self._json(200, db.admin_sales_dynamics(
+                        query.get("granularity", ["day"])[0],
+                    ))
+                except ValueError as exc:
                     return self._json(422, {"detail": str(exc)})
             if path == "/api/admin/dashboard":
                 return self._json(200, db.admin_dashboard())

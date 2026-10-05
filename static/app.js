@@ -2166,9 +2166,9 @@ function renderExamSelection(scrollPosition = null) {
     const disabledNote = disabled
       ? `<small class="exam-upgrade-note">Уже входит в «${escapeHtml(extended?.name || 'Расширенный комплекс')}»</small>`
       : '';
-    return `<label class="exam-card ${selected ? 'selected' : ''} ${disabled ? 'disabled-by-upgrade' : ''}" data-test-card="${test.id}" ${disabled ? 'aria-disabled="true"' : ''}><input type="checkbox" ${selected ? 'checked' : ''} ${disabled ? 'disabled' : ''}><span class="exam-check">✓</span>${recommended.has(test.id) ? '<small class="recommended-badge">Актуально для вас</small>' : ''}${genderIncompatible.has(test.id) ? '<small class="gender-alternative-badge">Можно посоветовать близким</small>' : ''}<span class="exam-card-top"><strong>${escapeHtml(test.name)}</strong>${examinationPriceMarkup(test, recommended.has(test.id))}</span><small>${escapeHtml(test.description)}</small><em>${escapeHtml(test.includes)}</em>${disabledNote}</label>`;
+    return `<label class="exam-card ${selected ? 'selected' : ''} ${disabled ? 'disabled-by-upgrade' : ''}" data-test-card="${test.id}" ${disabled ? 'aria-disabled="true"' : ''}><input type="checkbox" ${selected ? 'checked' : ''} ${disabled ? 'disabled' : ''}><span class="exam-check">✓</span>${recommended.has(test.id) ? '<small class="recommended-badge">Актуально для вас</small>' : ''}${genderIncompatible.has(test.id) ? '<small class="gender-alternative-badge">Можно посоветовать близким</small>' : ''}<span class="exam-card-top"><strong>${escapeHtml(test.name)}</strong>${marketerPriceMarkup(test)}</span><small>${escapeHtml(test.description)}</small><em>${escapeHtml(test.includes)}</em>${disabledNote}</label>`;
   }).join('');
-  const total = state.onboarding.tests.filter(test => state.selectedTests.has(test.id)).reduce((sum,test) => sum + examinationEffectivePrice(test), 0);
+  const totals = selectedOfferTotals();
   const copy = state.onboarding.examination_recommendation_copy || {};
   const questionnaireSkipped = Boolean(state.onboarding.questionnaire_skipped);
   const repeatedSelection = Boolean(state.returnToChatAfterExaminations);
@@ -2184,7 +2184,8 @@ function renderExamSelection(scrollPosition = null) {
   const selectionActions = repeatedSelection
     ? `<div class="onboarding-actions"><button type="button" class="onboarding-next" data-onboarding-action="continue-payment" ${state.selectedTests.size ? '' : 'disabled'}>Далее</button></div><button type="button" class="exam-skip" data-onboarding-action="close-current-exams">Закрыть</button>`
     : `<div class="onboarding-actions"><button type="button" class="onboarding-back" data-onboarding-action="exam-offer">Назад</button><button type="button" class="onboarding-next" data-onboarding-action="continue-payment" ${state.selectedTests.size ? '' : 'disabled'}>Далее</button></div><button type="button" class="exam-skip" data-onboarding-action="review-exam-skip">Ничего не выбирать</button>`;
-  $('#onboardingContent').innerHTML = `${selectionHeader}${selectionBenefits}<div class="exam-list">${cards}</div><div class="exam-total"><span>Выбрано: ${state.selectedTests.size}</span><strong>${total.toLocaleString('ru')} ₽</strong></div>${selectionActions}`;
+  const totalMarkup = `<div class="exam-total exam-total-online"><span>Выбрано: ${state.selectedTests.size}</span><span class="exam-total-prices"><span><s>${totals.full.toLocaleString('ru-RU')} ₽</s><strong>${totals.online.toLocaleString('ru-RU')} ₽</strong></span><small>При оплате онлайн · скидка 10 %</small></span></div>`;
+  $('#onboardingContent').innerHTML = `${selectionHeader}${selectionBenefits}<div class="exam-list">${cards}</div>${totalMarkup}${selectionActions}`;
   if (scrollPosition) {
     const examList = $('#onboardingContent .exam-list');
     const onboarding = $('#onboarding');

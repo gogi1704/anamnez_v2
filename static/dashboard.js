@@ -805,6 +805,51 @@ function scheduleMetricGroup(title, items) {
   return `<section class="schedule-revenue-metric-group"><h3>${escapeHtml(title)}</h3><div class="schedule-revenue-group-cards">${items.map(item => scheduleMetricCard(...item)).join('')}</div></section>`;
 }
 
+function salesDynamicsBucketLabel(key, granularity) {
+  const parts = String(key || '').split('-').map(Number);
+  if (granularity === 'month') {
+    const names = ['янв','фев','мар','апр','май','июн','июл','авг','сен','окт','ноя','дек'];
+    return `${names[(parts[1] || 1) - 1]} ${String(parts[0] || '').slice(-2)}`;
+  }
+  const label = `${String(parts[2] || '').padStart(2,'0')}.${String(parts[1] || '').padStart(2,'0')}`;
+  return granularity === 'week' ? `с ${label}` : label;
+}
+
+function renderSalesDynamics(data = {}) {
+  const root = $('#salesDynamicsChart');
+  const items = data.buckets || [];
+  const granularity = data.granularity || 'day';
+  const maximum = Math.max(1,...items.flatMap(item => [
+    Number(item.online_sales || 0),
+    Number(item.offline_sales || 0),
+    Number(item.checkup_selections || 0),
+  ]));
+  root.style.setProperty('--sales-buckets',Math.max(1,items.length));
+  root.innerHTML = items.map(item => {
+    const values = [
+      ['online',Number(item.online_sales || 0),'Онлайн-продажи'],
+      ['offline',Number(item.offline_sales || 0),'Подтверждённые офлайн-продажи · получили результаты'],
+      ['selections',Number(item.checkup_selections || 0),'Выбрали чекапы'],
+    ];
+    const bars = values.map(([kind,value,title]) => `<i class="${kind}" style="height:${value ? Math.max(4,value / maximum * 100) : 1}%" title="${escapeHtml(title)}: ${value.toLocaleString('ru-RU')}"><b>${value.toLocaleString('ru-RU')}</b></i>`).join('');
+    return `<div class="sales-dynamics-bucket"><div class="sales-dynamics-bars">${bars}</div><small>${escapeHtml(salesDynamicsBucketLabel(item.key,granularity))}</small></div>`;
+  }).join('');
+  const summary = data.summary || {};
+  $('#salesDynamicsNote').textContent = [
+    `Выбрали чекапы: ${Number(summary.checkup_selections || 0).toLocaleString('ru-RU')}`,
+    `онлайн-продажи: ${Number(summary.online_sales || 0).toLocaleString('ru-RU')}`,
+    `подтверждённые офлайн-продажи (получили результаты): ${Number(summary.offline_sales || 0).toLocaleString('ru-RU')}`,
+  ].join(' · ');
+}
+
+async function loadSalesDynamics() {
+  const panel = $('.sales-dynamics-panel');
+  return withPanelLoading(panel, async () => {
+    const granularity = $('#salesDynamicsGranularity').value || 'day';
+    renderSalesDynamics(await adminFetch(`/api/admin/sales-dynamics?granularity=${encodeURIComponent(granularity)}`));
+  }, 'Строим динамику продаж…');
+}
+
 function renderScheduleRevenue(data = {}) {
   const sheets = data.sheets || [];
   const report = data.report;
@@ -877,6 +922,10 @@ async function loadScheduleRevenue() {
     const query = sheetId ? `?sheet_id=${encodeURIComponent(sheetId)}` : '';
     renderScheduleRevenue(await adminFetch(`/api/admin/schedule-revenue${query}`));
   }, 'Сверяем график, заявки и оплаты…');
+}
+
+async function loadScheduleRevenueView() {
+  await Promise.all([loadSalesDynamics(),loadScheduleRevenue()]);
 }
 
 async function deleteUserData(event) {
@@ -2288,7 +2337,7 @@ async function loadAdminViewData(view = activeAdminView, {force = false} = {}) {
   else if (view === 'costs') request = loadCosts();
   else if (view === 'analytics') request = loadAnalytics();
   else if (view === 'service_results') request = loadServiceResults();
-  else if (view === 'schedule_revenue') request = loadScheduleRevenue();
+  else if (view === 'schedule_revenue') request = loadScheduleRevenueView();
   else if (view === 'experiments') request = loadExperiments();
   else if (view === 'metric2') request = loadMetric2();
   else if (view === 'content_texts') request = loadContentTexts();
@@ -2712,6 +2761,7 @@ $('#analyticsTab').addEventListener('click', () => showAdminView('analytics'));
 $('#serviceResultsTab').addEventListener('click', () => showAdminView('service_results'));
 $('#scheduleRevenueTab').addEventListener('click', () => showAdminView('schedule_revenue'));
 $('#scheduleRevenueApply').addEventListener('click', () => loadScheduleRevenue().catch(showDashboardError));
+$('#salesDynamicsGranularity').addEventListener('change', () => loadSalesDynamics().catch(showDashboardError));
 $('#experimentsTab').addEventListener('click', () => showAdminView('experiments'));
 $('#metric2Tab').addEventListener('click', () => showAdminView('metric2'));
 $('#contentTextsTab').addEventListener('click', () => showAdminView('content_texts'));
