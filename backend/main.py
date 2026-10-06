@@ -669,6 +669,9 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
             )
         self._ensure_user_context()
         if path in {"/", "/result", "/result/"}:
+            branch_token = parse_qs(parsed.query).get("branch", [""])[0]
+            if branch_token:
+                db.apply_ai_branch_link(branch_token)
             db.record_device_access(self.headers.get("User-Agent", ""))
             return self._send_file(
                 BASE_DIR / "index.html",
@@ -2963,6 +2966,7 @@ small{{display:block;color:#82918c;text-align:center;margin-top:18px}}
     def log_message(self, format: str, *args) -> None:
         message = format % args
         message = re.sub(r"(/auth/(?:max|messenger)\?t=)[^ ]+", r"\1[REDACTED]", message)
+        message = re.sub(r"([?&]branch=)[^ &]+", r"\1[REDACTED]", message)
         print(f"{self.address_string()} — {message}")
 
 

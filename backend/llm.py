@@ -27,6 +27,8 @@ class LLMService:
     yandex_endpoint = "https://ai.api.cloud.yandex.net/v1/responses"
 
     def _request(self, payload: dict) -> dict:
+        if db.current_ai_branch() == db.AI_BRANCH_TEST:
+            return self._yandex_request(payload, model=settings.test_branch_model)
         if settings.llm_provider == "yandex":
             return self._yandex_request(payload)
         if not settings.openai_api_key:

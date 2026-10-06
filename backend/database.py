@@ -90,6 +90,36 @@ def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+AI_BRANCH_MAIN = "main"
+AI_BRANCH_TEST = "deepseek_test"
+
+
+def current_ai_branch() -> str:
+    with connection() as conn:
+        row = conn.execute(
+            "SELECT branch FROM ai_branch WHERE chel_id = ?", (current_chel_id(),),
+        ).fetchone()
+    return row["branch"] if row else AI_BRANCH_MAIN
+
+
+def set_ai_branch(chel_id: str, branch: str) -> None:
+    with _write_lock, connection() as conn:
+        conn.execute(
+            """INSERT INTO ai_branch (chel_id, branch, updated_at) VALUES (?,?,?)
+               ON CONFLICT(chel_id) DO UPDATE SET branch=excluded.branch, updated_at=excluded.updated_at""",
+            (chel_id, branch, utc_now()),
+        )
+        conn.commit()
+
+
+def apply_ai_branch_link(token: str) -> None:
+    """Switch the current user's AI branch only for the secret link (or back to main)."""
+    if token == "main":
+        set_ai_branch(current_chel_id(), AI_BRANCH_MAIN)
+    elif settings.test_branch_token and hmac.compare_digest(token, settings.test_branch_token):
+        set_ai_branch(current_chel_id(), AI_BRANCH_TEST)
+
+
 def set_current_chel_id(chel_id: str) -> None:
     _current_chel_id.set(chel_id)
 
@@ -4913,6 +4943,12 @@ def init_db() -> None:
                 assigned_at TEXT NOT NULL,
                 PRIMARY KEY(experiment_key,chel_id),
                 FOREIGN KEY(chel_id) REFERENCES users(chel_id) ON DELETE CASCADE
+            );
+
+            CREATE TABLE IF NOT EXISTS ai_branch (
+                chel_id TEXT PRIMARY KEY,
+                branch TEXT NOT NULL,
+                updated_at TEXT NOT NULL
             );
 
             CREATE INDEX IF NOT EXISTS idx_experiment_assignments_variant_time

@@ -191,6 +191,90 @@ class YandexProviderTests(unittest.TestCase):
                 LLMService()._request({"instructions": "x", "input": "y"})
 
 
+def canned_with_usage(text: str, input_tokens: int = 1000, output_tokens: int = 500) -> dict:
+    payload = canned(text)
+    payload["usage"] = {
+        "input_tokens": input_tokens,
+        "output_tokens": output_tokens,
+        "total_tokens": input_tokens + output_tokens,
+    }
+    return payload
+
+
+class AiBranchTests(unittest.TestCase):
+    TOKEN = "branch-test-secret"
+
+    def setUp(self):
+        isolated_database(self)
+        names = ("llm_provider", "yandex_folder_id", "yandex_api_key", "yandex_model",
+                 "test_branch_token", "test_branch_model")
+        self.original = {name: getattr(settings, name) for name in names}
+        for name, value in {
+            "llm_provider": "openai",
+            "yandex_folder_id": "b1testfolder",
+            "yandex_api_key": "test-key",
+            "yandex_model": "yandexgpt-5.1",
+            "test_branch_token": self.TOKEN,
+            "test_branch_model": "deepseek-v4.1-flash",
+        }.items():
+            object.__setattr__(settings, name, value)
+
+    def tearDown(self):
+        for name, value in self.original.items():
+            object.__setattr__(settings, name, value)
+
+    def capture(self, payloads: list[dict]):
+        sent = []
+
+        def fake_urlopen(request, timeout=None):
+            sent.append(json.loads(request.data.decode("utf-8")))
+            return FakeResponse(canned_with_usage('{"message": "ok"}'))
+
+        return mock.patch("backend.llm.urllib.request.urlopen", side_effect=fake_urlopen), sent
+
+    def test_only_the_secret_link_switches_the_branch(self):
+        self.assertEqual(db.current_ai_branch(), db.AI_BRANCH_MAIN)
+        db.apply_ai_branch_link("wrong-token")
+        self.assertEqual(db.current_ai_branch(), db.AI_BRANCH_MAIN)
+        db.apply_ai_branch_link(self.TOKEN)
+        self.assertEqual(db.current_ai_branch(), db.AI_BRANCH_TEST)
+        db.apply_ai_branch_link("main")
+        self.assertEqual(db.current_ai_branch(), db.AI_BRANCH_MAIN)
+
+    def test_secret_link_is_ignored_when_no_token_is_configured(self):
+        object.__setattr__(settings, "test_branch_token", "")
+        db.apply_ai_branch_link("")
+        self.assertEqual(db.current_ai_branch(), db.AI_BRANCH_MAIN)
+
+    def test_test_branch_sends_every_call_to_deepseek_including_passport(self):
+        db.apply_ai_branch_link(self.TOKEN)
+        patcher, sent = self.capture([])
+        passport_format = {"format": {"type": "json_schema", "name": "health_passport", "schema": {}}}
+        with patcher:
+            LLMService()._request({"instructions": "x", "input": "y"})
+            LLMService()._request({"instructions": "x", "input": "y", "text": passport_format})
+        self.assertEqual([body["model"] for body in sent], ["gpt://b1testfolder/deepseek-v4.1-flash"] * 2)
+
+    def test_main_branch_keeps_the_configured_yandex_model(self):
+        patcher, sent = self.capture([])
+        passport_format = {"format": {"type": "json_schema", "name": "health_passport", "schema": {}}}
+        with patcher:
+            object.__setattr__(settings, "llm_provider", "yandex")
+            LLMService()._request({"instructions": "x", "input": "y", "text": passport_format})
+        self.assertEqual(sent[0]["model"], "gpt://b1testfolder/yandexgpt-5.1")
+
+    def test_test_branch_costs_appear_as_a_deepseek_row(self):
+        db.apply_ai_branch_link(self.TOKEN)
+        patcher, _ = self.capture([])
+        with patcher:
+            LLMService()._request({"instructions": "x", "input": "y"})
+        rows = [row for row in db.admin_ai_costs("all")["by_model"] if row["model"] == "deepseek-v4.1-flash"]
+        self.assertEqual(len(rows), 1)
+        self.assertTrue(rows[0]["pricing_known"])
+        expected = (1000 * 2.459016 + 500 * 4.09836) / 1_000_000
+        self.assertAlmostEqual(rows[0]["total_cost_usd"], expected, places=6)
+
+
 class ReadinessTests(unittest.TestCase):
     def test_yandex_mode_does_not_need_the_openai_key(self):
         from backend.main import ai_configured
