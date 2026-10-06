@@ -4948,7 +4948,8 @@ def init_db() -> None:
             CREATE TABLE IF NOT EXISTS ai_branch (
                 chel_id TEXT PRIMARY KEY,
                 branch TEXT NOT NULL,
-                updated_at TEXT NOT NULL
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY(chel_id) REFERENCES users(chel_id) ON DELETE CASCADE
             );
 
             CREATE INDEX IF NOT EXISTS idx_experiment_assignments_variant_time

@@ -102,10 +102,10 @@ class YandexProviderTests(unittest.TestCase):
             object.__setattr__(settings, "yandex_reasoning_effort", "none")
             object.__setattr__(settings, "yandex_model", "deepseek-v4-flash")
             captured, _ = self.send({"instructions": "x", "input": "y"}, "ok")
-            self.assertEqual(captured["body"]["reasoning_effort"], "none")
+            self.assertEqual(captured["body"]["reasoning"], {"effort": "none"})
             object.__setattr__(settings, "yandex_model", "yandexgpt-5.1")
             captured, _ = self.send({"instructions": "x", "input": "y"}, "ok")
-            self.assertNotIn("reasoning_effort", captured["body"])
+            self.assertNotIn("reasoning", captured["body"])
         finally:
             object.__setattr__(settings, "yandex_reasoning_effort", original)
 
@@ -121,7 +121,7 @@ class YandexProviderTests(unittest.TestCase):
             }
             captured, _ = self.send(payload, '{"status": "ok"}')
             self.assertEqual(captured["body"]["model"], "gpt://b1testfolder/yandexgpt-5.1")
-            self.assertNotIn("reasoning_effort", captured["body"])
+            self.assertNotIn("reasoning", captured["body"])
         finally:
             object.__setattr__(settings, "yandex_passport_model", original_passport)
 

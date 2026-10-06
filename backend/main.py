@@ -672,6 +672,15 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
             branch_token = parse_qs(parsed.query).get("branch", [""])[0]
             if branch_token:
                 db.apply_ai_branch_link(branch_token)
+                # Never leave the secret branch token in the address bar, browser
+                # history, referrer or Yandex Metrika page URL.
+                self.send_response(303)
+                self._send_security_headers()
+                self.send_header("Location", path)
+                self.send_header("Cache-Control", "no-store")
+                self._send_identity_cookie()
+                self.end_headers()
+                return
             db.record_device_access(self.headers.get("User-Agent", ""))
             return self._send_file(
                 BASE_DIR / "index.html",

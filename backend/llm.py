@@ -107,7 +107,7 @@ class LLMService:
         # DeepSeek reasons by default, and the reasoning can use up the whole output budget
         # before any answer text is written.
         if model_name.startswith("deepseek") and settings.yandex_reasoning_effort:
-            body["reasoning_effort"] = settings.yandex_reasoning_effort
+            body["reasoning"] = {"effort": settings.yandex_reasoning_effort}
         request = urllib.request.Request(
             self.yandex_endpoint,
             data=json.dumps(body, ensure_ascii=False).encode("utf-8"),
