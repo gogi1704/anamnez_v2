@@ -2190,7 +2190,7 @@ class OrchestratorTests(unittest.TestCase):
 
         before = db.admin_ai_costs("all")["all_time"]["requests"]
         with (
-            patch("backend.llm.settings", SimpleNamespace(openai_api_key="test-key")),
+            patch("backend.llm.settings", SimpleNamespace(openai_api_key="test-key", llm_provider="openai")),
             patch("backend.llm.urllib.request.urlopen", return_value=FakeResponse()),
         ):
             service._request({
@@ -5903,7 +5903,7 @@ class OrchestratorTests(unittest.TestCase):
         with (
             patch(
                 "backend.llm.settings",
-                SimpleNamespace(health_passport_model="gpt-5.6-luna"),
+                SimpleNamespace(health_passport_model="gpt-5.6-luna", llm_provider="openai"),
             ),
             patch.object(service, "_request", return_value=response) as request,
         ):

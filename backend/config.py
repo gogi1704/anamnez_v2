@@ -39,6 +39,15 @@ class Settings:
     health_passport_model: str = os.getenv(
         "HEALTH_PASSPORT_MODEL", "gpt-5.6-luna",
     )
+    # openai (production default) or yandex (test runs through Yandex AI Studio).
+    llm_provider: str = os.getenv("LLM_PROVIDER", "openai").strip().lower()
+    yandex_folder_id: str = os.getenv("YANDEX_FOLDER_ID", "").strip()
+    yandex_api_key: str = os.getenv("YANDEX_API_KEY", "").strip()
+    yandex_model: str = os.getenv("YANDEX_MODEL", "yandexgpt-5.1").strip()
+    # Structured health passport: a non-reasoning model finishes the JSON reliably.
+    yandex_passport_model: str = os.getenv("YANDEX_PASSPORT_MODEL", "yandexgpt-5.1").strip()
+    # Sent as top-level reasoning_effort to DeepSeek models only. Use "low" if Yandex rejects "none".
+    yandex_reasoning_effort: str = os.getenv("YANDEX_REASONING_EFFORT", "none").strip()
     database_path: Path = Path(os.getenv("DATABASE_PATH", BASE_DIR / "data" / "consilium.db"))
     analytics_database_path: Path = Path(os.getenv(
         "ANALYTICS_DATABASE_PATH", BASE_DIR / "data" / "analytics.db",

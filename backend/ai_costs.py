@@ -15,6 +15,12 @@ MODEL_PRICING_USD_PER_MILLION = {
     "gpt-5.6-sol": {"input": Decimal("5.00"), "cached_input": Decimal("0.50"), "output": Decimal("30.00")},
     "gpt-5.6-terra": {"input": Decimal("2.50"), "cached_input": Decimal("0.25"), "output": Decimal("15.00")},
     "gpt-5.6-luna": {"input": Decimal("1.00"), "cached_input": Decimal("0.10"), "output": Decimal("6.00")},
+    # Yandex AI Studio synchronous prices, without VAT (aistudio.yandex.ru pricing page).
+    # No cache discount is published, so cached input is billed as regular input.
+    "yandexgpt-5.1": {"input": Decimal("6.557376"), "cached_input": Decimal("6.557376"), "output": Decimal("6.557376")},
+    "yandexgpt-5-lite": {"input": Decimal("1.639344"), "cached_input": Decimal("1.639344"), "output": Decimal("1.639344")},
+    "deepseek-v4-flash": {"input": Decimal("2.459016"), "cached_input": Decimal("2.459016"), "output": Decimal("4.09836")},
+    "deepseek-v4.1-flash": {"input": Decimal("2.459016"), "cached_input": Decimal("2.459016"), "output": Decimal("4.09836")},
 }
 
 LONG_CONTEXT_THRESHOLD = 272_000

@@ -1,3 +1,4 @@
+import base64
 import json
 import re
 import urllib.error
@@ -23,8 +24,11 @@ class LLMProviderError(RuntimeError):
 
 class LLMService:
     endpoint = "https://api.openai.com/v1/responses"
+    yandex_endpoint = "https://ai.api.cloud.yandex.net/v1/responses"
 
     def _request(self, payload: dict) -> dict:
+        if settings.llm_provider == "yandex":
+            return self._yandex_request(payload)
         if not settings.openai_api_key:
             raise LLMNotConfigured("OPENAI_API_KEY не задан. Создайте .env, добавьте ключ и перезапустите сервер.")
         request = urllib.request.Request(
@@ -70,6 +74,130 @@ class LLMService:
         if not chunks:
             raise LLMProviderError("Модель не вернула текстовый ответ")
         return "\n".join(chunks).strip()
+
+    def _yandex_request(self, payload: dict, model: str | None = None) -> dict:
+        """Send the same logical request to YandexGPT (test provider).
+
+        Structured output is requested as JSON in the instructions, images are not
+        sent (the model is text-only), and PDFs are converted to text locally.
+        """
+        if not settings.yandex_folder_id or not settings.yandex_api_key:
+            raise LLMNotConfigured("Для LLM_PROVIDER=yandex задайте YANDEX_FOLDER_ID и YANDEX_API_KEY.")
+        text_format = (payload.get("text") or {}).get("format") or {}
+        wants_json = text_format.get("type") == "json_schema"
+        instructions = str(payload.get("instructions") or "")
+        if wants_json:
+            instructions += (
+                "\n\nВерни ответ только как JSON-объект строго по этой схеме, без пояснений "
+                "и без markdown:\n" + json.dumps(text_format.get("schema", {}), ensure_ascii=False)
+            )
+        user_input = self._yandex_input(payload.get("input"))
+        model_name = model or (
+            settings.yandex_passport_model if text_format.get("name") == "health_passport"
+            else settings.yandex_model
+        )
+        body = {
+            "model": f"gpt://{settings.yandex_folder_id}/{model_name}",
+            "input": "\n\n".join(part for part in (instructions, user_input) if part),
+            "temperature": 0.2,
+            "max_output_tokens": 6000,
+        }
+        # DeepSeek reasons by default, and the reasoning can use up the whole output budget
+        # before any answer text is written.
+        if model_name.startswith("deepseek") and settings.yandex_reasoning_effort:
+            body["reasoning_effort"] = settings.yandex_reasoning_effort
+        request = urllib.request.Request(
+            self.yandex_endpoint,
+            data=json.dumps(body, ensure_ascii=False).encode("utf-8"),
+            headers={
+                "Authorization": f"Api-Key {settings.yandex_api_key}",
+                "Content-Type": "application/json",
+            },
+            method="POST",
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=120) as response:
+                raw = json.loads(response.read().decode("utf-8"))
+        except urllib.error.HTTPError as exc:
+            detail = exc.read().decode("utf-8", errors="replace")
+            raise LLMProviderError(f"Yandex AI Studio: {detail[:300]}") from exc
+        except urllib.error.URLError as exc:
+            raise LLMProviderError(f"Не удалось подключиться к Yandex AI Studio: {exc.reason}") from exc
+        print(
+            f"[llm] yandex {model_name}: status={raw.get('status')}, "
+            f"output={[item.get('type') for item in raw.get('output', []) or []]}",
+            flush=True,
+        )
+        normalized = self._normalize_yandex_response(raw, wants_json)
+        print(f"[llm] yandex {model_name}: HTTP 200, {len(self._output_text(normalized))} chars", flush=True)
+        normalized["model"] = model_name
+        try:
+            record = usage_record(normalized, payload, db.current_chel_id())
+            if record:
+                db.record_ai_usage(record)
+        except Exception:
+            pass
+        return normalized
+
+    def _yandex_input(self, value) -> str:
+        if isinstance(value, str):
+            return value
+        chunks: list[str] = []
+        for message in value or []:
+            content = message.get("content", "")
+            if isinstance(content, str):
+                chunks.append(content)
+                continue
+            for part in content:
+                kind = part.get("type")
+                if kind == "input_text":
+                    chunks.append(str(part.get("text", "")))
+                elif kind == "input_image":
+                    chunks.append("[Изображение не передано: выбранная модель работает только с текстом.]")
+                elif kind == "input_file":
+                    chunks.append(self._yandex_file_text(part))
+        return "\n\n".join(chunk for chunk in chunks if chunk)
+
+    @staticmethod
+    def _yandex_file_text(part: dict) -> str:
+        from .lab_result_valuation import download_pdf, extract_pdf_text_with_ocr
+
+        if part.get("file_url"):
+            payload = download_pdf(str(part["file_url"]))
+        elif str(part.get("file_data", "")).startswith("data:application/pdf;base64,"):
+            payload = base64.b64decode(str(part["file_data"]).split(",", 1)[1])
+        else:
+            return "[Файл не передан: формат не поддерживается в тестовом режиме.]"
+        try:
+            text, _used_ocr = extract_pdf_text_with_ocr(payload)
+        except ImportError as exc:
+            raise LLMProviderError("Для PDF в тестовом режиме Yandex нужен пакет pypdf.") from exc
+        return "Содержимое документа:\n" + text[:20000]
+
+    @staticmethod
+    def _normalize_yandex_response(raw: dict, wants_json: bool) -> dict:
+        text = raw.get("output_text") if isinstance(raw.get("output_text"), str) else ""
+        if not text:
+            parts = []
+            for item in raw.get("output", []) or []:
+                for content in item.get("content", []) or []:
+                    if isinstance(content, dict) and content.get("text"):
+                        parts.append(content["text"])
+            text = "\n".join(parts)
+        text = text.strip()
+        if wants_json:
+            text = re.sub(r"^```(?:json)?\s*|\s*```$", "", text).strip()
+        if raw.get("status") == "incomplete":
+            reason = (raw.get("incomplete_details") or {}).get("reason") or "неизвестно"
+            raise LLMProviderError(
+                f"Модель оборвала ответ (причина: {reason}). Попробуйте ещё раз."
+            )
+        if not text:
+            raise LLMProviderError("Модель не вернула текстовый ответ")
+        return {
+            "output": [{"type": "message", "content": [{"type": "output_text", "text": text}]}],
+            "usage": raw.get("usage") or {},
+        }
 
     @staticmethod
     def _profile_analysis(profile: dict) -> dict:

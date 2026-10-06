@@ -186,6 +186,12 @@ def admin_token_valid(authorization: str, expected: str | None = None) -> bool:
     return bool(expected and supplied and hmac.compare_digest(supplied, expected))
 
 
+def ai_configured() -> bool:
+    if settings.llm_provider == "yandex":
+        return bool(settings.yandex_folder_id and settings.yandex_api_key)
+    return bool(settings.openai_api_key)
+
+
 def bot_token_valid(authorization: str) -> bool:
     return admin_token_valid(authorization, settings.bot_integration_secret)
 
@@ -391,11 +397,11 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
             messenger_auth_ready = bool(settings.bot_integration_secret) and (
                 settings.app_env != "production" or settings.public_base_url.startswith("https://")
             )
-            ready = database_ready and bool(settings.openai_api_key) and messenger_auth_ready
+            ready = database_ready and ai_configured() and messenger_auth_ready
             return self._json(200 if ready else 503, {
                 "status": "ready" if ready else "not_ready",
                 "database": "ok" if database_ready else "error",
-                "ai_configured": bool(settings.openai_api_key),
+                "ai_configured": ai_configured(),
                 "messenger_auth_configured": messenger_auth_ready,
                 "max_auth_configured": messenger_auth_ready,
             })
