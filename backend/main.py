@@ -450,6 +450,7 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
             "/api/admin/service-results",
             "/api/admin/experiments",
             "/api/admin/content-texts",
+            "/api/admin/assistant-personality",
             "/api/admin/ikp",
             "/api/admin/funnel-monitor", "/api/admin/funnel-monitor/preview",
             "/api/admin/checkup-reoffers",
@@ -551,6 +552,11 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                         "title": "Экран дополнительных обследований",
                         "values": db.admin_marketer_examination_texts(),
                     }],
+                })
+            if path == "/api/admin/assistant-personality":
+                return self._json(200, {
+                    "settings": db.admin_assistant_personality_settings(),
+                    "presets": db.ASSISTANT_PERSONALITY_PRESETS,
                 })
             if path == "/api/admin/metric2":
                 try:
@@ -1829,6 +1835,17 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                 payload = self._read_json(max_bytes=16_000)
                 return self._json(200, {
                     "settings": db.admin_update_experiment_settings(payload),
+                })
+            except (ValueError, TypeError, json.JSONDecodeError, UnicodeDecodeError) as exc:
+                return self._json(422, {"detail": str(exc)})
+        if path == "/api/admin/assistant-personality":
+            if not self._admin_authorized():
+                return
+            try:
+                payload = self._read_json(max_bytes=8_000)
+                return self._json(200, {
+                    "settings": db.admin_update_assistant_personality_settings(payload),
+                    "presets": db.ASSISTANT_PERSONALITY_PRESETS,
                 })
             except (ValueError, TypeError, json.JSONDecodeError, UnicodeDecodeError) as exc:
                 return self._json(422, {"detail": str(exc)})

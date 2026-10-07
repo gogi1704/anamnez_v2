@@ -11,7 +11,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/static/dashboard.css?v=20261005-sales-dynamics-v1">
+  <link rel="stylesheet" href="/static/dashboard.css?v=20261007-olga-personality-v5">
 </head>
 <body>
   <main class="dashboard-shell">
@@ -58,6 +58,7 @@
         <button id="experimentsTab" type="button">Эксперименты</button>
         <button id="metric2Tab" type="button">Метрика 2.0</button>
         <button id="contentTextsTab" type="button">Изменение текстов</button>
+        <button id="personalityTab" type="button">Характер Ольги</button>
         <button id="monitorTab" type="button">Мониторинг в Bitrix24</button>
         <button id="ikpTab" type="button">ИКП</button>
         <button id="managersTab" type="button">Менеджеры и врачи</button>
@@ -449,6 +450,39 @@
         </form>
       </section>
 
+      <section class="personality-admin hidden" id="personalityAdminView">
+        <article class="panel personality-heading-panel">
+          <div class="panel-heading"><div><p class="eyebrow">Стиль общения ИИ</p><h2>Характер Ольги</h2><p>По умолчанию галочка ниже ограничивает настройки секретной веткой Яндекс ИИ. Снимите её, чтобы изменить все новые ответы, включая основную ветку OpenAI. Медицинские ограничения, срочные предупреждения и точность ответов остаются прежними.</p></div><span class="personality-state" id="personalityState">Загрузка…</span></div>
+        </article>
+        <form class="panel personality-form" id="personalityForm">
+          <fieldset class="personality-presets"><legend>Готовый характер</legend>
+            <button type="button" data-personality-preset="professional"><strong>Деловой</strong><small>Сдержанно и короче</small></button>
+            <button type="button" data-personality-preset="balanced"><strong>Сбалансированный</strong><small>Тепло и профессионально</small></button>
+            <button type="button" data-personality-preset="friendly"><strong>Тёплый</strong><small>Живо, бережно и с лёгким юмором</small></button>
+            <button type="button" data-personality-preset="companion"><strong>По-дружески</strong><small>На «ты», общительно и с юмором</small></button>
+          </fieldset>
+          <label class="personality-scope"><input id="personalityYandexOnly" type="checkbox" checked><span><b>Только секретная ветка Яндекс ИИ</b><small>Если галочка включена — настройки характера получает только секретная ветка. Снимите её, чтобы применять характер ко всем ответам, включая основную ветку OpenAI.</small></span></label>
+          <div class="personality-layout">
+            <section class="personality-controls">
+              <label class="personality-address"><span><b>Как обращаться</b></span><small>Можно всегда сохранять «вы», подстраиваться под пользователя или сразу общаться на «ты».</small><select id="personalityAddressMode"><option value="formal">Всегда на «вы»</option><option value="contextual">По контексту</option><option value="informal">На «ты»</option></select></label>
+              <label><span><b>Формальность</b><output id="personalityFormalityValue">35</output></span><small>0 — простой живой язык · 100 — сдержанный профессиональный тон</small><input id="personalityFormality" type="range" min="0" max="100" step="5" value="35"></label>
+              <label><span><b>Теплота</b><output id="personalityWarmthValue">80</output></span><small>Насколько мягко и доброжелательно звучит ответ</small><input id="personalityWarmth" type="range" min="0" max="100" step="5" value="80"></label>
+              <label><span><b>Общительность</b><output id="personalitySociabilityValue">70</output></span><small>Больше ощущения живого диалога, но без пустой болтовни</small><input id="personalitySociability" type="range" min="0" max="100" step="5" value="70"></label>
+              <label><span><b>Поддержка</b><output id="personalitySupportivenessValue">85</output></span><small>Внимание к эмоциям, усилиям и небольшим выполнимым шагам</small><input id="personalitySupportiveness" type="range" min="0" max="100" step="5" value="85"></label>
+              <label><span><b>Юмор</b><output id="personalityHumorValue">15</output></span><small>От полностью серьёзного тона до лёгких добрых шуток в уместных ситуациях</small><input id="personalityHumor" type="range" min="0" max="100" step="5" value="15"></label>
+              <label><span><b>Эмодзи</b><output id="personalityEmojiValue">5</output></span><small>Насколько часто использовать уместные эмодзи для интонации</small><input id="personalityEmoji" type="range" min="0" max="100" step="5" value="5"></label>
+              <label><span><b>Инициативность</b><output id="personalityInitiativeValue">60</output></span><small>Предлагать ли следующий шаг и задавать полезные уточняющие вопросы</small><input id="personalityInitiative" type="range" min="0" max="100" step="5" value="60"></label>
+            </section>
+            <aside class="personality-preview">
+              <span class="personality-preview-label">Предпросмотр подачи</span>
+              <div class="personality-preview-message"><b>Ольга</b><p id="personalityPreviewText">Спасибо, что рассказали. Давайте спокойно разберёмся, что может помочь уже сейчас.</p></div>
+              <p>Это пример интонации, а не готовый медицинский ответ. Ольга по-прежнему подстраивается под контекст и стиль пользователя.</p>
+            </aside>
+          </div>
+          <div class="personality-actions"><button type="submit">Сохранить сейчас</button><button class="secondary" id="personalityReset" type="button">Вернуть сбалансированный</button><span class="form-status hidden" id="personalityStatus" role="status"></span></div>
+        </form>
+      </section>
+
       <section class="monitor-admin hidden" id="monitorAdminView">
         <article class="panel monitor-heading-panel">
           <div class="panel-heading"><div><p class="eyebrow">Ежедневный контроль</p><h2>Мониторинг воронки в Bitrix24</h2><p>Консилиум передаёт в выбранный чат только обезличенные агрегаты, сравнивает завершённый период с предыдущим и формирует задание для Bitrix AI.</p></div><span class="monitor-integration-state" id="monitorIntegrationState">Проверяем интеграцию…</span></div>
@@ -785,6 +819,6 @@
       </div>
     </section>
   </div>
-  <script src="/static/dashboard.js?v=20261005-sales-dynamics-v1" defer></script>
+  <script src="/static/dashboard.js?v=20261007-olga-personality-v5" defer></script>
 </body>
 </html>

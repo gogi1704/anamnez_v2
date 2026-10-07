@@ -1057,14 +1057,36 @@ docker-compose stop consilium
 
 ## 14. Резервная копия базы
 
-Приложение умеет делать согласованную SQLite-копию без остановки:
+Приложение умеет делать согласованные SQLite-копии без остановки и шифровать их
+публичным GPG-ключом. Приватный ключ должен храниться вне сервера. В `.env`
+обязательно задайте полный fingerprint импортированного публичного ключа:
+
+```dotenv
+BACKUP_GPG_RECIPIENT=FULL_PUBLIC_KEY_FINGERPRINT
+```
+
+Публичный ключ импортируется в keyring пользователя, который запускает скрипт
+(в примере ниже — `root`):
+
+```bash
+gpg --import /безопасный/путь/backup-public-key.asc
+gpg --list-keys FULL_PUBLIC_KEY_FINGERPRINT
+```
+
+Проверка ключа и создание двух зашифрованных копий с хоста:
 
 ```bash
 cd /root/anamnez_v2
-docker-compose exec -T consilium \
-  python scripts/backup_database.py --destination /app/backups --keep 14
+python3 scripts/backup_database.py --source data/consilium.db \
+  --destination backups --label consilium --keep 14
+python3 scripts/backup_database.py --source data/analytics.db \
+  --destination backups --label analytics --keep 14
 ls -lah /root/anamnez_v2/backups
 ```
+
+Без настроенного получателя скрипт завершается ошибкой и не оставляет открытую
+копию. Флаг `--allow-plaintext` предназначен только для осознанного аварийного
+исключения.
 
 Также сохраняйте отдельно:
 
@@ -1080,8 +1102,10 @@ ls -lah /root/anamnez_v2/backups
 
 ```bash
 cd /root/anamnez_v2
-docker-compose exec -T consilium \
-  python scripts/backup_database.py --destination /app/backups --keep 14
+python3 scripts/backup_database.py --source data/consilium.db \
+  --destination backups --label consilium --keep 14
+python3 scripts/backup_database.py --source data/analytics.db \
+  --destination backups --label analytics --keep 14
 cp -a /root/anamnez_v2 /root/anamnez_v2-rollback
 ```
 

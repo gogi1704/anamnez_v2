@@ -93,6 +93,41 @@ def utc_now() -> str:
 AI_BRANCH_MAIN = "main"
 AI_BRANCH_TEST = "deepseek_test"
 
+ASSISTANT_PERSONALITY_DEFAULTS = {
+    "preset": "balanced",
+    "apply_to_all": False,
+    "address_mode": "formal",
+    "formality": 35,
+    "warmth": 80,
+    "sociability": 70,
+    "supportiveness": 85,
+    "humor": 15,
+    "emoji": 5,
+    "initiative": 60,
+}
+ASSISTANT_PERSONALITY_PRESETS = {
+    "professional": {
+        "address_mode": "formal", "formality": 75, "warmth": 55,
+        "sociability": 35, "supportiveness": 65, "humor": 0, "emoji": 0,
+        "initiative": 40,
+    },
+    "balanced": {
+        "address_mode": "formal", "formality": 35, "warmth": 80,
+        "sociability": 70, "supportiveness": 85, "humor": 15, "emoji": 5,
+        "initiative": 60,
+    },
+    "friendly": {
+        "address_mode": "contextual", "formality": 15, "warmth": 95,
+        "sociability": 85, "supportiveness": 95, "humor": 45, "emoji": 15,
+        "initiative": 80,
+    },
+    "companion": {
+        "address_mode": "informal", "formality": 5, "warmth": 95,
+        "sociability": 95, "supportiveness": 95, "humor": 70, "emoji": 25,
+        "initiative": 90,
+    },
+}
+
 
 def current_ai_branch() -> str:
     with connection() as conn:
@@ -118,6 +153,162 @@ def apply_ai_branch_link(token: str) -> None:
         set_ai_branch(current_chel_id(), AI_BRANCH_MAIN)
     elif settings.test_branch_token and hmac.compare_digest(token, settings.test_branch_token):
         set_ai_branch(current_chel_id(), AI_BRANCH_TEST)
+
+
+def admin_assistant_personality_settings() -> dict:
+    """Return the safe, admin-controlled communication style for Olga."""
+    with connection() as conn:
+        row = conn.execute(
+            "SELECT * FROM assistant_personality_settings WHERE id = 1"
+        ).fetchone()
+    item = dict(row) if row else {}
+    result = {**ASSISTANT_PERSONALITY_DEFAULTS, **item}
+    result["apply_to_all"] = bool(result.get("apply_to_all"))
+    for key in (
+        "formality", "warmth", "sociability", "supportiveness",
+        "humor", "emoji", "initiative",
+    ):
+        result[key] = max(0, min(100, int(result.get(key, ASSISTANT_PERSONALITY_DEFAULTS[key]))))
+    if result.get("address_mode") not in {"formal", "contextual", "informal"}:
+        result["address_mode"] = ASSISTANT_PERSONALITY_DEFAULTS["address_mode"]
+    return result
+
+
+def admin_update_assistant_personality_settings(payload: dict) -> dict:
+    """Validate and persist personality controls without accepting raw prompts."""
+    if not isinstance(payload, dict):
+        raise ValueError("Ожидается объект настроек характера")
+    current = admin_assistant_personality_settings()
+    preset = str(payload.get("preset", current["preset"])).strip().lower()
+    if preset not in {*ASSISTANT_PERSONALITY_PRESETS, "custom"}:
+        raise ValueError("Неизвестный пресет характера")
+    address_mode = str(payload.get("address_mode", current["address_mode"])).strip().lower()
+    if address_mode not in {"formal", "contextual", "informal"}:
+        raise ValueError("Неизвестный формат обращения")
+    apply_to_all_raw = payload.get("apply_to_all", current["apply_to_all"])
+    if apply_to_all_raw in (True, 1, "1"):
+        apply_to_all = True
+    elif apply_to_all_raw in (False, 0, "0"):
+        apply_to_all = False
+    else:
+        raise ValueError("Некорректная область применения характера")
+    values = {}
+    for key in (
+        "formality", "warmth", "sociability", "supportiveness",
+        "humor", "emoji", "initiative",
+    ):
+        try:
+            value = int(payload.get(key, current[key]))
+        except (TypeError, ValueError):
+            raise ValueError("Параметры характера должны быть целыми числами") from None
+        if not 0 <= value <= 100:
+            raise ValueError("Параметры характера должны быть от 0 до 100")
+        values[key] = value
+    now = utc_now()
+    with _write_lock, connection() as conn:
+        conn.execute(
+            """INSERT INTO assistant_personality_settings
+               (id,preset,address_mode,formality,warmth,sociability,supportiveness,
+                humor,emoji,initiative,apply_to_all,updated_at)
+               VALUES (1,?,?,?,?,?,?,?,?,?,?,?)
+               ON CONFLICT(id) DO UPDATE SET
+                preset=excluded.preset,address_mode=excluded.address_mode,
+                formality=excluded.formality,
+                warmth=excluded.warmth,sociability=excluded.sociability,
+                supportiveness=excluded.supportiveness,humor=excluded.humor,
+                emoji=excluded.emoji,initiative=excluded.initiative,
+                apply_to_all=excluded.apply_to_all,
+                updated_at=excluded.updated_at""",
+            (
+                preset, address_mode, values["formality"], values["warmth"],
+                values["sociability"], values["supportiveness"],
+                values["humor"], values["emoji"], values["initiative"],
+                int(apply_to_all), now,
+            ),
+        )
+        conn.commit()
+    return admin_assistant_personality_settings()
+
+
+def assistant_personality_prompt(item: dict | None = None) -> str:
+    """Translate numeric controls into bounded dialogue guidance for user-facing replies."""
+    item = item or admin_assistant_personality_settings()
+
+    def level(value: int, low: str, middle: str, high: str) -> str:
+        return low if value <= 32 else high if value >= 68 else middle
+
+    formality = level(
+        item["formality"],
+        "говори просто и естественно, без канцелярита",
+        "сочетай живой разговорный язык с профессиональной точностью",
+        "сохраняй сдержанный профессиональный стиль, но не пиши как официальный документ",
+    )
+    address = {
+        "formal": "обязательно обращайся к пользователю на «вы» во всём ответе",
+        "contextual": "начинай с «вы», но обязательно переходи на «ты», если пользователь сам общается на «ты» или просит об этом",
+        "informal": "обязательно общайся с пользователем на «ты» во всём ответе; используй формы «тебе», «твой», «давай», а не «вам», «ваш», «давайте». Вернись к «вы» только по прямой просьбе пользователя",
+    }[item["address_mode"]]
+    warmth = level(
+        item["warmth"],
+        "держи нейтральный спокойный тон без холодности",
+        "отвечай доброжелательно и по-человечески",
+        "отвечай особенно тепло и бережно, но без сюсюканья и навязчивой похвалы",
+    )
+    sociability = level(
+        item["sociability"],
+        "будь лаконичной и сразу переходи к сути",
+        "поддерживай естественный диалог и используй короткие живые переходы",
+        "будь общительной: поддерживай ощущение живого разговора, но не добавляй пустую болтовню",
+    )
+    supportiveness = level(
+        item["supportiveness"],
+        "не добавляй отдельную поддержку без повода",
+        "при сложностях коротко поддержи и предложи выполнимый следующий шаг",
+        "замечай эмоции и усилия пользователя, мягко поддерживай и предлагай небольшой реалистичный шаг",
+    )
+    humor_value = item["humor"]
+    if humor_value == 0:
+        humor = "не добавляй шутки"
+    elif humor_value <= 32:
+        humor = "редко добавляй короткую добрую шутку в нейтральной теме"
+    elif humor_value <= 67:
+        humor = "регулярно используй лёгкий добрый юмор в нейтральных и бытовых темах"
+    else:
+        humor = "заметно оживляй нейтральный разговор добрыми шутками, но не превращай ответ в выступление"
+    emoji_value = item["emoji"]
+    if emoji_value == 0:
+        emoji = "не используй эмодзи"
+    elif emoji_value <= 32:
+        emoji = "в каждом обычном безопасном ответе добавляй ровно один уместный эмодзи"
+    elif emoji_value <= 67:
+        emoji = "в большинстве обычных безопасных ответов используй один-два уместных эмодзи"
+    else:
+        emoji = "используй один-два уместных эмодзи в каждом обычном безопасном ответе, но не ставь их в каждом предложении"
+    initiative = level(
+        item["initiative"],
+        "отвечай на вопрос и не расширяй тему без необходимости",
+        "предлагай один полезный следующий шаг, когда он уместен",
+        "проявляй инициативу: задавай уместный уточняющий вопрос и предлагай практичный следующий шаг, не перегружая пользователя",
+    )
+    return f"""Настройка характера Ольги, заданная администратором:
+- Выбранный профиль: {item['preset']}.
+- Обращение — обязательное правило: {address}.
+- Формальность {item['formality']}/100: {formality}.
+- Теплота {item['warmth']}/100: {warmth}.
+- Общительность {item['sociability']}/100: {sociability}.
+- Поддержка {item['supportiveness']}/100: {supportiveness}.
+- Юмор {item['humor']}/100: {humor}.
+- Эмодзи {item['emoji']}/100: {emoji}.
+- Инициативность {item['initiative']}/100: {initiative}.
+Одновременно соблюдай каждый параметр выше. Не выбирай только часть настроек. Если общие
+инструкции о тоне противоречат этому блоку, этот блок имеет приоритет, кроме правил безопасности.
+Эта настройка меняет только подачу. Она не отменяет медицинскую точность, правила
+безопасности, срочность предупреждений, запрет выдумывать факты и требуемый формат ответа.
+Никогда не шути и не используй игривый тон при красных флагах, срочных рекомендациях,
+тяжёлых симптомах, горе, страхе пользователя или сообщении потенциально опасной новости.
+Юмор не должен быть направлен на пользователя, его тело, симптомы, диагнозы или привычки.
+Не имитируй близкого друга и не допускай фамильярности даже при обращении на «ты».
+Подстраивайся под явный стиль самого пользователя, если это безопасно."""
 
 
 def set_current_chel_id(chel_id: str) -> None:
@@ -4952,6 +5143,25 @@ def init_db() -> None:
                 FOREIGN KEY(chel_id) REFERENCES users(chel_id) ON DELETE CASCADE
             );
 
+            CREATE TABLE IF NOT EXISTS assistant_personality_settings (
+                id INTEGER PRIMARY KEY CHECK(id = 1),
+                preset TEXT NOT NULL DEFAULT 'balanced',
+                address_mode TEXT NOT NULL DEFAULT 'formal',
+                formality INTEGER NOT NULL DEFAULT 35 CHECK(formality BETWEEN 0 AND 100),
+                warmth INTEGER NOT NULL DEFAULT 80 CHECK(warmth BETWEEN 0 AND 100),
+                sociability INTEGER NOT NULL DEFAULT 70 CHECK(sociability BETWEEN 0 AND 100),
+                supportiveness INTEGER NOT NULL DEFAULT 85 CHECK(supportiveness BETWEEN 0 AND 100),
+                humor INTEGER NOT NULL DEFAULT 15 CHECK(humor BETWEEN 0 AND 100),
+                emoji INTEGER NOT NULL DEFAULT 5 CHECK(emoji BETWEEN 0 AND 100),
+                initiative INTEGER NOT NULL DEFAULT 60 CHECK(initiative BETWEEN 0 AND 100),
+                apply_to_all INTEGER NOT NULL DEFAULT 0 CHECK(apply_to_all IN (0,1)),
+                updated_at TEXT NOT NULL
+            );
+
+            INSERT OR IGNORE INTO assistant_personality_settings
+            (id,preset,formality,warmth,sociability,supportiveness,updated_at)
+            VALUES (1,'balanced',35,80,70,85,CURRENT_TIMESTAMP);
+
             CREATE INDEX IF NOT EXISTS idx_experiment_assignments_variant_time
             ON experiment_assignments(experiment_key,variant,assigned_at);
 
@@ -5364,6 +5574,23 @@ def init_db() -> None:
             """
         )
         now = utc_now()
+        personality_columns = {
+            row[1] for row in conn.execute(
+                "PRAGMA table_info(assistant_personality_settings)"
+            ).fetchall()
+        }
+        personality_migrations = {
+            "address_mode": "TEXT NOT NULL DEFAULT 'formal'",
+            "humor": "INTEGER NOT NULL DEFAULT 15",
+            "emoji": "INTEGER NOT NULL DEFAULT 5",
+            "initiative": "INTEGER NOT NULL DEFAULT 60",
+            "apply_to_all": "INTEGER NOT NULL DEFAULT 0",
+        }
+        for name, declaration in personality_migrations.items():
+            if name not in personality_columns:
+                conn.execute(
+                    f"ALTER TABLE assistant_personality_settings ADD COLUMN {name} {declaration}"
+                )
         conn.execute(
             "INSERT OR IGNORE INTO checkup_reoffer_settings (id,enabled,updated_at) VALUES (1,1,?)",
             (now,),

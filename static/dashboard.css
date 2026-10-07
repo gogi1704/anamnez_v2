@@ -707,3 +707,33 @@ tbody tr:hover { background:#f8fbf9; }
 .metric2-mock-warning { display:block; padding:8px 9px; border-radius:8px; color:#76591f; background:#fff2d5; font-size:9px; line-height:1.45; }
 @media (max-width:1050px) { .content-text-form { grid-template-columns:1fr; }.content-text-form > :not(.content-text-preview),.content-text-preview { grid-column:1; }.content-text-preview { position:static; grid-row:auto; } }
 @media (max-width:760px) { .content-text-form fieldset,.content-text-pair { grid-template-columns:1fr; }.content-text-form fieldset > label { grid-column:1; }.content-text-preview { padding:12px; }.content-text-preview-heading { display:grid; }.content-text-preview-phone { min-height:540px; }.content-text-preview-phone .metric2-phone.large { height:530px; } }
+
+.personality-admin { display:grid; gap:18px; }
+.personality-heading-panel .panel-heading p:last-child { max-width:850px; margin:7px 0 0; color:var(--muted); font-size:12px; line-height:1.55; }
+.personality-state { align-self:flex-start; padding:7px 11px; border-radius:999px; color:#126549; background:#e4f3eb; font-size:10px; font-weight:800; white-space:nowrap; }
+.personality-form { display:grid; gap:22px; }
+.personality-presets { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:12px; margin:0; padding:0; border:0; }
+.personality-presets legend { margin-bottom:10px; color:#263a31; font-size:13px; font-weight:800; }
+.personality-presets button { display:grid; gap:4px; min-height:78px; padding:14px 16px; border:1px solid #cbdcd3; border-radius:15px; color:#32483e; background:#fff; text-align:left; cursor:pointer; }
+.personality-presets button:hover,.personality-presets button.active { border-color:#1f8667; background:#eaf6f0; box-shadow:0 8px 22px rgba(31,134,103,.09); }
+.personality-presets strong { font-size:14px; }.personality-presets small { color:var(--muted); font-size:10px; line-height:1.4; }
+.personality-scope { display:flex; align-items:flex-start; gap:12px; padding:15px 16px; border:1px solid #b9d8c9; border-radius:15px; background:#eff8f3; cursor:pointer; }
+.personality-scope input { width:20px; height:20px; margin:1px 0 0; accent-color:#1f8667; flex:0 0 auto; }
+.personality-scope span { display:grid; gap:4px; }.personality-scope b { color:#164f3d; font-size:13px; }.personality-scope small { color:var(--muted); font-size:10px; line-height:1.45; }
+.personality-layout { display:grid; grid-template-columns:minmax(0,1.25fr) minmax(300px,.75fr); gap:22px; align-items:start; }
+.personality-controls { display:grid; gap:14px; }
+.personality-controls label { display:grid; gap:8px; padding:16px; border:1px solid #dce8e2; border-radius:15px; background:#fbfdfc; }
+.personality-controls label > span { display:flex; align-items:center; justify-content:space-between; gap:12px; }
+.personality-controls b { font-size:13px; }.personality-controls output { min-width:42px; padding:4px 7px; border-radius:8px; color:#126549; background:#e4f3eb; font-size:11px; font-weight:800; text-align:center; }
+.personality-controls small { color:var(--muted); font-size:10px; line-height:1.45; }
+.personality-controls input[type="range"] { width:100%; accent-color:#1f8667; cursor:pointer; }
+.personality-controls .personality-address select { width:100%; min-height:44px; padding:0 12px; border:1px solid #cadbd2; border-radius:11px; color:#263a31; background:#fff; font:inherit; }
+.personality-preview { display:grid; gap:12px; padding:18px; border:1px solid #d8e5df; border-radius:18px; background:#f5faf7; }
+.personality-preview-label { color:#126549; font-size:10px; font-weight:800; letter-spacing:.07em; text-transform:uppercase; }
+.personality-preview-message { padding:15px 16px; border:1px solid #d6e6de; border-radius:16px 16px 16px 5px; background:#fff; box-shadow:0 8px 24px rgba(32,78,60,.07); }
+.personality-preview-message b { color:#126549; font-size:11px; }.personality-preview-message p { margin:7px 0 0; color:#263a31; font-size:13px; line-height:1.6; }
+.personality-preview > p { margin:0; color:var(--muted); font-size:10px; line-height:1.5; }
+.personality-actions { display:flex; align-items:center; flex-wrap:wrap; gap:12px; }
+.personality-actions button { min-height:46px; }.personality-actions .form-status { flex:1 1 280px; }
+@media(max-width:1050px){.personality-presets{grid-template-columns:repeat(2,minmax(0,1fr))}}
+@media(max-width:850px){.personality-layout{grid-template-columns:1fr}.personality-presets{grid-template-columns:1fr}.personality-heading-panel .panel-heading{align-items:flex-start;flex-direction:column}.personality-actions button{width:100%}}

@@ -63,6 +63,16 @@ let latestMetric2Data = null;
 let metric2ActiveFlow = 'standard';
 let activeContentTextPanel = 'offer';
 let contentTextPreviewExaminations = [];
+let personalityPreset = 'balanced';
+let personalitySaveTimer = null;
+let personalitySaveInFlight = false;
+let personalitySaveQueued = false;
+let personalityPresets = {
+  professional:{address_mode:'formal',formality:75,warmth:55,sociability:35,supportiveness:65,humor:0,emoji:0,initiative:40},
+  balanced:{address_mode:'formal',formality:35,warmth:80,sociability:70,supportiveness:85,humor:15,emoji:5,initiative:60},
+  friendly:{address_mode:'contextual',formality:15,warmth:95,sociability:85,supportiveness:95,humor:45,emoji:15,initiative:80},
+  companion:{address_mode:'informal',formality:5,warmth:95,sociability:95,supportiveness:95,humor:70,emoji:25,initiative:90},
+};
 const adminGetRequests = new Map();
 const loadedAdminViews = new Set();
 const panelLoadingCounts = new WeakMap();
@@ -2118,6 +2128,119 @@ async function saveExperiment(event) {
   }
 }
 
+const personalityFields = [
+  'formality','warmth','sociability','supportiveness','humor','emoji','initiative',
+];
+
+function personalityValues() {
+  return {
+    apply_to_all:!$('#personalityYandexOnly').checked,
+    address_mode:$('#personalityAddressMode').value,
+    ...Object.fromEntries(personalityFields.map(name => [
+    name, Number($(`#personality${name[0].toUpperCase()}${name.slice(1)}`).value),
+  ]))};
+}
+
+function renderPersonalitySettings() {
+  const values = personalityValues();
+  for (const name of personalityFields) {
+    $(`#personality${name[0].toUpperCase()}${name.slice(1)}Value`).textContent = String(values[name]);
+  }
+  document.querySelectorAll('[data-personality-preset]').forEach(button => {
+    button.classList.toggle('active',button.dataset.personalityPreset === personalityPreset);
+  });
+  const veryWarm = values.warmth >= 75 && values.supportiveness >= 75;
+  const conversational = values.sociability >= 65 && values.formality <= 45;
+  const informal = values.address_mode === 'informal';
+  const humor = values.humor >= 60;
+  const emoji = values.emoji >= 40 ? ' 🙂' : '';
+  $('#personalityPreviewText').textContent = veryWarm && conversational && humor
+    ? `${informal ? 'Спасибо, что делишься' : 'Спасибо, что делитесь'}. Давай${informal ? '' : 'те'} разберёмся спокойно и без медицинского квеста с тремя неизвестными: сначала выделим главное, затем выберем небольшой следующий шаг.${emoji}`
+    : veryWarm && conversational
+      ? `${informal ? 'Спасибо, что делишься' : 'Спасибо, что делитесь'}. Давай${informal ? '' : 'те'} без спешки разберёмся, что сейчас беспокоит больше всего и какой небольшой шаг может помочь.${emoji}`
+    : veryWarm
+      ? `${informal ? 'Спасибо, что говоришь об этом' : 'Спасибо, что рассказали'}. Я постараюсь бережно помочь ${informal ? 'тебе' : 'вам'} разобраться и выбрать понятный следующий шаг.${emoji}`
+      : values.formality >= 65
+        ? 'Спасибо за информацию. Уточним ключевые обстоятельства и определим наиболее безопасный следующий шаг.'
+        : `${informal ? 'Поняла тебя. Давай' : 'Поняла вас. Давайте'} разберём главное и решим, что можно сделать дальше.`;
+  const presetLabels = {professional:'Деловой',balanced:'Сбалансированный',friendly:'Тёплый',companion:'По-дружески',custom:'Своя настройка'};
+  const scope = values.apply_to_all ? 'все ветки' : 'только Яндекс';
+  $('#personalityState').textContent = `${presetLabels[personalityPreset] || presetLabels.custom} · ${scope}`;
+}
+
+function applyPersonalityPreset(name) {
+  const values = personalityPresets[name];
+  if (!values) return;
+  personalityPreset = name;
+  $('#personalityAddressMode').value = values.address_mode || 'formal';
+  for (const field of personalityFields) {
+    $(`#personality${field[0].toUpperCase()}${field.slice(1)}`).value = values[field];
+  }
+  renderPersonalitySettings();
+}
+
+function fillPersonalitySettings(item = {}, presets = {}) {
+  personalityPresets = {...personalityPresets,...presets};
+  personalityPreset = item.preset || 'balanced';
+  $('#personalityYandexOnly').checked = !Boolean(item.apply_to_all);
+  $('#personalityAddressMode').value = item.address_mode || personalityPresets.balanced.address_mode;
+  for (const field of personalityFields) {
+    const fallback = personalityPresets.balanced[field];
+    $(`#personality${field[0].toUpperCase()}${field.slice(1)}`).value = Number(item[field] ?? fallback);
+  }
+  renderPersonalitySettings();
+}
+
+function showPersonalityStatus(message = '', error = false) {
+  const node = $('#personalityStatus');
+  node.textContent = message;
+  node.classList.toggle('hidden',!message);
+  node.classList.toggle('error',error);
+}
+
+async function loadPersonality() {
+  return withPanelLoading('#personalityAdminView', async () => {
+    const data = await adminFetch('/api/admin/assistant-personality');
+    fillPersonalitySettings(data.settings || {},data.presets || {});
+  }, 'Загружаем характер Ольги…');
+}
+
+async function savePersonality(event) {
+  event?.preventDefault();
+  clearTimeout(personalitySaveTimer);
+  personalitySaveTimer = null;
+  if (personalitySaveInFlight) {
+    personalitySaveQueued = true;
+    return;
+  }
+  personalitySaveInFlight = true;
+  const button = $('#personalityForm').querySelector('button[type="submit"]');
+  button.disabled = true;
+  showPersonalityStatus('Сохраняем…');
+  try {
+    const result = await adminFetch('/api/admin/assistant-personality',undefined,{
+      method:'POST',body:JSON.stringify({preset:personalityPreset,...personalityValues()}),
+    });
+    const scope = result.settings?.apply_to_all ? 'ко всем новым ответам Ольги' : 'только к новым ответам в ветке Яндекс ИИ';
+    showPersonalityStatus(`Характер сохранён. Настройка применяется ${scope}.`);
+  } catch (error) {
+    showPersonalityStatus(error.message,true);
+  } finally {
+    personalitySaveInFlight = false;
+    button.disabled = false;
+    if (personalitySaveQueued) {
+      personalitySaveQueued = false;
+      savePersonality();
+    }
+  }
+}
+
+function schedulePersonalitySave() {
+  clearTimeout(personalitySaveTimer);
+  showPersonalityStatus('Сохраняем изменения…');
+  personalitySaveTimer = setTimeout(() => savePersonality(),600);
+}
+
 function showContentTextsStatus(message = '', error = false) {
   const node = $('#contentTextsStatus');
   node.textContent = message;
@@ -2270,7 +2393,7 @@ async function testFunnelMonitor(analysis = 'all', button = null) {
 }
 
 function showAdminView(view) {
-  activeAdminView = ['favorites','analytics','service_results','schedule_revenue','experiments','metric2','content_texts','monitor','ikp','managers','examinations','costs'].includes(view) ? view : 'dashboard';
+  activeAdminView = ['favorites','analytics','service_results','schedule_revenue','experiments','metric2','content_texts','personality','monitor','ikp','managers','examinations','costs'].includes(view) ? view : 'dashboard';
   const favoritesVisible = activeAdminView === 'favorites';
   const analyticsVisible = activeAdminView === 'analytics';
   const serviceResultsVisible = activeAdminView === 'service_results';
@@ -2278,6 +2401,7 @@ function showAdminView(view) {
   const experimentsVisible = activeAdminView === 'experiments';
   const metric2Visible = activeAdminView === 'metric2';
   const contentTextsVisible = activeAdminView === 'content_texts';
+  const personalityVisible = activeAdminView === 'personality';
   const monitorVisible = activeAdminView === 'monitor';
   const ikpVisible = activeAdminView === 'ikp';
   const managersVisible = activeAdminView === 'managers';
@@ -2292,6 +2416,7 @@ function showAdminView(view) {
   $('#dashboard').classList.toggle('show-experiments', experimentsVisible);
   $('#dashboard').classList.toggle('show-metric2', metric2Visible);
   $('#dashboard').classList.toggle('show-content-texts', contentTextsVisible);
+  $('#dashboard').classList.toggle('show-personality', personalityVisible);
   $('#dashboard').classList.toggle('show-monitor', monitorVisible);
   $('#dashboard').classList.toggle('show-ikp', ikpVisible);
   $('#dashboard').classList.toggle('show-favorites', favoritesVisible);
@@ -2302,6 +2427,7 @@ function showAdminView(view) {
   $('#experimentsAdminView').classList.toggle('hidden', !experimentsVisible);
   $('#metric2AdminView').classList.toggle('hidden', !metric2Visible);
   $('#contentTextsAdminView').classList.toggle('hidden', !contentTextsVisible);
+  $('#personalityAdminView').classList.toggle('hidden', !personalityVisible);
   $('#monitorAdminView').classList.toggle('hidden', !monitorVisible);
   $('#ikpAdminView').classList.toggle('hidden', !ikpVisible);
   $('#managerAdminView').classList.toggle('hidden', !managersVisible);
@@ -2315,6 +2441,7 @@ function showAdminView(view) {
   $('#experimentsTab').classList.toggle('active', experimentsVisible);
   $('#metric2Tab').classList.toggle('active', metric2Visible);
   $('#contentTextsTab').classList.toggle('active', contentTextsVisible);
+  $('#personalityTab').classList.toggle('active', personalityVisible);
   $('#monitorTab').classList.toggle('active', monitorVisible);
   $('#ikpTab').classList.toggle('active', ikpVisible);
   $('#managersTab').classList.toggle('active', managersVisible);
@@ -2341,6 +2468,7 @@ async function loadAdminViewData(view = activeAdminView, {force = false} = {}) {
   else if (view === 'experiments') request = loadExperiments();
   else if (view === 'metric2') request = loadMetric2();
   else if (view === 'content_texts') request = loadContentTexts();
+  else if (view === 'personality') request = loadPersonality();
   else if (view === 'monitor') request = loadFunnelMonitor();
   else if (view === 'ikp') request = loadIkp();
   else return;
@@ -2765,6 +2893,21 @@ $('#salesDynamicsGranularity').addEventListener('change', () => loadSalesDynamic
 $('#experimentsTab').addEventListener('click', () => showAdminView('experiments'));
 $('#metric2Tab').addEventListener('click', () => showAdminView('metric2'));
 $('#contentTextsTab').addEventListener('click', () => showAdminView('content_texts'));
+$('#personalityTab').addEventListener('click', () => showAdminView('personality'));
+$('#personalityForm').addEventListener('submit', savePersonality);
+document.querySelectorAll('[data-personality-preset]').forEach(button => {
+  button.addEventListener('click', () => {
+    applyPersonalityPreset(button.dataset.personalityPreset);
+    schedulePersonalitySave();
+  });
+});
+document.querySelectorAll('#personalityForm input[type="range"]').forEach(input => {
+  input.addEventListener('input', () => { personalityPreset = 'custom'; renderPersonalitySettings(); });
+  input.addEventListener('change', schedulePersonalitySave);
+});
+$('#personalityAddressMode').addEventListener('change', () => { personalityPreset = 'custom'; renderPersonalitySettings(); schedulePersonalitySave(); });
+$('#personalityYandexOnly').addEventListener('change', () => { renderPersonalitySettings(); schedulePersonalitySave(); });
+$('#personalityReset').addEventListener('click', () => { applyPersonalityPreset('balanced'); schedulePersonalitySave(); });
 document.querySelectorAll('[data-content-text-tab]').forEach(button => {
   button.addEventListener('click', () => selectContentTextPanel(button.dataset.contentTextTab));
 });

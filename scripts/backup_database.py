@@ -6,6 +6,7 @@ import argparse
 import gzip
 import hashlib
 import os
+import re
 import sqlite3
 import subprocess
 import sys
@@ -62,24 +63,45 @@ def main() -> int:
     parser.add_argument("--destination", type=Path, default=Path("/var/backups/consilium"))
     parser.add_argument("--keep", type=int, default=14)
     parser.add_argument(
+        "--label", default="consilium",
+        help="Safe filename prefix, for example consilium or analytics",
+    )
+    parser.add_argument(
         "--gpg-recipient",
         default=os.getenv("BACKUP_GPG_RECIPIENT", ""),
         help="GPG key id/email/fingerprint to encrypt the backup for (or BACKUP_GPG_RECIPIENT)",
+    )
+    parser.add_argument(
+        "--allow-plaintext", action="store_true",
+        help="Explicit emergency opt-out; without it a missing GPG recipient stops the backup",
     )
     args = parser.parse_args()
 
     source = args.source.resolve()
     destination = args.destination.resolve()
+    label = str(args.label or "").strip().lower()
+    recipient = str(args.gpg_recipient or "").strip()
     if not source.is_file():
         print(f"База не найдена: {source}", file=sys.stderr)
+        return 1
+    if not re.fullmatch(r"[a-z0-9][a-z0-9_-]{0,39}", label):
+        print("--label должен содержать только a-z, 0-9, _ или -", file=sys.stderr)
         return 1
     if args.keep < 1 or args.keep > 365:
         print("--keep должен быть от 1 до 365", file=sys.stderr)
         return 1
+    if not recipient and not args.allow_plaintext:
+        print(
+            "Шифрование обязательно: задайте --gpg-recipient или "
+            "BACKUP_GPG_RECIPIENT. Для осознанного аварийного исключения есть "
+            "--allow-plaintext.",
+            file=sys.stderr,
+        )
+        return 1
 
     destination.mkdir(parents=True, exist_ok=True)
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    final_path = destination / f"consilium-{timestamp}.db.gz"
+    final_path = destination / f"{label}-{timestamp}.db.gz"
 
     temp_name = ""
     try:
@@ -99,14 +121,13 @@ def main() -> int:
                 packed.write(chunk)
         temp_db.unlink(missing_ok=True)
 
-        if args.gpg_recipient:
-            encrypted_path = encrypt_with_gpg(final_path, args.gpg_recipient)
+        if recipient:
+            encrypted_path = encrypt_with_gpg(final_path, recipient)
             final_path.unlink(missing_ok=True)
             final_path = encrypted_path
         else:
             print(
-                "ВНИМАНИЕ: бэкап сохранён без шифрования — задайте --gpg-recipient "
-                "или BACKUP_GPG_RECIPIENT, чтобы защитить резервную копию в покое",
+                "ВНИМАНИЕ: использован явный --allow-plaintext; бэкап не зашифрован",
                 file=sys.stderr,
             )
 
@@ -117,8 +138,8 @@ def main() -> int:
 
         copies = sorted(
             (
-                *destination.glob("consilium-*.db.gz"),
-                *destination.glob("consilium-*.db.gz.gpg"),
+                *destination.glob(f"{label}-*.db.gz"),
+                *destination.glob(f"{label}-*.db.gz.gpg"),
             ),
             key=lambda p: p.name,
             reverse=True,
@@ -134,7 +155,12 @@ def main() -> int:
                 Path(temp_name).unlink(missing_ok=True)
             except OSError:
                 pass
-        for stray in (final_path, final_path.with_suffix(final_path.suffix + ".gpg")):
+        for stray in (
+            final_path,
+            final_path.with_suffix(final_path.suffix + ".gpg"),
+            final_path.with_suffix(final_path.suffix + ".sha256"),
+            final_path.with_suffix(final_path.suffix + ".gpg.sha256"),
+        ):
             try:
                 stray.unlink(missing_ok=True)
             except OSError:
