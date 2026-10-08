@@ -93,6 +93,21 @@ def utc_now() -> str:
 AI_BRANCH_MAIN = "main"
 AI_BRANCH_TEST = "deepseek_test"
 
+TEST_BRANCH_MODEL_OPTIONS = {
+    "deepseek-v4.1-flash": {
+        "label": "DeepSeek V4.1 Flash",
+        "description": "Основная быстрая модель; при сбое автоматически используется Qwen 3.6.",
+    },
+    "qwen3.6-35b-a3b": {
+        "label": "Qwen 3.6",
+        "description": "Qwen 3.6-35B-A3B через Yandex AI Studio.",
+    },
+    "gpt-oss-120b": {
+        "label": "OpenAI GPT-OSS 120B",
+        "description": "Открытая модель OpenAI, размещённая в Yandex AI Studio.",
+    },
+}
+
 ASSISTANT_PERSONALITY_DEFAULTS = {
     "preset": "balanced",
     "apply_to_all": False,
@@ -104,6 +119,7 @@ ASSISTANT_PERSONALITY_DEFAULTS = {
     "humor": 15,
     "emoji": 5,
     "initiative": 60,
+    "test_branch_model": "deepseek-v4.1-flash",
 }
 ASSISTANT_PERSONALITY_PRESETS = {
     "professional": {
@@ -171,6 +187,8 @@ def admin_assistant_personality_settings() -> dict:
         result[key] = max(0, min(100, int(result.get(key, ASSISTANT_PERSONALITY_DEFAULTS[key]))))
     if result.get("address_mode") not in {"formal", "contextual", "informal"}:
         result["address_mode"] = ASSISTANT_PERSONALITY_DEFAULTS["address_mode"]
+    if result.get("test_branch_model") not in TEST_BRANCH_MODEL_OPTIONS:
+        result["test_branch_model"] = ASSISTANT_PERSONALITY_DEFAULTS["test_branch_model"]
     return result
 
 
@@ -185,6 +203,11 @@ def admin_update_assistant_personality_settings(payload: dict) -> dict:
     address_mode = str(payload.get("address_mode", current["address_mode"])).strip().lower()
     if address_mode not in {"formal", "contextual", "informal"}:
         raise ValueError("Неизвестный формат обращения")
+    test_branch_model = str(
+        payload.get("test_branch_model", current["test_branch_model"])
+    ).strip().lower()
+    if test_branch_model not in TEST_BRANCH_MODEL_OPTIONS:
+        raise ValueError("Неизвестная модель секретной ветки")
     apply_to_all_raw = payload.get("apply_to_all", current["apply_to_all"])
     if apply_to_all_raw in (True, 1, "1"):
         apply_to_all = True
@@ -209,8 +232,8 @@ def admin_update_assistant_personality_settings(payload: dict) -> dict:
         conn.execute(
             """INSERT INTO assistant_personality_settings
                (id,preset,address_mode,formality,warmth,sociability,supportiveness,
-                humor,emoji,initiative,apply_to_all,updated_at)
-               VALUES (1,?,?,?,?,?,?,?,?,?,?,?)
+                humor,emoji,initiative,apply_to_all,test_branch_model,updated_at)
+               VALUES (1,?,?,?,?,?,?,?,?,?,?,?,?)
                ON CONFLICT(id) DO UPDATE SET
                 preset=excluded.preset,address_mode=excluded.address_mode,
                 formality=excluded.formality,
@@ -218,12 +241,13 @@ def admin_update_assistant_personality_settings(payload: dict) -> dict:
                 supportiveness=excluded.supportiveness,humor=excluded.humor,
                 emoji=excluded.emoji,initiative=excluded.initiative,
                 apply_to_all=excluded.apply_to_all,
+                test_branch_model=excluded.test_branch_model,
                 updated_at=excluded.updated_at""",
             (
                 preset, address_mode, values["formality"], values["warmth"],
                 values["sociability"], values["supportiveness"],
                 values["humor"], values["emoji"], values["initiative"],
-                int(apply_to_all), now,
+                int(apply_to_all), test_branch_model, now,
             ),
         )
         conn.commit()
@@ -5155,6 +5179,7 @@ def init_db() -> None:
                 emoji INTEGER NOT NULL DEFAULT 5 CHECK(emoji BETWEEN 0 AND 100),
                 initiative INTEGER NOT NULL DEFAULT 60 CHECK(initiative BETWEEN 0 AND 100),
                 apply_to_all INTEGER NOT NULL DEFAULT 0 CHECK(apply_to_all IN (0,1)),
+                test_branch_model TEXT NOT NULL DEFAULT 'deepseek-v4.1-flash',
                 updated_at TEXT NOT NULL
             );
 
@@ -5585,6 +5610,7 @@ def init_db() -> None:
             "emoji": "INTEGER NOT NULL DEFAULT 5",
             "initiative": "INTEGER NOT NULL DEFAULT 60",
             "apply_to_all": "INTEGER NOT NULL DEFAULT 0",
+            "test_branch_model": "TEXT NOT NULL DEFAULT 'deepseek-v4.1-flash'",
         }
         for name, declaration in personality_migrations.items():
             if name not in personality_columns:

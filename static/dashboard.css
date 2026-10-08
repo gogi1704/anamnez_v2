@@ -720,6 +720,9 @@ tbody tr:hover { background:#f8fbf9; }
 .personality-scope { display:flex; align-items:flex-start; gap:12px; padding:15px 16px; border:1px solid #b9d8c9; border-radius:15px; background:#eff8f3; cursor:pointer; }
 .personality-scope input { width:20px; height:20px; margin:1px 0 0; accent-color:#1f8667; flex:0 0 auto; }
 .personality-scope span { display:grid; gap:4px; }.personality-scope b { color:#164f3d; font-size:13px; }.personality-scope small { color:var(--muted); font-size:10px; line-height:1.45; }
+.personality-model { display:grid; grid-template-columns:minmax(0,1fr) minmax(280px,420px); gap:18px; align-items:center; padding:16px; border:1px solid #cbdcd3; border-radius:15px; background:#fbfdfc; }
+.personality-model span { display:grid; gap:5px; }.personality-model b { color:#164f3d; font-size:13px; }.personality-model small { color:var(--muted); font-size:10px; line-height:1.5; }
+.personality-model select { width:100%; min-height:46px; padding:0 12px; border:1px solid #b9d8c9; border-radius:11px; color:#263a31; background:#fff; font:inherit; }
 .personality-layout { display:grid; grid-template-columns:minmax(0,1.25fr) minmax(300px,.75fr); gap:22px; align-items:start; }
 .personality-controls { display:grid; gap:14px; }
 .personality-controls label { display:grid; gap:8px; padding:16px; border:1px solid #dce8e2; border-radius:15px; background:#fbfdfc; }
@@ -736,4 +739,4 @@ tbody tr:hover { background:#f8fbf9; }
 .personality-actions { display:flex; align-items:center; flex-wrap:wrap; gap:12px; }
 .personality-actions button { min-height:46px; }.personality-actions .form-status { flex:1 1 280px; }
 @media(max-width:1050px){.personality-presets{grid-template-columns:repeat(2,minmax(0,1fr))}}
-@media(max-width:850px){.personality-layout{grid-template-columns:1fr}.personality-presets{grid-template-columns:1fr}.personality-heading-panel .panel-heading{align-items:flex-start;flex-direction:column}.personality-actions button{width:100%}}
+@media(max-width:850px){.personality-layout{grid-template-columns:1fr}.personality-presets{grid-template-columns:1fr}.personality-model{grid-template-columns:1fr}.personality-heading-panel .panel-heading{align-items:flex-start;flex-direction:column}.personality-actions button{width:100%}}

@@ -557,6 +557,7 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                 return self._json(200, {
                     "settings": db.admin_assistant_personality_settings(),
                     "presets": db.ASSISTANT_PERSONALITY_PRESETS,
+                    "test_branch_models": db.TEST_BRANCH_MODEL_OPTIONS,
                 })
             if path == "/api/admin/metric2":
                 try:
@@ -1846,6 +1847,7 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                 return self._json(200, {
                     "settings": db.admin_update_assistant_personality_settings(payload),
                     "presets": db.ASSISTANT_PERSONALITY_PRESETS,
+                    "test_branch_models": db.TEST_BRANCH_MODEL_OPTIONS,
                 })
             except (ValueError, TypeError, json.JSONDecodeError, UnicodeDecodeError) as exc:
                 return self._json(422, {"detail": str(exc)})

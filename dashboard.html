@@ -11,7 +11,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/static/dashboard.css?v=20261007-olga-personality-v5">
+  <link rel="stylesheet" href="/static/dashboard.css?v=20261008-yandex-model-switch-v1">
 </head>
 <body>
   <main class="dashboard-shell">
@@ -461,6 +461,7 @@
             <button type="button" data-personality-preset="friendly"><strong>Тёплый</strong><small>Живо, бережно и с лёгким юмором</small></button>
             <button type="button" data-personality-preset="companion"><strong>По-дружески</strong><small>На «ты», общительно и с юмором</small></button>
           </fieldset>
+          <label class="personality-model"><span><b>Модель секретной ветки</b><small>Меняет только скрытую ветку Яндекс ИИ. При выбранном DeepSeek и отсутствии ответа запрос автоматически повторяется через Qwen 3.6.</small></span><select id="personalityTestBranchModel"><option value="deepseek-v4.1-flash">DeepSeek V4.1 Flash → Qwen 3.6 при сбое</option><option value="qwen3.6-35b-a3b">Qwen 3.6</option><option value="gpt-oss-120b">OpenAI GPT-OSS 120B через Yandex</option></select></label>
           <label class="personality-scope"><input id="personalityYandexOnly" type="checkbox" checked><span><b>Только секретная ветка Яндекс ИИ</b><small>Если галочка включена — настройки характера получает только секретная ветка. Снимите её, чтобы применять характер ко всем ответам, включая основную ветку OpenAI.</small></span></label>
           <div class="personality-layout">
             <section class="personality-controls">
@@ -819,6 +820,6 @@
       </div>
     </section>
   </div>
-  <script src="/static/dashboard.js?v=20261007-olga-personality-v5" defer></script>
+  <script src="/static/dashboard.js?v=20261008-yandex-model-switch-v1" defer></script>
 </body>
 </html>

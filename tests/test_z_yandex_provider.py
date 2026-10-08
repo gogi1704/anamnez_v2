@@ -160,6 +160,26 @@ class YandexProviderTests(unittest.TestCase):
             with self.assertRaisesRegex(LLMProviderError, "Yandex AI Studio"):
                 LLMService()._request({"instructions": "x", "input": "y"})
 
+    def test_main_yandex_branch_does_not_use_the_secret_branch_fallback(self):
+        object.__setattr__(settings, "yandex_model", "deepseek-v4.1-flash")
+        failed = {
+            "status": "failed",
+            "error": {"message": "503: Service temporarily unavailable"},
+            "output": [],
+        }
+        calls = []
+
+        def fake_urlopen(request, timeout=None):
+            calls.append(json.loads(request.data.decode("utf-8")))
+            return FakeResponse(failed)
+
+        with mock.patch("backend.llm.urllib.request.urlopen", side_effect=fake_urlopen):
+            with self.assertRaisesRegex(LLMProviderError, "503"):
+                LLMService()._request({"instructions": "x", "input": "y"})
+
+        self.assertEqual(len(calls), 1)
+        self.assertEqual(calls[0]["model"], "gpt://b1testfolder/deepseek-v4.1-flash")
+
     def test_missing_credentials_are_reported_clearly(self):
         object.__setattr__(settings, "yandex_api_key", "")
         with self.assertRaisesRegex(LLMNotConfigured, "YANDEX_FOLDER_ID"):
@@ -207,7 +227,7 @@ class AiBranchTests(unittest.TestCase):
     def setUp(self):
         isolated_database(self)
         names = ("llm_provider", "yandex_folder_id", "yandex_api_key", "yandex_model",
-                 "test_branch_token", "test_branch_model")
+                 "test_branch_token")
         self.original = {name: getattr(settings, name) for name in names}
         for name, value in {
             "llm_provider": "openai",
@@ -215,7 +235,6 @@ class AiBranchTests(unittest.TestCase):
             "yandex_api_key": "test-key",
             "yandex_model": "yandexgpt-5.1",
             "test_branch_token": self.TOKEN,
-            "test_branch_model": "deepseek-v4.1-flash",
         }.items():
             object.__setattr__(settings, name, value)
 
@@ -254,6 +273,64 @@ class AiBranchTests(unittest.TestCase):
             LLMService()._request({"instructions": "x", "input": "y"})
             LLMService()._request({"instructions": "x", "input": "y", "text": passport_format})
         self.assertEqual([body["model"] for body in sent], ["gpt://b1testfolder/deepseek-v4.1-flash"] * 2)
+
+    def test_deepseek_failure_falls_back_to_qwen_only_in_test_branch(self):
+        db.apply_ai_branch_link(self.TOKEN)
+        sent = []
+        responses = [
+            {
+                "status": "failed",
+                "error": {
+                    "code": "model_call_error",
+                    "message": "Error while calling model: 503: Service temporarily unavailable",
+                },
+                "output": [],
+                "usage": {},
+            },
+            canned_with_usage('{"message": "ответ Qwen"}'),
+        ]
+
+        def fake_urlopen(request, timeout=None):
+            sent.append(json.loads(request.data.decode("utf-8")))
+            return FakeResponse(responses.pop(0))
+
+        with mock.patch("backend.llm.urllib.request.urlopen", side_effect=fake_urlopen):
+            result = LLMService()._request({"instructions": "x", "input": "y"})
+
+        self.assertEqual(
+            [body["model"] for body in sent],
+            [
+                "gpt://b1testfolder/deepseek-v4.1-flash",
+                "gpt://b1testfolder/qwen3.6-35b-a3b",
+            ],
+        )
+        self.assertEqual(result["model"], "qwen3.6-35b-a3b")
+
+    def test_admin_can_select_qwen_or_openai_oss_for_test_branch(self):
+        db.apply_ai_branch_link(self.TOKEN)
+        for model in ("qwen3.6-35b-a3b", "gpt-oss-120b"):
+            with self.subTest(model=model):
+                db.admin_update_assistant_personality_settings({"test_branch_model": model})
+                patcher, sent = self.capture([])
+                with patcher:
+                    result = LLMService()._request({"instructions": "x", "input": "y"})
+                self.assertEqual(sent[0]["model"], f"gpt://b1testfolder/{model}")
+                self.assertEqual(result["model"], model)
+                self.assertEqual(len(sent), 1)
+
+    def test_failed_status_includes_the_provider_reason(self):
+        db.apply_ai_branch_link(self.TOKEN)
+        db.admin_update_assistant_personality_settings({"test_branch_model": "qwen3.6-35b-a3b"})
+        failed = {
+            "status": "failed",
+            "error": {"code": "model_call_error", "message": "503: Service temporarily unavailable"},
+            "output": [],
+        }
+        with mock.patch(
+            "backend.llm.urllib.request.urlopen", return_value=FakeResponse(failed),
+        ):
+            with self.assertRaisesRegex(LLMProviderError, "503: Service temporarily unavailable"):
+                LLMService()._request({"instructions": "x", "input": "y"})
 
     def test_main_branch_keeps_the_configured_yandex_model(self):
         patcher, sent = self.capture([])

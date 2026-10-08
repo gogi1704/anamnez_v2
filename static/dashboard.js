@@ -2136,6 +2136,7 @@ function personalityValues() {
   return {
     apply_to_all:!$('#personalityYandexOnly').checked,
     address_mode:$('#personalityAddressMode').value,
+    test_branch_model:$('#personalityTestBranchModel').value,
     ...Object.fromEntries(personalityFields.map(name => [
     name, Number($(`#personality${name[0].toUpperCase()}${name.slice(1)}`).value),
   ]))};
@@ -2165,7 +2166,12 @@ function renderPersonalitySettings() {
         : `${informal ? 'Поняла тебя. Давай' : 'Поняла вас. Давайте'} разберём главное и решим, что можно сделать дальше.`;
   const presetLabels = {professional:'Деловой',balanced:'Сбалансированный',friendly:'Тёплый',companion:'По-дружески',custom:'Своя настройка'};
   const scope = values.apply_to_all ? 'все ветки' : 'только Яндекс';
-  $('#personalityState').textContent = `${presetLabels[personalityPreset] || presetLabels.custom} · ${scope}`;
+  const modelLabels = {
+    'deepseek-v4.1-flash':'DeepSeek → Qwen',
+    'qwen3.6-35b-a3b':'Qwen 3.6',
+    'gpt-oss-120b':'GPT-OSS 120B',
+  };
+  $('#personalityState').textContent = `${presetLabels[personalityPreset] || presetLabels.custom} · ${scope} · ${modelLabels[values.test_branch_model] || 'модель Яндекс'}`;
 }
 
 function applyPersonalityPreset(name) {
@@ -2183,6 +2189,7 @@ function fillPersonalitySettings(item = {}, presets = {}) {
   personalityPresets = {...personalityPresets,...presets};
   personalityPreset = item.preset || 'balanced';
   $('#personalityYandexOnly').checked = !Boolean(item.apply_to_all);
+  $('#personalityTestBranchModel').value = item.test_branch_model || 'deepseek-v4.1-flash';
   $('#personalityAddressMode').value = item.address_mode || personalityPresets.balanced.address_mode;
   for (const field of personalityFields) {
     const fallback = personalityPresets.balanced[field];
@@ -2906,6 +2913,7 @@ document.querySelectorAll('#personalityForm input[type="range"]').forEach(input 
   input.addEventListener('change', schedulePersonalitySave);
 });
 $('#personalityAddressMode').addEventListener('change', () => { personalityPreset = 'custom'; renderPersonalitySettings(); schedulePersonalitySave(); });
+$('#personalityTestBranchModel').addEventListener('change', () => { renderPersonalitySettings(); schedulePersonalitySave(); });
 $('#personalityYandexOnly').addEventListener('change', () => { renderPersonalitySettings(); schedulePersonalitySave(); });
 $('#personalityReset').addEventListener('click', () => { applyPersonalityPreset('balanced'); schedulePersonalitySave(); });
 document.querySelectorAll('[data-content-text-tab]').forEach(button => {

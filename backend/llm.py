@@ -25,6 +25,7 @@ class LLMProviderError(RuntimeError):
 class LLMService:
     endpoint = "https://api.openai.com/v1/responses"
     yandex_endpoint = "https://ai.api.cloud.yandex.net/v1/responses"
+    qwen_fallback_model = "qwen3.6-35b-a3b"
 
     @staticmethod
     def _assistant_personality_prompt() -> str:
@@ -36,7 +37,24 @@ class LLMService:
 
     def _request(self, payload: dict) -> dict:
         if db.current_ai_branch() == db.AI_BRANCH_TEST:
-            return self._yandex_request(payload, model=settings.test_branch_model)
+            model = db.admin_assistant_personality_settings()["test_branch_model"]
+            try:
+                return self._yandex_request(payload, model=model)
+            except LLMProviderError as primary_error:
+                if not model.startswith("deepseek"):
+                    raise
+                print(
+                    f"[llm] yandex {model}: no answer, falling back to "
+                    f"{self.qwen_fallback_model}: {primary_error}",
+                    flush=True,
+                )
+                try:
+                    return self._yandex_request(payload, model=self.qwen_fallback_model)
+                except LLMProviderError as fallback_error:
+                    raise LLMProviderError(
+                        "Yandex AI Studio: DeepSeek не ответил, резервная модель "
+                        f"Qwen 3.6 также недоступна ({fallback_error})"
+                    ) from fallback_error
         if settings.llm_provider == "yandex":
             return self._yandex_request(payload)
         if not settings.openai_api_key:
@@ -186,10 +204,16 @@ class LLMService:
 
     @staticmethod
     def _normalize_yandex_response(raw: dict, wants_json: bool) -> dict:
+        if raw.get("status") == "failed":
+            error = raw.get("error") if isinstance(raw.get("error"), dict) else {}
+            message = str(error.get("message") or error.get("code") or "неизвестная ошибка")
+            raise LLMProviderError(f"Yandex AI Studio: модель завершила запрос с ошибкой: {message}")
         text = raw.get("output_text") if isinstance(raw.get("output_text"), str) else ""
         if not text:
             parts = []
             for item in raw.get("output", []) or []:
+                if item.get("type") != "message":
+                    continue
                 for content in item.get("content", []) or []:
                     if isinstance(content, dict) and content.get("text"):
                         parts.append(content["text"])

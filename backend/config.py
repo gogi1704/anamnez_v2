@@ -46,9 +46,9 @@ class Settings:
     yandex_model: str = os.getenv("YANDEX_MODEL", "yandexgpt-5.1").strip()
     # Structured health passport: a non-reasoning model finishes the JSON reliably.
     yandex_passport_model: str = os.getenv("YANDEX_PASSPORT_MODEL", "yandexgpt-5.1").strip()
-    # Test branch: users who open /?branch=<TEST_BRANCH_TOKEN> get every AI call on this model.
+    # Test branch: users who open /?branch=<TEST_BRANCH_TOKEN> get the model
+    # selected in the admin panel. The selection is stored in SQLite.
     test_branch_token: str = os.getenv("TEST_BRANCH_TOKEN", "").strip()
-    test_branch_model: str = os.getenv("TEST_BRANCH_MODEL", "deepseek-v4.1-flash").strip()
     # Sent as top-level reasoning_effort to DeepSeek models only. Use "low" if Yandex rejects "none".
     yandex_reasoning_effort: str = os.getenv("YANDEX_REASONING_EFFORT", "none").strip()
     database_path: Path = Path(os.getenv("DATABASE_PATH", BASE_DIR / "data" / "consilium.db"))
