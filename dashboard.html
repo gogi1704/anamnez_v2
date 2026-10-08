@@ -11,7 +11,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/static/dashboard.css?v=20261008-yandex-model-switch-v1">
+  <link rel="stylesheet" href="/static/dashboard.css?v=20261008-yandex-cost-models-v2">
 </head>
 <body>
   <main class="dashboard-shell">
@@ -531,7 +531,7 @@
         <article class="panel costs-heading-panel">
           <div class="costs-heading">
             <div>
-              <p class="eyebrow">Использование OpenAI API</p>
+              <p class="eyebrow">Использование OpenAI и Yandex AI Studio</p>
               <h2>Расходы на ИИ</h2>
               <p id="costsNotice">Сохраняются только счётчики токенов — без текстов сообщений и медицинских данных.</p>
             </div>
@@ -579,7 +579,7 @@
         <article class="panel pricing-panel">
           <div class="panel-heading"><div><p class="eyebrow">Тарифный снимок</p><h2>Цена за 1 млн токенов</h2></div></div>
           <div class="pricing-list" id="costPricingList"></div>
-          <p>Это расчётная аналитика приложения. Для сверки оплаты используйте раздел Billing в кабинете OpenAI. Статистика начинается после установки этого обновления.</p>
+          <p>Это расчётная аналитика приложения. Для сверки оплаты используйте Billing соответствующего провайдера — OpenAI или Yandex Cloud.</p>
         </article>
       </section>
 
@@ -820,6 +820,6 @@
       </div>
     </section>
   </div>
-  <script src="/static/dashboard.js?v=20261008-yandex-model-switch-v1" defer></script>
+  <script src="/static/dashboard.js?v=20261008-yandex-cost-models-v2" defer></script>
 </body>
 </html>

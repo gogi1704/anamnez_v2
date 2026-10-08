@@ -28,6 +28,12 @@ const operationNames = {
   council_summary:'Итог консилиума', health_passport:'Паспорт здоровья',
   other:'Другой запрос',
 };
+const aiModelNames = {
+  'deepseek-v4-flash':'DeepSeek V4 Flash · Yandex',
+  'deepseek-v4.1-flash':'DeepSeek V4.1 Flash · Yandex',
+  'qwen3.6-35b-a3b':'Qwen 3.6 35B · Yandex',
+  'gpt-oss-120b':'GPT-OSS 120B · Yandex',
+};
 const searchAliases = {
   'завершена':'complete','завершено':'complete','анкета':'questionnaire',
   'не начата':'not_started','активен':'active','активный':'active',
@@ -506,7 +512,7 @@ function renderCostModels(items) {
   if (!items.length) emptyTable(root,7);
   for (const item of items) {
     const row = document.createElement('tr');
-    textCell(row,item.model);
+    textCell(row,aiModelNames[item.model] || item.model,item.model);
     textCell(row,formatTokens(item.requests));
     textCell(row,formatTokens(item.input_tokens));
     textCell(row,formatTokens(item.cached_input_tokens));
@@ -526,7 +532,7 @@ function renderCostRecent(items) {
     const row = document.createElement('tr');
     textCell(row,formatDate(item.created_at));
     textCell(row,operationNames[item.operation] || item.operation);
-    textCell(row,item.model);
+    textCell(row,aiModelNames[item.model] || item.model,item.model);
     textCell(row,shortId(item.chel_id),item.chel_id);
     textCell(row,formatTokens(item.input_tokens));
     textCell(row,formatTokens(item.cached_input_tokens));
@@ -546,7 +552,7 @@ function renderPricing(items) {
     card.className = 'pricing-card';
     const model = document.createElement('strong');
     const rates = document.createElement('span');
-    model.textContent = item.model;
+    model.textContent = aiModelNames[item.model] || item.model;
     rates.textContent = `вход $${item.input} · кеш $${item.cached_input} · выход $${item.output}`;
     card.append(model,rates);
     root.append(card);

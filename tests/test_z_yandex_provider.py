@@ -368,6 +368,48 @@ class AiBranchTests(unittest.TestCase):
         expected = (1000 * 2.459016 + 500 * 4.09836) / 1_000_000
         self.assertAlmostEqual(rows[0]["total_cost_usd"], expected, places=6)
 
+    def test_qwen_and_gpt_oss_have_separate_priced_cost_rows(self):
+        db.apply_ai_branch_link(self.TOKEN)
+        expected = {
+            "qwen3.6-35b-a3b": (1000 * 1.639344 + 500 * 2.459016) / 1_000_000,
+            "gpt-oss-120b": (1000 * 2.459016 + 500 * 2.459016) / 1_000_000,
+        }
+        for model in expected:
+            db.admin_update_assistant_personality_settings({"test_branch_model": model})
+            patcher, _ = self.capture([])
+            with patcher:
+                LLMService()._request({"instructions": "x", "input": "y"})
+
+        rows = {item["model"]: item for item in db.admin_ai_costs("all")["by_model"]}
+        for model, amount in expected.items():
+            with self.subTest(model=model):
+                self.assertTrue(rows[model]["pricing_known"])
+                self.assertAlmostEqual(rows[model]["total_cost_usd"], amount, places=9)
+
+    def test_new_tariffs_backfill_earlier_unpriced_qwen_usage(self):
+        with db.connection() as connection:
+            connection.execute(
+                """INSERT INTO ai_usage
+                   (chel_id,operation,model,pricing_known,input_tokens,
+                    cached_input_tokens,output_tokens,total_tokens,created_at)
+                   VALUES ('chel_real','agent_response','qwen3.6-35b-a3b',0,
+                           1000,200,500,1500,?)""",
+                (db.utc_now(),),
+            )
+            connection.commit()
+
+        db.init_db()
+        with db.connection() as connection:
+            row = connection.execute(
+                "SELECT * FROM ai_usage WHERE chel_id='chel_real'"
+            ).fetchone()
+        expected = (
+            800 * 1.639344 + 200 * 0.409836 + 500 * 2.459016
+        ) / 1_000_000
+        self.assertEqual(row["pricing_key"], "qwen3.6-35b-a3b")
+        self.assertEqual(row["pricing_known"], 1)
+        self.assertAlmostEqual(row["total_cost_usd"], expected, places=9)
+
 
 class ReadinessTests(unittest.TestCase):
     def test_yandex_mode_does_not_need_the_openai_key(self):

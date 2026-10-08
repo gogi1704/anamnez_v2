@@ -2213,6 +2213,39 @@ def record_ai_usage(item: dict) -> int:
         return int(cursor.lastrowid)
 
 
+def _backfill_known_ai_usage_pricing(conn: sqlite3.Connection) -> int:
+    """Price earlier unpriced rows when a missing model tariff is added."""
+    from .ai_costs import cost_fields_for_usage
+
+    updated = 0
+    rows = conn.execute(
+        """SELECT id, model, long_context, input_tokens, cached_input_tokens,
+                  output_tokens
+           FROM ai_usage WHERE pricing_known = 0"""
+    ).fetchall()
+    for row in rows:
+        costs = cost_fields_for_usage(
+            row["model"], row["input_tokens"], row["cached_input_tokens"],
+            row["output_tokens"], bool(row["long_context"]),
+        )
+        if not costs["pricing_known"]:
+            continue
+        conn.execute(
+            """UPDATE ai_usage SET pricing_key=?, pricing_known=1,
+                   input_rate=?, cached_input_rate=?, output_rate=?,
+                   input_cost_usd=?, cached_input_cost_usd=?, output_cost_usd=?,
+                   total_cost_usd=? WHERE id=?""",
+            (
+                costs["pricing_key"], costs["input_rate"],
+                costs["cached_input_rate"], costs["output_rate"],
+                costs["input_cost_usd"], costs["cached_input_cost_usd"],
+                costs["output_cost_usd"], costs["total_cost_usd"], row["id"],
+            ),
+        )
+        updated += 1
+    return updated
+
+
 def admin_ai_costs(period: str = "30", recent_limit: int = 100) -> dict:
     """Aggregate AI token usage without exposing prompts, replies, or medical data."""
     period = str(period or "30").strip().lower()
@@ -2328,8 +2361,8 @@ def admin_ai_costs(period: str = "30", recent_limit: int = 100) -> dict:
         "recent": recent,
         "pricing": public_pricing_catalog(),
         "notice": (
-            "Расчёт по токенам из ответов OpenAI API и сохранённым тарифам. "
-            "Окончательная сумма определяется биллингом OpenAI."
+            "Расчёт по токенам из ответов API и сохранённым тарифам OpenAI и "
+            "Yandex AI Studio. Окончательная сумма определяется биллингом провайдера."
         ),
     }
 
@@ -6105,6 +6138,7 @@ def init_db() -> None:
             "CREATE INDEX IF NOT EXISTS idx_lab_result_value_estimates_status "
             "ON lab_result_value_estimates(status, updated_at)"
         )
+        _backfill_known_ai_usage_pricing(conn)
 
         # Preserve tickets created by earlier versions without rewriting messages.
         conversations = conn.execute("SELECT id, status, human_status, human_ticket_id FROM conversations").fetchall()
