@@ -169,6 +169,7 @@ class YandexProviderTests(unittest.TestCase):
     def test_global_yandex_mode_uses_deepseek_fallback_when_selected(self):
         db.admin_update_assistant_personality_settings({
             "test_branch_model": "deepseek-v4.1-flash",
+            "test_branch_fallback_model": "qwen3.6-35b-a3b",
         })
         failed = {
             "status": "failed",
@@ -193,6 +194,34 @@ class YandexProviderTests(unittest.TestCase):
                 "gpt://b1testfolder/qwen3.6-35b-a3b",
             ],
         )
+
+    def test_selected_primary_and_secondary_models_define_fallback_order(self):
+        db.admin_update_assistant_personality_settings({
+            "test_branch_model": "qwen3.6-35b-a3b",
+            "test_branch_fallback_model": "gpt-oss-120b",
+        })
+        failed = {
+            "status": "failed",
+            "error": {"message": "503: Service temporarily unavailable"},
+            "output": [],
+        }
+        calls = []
+
+        def fake_urlopen(request, timeout=None):
+            body = json.loads(request.data.decode("utf-8"))
+            calls.append(body["model"])
+            if body["model"].endswith("qwen3.6-35b-a3b"):
+                return FakeResponse(failed)
+            return FakeResponse(canned("резервная модель ответила"))
+
+        with mock.patch("backend.llm.urllib.request.urlopen", side_effect=fake_urlopen):
+            result = LLMService()._request({"instructions": "x", "input": "y"})
+
+        self.assertEqual(calls, [
+            "gpt://b1testfolder/qwen3.6-35b-a3b",
+            "gpt://b1testfolder/gpt-oss-120b",
+        ])
+        self.assertEqual(result["model"], "gpt-oss-120b")
 
     def test_missing_credentials_are_reported_clearly(self):
         object.__setattr__(settings, "yandex_api_key", "")

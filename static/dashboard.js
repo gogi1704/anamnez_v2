@@ -2143,9 +2143,18 @@ function personalityValues() {
     apply_to_all:!$('#personalityYandexOnly').checked,
     address_mode:$('#personalityAddressMode').value,
     test_branch_model:$('#personalityTestBranchModel').value,
+    test_branch_fallback_model:$('#personalityTestBranchFallbackModel').value,
     ...Object.fromEntries(personalityFields.map(name => [
     name, Number($(`#personality${name[0].toUpperCase()}${name.slice(1)}`).value),
   ]))};
+}
+
+function ensureDifferentPersonalityModels() {
+  const primary = $('#personalityTestBranchModel');
+  const fallback = $('#personalityTestBranchFallbackModel');
+  if (primary.value !== fallback.value) return;
+  const replacement = [...fallback.options].find(option => option.value !== primary.value);
+  if (replacement) fallback.value = replacement.value;
 }
 
 function renderPersonalitySettings() {
@@ -2177,7 +2186,9 @@ function renderPersonalitySettings() {
     'qwen3.6-35b-a3b':'Qwen 3.6',
     'gpt-oss-120b':'GPT-OSS 120B',
   };
-  $('#personalityState').textContent = `${presetLabels[personalityPreset] || presetLabels.custom} · ${scope} · ${modelLabels[values.test_branch_model] || 'модель Яндекс'}`;
+  const primary = modelLabels[values.test_branch_model] || 'модель Яндекс';
+  const fallback = modelLabels[values.test_branch_fallback_model] || 'резервная модель';
+  $('#personalityState').textContent = `${presetLabels[personalityPreset] || presetLabels.custom} · ${scope} · ${primary} → ${fallback}`;
 }
 
 function applyPersonalityPreset(name) {
@@ -2196,6 +2207,8 @@ function fillPersonalitySettings(item = {}, presets = {}) {
   personalityPreset = item.preset || 'balanced';
   $('#personalityYandexOnly').checked = !Boolean(item.apply_to_all);
   $('#personalityTestBranchModel').value = item.test_branch_model || 'deepseek-v4.1-flash';
+  $('#personalityTestBranchFallbackModel').value = item.test_branch_fallback_model || 'qwen3.6-35b-a3b';
+  ensureDifferentPersonalityModels();
   $('#personalityAddressMode').value = item.address_mode || personalityPresets.balanced.address_mode;
   for (const field of personalityFields) {
     const fallback = personalityPresets.balanced[field];
@@ -2919,7 +2932,8 @@ document.querySelectorAll('#personalityForm input[type="range"]').forEach(input 
   input.addEventListener('change', schedulePersonalitySave);
 });
 $('#personalityAddressMode').addEventListener('change', () => { personalityPreset = 'custom'; renderPersonalitySettings(); schedulePersonalitySave(); });
-$('#personalityTestBranchModel').addEventListener('change', () => { renderPersonalitySettings(); schedulePersonalitySave(); });
+$('#personalityTestBranchModel').addEventListener('change', () => { ensureDifferentPersonalityModels(); renderPersonalitySettings(); schedulePersonalitySave(); });
+$('#personalityTestBranchFallbackModel').addEventListener('change', () => { ensureDifferentPersonalityModels(); renderPersonalitySettings(); schedulePersonalitySave(); });
 $('#personalityYandexOnly').addEventListener('change', () => { renderPersonalitySettings(); schedulePersonalitySave(); });
 $('#personalityReset').addEventListener('click', () => { applyPersonalityPreset('balanced'); schedulePersonalitySave(); });
 document.querySelectorAll('[data-content-text-tab]').forEach(button => {

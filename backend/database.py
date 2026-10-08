@@ -96,7 +96,7 @@ AI_BRANCH_TEST = "deepseek_test"
 TEST_BRANCH_MODEL_OPTIONS = {
     "deepseek-v4.1-flash": {
         "label": "DeepSeek V4.1 Flash",
-        "description": "Основная быстрая модель; при сбое автоматически используется Qwen 3.6.",
+        "description": "Быстрая модель DeepSeek через Yandex AI Studio.",
     },
     "qwen3.6-35b-a3b": {
         "label": "Qwen 3.6",
@@ -120,6 +120,7 @@ ASSISTANT_PERSONALITY_DEFAULTS = {
     "emoji": 5,
     "initiative": 60,
     "test_branch_model": "deepseek-v4.1-flash",
+    "test_branch_fallback_model": "qwen3.6-35b-a3b",
 }
 ASSISTANT_PERSONALITY_PRESETS = {
     "professional": {
@@ -189,6 +190,15 @@ def admin_assistant_personality_settings() -> dict:
         result["address_mode"] = ASSISTANT_PERSONALITY_DEFAULTS["address_mode"]
     if result.get("test_branch_model") not in TEST_BRANCH_MODEL_OPTIONS:
         result["test_branch_model"] = ASSISTANT_PERSONALITY_DEFAULTS["test_branch_model"]
+    if (
+        result.get("test_branch_fallback_model") not in TEST_BRANCH_MODEL_OPTIONS
+        or result["test_branch_fallback_model"] == result["test_branch_model"]
+    ):
+        preferred = ASSISTANT_PERSONALITY_DEFAULTS["test_branch_fallback_model"]
+        result["test_branch_fallback_model"] = next(
+            model for model in (preferred, *TEST_BRANCH_MODEL_OPTIONS)
+            if model != result["test_branch_model"]
+        )
     return result
 
 
@@ -208,6 +218,20 @@ def admin_update_assistant_personality_settings(payload: dict) -> dict:
     ).strip().lower()
     if test_branch_model not in TEST_BRANCH_MODEL_OPTIONS:
         raise ValueError("Неизвестная модель секретной ветки")
+    fallback_explicit = "test_branch_fallback_model" in payload
+    test_branch_fallback_model = str(
+        payload.get(
+            "test_branch_fallback_model",
+            current["test_branch_fallback_model"],
+        )
+    ).strip().lower()
+    if test_branch_fallback_model not in TEST_BRANCH_MODEL_OPTIONS:
+        raise ValueError("Неизвестная резервная модель секретной ветки")
+    if test_branch_fallback_model == test_branch_model:
+        if not fallback_explicit and current["test_branch_model"] != test_branch_model:
+            test_branch_fallback_model = current["test_branch_model"]
+        else:
+            raise ValueError("Основная и резервная модели должны различаться")
     apply_to_all_raw = payload.get("apply_to_all", current["apply_to_all"])
     if apply_to_all_raw in (True, 1, "1"):
         apply_to_all = True
@@ -232,8 +256,9 @@ def admin_update_assistant_personality_settings(payload: dict) -> dict:
         conn.execute(
             """INSERT INTO assistant_personality_settings
                (id,preset,address_mode,formality,warmth,sociability,supportiveness,
-                humor,emoji,initiative,apply_to_all,test_branch_model,updated_at)
-               VALUES (1,?,?,?,?,?,?,?,?,?,?,?,?)
+                humor,emoji,initiative,apply_to_all,test_branch_model,
+                test_branch_fallback_model,updated_at)
+               VALUES (1,?,?,?,?,?,?,?,?,?,?,?,?,?)
                ON CONFLICT(id) DO UPDATE SET
                 preset=excluded.preset,address_mode=excluded.address_mode,
                 formality=excluded.formality,
@@ -242,12 +267,14 @@ def admin_update_assistant_personality_settings(payload: dict) -> dict:
                 emoji=excluded.emoji,initiative=excluded.initiative,
                 apply_to_all=excluded.apply_to_all,
                 test_branch_model=excluded.test_branch_model,
+                test_branch_fallback_model=excluded.test_branch_fallback_model,
                 updated_at=excluded.updated_at""",
             (
                 preset, address_mode, values["formality"], values["warmth"],
                 values["sociability"], values["supportiveness"],
                 values["humor"], values["emoji"], values["initiative"],
-                int(apply_to_all), test_branch_model, now,
+                int(apply_to_all), test_branch_model,
+                test_branch_fallback_model, now,
             ),
         )
         conn.commit()
@@ -5213,6 +5240,7 @@ def init_db() -> None:
                 initiative INTEGER NOT NULL DEFAULT 60 CHECK(initiative BETWEEN 0 AND 100),
                 apply_to_all INTEGER NOT NULL DEFAULT 0 CHECK(apply_to_all IN (0,1)),
                 test_branch_model TEXT NOT NULL DEFAULT 'deepseek-v4.1-flash',
+                test_branch_fallback_model TEXT NOT NULL DEFAULT 'qwen3.6-35b-a3b',
                 updated_at TEXT NOT NULL
             );
 
@@ -5644,6 +5672,7 @@ def init_db() -> None:
             "initiative": "INTEGER NOT NULL DEFAULT 60",
             "apply_to_all": "INTEGER NOT NULL DEFAULT 0",
             "test_branch_model": "TEXT NOT NULL DEFAULT 'deepseek-v4.1-flash'",
+            "test_branch_fallback_model": "TEXT NOT NULL DEFAULT 'qwen3.6-35b-a3b'",
         }
         for name, declaration in personality_migrations.items():
             if name not in personality_columns:

@@ -25,7 +25,6 @@ class LLMProviderError(RuntimeError):
 class LLMService:
     endpoint = "https://api.openai.com/v1/responses"
     yandex_endpoint = "https://ai.api.cloud.yandex.net/v1/responses"
-    qwen_fallback_model = "qwen3.6-35b-a3b"
 
     _CHECKUP_CONTEXT = re.compile(
         r"чек[- ]?ап|обследован|анализ|куп|приобр|заказ|оплат|стоим|цен",
@@ -59,23 +58,24 @@ class LLMService:
     def _request(self, payload: dict) -> dict:
         ai_branch = db.current_ai_branch()
         if ai_branch == db.AI_BRANCH_TEST or settings.llm_provider == "yandex":
-            model = db.admin_assistant_personality_settings()["test_branch_model"]
+            model_settings = db.admin_assistant_personality_settings()
+            model = model_settings["test_branch_model"]
+            fallback_model = model_settings["test_branch_fallback_model"]
             try:
                 return self._yandex_request(payload, model=model)
             except LLMProviderError as primary_error:
-                if not model.startswith("deepseek"):
-                    raise
                 print(
                     f"[llm] yandex {model}: no answer, falling back to "
-                    f"{self.qwen_fallback_model}: {primary_error}",
+                    f"{fallback_model}: {primary_error}",
                     flush=True,
                 )
                 try:
-                    return self._yandex_request(payload, model=self.qwen_fallback_model)
+                    return self._yandex_request(payload, model=fallback_model)
                 except LLMProviderError as fallback_error:
                     raise LLMProviderError(
-                        "Yandex AI Studio: DeepSeek не ответил, резервная модель "
-                        f"Qwen 3.6 также недоступна ({fallback_error})"
+                        f"Yandex AI Studio: основная модель {model} не ответила, "
+                        f"резервная модель {fallback_model} также недоступна "
+                        f"({fallback_error})"
                     ) from fallback_error
         if not settings.openai_api_key:
             raise LLMNotConfigured("OPENAI_API_KEY не задан. Создайте .env, добавьте ключ и перезапустите сервер.")

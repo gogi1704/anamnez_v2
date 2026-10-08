@@ -34,6 +34,7 @@ class AssistantPersonalityTests(unittest.TestCase):
         self.assertEqual(item["initiative"], 60)
         self.assertFalse(item["apply_to_all"])
         self.assertEqual(item["test_branch_model"], "deepseek-v4.1-flash")
+        self.assertEqual(item["test_branch_fallback_model"], "qwen3.6-35b-a3b")
 
     def test_custom_personality_is_persisted_and_used_in_prompt(self):
         saved = db.admin_update_assistant_personality_settings({
@@ -48,11 +49,13 @@ class AssistantPersonalityTests(unittest.TestCase):
             "emoji": 30,
             "initiative": 90,
             "test_branch_model": "qwen3.6-35b-a3b",
+            "test_branch_fallback_model": "gpt-oss-120b",
         })
         self.assertEqual(saved["preset"], "custom")
         self.assertTrue(saved["apply_to_all"])
         self.assertEqual(db.admin_assistant_personality_settings()["sociability"], 90)
         self.assertEqual(saved["test_branch_model"], "qwen3.6-35b-a3b")
+        self.assertEqual(saved["test_branch_fallback_model"], "gpt-oss-120b")
 
         prompt = db.assistant_personality_prompt()
         self.assertIn("Формальность 10/100", prompt)
@@ -73,6 +76,11 @@ class AssistantPersonalityTests(unittest.TestCase):
             {"humor": 101},
             {"apply_to_all": "везде"},
             {"test_branch_model": "some-unknown-model"},
+            {"test_branch_fallback_model": "some-unknown-model"},
+            {
+                "test_branch_model": "qwen3.6-35b-a3b",
+                "test_branch_fallback_model": "qwen3.6-35b-a3b",
+            },
         )
         for payload in invalid_payloads:
             with self.subTest(payload=payload), self.assertRaises(ValueError):
@@ -100,6 +108,7 @@ class AssistantPersonalityTests(unittest.TestCase):
         self.assertEqual(item["initiative"], 60)
         self.assertFalse(item["apply_to_all"])
         self.assertEqual(item["test_branch_model"], "deepseek-v4.1-flash")
+        self.assertEqual(item["test_branch_fallback_model"], "qwen3.6-35b-a3b")
 
     def test_personality_prompt_is_enabled_only_for_yandex_test_branch(self):
         service = LLMService()
@@ -172,8 +181,11 @@ class AssistantPersonalityTests(unittest.TestCase):
         self.assertIn('id="personalityForm"', html)
         self.assertIn('id="personalityYandexOnly"', html)
         self.assertIn('id="personalityTestBranchModel"', html)
+        self.assertIn('id="personalityTestBranchFallbackModel"', html)
         self.assertIn("apply_to_all:!$('#personalityYandexOnly').checked", javascript)
         self.assertIn("test_branch_model:$('#personalityTestBranchModel').value", javascript)
+        self.assertIn("test_branch_fallback_model:$('#personalityTestBranchFallbackModel').value", javascript)
+        self.assertIn(".dashboard.show-personality", (project / "static" / "dashboard.css").read_text(encoding="utf-8"))
         self.assertIn("/api/admin/assistant-personality", javascript)
         self.assertIn("schedulePersonalitySave", javascript)
         self.assertGreaterEqual(llm.count("self._assistant_personality_prompt()"), 6)
