@@ -57,7 +57,8 @@ class LLMService:
         return db.assistant_personality_prompt(settings_item)
 
     def _request(self, payload: dict) -> dict:
-        if db.current_ai_branch() == db.AI_BRANCH_TEST:
+        ai_branch = db.current_ai_branch()
+        if ai_branch == db.AI_BRANCH_TEST or settings.llm_provider == "yandex":
             model = db.admin_assistant_personality_settings()["test_branch_model"]
             try:
                 return self._yandex_request(payload, model=model)
@@ -76,8 +77,6 @@ class LLMService:
                         "Yandex AI Studio: DeepSeek не ответил, резервная модель "
                         f"Qwen 3.6 также недоступна ({fallback_error})"
                     ) from fallback_error
-        if settings.llm_provider == "yandex":
-            return self._yandex_request(payload)
         if not settings.openai_api_key:
             raise LLMNotConfigured("OPENAI_API_KEY не задан. Создайте .env, добавьте ключ и перезапустите сервер.")
         request = urllib.request.Request(

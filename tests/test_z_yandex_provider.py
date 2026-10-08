@@ -56,6 +56,9 @@ class YandexProviderTests(unittest.TestCase):
         object.__setattr__(settings, "yandex_folder_id", "b1testfolder")
         object.__setattr__(settings, "yandex_api_key", "test-key")
         object.__setattr__(settings, "yandex_model", "yandexgpt-5.1")
+        db.admin_update_assistant_personality_settings({
+            "test_branch_model": "qwen3.6-35b-a3b",
+        })
 
     def tearDown(self):
         for name, value in self.original.items():
@@ -78,7 +81,7 @@ class YandexProviderTests(unittest.TestCase):
         captured, _ = self.send({"instructions": "Роль.", "input": "Вопрос"}, "ok")
         self.assertEqual(captured["url"], "https://ai.api.cloud.yandex.net/v1/responses")
         self.assertEqual(captured["headers"]["Authorization"], "Api-Key test-key")
-        self.assertEqual(captured["body"]["model"], "gpt://b1testfolder/yandexgpt-5.1")
+        self.assertEqual(captured["body"]["model"], "gpt://b1testfolder/qwen3.6-35b-a3b")
         self.assertIn("Роль.", captured["body"]["input"])
         self.assertIn("Вопрос", captured["body"]["input"])
         self.assertNotIn("reasoning", captured["body"])
@@ -100,10 +103,14 @@ class YandexProviderTests(unittest.TestCase):
         original = settings.yandex_reasoning_effort
         try:
             object.__setattr__(settings, "yandex_reasoning_effort", "none")
-            object.__setattr__(settings, "yandex_model", "deepseek-v4-flash")
+            db.admin_update_assistant_personality_settings({
+                "test_branch_model": "deepseek-v4.1-flash",
+            })
             captured, _ = self.send({"instructions": "x", "input": "y"}, "ok")
             self.assertEqual(captured["body"]["reasoning"], {"effort": "none"})
-            object.__setattr__(settings, "yandex_model", "yandexgpt-5.1")
+            db.admin_update_assistant_personality_settings({
+                "test_branch_model": "qwen3.6-35b-a3b",
+            })
             captured, _ = self.send({"instructions": "x", "input": "y"}, "ok")
             self.assertNotIn("reasoning", captured["body"])
         finally:
@@ -112,7 +119,6 @@ class YandexProviderTests(unittest.TestCase):
     def test_health_passport_uses_the_passport_model_without_reasoning(self):
         original_passport = settings.yandex_passport_model
         try:
-            object.__setattr__(settings, "yandex_model", "deepseek-v4-flash")
             object.__setattr__(settings, "yandex_passport_model", "yandexgpt-5.1")
             payload = {
                 "instructions": "x",
@@ -120,7 +126,7 @@ class YandexProviderTests(unittest.TestCase):
                 "text": {"format": {"type": "json_schema", "name": "health_passport", "schema": {}}},
             }
             captured, _ = self.send(payload, '{"status": "ok"}')
-            self.assertEqual(captured["body"]["model"], "gpt://b1testfolder/yandexgpt-5.1")
+            self.assertEqual(captured["body"]["model"], "gpt://b1testfolder/qwen3.6-35b-a3b")
             self.assertNotIn("reasoning", captured["body"])
         finally:
             object.__setattr__(settings, "yandex_passport_model", original_passport)
@@ -160,8 +166,10 @@ class YandexProviderTests(unittest.TestCase):
             with self.assertRaisesRegex(LLMProviderError, "Yandex AI Studio"):
                 LLMService()._request({"instructions": "x", "input": "y"})
 
-    def test_main_yandex_branch_does_not_use_the_secret_branch_fallback(self):
-        object.__setattr__(settings, "yandex_model", "deepseek-v4.1-flash")
+    def test_global_yandex_mode_uses_deepseek_fallback_when_selected(self):
+        db.admin_update_assistant_personality_settings({
+            "test_branch_model": "deepseek-v4.1-flash",
+        })
         failed = {
             "status": "failed",
             "error": {"message": "503: Service temporarily unavailable"},
@@ -177,8 +185,14 @@ class YandexProviderTests(unittest.TestCase):
             with self.assertRaisesRegex(LLMProviderError, "503"):
                 LLMService()._request({"instructions": "x", "input": "y"})
 
-        self.assertEqual(len(calls), 1)
-        self.assertEqual(calls[0]["model"], "gpt://b1testfolder/deepseek-v4.1-flash")
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(
+            [item["model"] for item in calls],
+            [
+                "gpt://b1testfolder/deepseek-v4.1-flash",
+                "gpt://b1testfolder/qwen3.6-35b-a3b",
+            ],
+        )
 
     def test_missing_credentials_are_reported_clearly(self):
         object.__setattr__(settings, "yandex_api_key", "")
@@ -332,13 +346,16 @@ class AiBranchTests(unittest.TestCase):
             with self.assertRaisesRegex(LLMProviderError, "503: Service temporarily unavailable"):
                 LLMService()._request({"instructions": "x", "input": "y"})
 
-    def test_main_branch_keeps_the_configured_yandex_model(self):
+    def test_global_yandex_mode_uses_the_admin_selected_model(self):
+        db.admin_update_assistant_personality_settings({
+            "test_branch_model": "qwen3.6-35b-a3b",
+        })
         patcher, sent = self.capture([])
         passport_format = {"format": {"type": "json_schema", "name": "health_passport", "schema": {}}}
         with patcher:
             object.__setattr__(settings, "llm_provider", "yandex")
             LLMService()._request({"instructions": "x", "input": "y", "text": passport_format})
-        self.assertEqual(sent[0]["model"], "gpt://b1testfolder/yandexgpt-5.1")
+        self.assertEqual(sent[0]["model"], "gpt://b1testfolder/qwen3.6-35b-a3b")
 
     def test_test_branch_costs_appear_as_a_deepseek_row(self):
         db.apply_ai_branch_link(self.TOKEN)
