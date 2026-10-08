@@ -27,6 +27,27 @@ class LLMService:
     yandex_endpoint = "https://ai.api.cloud.yandex.net/v1/responses"
     qwen_fallback_model = "qwen3.6-35b-a3b"
 
+    _CHECKUP_CONTEXT = re.compile(
+        r"чек[- ]?ап|обследован|анализ|куп|приобр|заказ|оплат|стоим|цен",
+        re.IGNORECASE,
+    )
+    _PASSPORT_CONTEXT = re.compile(r"паспорт\w*\s+здоров|мои\s+данн", re.IGNORECASE)
+    _DEVICE_CONTEXT = re.compile(
+        r"ярлык|рабоч\w*\s+стол|главн\w*\s+экран|установ|iphone|ipad|android|"
+        r"браузер|chrome|safari|edge|устройств",
+        re.IGNORECASE,
+    )
+    _MESSENGER_CONTEXT = re.compile(
+        r"telegram|телеграм|max|макс|мессенджер|привяз|войти|вход|аккаунт|"
+        r"друг\w*\s+устройств|уведомлен|напоминан",
+        re.IGNORECASE,
+    )
+    _BODY_CONTEXT = re.compile(
+        r"карт\w*\s+тел|симптом|бол|онемен|сып|от[её]к|давлен|пульс|"
+        r"голов|груд|живот|спин|сустав|температур|одыш|слабост",
+        re.IGNORECASE,
+    )
+
     @staticmethod
     def _assistant_personality_prompt() -> str:
         """Apply the personality to Yandex or to every branch when explicitly enabled."""
@@ -314,10 +335,20 @@ class LLMService:
         }
 
     @classmethod
-    def runtime_context(cls, history: list[dict], context: dict, conversation: dict, route_decision: dict | None = None) -> str:
-        latest_user_message = next(
-            (message["content"] for message in reversed(history) if message["role"] == "user"), ""
+    def runtime_context(
+        cls, history: list[dict], context: dict, conversation: dict,
+        route_decision: dict | None = None, *, view: str = "full",
+    ) -> str:
+        """Build the smallest safe context for the current model call.
+
+        ``full`` is kept for compatibility and diagnostics. Production routing and
+        answers use focused views so unrelated product data (especially the full
+        check-up catalog) is not paid for on every turn.
+        """
+        latest_user_item = next(
+            (message for message in reversed(history) if message["role"] == "user"), None
         )
+        latest_user_message = latest_user_item["content"] if latest_user_item else ""
         normalized_context = normalize_context(context)
         profile = conversation.get("_profile", {})
         payload = {
@@ -328,47 +359,61 @@ class LLMService:
                 "human_ticket_id": conversation.get("human_ticket_id"),
                 "human_channel": conversation.get("human_channel"),
             },
-            "user_memory": conversation.get("_memories", []),
-            "user_profile": profile,
-            "profile_analysis": cls._profile_analysis(profile),
-            "health_passport": conversation.get("_health_passport", {
-                "status": "not_created",
-                "available_in": "Мои данные → Паспорт здоровья",
-                "overview": "",
-                "questions": [],
-            }),
-            "checkup_catalog": conversation.get("_checkup_catalog", []),
-            "current_device": conversation.get("_device", {
-                "device_type": "other",
-                "operating_system": "Другое",
-                "browser": "Другое",
-            }),
-            "messenger_access": conversation.get("_messenger_access", {
-                "is_anonymous": True,
-                "linked_providers": [],
-                "available_providers": [],
-            }),
-            "active_body_symptoms": conversation.get("_body_symptoms", []),
-            "consultation_progress": conversation.get("_consultation_progress", {
-                "questions_asked": 0,
-                "questions_per_message_limit": 2,
-                "unlimited_dialogue": True,
-                "instruction": (
-                    "Можно продолжать диалог без общего лимита. Задавай не больше "
-                    "1–2 действительно нужных вопросов за реплику."
-                ),
-            }),
             "latest_user_message": latest_user_message,
             "context": normalized_context,
             "dialogue_continuity": cls._dialogue_continuity(history, normalized_context),
             "history": [
                 {"role": message["role"], "agent_id": message.get("agent_id"), "content": message["content"]}
                 for message in history
+                if view == "full" or message is not latest_user_item
             ],
         }
+
+        is_full = view == "full"
+        agent_id = view.split(":", 1)[1] if view.startswith("agent:") else ""
+        is_medical = agent_id not in {"", "manager"}
+        relevant_text = " ".join((latest_user_message, normalized_context.get("current_topic", "")))
+
+        if view == "route":
+            payload["user_profile"] = {
+                key: profile.get(key)
+                for key in ("age", "sex", "pregnancy", "conditions")
+                if profile.get(key) not in (None, "", [], "unknown")
+            }
+        if is_full or view != "route":
+            payload["user_memory"] = conversation.get("_memories", [])
+        if is_full or is_medical or cls._PASSPORT_CONTEXT.search(relevant_text):
+            payload["user_profile"] = profile
+            payload["profile_analysis"] = cls._profile_analysis(profile)
+        if is_full or (view != "route" and cls._PASSPORT_CONTEXT.search(relevant_text)):
+            payload["health_passport"] = conversation.get("_health_passport", {
+                "status": "not_created",
+                "available_in": "Мои данные → Паспорт здоровья",
+                "overview": "",
+                "questions": [],
+            })
+        if is_full or (view != "route" and cls._CHECKUP_CONTEXT.search(relevant_text)):
+            payload["checkup_catalog"] = conversation.get("_checkup_catalog", [])
+        if is_full or (view != "route" and cls._DEVICE_CONTEXT.search(relevant_text)):
+            payload["current_device"] = conversation.get("_device", {
+                "device_type": "other", "operating_system": "Другое", "browser": "Другое",
+            })
+        if is_full or (view != "route" and cls._MESSENGER_CONTEXT.search(relevant_text)):
+            payload["messenger_access"] = conversation.get("_messenger_access", {
+                "is_anonymous": True, "linked_providers": [], "available_providers": [],
+            })
+        if is_full or (is_medical and cls._BODY_CONTEXT.search(relevant_text)):
+            payload["active_body_symptoms"] = conversation.get("_body_symptoms", [])
+        if is_full or is_medical:
+            payload["consultation_progress"] = conversation.get("_consultation_progress", {
+                "questions_asked": 0,
+                "questions_per_message_limit": 2,
+                "unlimited_dialogue": True,
+                "instruction": "Задавай не больше 1–2 действительно нужных вопросов за реплику.",
+            })
         if route_decision:
             payload["route_decision"] = route_decision
-        return json.dumps(payload, ensure_ascii=False, indent=2)
+        return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
 
     @classmethod
     def multimodal_input(cls, runtime_context: str, attachments: list[dict] | None = None):
@@ -388,7 +433,7 @@ class LLMService:
         return [{"role": "user", "content": content}]
 
     def route(self, history: list[dict], context: dict, conversation: dict, attachments: list[dict] | None = None) -> RouteDecision:
-        runtime = self.runtime_context(history, context, conversation)
+        runtime = self.runtime_context(history, context, conversation, view="route")
         response = self._request({
             "model": settings.orchestrator_model,
             "reasoning": {"effort": "low"},
@@ -422,9 +467,12 @@ Input contract: Вход — JSON runtime_context. latest_user_message и histor
         }
         low_detail = agent_id in {"manager", "safety"}
         agent_conversation = {**conversation, "active_agent": agent_id}
-        runtime = self.runtime_context(history, context, agent_conversation, route_payload)
+        runtime = self.runtime_context(
+            history, context, agent_conversation, route_payload, view=f"agent:{agent_id}",
+        )
+        model = settings.orchestrator_model if agent_id == "manager" else settings.specialist_model
         response = self._request({
-            "model": settings.specialist_model,
+            "model": model,
             "reasoning": {"effort": "low" if low_detail else "medium"},
             "instructions": instructions,
             "input": self.multimodal_input(runtime, attachments),

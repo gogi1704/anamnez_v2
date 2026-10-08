@@ -1130,7 +1130,8 @@ class OrchestratorTests(unittest.TestCase):
             db.set_current_chel_id("chel_test_default")
 
     def test_human_offer_keeps_ai_active_until_user_confirms(self):
-        service = ConversationOrchestrator(FakeLLM())
+        fake = FakeLLM()
+        service = ConversationOrchestrator(fake)
         with patch.object(db, "enqueue_manager_notifications") as notify:
             result = service.process(None, "Позовите живого оператора")
 
@@ -1142,6 +1143,7 @@ class OrchestratorTests(unittest.TestCase):
         self.assertEqual(saved["human_status"], "none")
         self.assertIsNone(saved["human_ticket_id"])
         self.assertTrue(saved["ai_enabled"])
+        self.assertEqual(fake.answer_calls, [])
         notify.assert_not_called()
 
     def test_checkup_purchase_connects_manager_without_second_confirmation(self):
@@ -1765,6 +1767,103 @@ class OrchestratorTests(unittest.TestCase):
         )
         self.assertIn("три дня назад", continuity["questions_already_answered"][0])
         self.assertEqual(continuity["questions_still_open"], ["Есть ли одышка?"])
+
+    def test_focused_runtime_context_omits_unrelated_expensive_data(self):
+        history = [
+            {"role": "assistant", "agent_id": "manager", "content": "Чем помочь?"},
+            {"role": "user", "agent_id": None, "content": "У меня болит голова"},
+        ]
+        conversation = {
+            "active_agent": "manager",
+            "_profile": {"age": 42, "sex": "male", "conditions": ["Гипертония"]},
+            "_memories": [{"category": "preference", "content": "Обращаться на ты"}],
+            "_health_passport": {"status": "ready", "overview": "Большой паспорт"},
+            "_checkup_catalog": [
+                {"id": f"checkup-{index}", "name": "Большой каталог", "description": "x" * 500}
+                for index in range(20)
+            ],
+            "_device": {"device_type": "desktop", "browser": "Chrome"},
+            "_messenger_access": {"linked_providers": ["telegram"]},
+        }
+        full = LLMService.runtime_context(history, {}, conversation)
+        route = LLMService.runtime_context(history, {}, conversation, view="route")
+        medical = LLMService.runtime_context(
+            history, {}, conversation, view="agent:neurologist",
+        )
+        route_payload = json.loads(route)
+        medical_payload = json.loads(medical)
+
+        self.assertLess(len(route), len(full) / 3)
+        self.assertLess(len(medical), len(full) / 2)
+        self.assertNotIn("checkup_catalog", route_payload)
+        self.assertNotIn("checkup_catalog", medical_payload)
+        self.assertNotIn("health_passport", medical_payload)
+        self.assertEqual(route_payload["user_profile"]["age"], 42)
+        self.assertEqual(medical_payload["user_profile"]["conditions"], ["Гипертония"])
+        self.assertNotIn("У меня болит голова", [item["content"] for item in route_payload["history"]])
+        self.assertEqual(route_payload["latest_user_message"], "У меня болит голова")
+
+    def test_focused_context_adds_product_data_only_when_relevant(self):
+        catalog = [{"id": "heart", "name": "Сердце", "price_rub": 1000}]
+        conversation = {
+            "active_agent": "manager",
+            "_checkup_catalog": catalog,
+            "_messenger_access": {
+                "is_anonymous": False,
+                "linked_providers": ["max"],
+                "available_providers": ["telegram", "max"],
+            },
+        }
+        checkup = json.loads(LLMService.runtime_context(
+            [{"role": "user", "content": "Какой чекап купить?"}],
+            {}, conversation, view="agent:manager",
+        ))
+        checkup_route = json.loads(LLMService.runtime_context(
+            [{"role": "user", "content": "Какой чекап купить?"}],
+            {}, conversation, view="route",
+        ))
+        messenger = json.loads(LLMService.runtime_context(
+            [{"role": "user", "content": "Как привязать мессенджер?"}],
+            {}, conversation, view="agent:manager",
+        ))
+
+        self.assertEqual(checkup["checkup_catalog"], catalog)
+        self.assertNotIn("checkup_catalog", checkup_route)
+        self.assertNotIn("messenger_access", checkup)
+        self.assertEqual(messenger["messenger_access"]["linked_providers"], ["max"])
+        self.assertNotIn("checkup_catalog", messenger)
+
+    def test_manager_uses_economical_model_but_medical_agent_keeps_specialist_model(self):
+        response = {
+            "output": [{
+                "type": "message",
+                "content": [{
+                    "type": "output_text",
+                    "text": json.dumps({
+                        "message": "Готово", "next_action": "respond",
+                        "target_agent": None, "handoff_reason": "",
+                        "urgency": "routine", "missing_information": [],
+                    }),
+                }],
+            }],
+        }
+        service = LLMService()
+        decision = RouteDecision("respond", "manager", "Тест", normalize_context(None))
+        with patch.object(service, "_request", return_value=response) as request:
+            service.answer(
+                "manager", [{"role": "user", "content": "Что умеет сервис?"}],
+                {}, decision, {"active_agent": "manager"},
+            )
+            manager_payload = request.call_args.args[0]
+            service.answer(
+                "therapist", [{"role": "user", "content": "Болит живот"}],
+                {}, RouteDecision("handoff", "therapist", "Тест", normalize_context(None)),
+                {"active_agent": "manager"},
+            )
+            specialist_payload = request.call_args.args[0]
+
+        self.assertEqual(manager_payload["model"], settings.orchestrator_model)
+        self.assertEqual(specialist_payload["model"], settings.specialist_model)
 
     def test_other_person_profile_request_uses_normal_router(self):
         fake = FakeLLM()

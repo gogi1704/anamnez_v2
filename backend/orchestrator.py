@@ -1369,26 +1369,17 @@ class ConversationOrchestrator:
         self, history: list[dict], context: dict, decision: RouteDecision,
         conversation: dict, status: str, ticket_id: str | None, channel: str | None,
     ) -> tuple[None, str]:
-        draft = ""
-        try:
-            manager_conversation = {**conversation, "active_agent": "manager"}
-            draft = self.llm.answer(
-                "manager", history, context, decision, manager_conversation
-            ).message.strip()
-            draft = self._limit_questions(draft, 0)
-        except (LLMNotConfigured, LLMProviderError, ValueError):
-            draft = (
-                "Понимаю — здесь может быть полезен разговор с медицинским "
-                "специалистом. Контекст этой переписки уже подготовлен."
-            )
-
+        # The confirmation dialog is a fixed product action. Generating its preface
+        # with another model call added cost and latency without adding medical value.
+        draft = (
+            "Понимаю — здесь может быть полезен разговор с медицинским "
+            "специалистом. Контекст этой переписки уже подготовлен."
+        )
         choice = (
             "Если хотите, подключу медицинского специалиста к этому чату. "
             "Обращение будет создано только после подтверждения в появившемся окне. "
             "Если специалист сейчас не нужен, оставайтесь в этом диалоге — ИИ продолжит отвечать."
         )
-        if not draft:
-            return None, choice
         return None, f"{draft}\n\n{choice}"
 
     @staticmethod
