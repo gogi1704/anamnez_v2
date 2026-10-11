@@ -56,6 +56,7 @@ const state = {
   weightDiaryEditingId: null,
   weightDiaryEditingDate: '',
   weightBodyMeasurements: null,
+  weightPersonality: null,
   healthPassport: null,
   healthPassportOfferHandled: false,
   healthPassportProgressTimer: null,
@@ -3795,6 +3796,69 @@ function updateWeightControlTools() {
   if (!visible) closeWeightToolsMenu();
 }
 
+function renderWeightPersonality(item = {}) {
+  state.weightPersonality = item;
+  const mode = ['friendly','balanced','strict'].includes(item.personality_mode)
+    ? item.personality_mode : 'balanced';
+  const address = item.address_mode === 'informal' ? 'informal' : 'formal';
+  document.querySelectorAll('input[name="weightPersonalityMode"]').forEach(input => {
+    input.checked = input.value === mode;
+  });
+  document.querySelectorAll('input[name="weightAddressMode"]').forEach(input => {
+    input.checked = input.value === address;
+  });
+  $('#weightPersonalityEmoji').checked = Boolean(item.use_emoji);
+}
+
+async function openWeightPersonality() {
+  if (!state.conversationId || state.conversationType !== 'weight_control') return;
+  $('#weightPersonalityError').classList.add('hidden');
+  $('#weightPersonalitySuccess').classList.add('hidden');
+  $('#weightPersonalityModal').classList.remove('hidden');
+  try {
+    const item = await api(`/api/weight-control/personality?conversation_id=${encodeURIComponent(state.conversationId)}`);
+    renderWeightPersonality(item);
+  } catch (error) {
+    $('#weightPersonalityError').textContent = error.message;
+    $('#weightPersonalityError').classList.remove('hidden');
+  }
+}
+
+function closeWeightPersonality() {
+  $('#weightPersonalityModal').classList.add('hidden');
+}
+
+async function saveWeightPersonality() {
+  if (!state.conversationId || state.conversationType !== 'weight_control') return;
+  const button = $('#saveWeightPersonalityButton');
+  const errorNode = $('#weightPersonalityError');
+  const successNode = $('#weightPersonalitySuccess');
+  errorNode.classList.add('hidden');
+  successNode.classList.add('hidden');
+  button.disabled = true;
+  button.textContent = 'Сохраняем…';
+  try {
+    const item = await api('/api/weight-control/personality', {
+      method:'POST',
+      body:JSON.stringify({
+        conversation_id:state.conversationId,
+        personality_mode:document.querySelector('input[name="weightPersonalityMode"]:checked')?.value || 'balanced',
+        address_mode:document.querySelector('input[name="weightAddressMode"]:checked')?.value || 'formal',
+        use_emoji:$('#weightPersonalityEmoji').checked,
+      }),
+    });
+    renderWeightPersonality(item);
+    successNode.textContent = 'Характер сохранён. Настройки применятся к следующему ответу Ольги.';
+    successNode.classList.remove('hidden');
+  } catch (error) {
+    errorNode.textContent = error.message;
+    errorNode.classList.remove('hidden');
+  } finally {
+    button.disabled = false;
+    button.textContent = 'Сохранить характер';
+  }
+}
+
 function weightDiaryDateLabel(value) {
   const date = new Date(`${value}T12:00:00`);
   return new Intl.DateTimeFormat('ru', {day:'numeric', month:'long'}).format(date);
@@ -6143,6 +6207,7 @@ function closeVisibleModal() {
     case 'profileModal': closeProfileModal(); break;
     case 'labResultsModal': closeLabResults(); break;
     case 'interpretationProfileModal': closeInterpretationProfileModal(); break;
+    case 'weightPersonalityModal': closeWeightPersonality(); break;
     default: layer.classList.add('hidden');
   }
   return true;
@@ -6252,6 +6317,7 @@ $('#menuHealthHistoryButton').addEventListener('click', () => openHealthHistory(
 $('#menuWeightRemindersButton').addEventListener('click', openWeightReminders);
 $('#menuWeightDiaryButton').addEventListener('click', openWeightDiary);
 $('#menuWeightBodyButton').addEventListener('click', openWeightBody);
+$('#menuWeightPersonalityButton').addEventListener('click', openWeightPersonality);
 $('#menuInstallAppButton').addEventListener('click', openInstallApp);
 $('#installAppClose').addEventListener('click', () => closeInstallApp({ dismissed:true }));
 $('#installAppLaterButton').addEventListener('click', () => closeInstallApp({ dismissed:true }));
@@ -6509,6 +6575,11 @@ $('#linkMessengerFromReminder').addEventListener('click', () => {
 $('#weightBodyClose').addEventListener('click', closeWeightBody);
 $('#weightBodyModal').addEventListener('click', event => {
   if (event.target.id === 'weightBodyModal') closeWeightBody();
+});
+$('#weightPersonalityClose').addEventListener('click', closeWeightPersonality);
+$('#saveWeightPersonalityButton').addEventListener('click', saveWeightPersonality);
+$('#weightPersonalityModal').addEventListener('click', event => {
+  if (event.target.id === 'weightPersonalityModal') closeWeightPersonality();
 });
 $('#weightBodyDate').addEventListener('change', event => selectWeightBodyDate(event.target.value));
 $('#weightBodyHistory').addEventListener('click', event => {

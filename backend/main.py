@@ -814,6 +814,14 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                 ))
             except ValueError as exc:
                 return self._json(422, {"detail": str(exc)})
+        if path == "/api/weight-control/personality":
+            query = parse_qs(parsed.query)
+            try:
+                return self._json(200, db.weight_control_personality(
+                    query.get("conversation_id", [""])[0],
+                ))
+            except ValueError as exc:
+                return self._json(422, {"detail": str(exc)})
         if path.startswith("/api/conversations/") and path.endswith("/updates"):
             conversation_id = path.removeprefix("/api/conversations/").removesuffix("/updates").strip("/")
             item = db.get_conversation(conversation_id)
@@ -1583,6 +1591,20 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                 "conversation_id": conversation["id"],
             })
             return self._json(200, conversation)
+        if path == "/api/weight-control/personality":
+            try:
+                payload = self._read_json(max_bytes=2_000)
+                use_emoji = payload.get("use_emoji")
+                if not isinstance(use_emoji, bool):
+                    raise ValueError("Некорректная настройка эмодзи")
+                return self._json(200, db.update_weight_control_personality(
+                    str(payload.get("conversation_id", "")),
+                    personality_mode=str(payload.get("personality_mode", "")),
+                    address_mode=str(payload.get("address_mode", "")),
+                    use_emoji=use_emoji,
+                ))
+            except (ValueError, TypeError, json.JSONDecodeError, UnicodeDecodeError) as exc:
+                return self._json(422, {"detail": str(exc)})
         if path == "/api/weight-control/reminders":
             try:
                 payload = self._read_json(max_bytes=8_000)

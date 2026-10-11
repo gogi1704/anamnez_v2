@@ -19,6 +19,8 @@ _current_chel_id: ContextVar[str] = ContextVar("current_chel_id", default="chel_
 MOSCOW_TZ = timezone(timedelta(hours=3), "Europe/Moscow")
 TEST_COMPANY_INN = "123123"
 WEIGHT_ANALYSIS_MIN_CONFIRMED_MEALS = 20
+WEIGHT_CONTROL_PERSONALITY_MODES = {"friendly", "balanced", "strict"}
+WEIGHT_CONTROL_ADDRESS_MODES = {"formal", "informal"}
 
 
 def normalize_tube_number(value: object) -> str:
@@ -5298,6 +5300,9 @@ def init_db() -> None:
                 conclusion_status TEXT NOT NULL DEFAULT 'idle',
                 conclusion_error TEXT NOT NULL DEFAULT '',
                 conclusion_message_id INTEGER,
+                personality_mode TEXT NOT NULL DEFAULT 'balanced',
+                address_mode TEXT NOT NULL DEFAULT 'formal',
+                use_emoji INTEGER NOT NULL DEFAULT 0,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
                 FOREIGN KEY(conversation_id) REFERENCES conversations(id) ON DELETE CASCADE,
@@ -5908,6 +5913,9 @@ def init_db() -> None:
             ("conclusion_status", "TEXT NOT NULL DEFAULT 'idle'"),
             ("conclusion_error", "TEXT NOT NULL DEFAULT ''"),
             ("conclusion_message_id", "INTEGER"),
+            ("personality_mode", "TEXT NOT NULL DEFAULT 'balanced'"),
+            ("address_mode", "TEXT NOT NULL DEFAULT 'formal'"),
+            ("use_emoji", "INTEGER NOT NULL DEFAULT 0"),
         ):
             if name not in weight_state_columns:
                 conn.execute(
@@ -6902,7 +6910,54 @@ def get_weight_control_state(conversation_id: str) -> dict | None:
             result[key] = json.loads(result[key] or "{}")
         except json.JSONDecodeError:
             result[key] = {}
+    if result.get("personality_mode") not in WEIGHT_CONTROL_PERSONALITY_MODES:
+        result["personality_mode"] = "balanced"
+    if result.get("address_mode") not in WEIGHT_CONTROL_ADDRESS_MODES:
+        result["address_mode"] = "formal"
+    result["use_emoji"] = bool(result.get("use_emoji"))
     return result
+
+
+def weight_control_personality(conversation_id: str) -> dict:
+    """Return the conversation-specific communication style for nutrition chat."""
+    state = get_weight_control_state(conversation_id)
+    if not state:
+        raise ValueError("Диалог «Контроль питания» не найден")
+    return {
+        "conversation_id": conversation_id,
+        "personality_mode": state["personality_mode"],
+        "address_mode": state["address_mode"],
+        "use_emoji": bool(state["use_emoji"]),
+    }
+
+
+def update_weight_control_personality(
+    conversation_id: str, *, personality_mode: str,
+    address_mode: str, use_emoji: bool,
+) -> dict:
+    """Validate and persist style controls scoped to one weight-control chat."""
+    personality_mode = str(personality_mode or "").strip().lower()
+    address_mode = str(address_mode or "").strip().lower()
+    if personality_mode not in WEIGHT_CONTROL_PERSONALITY_MODES:
+        raise ValueError("Выберите характер: дружелюбный, баланс или строгий")
+    if address_mode not in WEIGHT_CONTROL_ADDRESS_MODES:
+        raise ValueError("Выберите обращение на «ты» или на «вы»")
+    if not isinstance(use_emoji, bool):
+        raise ValueError("Некорректная настройка эмодзи")
+    with _write_lock, connection() as conn:
+        cursor = conn.execute(
+            """UPDATE weight_control_states
+               SET personality_mode=?,address_mode=?,use_emoji=?,updated_at=?
+               WHERE conversation_id=? AND chel_id=?""",
+            (
+                personality_mode, address_mode, int(use_emoji), utc_now(),
+                conversation_id, current_chel_id(),
+            ),
+        )
+        if not cursor.rowcount:
+            raise ValueError("Диалог «Контроль питания» не найден")
+        conn.commit()
+    return weight_control_personality(conversation_id)
 
 
 WEIGHT_BODY_MEASUREMENT_LIMITS = {

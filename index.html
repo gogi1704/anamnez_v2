@@ -17,7 +17,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/static/styles.css?v=20261005-control-online-prices-v2">
+  <link rel="stylesheet" href="/static/styles.css?v=20261011-weight-character-v1">
   <link rel="stylesheet" href="/static/rich-text.2bf1f5fab764.css">
 </head>
 <body>
@@ -147,6 +147,7 @@
               <button id="menuWeightDiaryButton" role="menuitem"><i>14</i><span>Контроль веса<small>Дни программы и дневник питания</small></span></button>
               <button id="menuWeightRemindersButton" role="menuitem"><i>⏰</i><span>Время питания<small>Настроить напоминания</small></span></button>
               <button id="menuWeightBodyButton" role="menuitem"><i>↔</i><span>Параметры тела<small>Вес и текущие объёмы</small></span></button>
+              <button id="menuWeightPersonalityButton" role="menuitem"><i>☺</i><span>Характер<small>Стиль общения Ольги</small></span></button>
             </div>
           </div>
           <div class="function-menu-wrap">
@@ -731,6 +732,33 @@
     </div>
   </div>
 
+  <div class="modal-backdrop hidden" id="weightPersonalityModal" role="dialog" aria-modal="true" aria-labelledby="weightPersonalityTitle">
+    <div class="modal weight-personality-modal">
+      <button class="modal-close" id="weightPersonalityClose" type="button" aria-label="Закрыть">×</button>
+      <div class="modal-icon">☺</div>
+      <h2 id="weightPersonalityTitle">Характер Ольги</h2>
+      <p>Настройки применяются только к ответам в этом чате контроля веса.</p>
+
+      <fieldset class="weight-personality-options" id="weightPersonalityModes">
+        <legend>Стиль общения</legend>
+        <label><input type="radio" name="weightPersonalityMode" value="friendly"><span><strong>Дружелюбный</strong><small>Теплее, живее и с лёгкой поддержкой</small></span></label>
+        <label><input type="radio" name="weightPersonalityMode" value="balanced" checked><span><strong>Баланс</strong><small>Доброжелательно, спокойно и по делу</small></span></label>
+        <label><input type="radio" name="weightPersonalityMode" value="strict"><span><strong>Строгий</strong><small>Коротко, прямо и без лишних вводных</small></span></label>
+      </fieldset>
+
+      <fieldset class="weight-personality-options compact" id="weightPersonalityAddresses">
+        <legend>Обращение</legend>
+        <label><input type="radio" name="weightAddressMode" value="informal"><span><strong>На «ты»</strong></span></label>
+        <label><input type="radio" name="weightAddressMode" value="formal" checked><span><strong>На «вы»</strong></span></label>
+      </fieldset>
+
+      <label class="weight-personality-emoji"><input id="weightPersonalityEmoji" type="checkbox"><span><strong>Использовать эмодзи</strong><small>Не более одного уместного эмодзи в ответе</small></span></label>
+      <p class="reminder-error hidden" id="weightPersonalityError" role="alert"></p>
+      <p class="reminder-success hidden" id="weightPersonalitySuccess" role="status"></p>
+      <button class="primary-button weight-personality-save" id="saveWeightPersonalityButton" type="button">Сохранить характер</button>
+    </div>
+  </div>
+
   <div class="modal-backdrop hidden" id="weightDiaryModal" role="dialog" aria-modal="true" aria-labelledby="weightDiaryTitle">
     <div class="modal weight-diary-modal">
       <button class="modal-close" id="weightDiaryClose" type="button" aria-label="Закрыть">×</button>
@@ -756,9 +784,9 @@
     </div>
   </div>
 
-  <script src="/static/metrika.js?v=20261005-control-online-prices-v2"></script>
-  <script src="/static/agents.js?v=20261005-control-online-prices-v2"></script>
+  <script src="/static/metrika.js?v=20261011-weight-character-v1"></script>
+  <script src="/static/agents.js?v=20261011-weight-character-v1"></script>
   <script src="/static/rich-text.js?v=20260929-loose-lists-v1"></script>
-  <script src="/static/app.js?v=20261005-control-online-prices-v2"></script>
+  <script src="/static/app.js?v=20261011-weight-character-v1"></script>
 </body>
 </html>

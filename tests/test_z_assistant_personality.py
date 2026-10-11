@@ -188,7 +188,8 @@ class AssistantPersonalityTests(unittest.TestCase):
         self.assertIn(".dashboard.show-personality", (project / "static" / "dashboard.css").read_text(encoding="utf-8"))
         self.assertIn("/api/admin/assistant-personality", javascript)
         self.assertIn("schedulePersonalitySave", javascript)
-        self.assertGreaterEqual(llm.count("self._assistant_personality_prompt()"), 6)
+        self.assertGreaterEqual(llm.count("self._assistant_personality_prompt()"), 4)
+        self.assertGreaterEqual(llm.count("self._weight_control_personality_prompt(state)"), 2)
         self.assertLess(
             llm.index("self._assistant_personality_prompt()"),
             llm.index("def generate_health_passport"),

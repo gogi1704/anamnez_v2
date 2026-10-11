@@ -635,6 +635,68 @@ class OrchestratorTests(unittest.TestCase):
                 conn.commit()
             db.set_current_chel_id("chel_test_default")
 
+    def test_weight_control_personality_is_scoped_validated_and_used_in_prompt(self):
+        owner_id = "chel_weight_personality_owner"
+        stranger_id = "chel_weight_personality_stranger"
+        db.ensure_user(owner_id)
+        db.ensure_user(stranger_id)
+        db.set_current_chel_id(owner_id)
+        try:
+            conversation = db.create_or_get_weight_control_conversation()
+            self.assertEqual(db.weight_control_personality(conversation["id"]), {
+                "conversation_id": conversation["id"],
+                "personality_mode": "balanced",
+                "address_mode": "formal",
+                "use_emoji": False,
+            })
+
+            updated = db.update_weight_control_personality(
+                conversation["id"], personality_mode="friendly",
+                address_mode="informal", use_emoji=True,
+            )
+            self.assertEqual(updated["personality_mode"], "friendly")
+            self.assertEqual(updated["address_mode"], "informal")
+            self.assertTrue(updated["use_emoji"])
+            state = db.get_weight_control_state(conversation["id"])
+            prompt = LLMService._weight_control_personality_prompt(state)
+            self.assertIn("Дружелюбный", prompt)
+            self.assertIn("на «ты»", prompt)
+            self.assertIn("не более одного", prompt)
+            self.assertIn("приоритет", prompt)
+
+            with self.assertRaisesRegex(ValueError, "Выберите характер"):
+                db.update_weight_control_personality(
+                    conversation["id"], personality_mode="angry",
+                    address_mode="informal", use_emoji=True,
+                )
+            with self.assertRaisesRegex(ValueError, "Выберите обращение"):
+                db.update_weight_control_personality(
+                    conversation["id"], personality_mode="strict",
+                    address_mode="casual", use_emoji=False,
+                )
+            with self.assertRaisesRegex(ValueError, "эмодзи"):
+                db.update_weight_control_personality(
+                    conversation["id"], personality_mode="strict",
+                    address_mode="formal", use_emoji=1,
+                )
+
+            db.set_current_chel_id(stranger_id)
+            with self.assertRaisesRegex(ValueError, "не найден"):
+                db.weight_control_personality(conversation["id"])
+            with self.assertRaisesRegex(ValueError, "не найден"):
+                db.update_weight_control_personality(
+                    conversation["id"], personality_mode="strict",
+                    address_mode="formal", use_emoji=False,
+                )
+        finally:
+            with db.connection() as conn:
+                conn.execute(
+                    "DELETE FROM users WHERE chel_id IN (?,?)",
+                    (owner_id, stranger_id),
+                )
+                conn.commit()
+            db.set_current_chel_id("chel_test_default")
+
     def test_weight_messenger_offer_is_daily_and_can_be_disabled(self):
         chel_id = "chel_weight_daily_messenger_offer"
         db.ensure_user(chel_id)
@@ -3612,6 +3674,14 @@ class OrchestratorTests(unittest.TestCase):
         self.assertIn('id="weightToolsButton"', index)
         self.assertIn('id="menuWeightDiaryButton"', index)
         self.assertIn('id="menuWeightBodyButton"', index)
+        self.assertIn('id="menuWeightPersonalityButton"', index)
+        self.assertIn('id="weightPersonalityModal"', index)
+        self.assertIn('value="friendly"', index)
+        self.assertIn('value="balanced"', index)
+        self.assertIn('value="strict"', index)
+        self.assertIn('value="informal"', index)
+        self.assertIn('value="formal"', index)
+        self.assertIn('id="weightPersonalityEmoji"', index)
         self.assertIn('id="weightBodyModal"', index)
         self.assertIn('id="weightBodyDate"', index)
         self.assertIn('id="weightBodyHistory"', index)
@@ -3622,6 +3692,10 @@ class OrchestratorTests(unittest.TestCase):
         self.assertIn('id="weightDiaryModal"', index)
         self.assertIn("/api/weight-control/diary", app)
         self.assertIn("/api/weight-control/body-measurements", app)
+        self.assertIn("/api/weight-control/personality", app)
+        self.assertIn("function openWeightPersonality()", app)
+        self.assertIn("function saveWeightPersonality()", app)
+        self.assertIn(".weight-personality-modal", styles)
         self.assertIn("function openWeightBody()", app)
         self.assertIn("function renderWeightBodyHistory", app)
         self.assertIn("data-weight-body-open", app)
@@ -4052,14 +4126,14 @@ class OrchestratorTests(unittest.TestCase):
         self.assertIn("controllerchange", script)
         self.assertIn("url.pathname.startsWith('/api/')", worker)
         self.assertIn("url.pathname.startsWith('/auth/')", worker)
-        self.assertIn("consilium-shell-v154", worker)
+        self.assertIn("consilium-shell-v155", worker)
         self.assertIn("fetch(request)", worker)
-        self.assertIn("/static/styles.css?v=20261005-control-online-prices-v2", index)
+        self.assertIn("/static/styles.css?v=20261011-weight-character-v1", index)
         self.assertIn("/static/rich-text.2bf1f5fab764.css", index)
         self.assertTrue((project_root / "static" / "styles.07ffaefb4795.css").is_file())
         self.assertTrue((project_root / "static" / "rich-text.2bf1f5fab764.css").is_file())
-        self.assertIn("/static/app.js?v=20261005-control-online-prices-v2", index)
-        self.assertIn("/static/metrika.js?v=20261005-control-online-prices-v2", index)
+        self.assertIn("/static/app.js?v=20261011-weight-character-v1", index)
+        self.assertIn("/static/metrika.js?v=20261011-weight-character-v1", index)
         self.assertIn("Enter — новая строка · отправка — кнопкой", index)
         self.assertIn('enterkeyhint="enter"', index)
         self.assertNotIn("$('#chatForm').requestSubmit()", script)
@@ -4145,7 +4219,7 @@ class OrchestratorTests(unittest.TestCase):
         main = (project_root / "backend" / "main.py").read_text(encoding="utf-8")
         config = (project_root / "backend" / "config.py").read_text(encoding="utf-8")
 
-        self.assertIn('src="/static/metrika.js?v=20261005-control-online-prices-v2"', index)
+        self.assertIn('src="/static/metrika.js?v=20261011-weight-character-v1"', index)
         self.assertIn('YANDEX_METRIKA_COUNTER_ID', config)
         self.assertIn('path == "/api/public-config"', main)
         self.assertIn('"metrika.js"', main)
