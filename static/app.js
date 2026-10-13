@@ -2821,7 +2821,7 @@ async function leavePaymentResult() {
   try {
     trackOnboardingAction('back', 'payment_result');
     if (source === 'psychology_session') {
-      await openMainApp({skipIntro:true});
+      await openMainApp({skipIntro:true, allowIncompleteOnboarding:true});
       if (state.paymentReviewConversationId) await openConversation(state.paymentReviewConversationId);
       state.paymentReviewSource = '';
       state.paymentReviewOrderId = '';
@@ -3065,7 +3065,7 @@ function renderPsychologySessionPaymentSuccess(order) {
 
 async function finishPsychologySessionPayment(openList = false) {
   const conversationId = state.paymentReviewConversationId;
-  await openMainApp({skipIntro:true});
+  await openMainApp({skipIntro:true, allowIncompleteOnboarding:true});
   if (conversationId) await openConversation(conversationId);
   if (openList) await openPsychologySessions();
   state.paymentReviewSource = '';
@@ -3526,7 +3526,7 @@ $('#onboardingContent').addEventListener('click', async event => {
     state.paymentReviewOrderId = '';
     state.paymentReviewConversationId = '';
     state.paymentReceiptEmail = '';
-    await openMainApp({skipIntro:true});
+    await openMainApp({skipIntro:true, allowIncompleteOnboarding:true});
     if (conversationId) await openConversation(conversationId);
     await openPsychologySessions();
   }
