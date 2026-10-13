@@ -2997,7 +2997,7 @@ function renderPsychologySessionPayment() {
   $('#onboardingContent').innerHTML = `
     <span class="onboarding-kicker">Психологическая поддержка</span>
     <h1>Оплата сессии</h1>
-    <p class="onboarding-lead">После подтверждения оплаты одна сессия появится в вашем балансе. Начать её можно будет первым сообщением в психологическом чате.</p>
+    <p class="onboarding-lead">После подтверждения оплаты одна 30-минутная сессия появится в вашем балансе. Заявку на созвон можно будет оставить в меню психологического чата.</p>
     <section class="consultation-payment-card"><header><strong>1 сессия с психологом</strong><b>2 000 ₽</b></header><p>История сессий и доступный баланс сохраняются в меню психологического чата.</p></section>
     ${emailField}
     <div class="onboarding-actions"><button type="button" class="onboarding-back" data-onboarding-action="cancel-psychology-session-payment">Назад</button><button type="button" class="onboarding-next" data-onboarding-action="pay-psychology-session">Оплатить 2 000 ₽</button></div>`;
@@ -3058,8 +3058,8 @@ function renderPsychologySessionPaymentSuccess(order) {
       <span class="onboarding-kicker">Сессия оплачена</span>
       <h1>Сессия добавлена</h1>
       <p class="onboarding-lead">Оплата 2 000 ₽ подтверждена. Новая сессия доступна в балансе психологического чата.</p>
-      <section class="payment-find-guide"><strong>Как начать</strong><p>Откройте психологический чат и отправьте первое сообщение. Сессия начнётся автоматически.</p></section>
-      <div class="onboarding-actions"><button type="button" class="onboarding-next" data-onboarding-action="open-psychology-session-chat">Открыть чат</button><button type="button" class="onboarding-back" data-onboarding-action="open-psychology-sessions-after-payment">Мои сессии</button></div>
+      <section class="payment-find-guide"><strong>Как оставить заявку</strong><p>Откройте список сессий в психологическом чате и нажмите «Новая сессия». Менеджер свяжется с вами для согласования времени созвона.</p></section>
+      <div class="onboarding-actions"><button type="button" class="onboarding-next" data-onboarding-action="open-psychology-sessions-after-payment">Оставить заявку</button><button type="button" class="onboarding-back" data-onboarding-action="open-psychology-session-chat">Вернуться в чат</button></div>
     </div>`;
 }
 
@@ -3900,17 +3900,6 @@ async function processMessage(text, options = {}) {
     await loadConversationList();
   } catch (error) {
     $('#typing')?.remove();
-    if (error.code === 'psychology_session_required') {
-      userMessageRow.remove();
-      input.value = text;
-      state.attachments = outgoingAttachments;
-      renderAttachments();
-      $('#taskStatus').textContent = 'Нужна новая сессия';
-      await openPsychologySessions();
-      $('#psychologySessionsError').textContent = error.message;
-      $('#psychologySessionsError').classList.remove('hidden');
-      return;
-    }
     markMessageSendError(userMessageRow);
     $('#taskStatus').textContent = 'Ошибка подключения';
   } finally {
@@ -4226,29 +4215,29 @@ function psychologySessionDate(value) {
 
 function renderPsychologySessions(summary = {}) {
   state.psychologySessions = summary;
-  const total = Number(summary.total_started || 0);
   const completed = Number(summary.completed_count || 0);
-  const remainingPaid = Number(summary.remaining_paid || 0);
+  const paid = Number(summary.purchased_count || 0);
   $('#psychologySessionsSummary').innerHTML = `
-    <article><strong>${total}</strong><span>всего начато</span></article>
-    <article><strong>${completed}</strong><span>завершено</span></article>
-    <article><strong>${remainingPaid}</strong><span>оплачено и доступно</span></article>`;
-  const active = summary.active_session;
-  $('#psychologyCurrentSession').classList.toggle('hidden', !active);
-  $('#psychologySessionCompleteConfirm').classList.add('hidden');
-  if (active) {
-    const access = active.access_type === 'free' ? 'Бесплатная' : 'Оплаченная';
-    $('#psychologyCurrentSessionText').textContent = `${access} сессия № ${active.session_number} · начата ${psychologySessionDate(active.started_at)}`;
-  }
-  const sessions = summary.sessions || [];
-  const freeCard = summary.free_available
-    ? '<article class="psychology-session-card available"><i>Подарок</i><div><strong>Первая сессия</strong><span>Бесплатная · начнётся с первого сообщения</span></div><b>Доступна</b></article>' : '';
-  $('#psychologySessionsList').innerHTML = freeCard + (sessions.length ? sessions.map(item => {
-    const activeSession = item.status === 'active';
-    return `<article class="psychology-session-card ${activeSession ? 'active' : ''}">
-      <i>№ ${item.session_number}</i><div><strong>${item.access_type === 'free' ? 'Бесплатная сессия' : 'Оплаченная сессия'}</strong><span>${psychologySessionDate(item.started_at)}</span></div><b>${activeSession ? 'Идёт сейчас' : 'Завершена'}</b>
+    <span>Сессий было <strong>${completed}</strong></span>
+    <span>Оплачено <strong>${paid}</strong></span>`;
+  const sessions = (summary.sessions || []).filter(item => item.status === 'completed');
+  const pending = summary.pending_session;
+  const newSessionSubtitle = pending
+    ? 'Заявка отправлена · менеджер свяжется для согласования времени'
+    : summary.free_available
+      ? 'Первая сессия · 30 минут абсолютно бесплатно'
+      : Number(summary.remaining_paid || 0) > 0
+        ? '30 минут · будет использована оплаченная сессия'
+        : '30 минут · для заявки потребуется купить сессию';
+  const newCard = `<button type="button" class="psychology-session-card psychology-session-new ${pending ? 'requested' : ''}" data-psychology-session-request>
+    <i>＋</i><div><strong>Новая сессия</strong><span>${newSessionSubtitle}</span></div><b>Открыть</b>
+  </button>`;
+  const history = sessions.length ? sessions.map(item => {
+    return `<article class="psychology-session-card">
+      <i>№ ${item.session_number}</i><div><strong>${item.access_type === 'free' ? 'Бесплатная сессия · 30 минут' : 'Сессия с психологом · 30 минут'}</strong><span>${psychologySessionDate(item.completed_at || item.started_at)}</span></div><b>Проведена</b>
     </article>`;
-  }).join('') : (freeCard ? '' : '<div class="psychology-sessions-empty">Сессий пока нет</div>'));
+  }).join('') : '<div class="psychology-sessions-empty">Проведённых сессий пока нет</div>';
+  $('#psychologySessionsList').innerHTML = newCard + history;
   const buyButton = $('#psychologySessionBuyButton');
   const paymentsEnabled = Boolean(state.publicConfig.online_payments_enabled);
   buyButton.disabled = !paymentsEnabled;
@@ -4277,21 +4266,68 @@ async function openPsychologySessions() {
 
 function closePsychologySessions() {
   $('#psychologySessionsModal').classList.add('hidden');
-  $('#psychologySessionCompleteConfirm').classList.add('hidden');
 }
 
-async function completePsychologySession() {
-  const button = $('#psychologySessionCompleteConfirmButton');
+function openPsychologySessionRequest() {
+  const summary = state.psychologySessions || {};
+  const button = $('#psychologySessionRequestConfirm');
+  const pending = summary.pending_session;
+  const canRequest = Boolean(summary.free_available || Number(summary.remaining_paid || 0) > 0);
+  $('#psychologySessionRequestError').classList.add('hidden');
+  if (pending) {
+    $('#psychologySessionRequestTitle').textContent = 'Заявка уже отправлена';
+    $('#psychologySessionRequestText').textContent = 'Менеджер свяжется с вами, чтобы согласовать удобное время 30-минутного созвона с психологом.';
+    button.dataset.mode = 'close';
+    button.textContent = 'Понятно';
+    $('#psychologySessionRequestCancel').classList.add('hidden');
+  } else if (canRequest) {
+    const free = Boolean(summary.free_available);
+    $('#psychologySessionRequestTitle').textContent = 'Оставить заявку на сессию?';
+    $('#psychologySessionRequestText').textContent = free
+      ? 'Первая 30-минутная сессия абсолютно бесплатна. Менеджер свяжется с вами и поможет согласовать удобное время созвона.'
+      : 'Будет использована одна оплаченная сессия. Менеджер свяжется с вами и поможет согласовать удобное время 30-минутного созвона.';
+    button.dataset.mode = 'request';
+    button.textContent = 'Да, оставить заявку';
+    $('#psychologySessionRequestCancel').classList.remove('hidden');
+  } else {
+    $('#psychologySessionRequestTitle').textContent = 'Нужна оплаченная сессия';
+    $('#psychologySessionRequestText').textContent = 'Бесплатная 30-минутная сессия уже использована. Купите следующую сессию за 2 000 ₽, после чего сможете оставить заявку на созвон.';
+    button.dataset.mode = 'purchase';
+    button.textContent = 'Купить за 2 000 ₽';
+    $('#psychologySessionRequestCancel').classList.remove('hidden');
+  }
+  $('#psychologySessionRequestModal').classList.remove('hidden');
+}
+
+function closePsychologySessionRequest() {
+  $('#psychologySessionRequestModal').classList.add('hidden');
+}
+
+async function confirmPsychologySessionRequest() {
+  const button = $('#psychologySessionRequestConfirm');
+  const mode = button.dataset.mode;
+  if (mode === 'close') {
+    closePsychologySessionRequest();
+    return;
+  }
+  if (mode === 'purchase') {
+    closePsychologySessionRequest();
+    beginPsychologySessionPurchase();
+    return;
+  }
   button.disabled = true;
   try {
-    const result = await api('/api/psychology-sessions/complete', {
+    const result = await api('/api/psychology-sessions/request', {
       method:'POST', body:JSON.stringify({conversation_id:state.conversationId}),
     });
-    renderPsychologySessions(result);
-    trackEvent('psychology_session_completed', {completed_count:result.completed_count || 0});
+    renderPsychologySessions(result.summary || {});
+    closePsychologySessionRequest();
+    trackEvent('psychology_session_requested', {
+      access_type:result.session?.access_type || '',
+    });
   } catch (error) {
-    $('#psychologySessionsError').textContent = error.message;
-    $('#psychologySessionsError').classList.remove('hidden');
+    $('#psychologySessionRequestError').textContent = error.message;
+    $('#psychologySessionRequestError').classList.remove('hidden');
   } finally {
     button.disabled = false;
   }
@@ -6713,6 +6749,7 @@ function closeVisibleModal() {
     case 'purchasesModal': closePurchases(); break;
     case 'consultationsModal': closeConsultations(); break;
     case 'psychologySessionsModal': closePsychologySessions(); break;
+    case 'psychologySessionRequestModal': closePsychologySessionRequest(); break;
     case 'bodyMapModal': closeBodyMap(); break;
     case 'healthHistoryModal': closeHealthHistory(); break;
     case 'healthPassportModal': closeHealthPassportModal(); break;
@@ -6855,14 +6892,16 @@ $('#psychologySessionsClose').addEventListener('click', closePsychologySessions)
 $('#psychologySessionsModal').addEventListener('click', event => {
   if (event.target.id === 'psychologySessionsModal') closePsychologySessions();
 });
+$('#psychologySessionsList').addEventListener('click', event => {
+  if (event.target.closest('[data-psychology-session-request]')) openPsychologySessionRequest();
+});
 $('#psychologySessionBuyButton').addEventListener('click', beginPsychologySessionPurchase);
-$('#psychologySessionCompleteButton').addEventListener('click', () => {
-  $('#psychologySessionCompleteConfirm').classList.remove('hidden');
+$('#psychologySessionRequestClose').addEventListener('click', closePsychologySessionRequest);
+$('#psychologySessionRequestCancel').addEventListener('click', closePsychologySessionRequest);
+$('#psychologySessionRequestConfirm').addEventListener('click', confirmPsychologySessionRequest);
+$('#psychologySessionRequestModal').addEventListener('click', event => {
+  if (event.target.id === 'psychologySessionRequestModal') closePsychologySessionRequest();
 });
-$('#psychologySessionCompleteCancel').addEventListener('click', () => {
-  $('#psychologySessionCompleteConfirm').classList.add('hidden');
-});
-$('#psychologySessionCompleteConfirmButton').addEventListener('click', completePsychologySession);
 $('#profileButton').addEventListener('click', openProfile);
 $('#bodyMapButton').addEventListener('click', openBodyMap);
 $('#healthHistoryButton').addEventListener('click', () => openHealthHistory());

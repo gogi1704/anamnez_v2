@@ -109,6 +109,9 @@ button { cursor:pointer; }
 .manager-composer .consultation-instruction-button { padding:7px 10px; border:1px solid #b8d8ca; background:#eff8f3; color:var(--green-dark); font-size:9px; }
 .manager-composer .consultation-instruction-button:hover { border-color:var(--green); background:#e2f3eb; }
 .manager-composer .consultation-instruction-button:disabled { opacity:.55; cursor:wait; }
+.manager-composer .psychology-session-complete-button { padding:7px 10px; border:1px solid #cbb8e7; background:#f5effb; color:#684294; font-size:9px; }
+.manager-composer .psychology-session-complete-button:hover { border-color:#8b63b7; background:#eee3f8; }
+.manager-composer .psychology-session-complete-button:disabled { opacity:.55; cursor:wait; }
 .manager-composer textarea { width:100%; max-height:130px; resize:none; padding:4px; border:0; outline:none; font-size:12px; }
 .manager-composer > div { display:flex; align-items:center; justify-content:space-between; gap:10px; }.manager-composer span { color:var(--muted); font-size:8px; }
 .manager-composer button { padding:9px 15px; border:0; border-radius:10px; background:var(--green); color:white; font-size:10px; font-weight:700; }

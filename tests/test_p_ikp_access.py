@@ -110,19 +110,46 @@ class IkpAccessTests(unittest.TestCase):
             self.assertEqual(initial['total_started'], 0)
             self.assertEqual(initial['remaining_paid'], 0)
 
-            free_session = db.ensure_psychology_session_access(conversation['id'])
+            free_session = db.request_psychology_session(conversation['id'])
             self.assertEqual(free_session['access_type'], 'free')
-            self.assertEqual(free_session['status'], 'active')
+            self.assertEqual(free_session['status'], 'requested')
+            self.assertTrue(free_session['created'])
             self.assertEqual(
-                db.ensure_psychology_session_access(conversation['id'])['id'],
+                db.request_psychology_session(conversation['id'])['id'],
                 free_session['id'],
             )
 
-            completed = db.complete_psychology_session(conversation['id'])
+            manager_detail = db.manager_conversation_detail(conversation['id'], 'manager')
+            self.assertEqual(manager_detail['psychology_session']['id'], free_session['id'])
+            completed_session = db.manager_complete_psychology_session(
+                conversation['id'], 'Тестовый менеджер', 'manager',
+            )
+            self.assertEqual(completed_session['status'], 'completed')
+            self.assertIsNotNone(completed_session['completed_at'])
+            self.assertIsNone(
+                db.manager_conversation_detail(conversation['id'], 'manager')['psychology_session'],
+            )
+            with self.assertRaisesRegex(ValueError, 'Активная заявка'):
+                db.manager_complete_psychology_session(
+                    conversation['id'], 'Тестовый менеджер', 'manager',
+                )
+            self.assertIsNone(
+                db.manager_complete_psychology_session(
+                    conversation['id'], 'Тестовый врач', 'doctor',
+                ),
+            )
+            with db.connection() as connection:
+                action = connection.execute(
+                    """SELECT action FROM manager_actions
+                       WHERE conversation_id=? ORDER BY id DESC LIMIT 1""",
+                    (conversation['id'],),
+                ).fetchone()
+            self.assertEqual(action['action'], 'complete_psychology_session')
+            completed = db.psychology_session_summary(conversation['id'])
             self.assertEqual(completed['completed_count'], 1)
             self.assertFalse(completed['free_available'])
             with self.assertRaisesRegex(ValueError, 'Купите следующую сессию'):
-                db.ensure_psychology_session_access(conversation['id'])
+                db.request_psychology_session(conversation['id'])
 
             order = db.create_psychology_session_payment_order(conversation['id'])
             self.assertEqual(order['order_type'], 'psychology_session')
@@ -139,7 +166,7 @@ class IkpAccessTests(unittest.TestCase):
             paid_balance = db.psychology_session_summary(conversation['id'])
             self.assertEqual(paid_balance['purchased_count'], 1)
             self.assertEqual(paid_balance['remaining_paid'], 1)
-            paid_session = db.ensure_psychology_session_access(conversation['id'])
+            paid_session = db.request_psychology_session(conversation['id'])
             self.assertEqual(paid_session['access_type'], 'paid')
             self.assertEqual(paid_session['session_number'], 2)
             self.assertEqual(

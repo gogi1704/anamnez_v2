@@ -3297,7 +3297,7 @@ def enqueue_manager_notifications(
 ) -> int:
     if event_type not in {
         "new_request", "new_message", "request_cancelled",
-        "weight_program_completed",
+        "weight_program_completed", "psychology_session_requested",
     }:
         raise ValueError("Неизвестный тип уведомления")
     now = utc_now()
@@ -3315,7 +3315,14 @@ def enqueue_manager_notifications(
         recipient_role = _staff_role(recipient_role or conversation["human_recipient_role"])
         manager_url = f"{settings.public_base_url}/manager?conversation={conversation_id}"
         name = conversation["preferred_name"] or f"Пользователь {conversation['chel_id'][-6:]}"
-        if event_type == "weight_program_completed":
+        if event_type == "psychology_session_requested":
+            title = "Новая заявка на сессию с психологом"
+            body = (
+                f"{name} оставил заявку на 30-минутный созвон с психологом. "
+                "Откройте чат, чтобы связаться с пользователем и согласовать время."
+            )
+            preference = "notify_new_requests"
+        elif event_type == "weight_program_completed":
             title = "Завершён марафон контроля питания"
             body = (
                 f"{name} завершил 14-дневный марафон. "
@@ -3370,7 +3377,7 @@ def enqueue_manager_notifications(
             "action_url": manager_url,
             "action_label": (
                 "Открыть чат"
-                if event_type == "weight_program_completed"
+                if event_type in {"weight_program_completed", "psychology_session_requested"}
                 else "Открыть чат пользователя" if recipient_role == "doctor"
                 else "Открыть диалог"
             ),
@@ -3423,13 +3430,14 @@ def claim_manager_notifications(provider: str, limit: int = 20) -> list[dict]:
                 WHERE staff.id = outbox.staff_user_id AND staff.is_active = 1
                   AND staff.role = COALESCE(conversation.human_recipient_role, 'manager')
                   AND (
-                    outbox.event_type IN ('request_cancelled','weight_program_completed')
+                    outbox.event_type IN ('request_cancelled','weight_program_completed','psychology_session_requested')
                     OR COALESCE(conversation.human_status, 'closed') <> 'closed'
                   )
                   AND (
                     (outbox.event_type = 'new_request' AND staff.notify_new_requests = 1)
                     OR (outbox.event_type = 'request_cancelled' AND staff.notify_new_requests = 1)
                     OR (outbox.event_type = 'weight_program_completed' AND staff.notify_new_requests = 1)
+                    OR (outbox.event_type = 'psychology_session_requested' AND staff.notify_new_requests = 1)
                     OR (outbox.event_type = 'new_message' AND staff.notify_new_messages = 1)
                   )
               )
@@ -3780,7 +3788,7 @@ def create_psychology_session_payment_order(conversation_id: str) -> dict:
 
 
 def psychology_session_summary(conversation_id: str) -> dict:
-    """Return session history and the free/paid balance for one psychology chat."""
+    """Return call-session history and the free/paid balance for one psychology chat."""
     conversation = get_conversation(conversation_id)
     if not conversation or conversation.get("dialog_type") != "masterclass_psychology":
         raise ValueError("Чат психологической поддержки не найден")
@@ -3805,14 +3813,14 @@ def psychology_session_summary(conversation_id: str) -> dict:
     paid_used = sum(1 for item in session_items if item["access_type"] == "paid")
     free_used = any(item["access_type"] == "free" for item in session_items)
     completed = sum(1 for item in session_items if item["status"] == "completed")
-    active = next((item for item in session_items if item["status"] == "active"), None)
+    requested = next((item for item in session_items if item["status"] == "requested"), None)
     remaining_paid = max(0, len(purchased) - paid_used)
     return {
         "conversation_id": conversation_id,
         "sessions": session_items,
         "total_started": len(session_items),
         "completed_count": completed,
-        "active_session": active,
+        "pending_session": requested,
         "free_available": not free_used,
         "purchased_count": len(purchased),
         "remaining_paid": remaining_paid,
@@ -3825,8 +3833,8 @@ def psychology_session_summary(conversation_id: str) -> dict:
     }
 
 
-def ensure_psychology_session_access(conversation_id: str) -> dict:
-    """Start a free or paid session on the first message, reusing an active one."""
+def request_psychology_session(conversation_id: str) -> dict:
+    """Create a request for a 30-minute human call, consuming free/paid access once."""
     chel_id = current_chel_id()
     now = utc_now()
     with _write_lock, connection() as conn:
@@ -3837,14 +3845,14 @@ def ensure_psychology_session_access(conversation_id: str) -> dict:
         ).fetchone()
         if not conversation:
             raise ValueError("Чат психологической поддержки не найден")
-        active = conn.execute(
+        pending = conn.execute(
             """SELECT * FROM psychology_sessions
-               WHERE conversation_id=? AND chel_id=? AND status='active'
+               WHERE conversation_id=? AND chel_id=? AND status='requested'
                ORDER BY session_number DESC LIMIT 1""",
             (conversation_id, chel_id),
         ).fetchone()
-        if active:
-            return dict(active)
+        if pending:
+            return {**dict(pending), "created": False}
         free_used = conn.execute(
             """SELECT 1 FROM psychology_sessions
                WHERE conversation_id=? AND chel_id=? AND access_type='free' LIMIT 1""",
@@ -3863,7 +3871,7 @@ def ensure_psychology_session_access(conversation_id: str) -> dict:
                 (chel_id, conversation_id),
             ).fetchone()
             if not paid_order:
-                raise ValueError("Бесплатная сессия завершена. Купите следующую сессию, чтобы продолжить чат")
+                raise ValueError("Бесплатная сессия уже использована. Купите следующую сессию, чтобы оставить заявку")
             access_type = "paid"
             payment_order_id = paid_order["id"]
         number = int(conn.execute(
@@ -3876,7 +3884,7 @@ def ensure_psychology_session_access(conversation_id: str) -> dict:
             """INSERT INTO psychology_sessions
                (id,conversation_id,chel_id,session_number,access_type,payment_order_id,
                 status,started_at,created_at,updated_at)
-               VALUES (?,?,?,?,?,?,'active',?,?,?)""",
+               VALUES (?,?,?,?,?,?,'requested',?,?,?)""",
             (
                 session_id, conversation_id, chel_id, number, access_type,
                 payment_order_id, now, now, now,
@@ -3890,11 +3898,16 @@ def ensure_psychology_session_access(conversation_id: str) -> dict:
             )
         conn.commit()
         row = conn.execute("SELECT * FROM psychology_sessions WHERE id=?", (session_id,)).fetchone()
-    return dict(row)
+    return {**dict(row), "created": True}
+
+
+def ensure_psychology_session_access(conversation_id: str) -> dict:
+    """Backward-compatible alias for explicitly requesting a human session."""
+    return request_psychology_session(conversation_id)
 
 
 def complete_psychology_session(conversation_id: str) -> dict:
-    """Finish the current session so the next message uses the next credit."""
+    """Finish the current session in the user context (legacy internal helper)."""
     chel_id = current_chel_id()
     now = utc_now()
     with _write_lock, connection() as conn:
@@ -3902,12 +3915,12 @@ def complete_psychology_session(conversation_id: str) -> dict:
             """SELECT ps.id FROM psychology_sessions ps
                JOIN conversations c ON c.id=ps.conversation_id
                WHERE ps.conversation_id=? AND ps.chel_id=? AND c.chel_id=?
-                 AND c.dialog_type='masterclass_psychology' AND ps.status='active'
+                 AND c.dialog_type='masterclass_psychology' AND ps.status='requested'
                ORDER BY ps.session_number DESC LIMIT 1""",
             (str(conversation_id or ""), chel_id, chel_id),
         ).fetchone()
         if not row:
-            raise ValueError("Активная сессия не найдена")
+            raise ValueError("Заявка на сессию не найдена")
         conn.execute(
             """UPDATE psychology_sessions SET status='completed',completed_at=?,updated_at=?
                WHERE id=?""",
@@ -3915,6 +3928,57 @@ def complete_psychology_session(conversation_id: str) -> dict:
         )
         conn.commit()
     return psychology_session_summary(conversation_id)
+
+
+def manager_complete_psychology_session(
+    conversation_id: str, manager_name: str, staff_role: str = "manager",
+) -> dict | None:
+    """Mark the latest requested human psychology call as conducted."""
+    manager_name = " ".join(str(manager_name or "").split())[:80] or "Менеджер"
+    staff_role = _staff_role(staff_role)
+    now = utc_now()
+    with _write_lock, connection() as conn:
+        conversation = conn.execute(
+            """SELECT id FROM conversations WHERE id=?
+               AND dialog_type='masterclass_psychology'
+               AND COALESCE(human_recipient_role, 'manager')=?""",
+            (str(conversation_id or ""), staff_role),
+        ).fetchone()
+        if not conversation:
+            return None
+        session = conn.execute(
+            """SELECT * FROM psychology_sessions
+               WHERE conversation_id=? AND status='requested'
+               ORDER BY session_number DESC LIMIT 1""",
+            (conversation_id,),
+        ).fetchone()
+        if not session:
+            raise ValueError("Активная заявка на сессию не найдена")
+        conn.execute(
+            """UPDATE psychology_sessions SET status='completed',completed_at=?,updated_at=?
+               WHERE id=?""",
+            (now, now, session["id"]),
+        )
+        conn.execute(
+            """INSERT INTO manager_actions
+               (conversation_id, manager_name, action, details, created_at)
+               VALUES (?, ?, 'complete_psychology_session', ?, ?)""",
+            (
+                conversation_id,
+                manager_name,
+                json.dumps({
+                    "session_id": session["id"],
+                    "session_number": session["session_number"],
+                    "access_type": session["access_type"],
+                }, ensure_ascii=False),
+                now,
+            ),
+        )
+        conn.commit()
+        completed = conn.execute(
+            "SELECT * FROM psychology_sessions WHERE id=?", (session["id"],),
+        ).fetchone()
+    return dict(completed)
 
 
 def list_paid_consultations(limit: int = 100) -> list[dict]:
@@ -4756,6 +4820,15 @@ def manager_conversation_detail(
             except json.JSONDecodeError:
                 item["details"] = {}
             actions.append(item)
+        psychology_session_row = None
+        if conversation.get("dialog_type") == "masterclass_psychology":
+            psychology_session_row = conn.execute(
+                """SELECT id,session_number,access_type,status,started_at,completed_at
+                   FROM psychology_sessions
+                   WHERE conversation_id=? AND status='requested'
+                   ORDER BY session_number DESC LIMIT 1""",
+                (conversation_id,),
+            ).fetchone()
 
     lab_documents: list[dict] = []
     seen_urls: set[str] = set()
@@ -4781,6 +4854,9 @@ def manager_conversation_detail(
         },
         "identities": identities,
         "manager_actions": actions,
+        "psychology_session": (
+            dict(psychology_session_row) if psychology_session_row else None
+        ),
     }
 
 

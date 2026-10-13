@@ -1318,6 +1318,27 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                     return self._json(200, result)
                 except (ValueError, TypeError, json.JSONDecodeError, UnicodeDecodeError) as exc:
                     return self._json(422, {"detail": str(exc)})
+            if suffix.endswith("/complete-psychology-session"):
+                conversation_id = suffix.removesuffix(
+                    "/complete-psychology-session"
+                ).strip("/")
+                try:
+                    session = db.manager_complete_psychology_session(
+                        conversation_id,
+                        manager["display_name"],
+                        manager.get("role", "manager"),
+                    )
+                    if not session:
+                        return self._json(404, {"detail": "Диалог психолога не найден"})
+                    detail = db.manager_conversation_detail(
+                        conversation_id, manager.get("role", "manager"),
+                    )
+                    return self._json(200, {
+                        "session": session,
+                        "detail": detail,
+                    })
+                except (ValueError, TypeError) as exc:
+                    return self._json(422, {"detail": str(exc)})
             if suffix.endswith("/close"):
                 conversation_id = suffix.removesuffix("/close").strip("/")
                 conversation = db.manager_close_conversation(
@@ -1545,17 +1566,26 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                 return self._json(422, {"detail": str(exc)})
             except yookassa.YooKassaUnavailable as exc:
                 return self._json(503, {"detail": str(exc)})
-        if path == "/api/psychology-sessions/complete":
+        if path == "/api/psychology-sessions/request":
             try:
                 payload = self._read_json(max_bytes=4_000)
-                result = db.complete_psychology_session(
+                session = db.request_psychology_session(
                     str(payload.get("conversation_id") or "").strip(),
                 )
-                self._track_analytics("psychology_session_completed", {
-                    "conversation_id": result.get("conversation_id", ""),
-                    "completed_count": result.get("completed_count", 0),
+                conversation_id = str(payload.get("conversation_id") or "").strip()
+                if session.get("created"):
+                    db.enqueue_manager_notifications(
+                        "psychology_session_requested", conversation_id,
+                        recipient_role="manager", request_kind="psychology_session",
+                    )
+                    self._track_analytics("psychology_session_requested", {
+                        "conversation_id": conversation_id,
+                        "access_type": session.get("access_type", ""),
+                    })
+                return self._json(200, {
+                    "session": session,
+                    "summary": db.psychology_session_summary(conversation_id),
                 })
-                return self._json(200, result)
             except (ValueError, TypeError, json.JSONDecodeError, UnicodeDecodeError) as exc:
                 return self._json(422, {"detail": str(exc)})
         if path.startswith("/api/payments/") and path.endswith("/abandon"):
@@ -2376,14 +2406,6 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                 return self._json(409, {
                     "detail": "Сначала завершите выбор обследований и финальный экран анкеты",
                 })
-            if conversation and conversation.get("dialog_type") == "masterclass_psychology":
-                try:
-                    db.ensure_psychology_session_access(conversation["id"])
-                except ValueError as exc:
-                    return self._json(402, {
-                        "detail": str(exc),
-                        "code": "psychology_session_required",
-                    })
             if not message and not (
                 conversation and conversation.get("dialog_type") == "weight_control"
             ):

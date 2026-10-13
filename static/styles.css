@@ -765,27 +765,12 @@ article.capability-card strong { font-weight:650; }
 .psychology-sessions-heading span { color:#765a9a; font-size:12px; font-weight:800; letter-spacing:.07em; text-transform:uppercase; }
 .psychology-sessions-heading h2 { margin:3px 0 0; }
 .psychology-sessions-lead { margin:16px 0; color:#65736e; line-height:1.55; }
-.psychology-sessions-summary { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:9px; }
-.psychology-sessions-summary article { display:grid; gap:2px; padding:14px; border:1px solid #ddd2ec; border-radius:14px; background:#faf7fd; }
-.psychology-sessions-summary strong { color:#64458c; font-size:24px; line-height:1; }
-.psychology-sessions-summary span { color:#6d7773; font-size:12px; line-height:1.35; }
-.psychology-current-session { display:grid; grid-template-columns:minmax(0,1fr) auto; align-items:center; gap:12px; margin-top:14px; padding:15px; border:1px solid #bfa9da; border-radius:15px; background:#f2ebfa; }
-.psychology-current-session>div:first-child { display:grid; gap:4px; }
-.psychology-current-session span { color:#6e7773; font-size:13px; line-height:1.4; }
-.psychology-current-session>button { min-height:40px; padding:9px 13px; border:1px solid #9e84c1; border-radius:10px; background:#fff; color:#67478f; font:inherit; font-weight:750; cursor:pointer; }
-.psychology-session-complete-confirm { grid-column:1/-1; display:grid; grid-template-columns:1fr auto auto; align-items:center; gap:8px; padding-top:12px; border-top:1px solid #d9cbea; }
-.psychology-session-complete-confirm p { margin:0; color:#665f6d; font-size:13px; line-height:1.45; }
-.psychology-session-complete-confirm button { min-height:38px; padding:8px 12px; border:1px solid #b9a6cf; border-radius:9px; background:#fff; color:#654788; font:inherit; font-weight:700; cursor:pointer; }
-.psychology-session-complete-confirm button:last-child { border-color:#705094; background:#705094; color:#fff; }
 .psychology-sessions-list { display:grid; gap:8px; max-height:260px; margin-top:15px; overflow:auto; }
 .psychology-session-card { display:grid; grid-template-columns:auto minmax(0,1fr) auto; align-items:center; gap:11px; padding:12px 13px; border:1px solid #dbe4df; border-radius:13px; background:#fff; }
 .psychology-session-card>i { display:grid; place-items:center; min-width:54px; min-height:34px; padding:5px 8px; border-radius:10px; background:#eee7f7; color:#67478f; font-size:11px; font-style:normal; font-weight:800; }
 .psychology-session-card>div { display:grid; gap:3px; min-width:0; }
 .psychology-session-card span { color:#74807b; font-size:12px; }
 .psychology-session-card>b { color:#6b7772; font-size:12px; white-space:nowrap; }
-.psychology-session-card.active { border-color:#9f85c0; background:#faf7fd; }
-.psychology-session-card.active>b,.psychology-session-card.available>b { color:#67478f; }
-.psychology-session-card.available { border-style:dashed; border-color:#baa5d2; }
 .psychology-sessions-empty { padding:18px; border:1px dashed #d6dfdb; border-radius:13px; color:#77827d; text-align:center; }
 .psychology-session-product { display:flex; align-items:center; justify-content:space-between; gap:14px; margin-top:15px; padding:16px; border-radius:15px; background:linear-gradient(135deg,#f0e8f9,#faf7fd); }
 .psychology-session-product>div { display:grid; gap:3px; }
@@ -799,14 +784,33 @@ article.capability-card strong { font-weight:650; }
 .psychology-sessions-security span { color:#6f4d98; font-weight:900; }
 @media(max-width:720px) {
   .psychology-sessions-modal { width:calc(100vw - 16px); max-height:calc(var(--app-height,100dvh) - 16px); padding:22px 16px; border-radius:22px; }
-  .psychology-sessions-summary { grid-template-columns:repeat(3,1fr); gap:6px; }
-  .psychology-sessions-summary article { padding:10px 8px; }
-  .psychology-sessions-summary strong { font-size:20px; }
-  .psychology-current-session { grid-template-columns:1fr; }
-  .psychology-current-session>button { width:100%; }
-  .psychology-session-complete-confirm { grid-template-columns:1fr 1fr; }
-  .psychology-session-complete-confirm p { grid-column:1/-1; }
   .psychology-session-card { grid-template-columns:auto minmax(0,1fr); }
   .psychology-session-card>b { grid-column:2; }
   .psychology-session-product { align-items:flex-start; }
+}
+
+/* Human psychology sessions: compact counters, newest request first. */
+.psychology-sessions-summary { display:flex; align-items:center; gap:8px; }
+.psychology-sessions-summary>span { display:inline-flex; align-items:baseline; gap:5px; padding:6px 10px; border:1px solid #e0d5ee; border-radius:999px; background:#faf7fd; color:#716c75; font-size:12px; }
+.psychology-sessions-summary>span strong { color:#68478f; font-size:15px; line-height:1; }
+.psychology-sessions-list-title { margin:17px 0 8px; font-size:16px; }
+.psychology-session-card.psychology-session-new { width:100%; border:1px dashed #a989cc; background:#faf7fd; color:inherit; font:inherit; text-align:left; cursor:pointer; }
+.psychology-session-card.psychology-session-new:hover { border-color:#704d98; background:#f2eafb; transform:translateY(-1px); }
+.psychology-session-card.psychology-session-new>i { background:#704d98; color:#fff; font-size:18px; }
+.psychology-session-card.psychology-session-new>b { color:#67478f; }
+.psychology-session-card.requested { border-color:#d0c0e3; background:#f8f4fc; }
+.psychology-session-card.requested>b { color:#67478f; }
+.psychology-session-request-modal { width:min(510px,calc(100vw - 28px)); text-align:center; }
+.psychology-session-request-icon { display:grid; place-items:center; width:58px; height:58px; margin:0 auto 10px; border-radius:18px; background:#eee6f8; color:#67478f; font-family:Georgia,serif; font-size:29px; font-weight:800; }
+.psychology-session-request-kicker { color:#765a9a; font-size:11px; font-weight:850; letter-spacing:.08em; text-transform:uppercase; }
+.psychology-session-request-modal h2 { margin:7px 0 10px; }
+.psychology-session-request-modal>p:not(.reminder-error) { margin:0; color:#65736e; line-height:1.55; }
+.psychology-session-request-actions { display:grid; grid-template-columns:1fr 1.35fr; gap:9px; margin-top:20px; }
+.psychology-session-request-actions button { min-height:48px; padding:10px 14px; border:1px solid #c7b6dc; border-radius:12px; background:#fff; color:#68478f; font:inherit; font-weight:800; cursor:pointer; }
+.psychology-session-request-actions button:last-child { border-color:#704d98; background:#704d98; color:#fff; }
+@media(max-width:720px) {
+  .psychology-sessions-summary { flex-wrap:wrap; }
+  .psychology-session-request-modal { width:calc(100vw - 20px); padding:24px 17px; border-radius:22px; }
+  .psychology-session-request-actions { grid-template-columns:1fr; }
+  .psychology-session-request-actions button:last-child { grid-row:1; }
 }
