@@ -883,7 +883,7 @@ function renderMasterclassBurnout(entry) {
     <section><h2>Когда пора обратиться к специалисту</h2><ul class="masterclass-check-list"><li>Больше двух недель не становится легче</li><li>Нарушился сон</li><li>Появляются панические атаки</li><li>Пропадает интерес к привычным делам и людям</li><li>Состояние мешает работе, отношениям или повседневным делам</li></ul><p>Это забота о себе, а не слабость.</p></section>
     <section class="masterclass-emergency"><h2>Если вам плохо прямо сейчас</h2><p>Не оставайтесь с этим один на один. Опишите Ольге, что чувствуете, своими словами. Мы поможем понять, что делать дальше.</p>${masterclassChatButton()}<em>Мы поможем. Просто напишите нам.</em></section>
     <section class="masterclass-next-meeting"><i>▣</i><span><b>Следующая встреча</b><small>Дату и время уточняйте у вашего руководства.</small></span></section>
-    <footer><b>ГК «Человек» · Экосистема здоровья</b><span>Позаботьтесь о себе. Это не эгоизм, это необходимость.</span></footer>
+    <footer><b>ГК «Человек» · Экосистема здоровья</b><span>13 лет заботимся о здоровье ваших сотрудников</span><span>Гайд подготовлен для сотрудников <strong>«${escapeHtml(entry.company || 'вашей компании')}»</strong></span></footer>
   </article>`;
   $('#onboarding').scrollTop = 0;
   trackMasterclassScreen('masterclass_burnout');

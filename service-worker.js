@@ -1,5 +1,5 @@
-const CACHE_NAME = 'consilium-shell-v158';
-const ASSET_VERSION = '20261013-masterclass-psychology-v3';
+const CACHE_NAME = 'consilium-shell-v159';
+const ASSET_VERSION = '20261013-masterclass-psychology-v4';
 const APP_SHELL = [
   '/',
   '/manifest.webmanifest',
