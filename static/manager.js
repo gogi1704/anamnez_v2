@@ -425,6 +425,12 @@ function renderHeader() {
     && state.detail.psychology_session?.status === 'requested';
   psychologyComplete.classList.toggle('hidden', !canCompletePsychologySession);
   psychologyComplete.disabled = state.busy;
+  const psychologyPayment = $('#psychologySessionPaymentInstructionButton');
+  const canOfferPsychologySessions = state.manager?.role === 'psychologist'
+    && conversation.dialog_type === 'masterclass_psychology'
+    && conversation.human_status !== 'closed';
+  psychologyPayment.classList.toggle('hidden', !canOfferPsychologySessions);
+  psychologyPayment.disabled = state.busy;
 }
 
 function messageDocuments(metadata) {
@@ -644,6 +650,33 @@ async function completePsychologySession() {
   }
 }
 
+async function sendPsychologySessionPaymentInstruction() {
+  if (!state.selectedId || state.busy) return;
+  if (!window.confirm(
+    'Отправить пользователю инструкцию и кнопку для покупки сессий? Сообщение сразу появится в его психологическом чате.'
+  )) return;
+  const button = $('#psychologySessionPaymentInstructionButton');
+  state.busy = true;
+  button.disabled = true;
+  try {
+    const result = await api(
+      `/api/manager/conversations/${encodeURIComponent(state.selectedId)}/psychology-session-payment-instruction`,
+      {method:'POST', body:'{}'},
+    );
+    state.detail.messages.push(result.message);
+    state.detail.conversation = result.conversation;
+    renderHeader();
+    renderMessages();
+    await loadQueue();
+    toast('Инструкция по покупке сессий отправлена пользователю');
+  } catch (error) {
+    toast(error.message, true);
+  } finally {
+    state.busy = false;
+    button.disabled = false;
+  }
+}
+
 async function closeRequest() {
   if (!state.selectedId || state.busy) return;
   const doctor = state.manager?.role === 'doctor';
@@ -714,6 +747,7 @@ $('#aiEnabled').addEventListener('change', event => setAiMode(event.target.check
 $('#closeRequestButton').addEventListener('click', closeRequest);
 $('#consultationPaymentInstructionButton').addEventListener('click', sendConsultationPaymentInstruction);
 $('#psychologySessionCompleteButton').addEventListener('click', completePsychologySession);
+$('#psychologySessionPaymentInstructionButton').addEventListener('click', sendPsychologySessionPaymentInstruction);
 $('#managerReplyForm').addEventListener('submit', sendReply);
 $('#managerMessages').addEventListener('click', event => {
   const button = event.target.closest('[data-delete-message-id]');

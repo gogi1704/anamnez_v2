@@ -754,7 +754,7 @@ article.capability-card strong { font-weight:650; }
 .masterclass-landing-orbit i { width:12px; height:12px; border-radius:50%; background:#177d5c; box-shadow:18px 0 0 #f1bc54,36px 0 0 #b8dbcc; }
 .masterclass-topics { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:12px; }
 .masterclass-topics article { display:grid; gap:7px; min-width:0; padding:18px; border:1px solid rgba(24,126,92,.15); border-radius:20px; background:rgba(255,255,255,.82); box-shadow:0 12px 30px rgba(36,85,66,.06); }
-.masterclass-topics i { color:#bd8524; font-size:11px; font-style:normal; font-weight:900; letter-spacing:.12em; }
+.masterclass-topics i { display:grid; place-items:center; width:32px; height:32px; border-radius:10px; background:#fff3d7; color:#a96f12; font-size:11px; font-style:normal; font-variant-numeric:tabular-nums; font-weight:900; letter-spacing:.02em; line-height:1; }
 .masterclass-topics strong { color:#173d30; font-size:18px; }
 .masterclass-topics span { color:#6a7d75; font-size:13px; line-height:1.5; }
 .masterclass-invitation { display:grid; gap:5px; max-width:780px; padding:17px 20px; border-left:4px solid #177d5c; border-radius:0 16px 16px 0; background:rgba(255,255,255,.66); }

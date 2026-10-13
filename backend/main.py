@@ -1339,6 +1339,25 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                     })
                 except (ValueError, TypeError) as exc:
                     return self._json(422, {"detail": str(exc)})
+            if suffix.endswith("/psychology-session-payment-instruction"):
+                conversation_id = suffix.removesuffix(
+                    "/psychology-session-payment-instruction"
+                ).strip("/")
+                try:
+                    message = db.manager_send_psychology_session_payment_instruction(
+                        conversation_id,
+                        manager["display_name"],
+                        manager.get("role", "manager"),
+                    )
+                    detail = db.manager_conversation_detail(
+                        conversation_id, manager.get("role", "manager"),
+                    )
+                    return self._json(201, {
+                        "message": message,
+                        "conversation": detail["conversation"],
+                    })
+                except (ValueError, TypeError) as exc:
+                    return self._json(422, {"detail": str(exc)})
             if suffix.endswith("/close"):
                 conversation_id = suffix.removesuffix("/close").strip("/")
                 conversation = db.manager_close_conversation(

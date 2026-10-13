@@ -3818,10 +3818,14 @@ function addMessage(sender, text, agentId = state.active, urgent = false, create
       && !metadata.checkup_purchase_cancelled
     ? '<div class="message-messenger-actions message-checkup-purchase-actions"><button type="button" class="message-messenger-dismiss" data-checkup-purchase-cancel>Отменить заявку менеджеру</button></div>'
     : '';
+  const psychologySessionPaymentAction = sender === 'agent'
+      && metadata.action === 'psychology_session_payment_instruction'
+    ? '<div class="message-messenger-actions message-psychology-session-actions"><button type="button" class="message-checkup-reoffer" data-psychology-sessions-open>Открыть меню сессий</button></div>'
+    : '';
   const userTextMarkup = String(text || '').trim() ? `<p>${escapeHtml(text)}</p>` : '';
   wrapper.innerHTML = sender === 'user'
     ? `<div class="bubble user-bubble">${attachmentMarkup}${userTextMarkup}<span>${time}</span></div><div class="message-send-error hidden" role="status"><span>Ошибка отправки</span><button type="button" data-message-retry>Повторить</button></div>`
-    : `<div class="message-avatar">${humanManager ? (metadata.staff_role === 'doctor' ? 'В' : 'Ч') : agent.initials}</div><div><div class="message-author"><strong>${humanManager ? escapeHtml(metadata.manager_name || humanRole) : agent.name}</strong><span>${humanManager ? humanRole : agent.role}</span>${cached}</div><div class="bubble agent-bubble">${assistantContent}${labDocuments}${reofferAction}${reminderAction}${weightDiaryAction}${messengerLinkAction}${bodyParametersAction}${mealConfirmationAction}${checkupPurchaseCancelAction}<span>${time}</span></div></div>`;
+    : `<div class="message-avatar">${humanManager ? (metadata.staff_role === 'doctor' ? 'В' : metadata.staff_role === 'psychologist' ? 'Ψ' : 'Ч') : agent.initials}</div><div><div class="message-author"><strong>${humanManager ? escapeHtml(metadata.manager_name || humanRole) : agent.name}</strong><span>${humanManager ? humanRole : agent.role}</span>${cached}</div><div class="bubble agent-bubble">${assistantContent}${labDocuments}${reofferAction}${reminderAction}${weightDiaryAction}${messengerLinkAction}${bodyParametersAction}${mealConfirmationAction}${checkupPurchaseCancelAction}${psychologySessionPaymentAction}<span>${time}</span></div></div>`;
   messages.appendChild(wrapper);
   scrollChatToBottom();
   return wrapper;
@@ -7320,6 +7324,12 @@ function handleLabInterpretClick(event) {
   const checkupPurchaseCancelButton = event.target.closest('[data-checkup-purchase-cancel]');
   if (checkupPurchaseCancelButton) {
     cancelCheckupPurchaseRequest(checkupPurchaseCancelButton);
+    return;
+  }
+  const psychologySessionsButton = event.target.closest('[data-psychology-sessions-open]');
+  if (psychologySessionsButton) {
+    openPsychologySessions();
+    trackEvent('psychology_sessions_opened_from_message', {source:'psychologist_instruction'});
     return;
   }
   const weightDiaryButton = event.target.closest('[data-weight-diary-open]');

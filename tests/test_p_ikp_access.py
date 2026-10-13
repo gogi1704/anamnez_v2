@@ -126,6 +126,8 @@ class IkpAccessTests(unittest.TestCase):
         self.assertIn('.masterclass-select-options', styles)
         self.assertIn('.psychology-guide-spotlight', styles)
         self.assertIn('.masterclass-profile-form>.onboarding-next', styles)
+        self.assertIn('font-variant-numeric:tabular-nums', styles)
+        self.assertIn('data-psychology-sessions-open', script)
 
     def test_psychology_session_lifecycle_and_paid_balance(self):
         token = 's' * 43
@@ -185,6 +187,20 @@ class IkpAccessTests(unittest.TestCase):
                 notification['payload']['request_number'], free_session['request_number'],
             )
             self.assertIn(f"Заявка № {free_session['request_number']}", notification['payload']['body'])
+            with self.assertRaisesRegex(ValueError, 'только психолог'):
+                db.manager_send_psychology_session_payment_instruction(
+                    conversation['id'], 'Тестовый менеджер', 'manager',
+                )
+            payment_instruction = db.manager_send_psychology_session_payment_instruction(
+                conversation['id'], 'Тестовый психолог', 'psychologist',
+            )
+            self.assertEqual(
+                payment_instruction['metadata']['action'],
+                'psychology_session_payment_instruction',
+            )
+            self.assertEqual(payment_instruction['metadata']['staff_role'], 'psychologist')
+            self.assertIn('пакет от 1 до 7 сессий', payment_instruction['content'])
+            self.assertIn('«Открыть меню сессий»', payment_instruction['content'])
             completed_session = db.manager_complete_psychology_session(
                 conversation['id'], 'Тестовый психолог', 'psychologist',
             )

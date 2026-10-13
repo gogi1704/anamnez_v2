@@ -5011,7 +5011,10 @@ def manager_add_reply(
         raise ValueError("Ответ должен содержать от 1 до 12000 символов")
     now = utc_now()
     staff_role = _staff_role(staff_role)
-    if message_action not in {"manager_reply", "consultation_payment_instruction"}:
+    if message_action not in {
+        "manager_reply", "consultation_payment_instruction",
+        "psychology_session_payment_instruction",
+    }:
         raise ValueError("Неизвестное действие сообщения")
     metadata = {
         "sender_type": "human_manager",
@@ -5044,8 +5047,7 @@ def manager_add_reply(
             VALUES (?, ?, ?, ?, ?)""",
             (
                 conversation_id, manager_name,
-                "consultation_payment_instruction"
-                if message_action == "consultation_payment_instruction" else "reply",
+                message_action if message_action != "manager_reply" else "reply",
                 json.dumps({"message_id": cursor.lastrowid}), now,
             ),
         )
@@ -5148,6 +5150,36 @@ def manager_send_consultation_payment_instruction(
     return manager_add_reply(
         conversation_id, content, manager_name, "doctor",
         message_action="consultation_payment_instruction",
+    )
+
+
+def manager_send_psychology_session_payment_instruction(
+    conversation_id: str, manager_name: str, staff_role: str = "psychologist",
+) -> dict:
+    """Send package purchase instructions with an interactive sessions-menu action."""
+    if _staff_role(staff_role) != "psychologist":
+        raise ValueError("Инструкцию по оплате сессий может отправить только психолог")
+    with connection() as conn:
+        conversation = conn.execute(
+            """SELECT id FROM conversations
+               WHERE id=? AND dialog_type='masterclass_psychology'
+               AND COALESCE(human_recipient_role, 'manager')='psychologist'""",
+            (conversation_id,),
+        ).fetchone()
+    if not conversation:
+        raise ValueError("Психологический диалог не найден")
+    content = (
+        "Как приобрести дополнительные сессии с психологом:\n\n"
+        "1. Нажмите кнопку «Открыть меню сессий» под этим сообщением.\n"
+        "2. В меню нажмите «Купить».\n"
+        "3. Выберите пакет от 1 до 7 сессий — чем больше пакет, тем ниже цена одной сессии.\n"
+        "4. Укажите электронную почту для чека и завершите оплату через ЮKassa.\n\n"
+        "После подтверждения оплаты сессии сразу появятся в предоплаченном балансе. "
+        "Затем откройте меню ещё раз и оставьте заявку на удобное время созвона."
+    )
+    return manager_add_reply(
+        conversation_id, content, manager_name, "psychologist",
+        message_action="psychology_session_payment_instruction",
     )
 
 
