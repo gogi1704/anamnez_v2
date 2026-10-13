@@ -19,6 +19,7 @@ from urllib.parse import parse_qs, quote, urlparse
 from . import analytics, checkup_reoffers, company_suggestions, database as db, examination_schedule, funnel_monitor, splitter_tracking, weight_reminders
 from .config import BASE_DIR, settings
 from .health_passport import build_health_passport_pdf
+from .masterclass_materials import build_masterclass_practices_pdf
 from .llm import LLMNotConfigured, LLMProviderError
 from .lab_results import LabResultsUnavailable, lookup_lab_results
 from .lab_result_valuation import schedule_estimate as schedule_lab_result_value_estimate
@@ -718,6 +719,19 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
             if not entry:
                 return self._json(404, {"detail": "Ссылка мастер-класса не найдена"})
             return self._json(200, entry)
+        if path == "/api/masterclass-practices/pdf":
+            entry = db.current_masterclass_access()
+            if not entry:
+                return self._json(404, {"detail": "Ссылка мастер-класса не найдена"})
+            try:
+                pdf = build_masterclass_practices_pdf(entry.get("company", ""))
+                return self._bytes(
+                    200, pdf, "application/pdf",
+                    disposition="attachment; filename=masterclass-practices.pdf; filename*=UTF-8''5-%D0%BF%D1%80%D0%B0%D0%BA%D1%82%D0%B8%D0%BA-%D0%B4%D0%BB%D1%8F-%D0%B2%D0%BE%D1%81%D1%81%D1%82%D0%B0%D0%BD%D0%BE%D0%B2%D0%BB%D0%B5%D0%BD%D0%B8%D1%8F.pdf",
+                )
+            except Exception:
+                _record_server_error("Ошибка формирования PDF практик мастер-класса")
+                return self._json(500, {"detail": "Не удалось сформировать PDF. Попробуйте ещё раз"})
         if path == "/api/health-passport/pdf":
             passport = db.get_health_passport()
             if passport.get("status") != "ready":

@@ -1,9 +1,11 @@
 import tempfile
 import unittest
+import io
 from pathlib import Path
 
 from backend import database as db
 from backend.config import settings
+from backend.masterclass_materials import build_masterclass_practices_pdf
 
 
 class IkpAccessTests(unittest.TestCase):
@@ -32,6 +34,20 @@ class IkpAccessTests(unittest.TestCase):
         self.assertEqual(report['summary'], {'links':1,'visits':2,'users':1,'active_users':0})
         self.assertEqual(report['links'][0]['company'], 'ООО Ромашка новое имя')
         self.assertEqual(report['users'][0]['visit_count'], 2)
+
+    def test_masterclass_practices_are_a_real_downloadable_pdf(self):
+        from pypdf import PdfReader
+
+        pdf = build_masterclass_practices_pdf('ООО Ромашка')
+        self.assertTrue(pdf.startswith(b'%PDF-'))
+        self.assertGreater(len(pdf), 20_000)
+        extracted = '\n'.join(
+            page.extract_text() or ''
+            for page in PdfReader(io.BytesIO(pdf)).pages
+        )
+        self.assertIn('5 практик', extracted)
+        self.assertIn('Заземление 5–4–3–2–1', extracted)
+        self.assertIn('ООО Ромашка', extracted)
 
     def test_masterclass_link_tracks_unique_users_and_continuation(self):
         token = 'm' * 43

@@ -870,7 +870,7 @@ function renderMasterclassBurnout(entry) {
           <article><header><i>4</i><span><b>Дневник «выжало / дало»</b><small>Чтобы понять, откуда уходит энергия</small></span></header><ul><li>Каждый вечер выделите 5 минут</li><li>Запишите, что за день вымотало вас больше всего</li><li>Что, наоборот, придало сил и порадовало</li><li>Что вы могли бы сделать по-другому завтра</li></ul><p><b>Почему работает:</b> записи показывают конкретные источники усталости и восстановления, а не оставляют ощущение сплошного тяжёлого дня.</p></article>
           <article><header><i>5</i><span><b>Одно дело</b><small>Для тех, кто всё время в делах</small></span></header><ul><li>Утром выберите одно дело, которое важнее всего</li><li>Не список из 20 дел — одно</li><li>Сделайте его первым, остальное потом</li><li>Вечером отметьте, что получилось</li></ul><p><b>Почему работает:</b> снижает тревогу «я ничего не успеваю» до конкретного «я сделал главное».</p></article>
         </div>
-        <div class="masterclass-practices-save"><b>Сохранить эти практики</b><span>Откройте версию для печати и сохраните её как PDF на телефон или компьютер.</span><button type="button" data-masterclass-action="print-practices">Скачать 5 практик (PDF)</button></div>
+        <div class="masterclass-practices-save"><b>Сохранить эти практики</b><span>Готовый PDF сохранится на телефон или компьютер.</span><button type="button" data-masterclass-action="download-practices">Скачать 5 практик (PDF)</button></div>
       </div>
       <div class="masterclass-next-panel masterclass-specialist-panel" data-masterclass-panel-content="chat" hidden>
         <div class="masterclass-specialist-head"><i>ОП</i><span><b>Ольга поможет разобрать вашу ситуацию</b><small>Задайте вопрос о стрессе, выгорании или самочувствии</small></span></div>
@@ -880,8 +880,10 @@ function renderMasterclassBurnout(entry) {
       </div>
     </section>
     <section><h2>Часть 4. Что рекомендуют психологи</h2><div class="masterclass-do-dont"><article><b>✓ Помогает</b><ul><li>Стабильный сон и час без телефона перед ним</li><li>Посильное движение каждый день</li><li>Честный разговор с человеком, которому доверяете</li><li>Ограничение новостей и соцсетей</li><li>Обращение за помощью, если легче не становится</li></ul></article><article><b>Не помогает</b><ul><li>Требовать от себя «просто собраться»</li><li>Использовать алкоголь для расслабления</li><li>Игнорировать постоянные телесные симптомы</li><li>Сравнивать себя с другими</li><li>Обесценивать собственную усталость</li></ul></article></div></section>
-    <section><h2>Когда пора обратиться к специалисту</h2><ul class="masterclass-check-list"><li>Больше двух недель не становится легче</li><li>Нарушился сон</li><li>Появляются панические атаки</li><li>Пропадает интерес к привычным делам и людям</li><li>Состояние мешает работе, отношениям или повседневным делам</li></ul><p>Это забота о себе, а не слабость.</p>${masterclassChatButton()}</section>
-    <footer><b>Позаботьтесь о себе. Это не эгоизм, это необходимость.</b><span>ГК «Человек» · Экосистема здоровья</span></footer>
+    <section><h2>Когда пора обратиться к специалисту</h2><ul class="masterclass-check-list"><li>Больше двух недель не становится легче</li><li>Нарушился сон</li><li>Появляются панические атаки</li><li>Пропадает интерес к привычным делам и людям</li><li>Состояние мешает работе, отношениям или повседневным делам</li></ul><p>Это забота о себе, а не слабость.</p></section>
+    <section class="masterclass-emergency"><h2>Если вам плохо прямо сейчас</h2><p>Не оставайтесь с этим один на один. Опишите Ольге, что чувствуете, своими словами. Мы поможем понять, что делать дальше.</p>${masterclassChatButton()}<em>Мы поможем. Просто напишите нам.</em></section>
+    <section class="masterclass-next-meeting"><i>▣</i><span><b>Следующая встреча</b><small>Дату и время уточняйте у вашего руководства.</small></span></section>
+    <footer><b>ГК «Человек» · Экосистема здоровья</b><span>Позаботьтесь о себе. Это не эгоизм, это необходимость.</span></footer>
   </article>`;
   $('#onboarding').scrollTop = 0;
   trackMasterclassScreen('masterclass_burnout');
@@ -923,19 +925,14 @@ function toggleMasterclassBurnoutPanel(panelName) {
   });
 }
 
-function printMasterclassPractices() {
-  const practices = document.querySelector('[data-masterclass-panel-content="practices"] .masterclass-practices');
-  if (!practices) return;
-  const printWindow = window.open('', '_blank');
-  if (!printWindow) {
-    showOnboardingError('Браузер заблокировал окно. Разрешите всплывающие окна и попробуйте ещё раз.');
-    return;
-  }
-  printWindow.opener = null;
-  const company = escapeHtml(state.masterclassEntry?.company || 'вашей компании');
-  printWindow.document.write(`<!doctype html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>5 практик для восстановления</title><style>body{margin:0;background:#eef5f1;color:#17231f;font:16px/1.55 Arial,sans-serif}.page{max-width:760px;margin:auto;padding:36px}.head{padding:28px;border-radius:20px;background:#176f57;color:white}.head h1{margin:0 0 8px}.head p{margin:0;color:#d9eee6}.masterclass-practices{display:grid;gap:14px;margin-top:18px}.masterclass-practices article{padding:22px;border:1px solid #d8e7e0;border-radius:18px;background:#fff;break-inside:avoid}.masterclass-practices header{display:flex;gap:12px;align-items:flex-start}.masterclass-practices header i{display:grid;place-items:center;flex:0 0 34px;width:34px;height:34px;border-radius:10px;background:#e5f3ed;color:#176f57;font-style:normal;font-weight:700}.masterclass-practices header span{display:grid}.masterclass-practices small{color:#687a73}.masterclass-practices li{margin:6px 0}.masterclass-practices article>p{padding:12px;border-radius:10px;background:#eef6f2;color:#536860}.print{display:block;width:100%;margin:18px 0;padding:14px;border:0;border-radius:12px;background:#176f57;color:#fff;font:inherit;font-weight:700}@media print{body{background:#fff}.page{padding:0}.print{display:none}}</style></head><body><main class="page"><button class="print" onclick="window.print()">Сохранить как PDF / распечатать</button><div class="head"><h1>5 практик, которые помогают вернуть силы</h1><p>Материал для сотрудников ${company}</p></div>${practices.outerHTML}</main></body></html>`);
-  printWindow.document.close();
-  trackEvent('masterclass_burnout_practices_download_opened', {screen:'masterclass_burnout', context:'masterclass'});
+function downloadMasterclassPractices() {
+  trackEvent('masterclass_burnout_practices_downloaded', {screen:'masterclass_burnout', context:'masterclass'});
+  const link = document.createElement('a');
+  link.href = '/api/masterclass-practices/pdf';
+  link.download = '5-практик-для-восстановления.pdf';
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
 }
 
 async function saveMasterclassProfile(form) {
@@ -1519,6 +1516,27 @@ $('#anonymousWarningClose').addEventListener('click', () => returnFromAnonymousW
 $('#anonymousWarningCancel').addEventListener('click', () => returnFromAnonymousWarning('anonymous_cancel'));
 $('#anonymousWarning').addEventListener('click', event => {
   if (event.target === $('#anonymousWarning')) returnFromAnonymousWarning('anonymous_close');
+});
+function closeMasterclassChatConfirmation() {
+  $('#masterclassChatConfirmation').classList.add('hidden');
+}
+$('#masterclassChatConfirmationClose').addEventListener('click', closeMasterclassChatConfirmation);
+$('#masterclassChatConfirmationCancel').addEventListener('click', closeMasterclassChatConfirmation);
+$('#masterclassChatConfirmation').addEventListener('click', event => {
+  if (event.target === $('#masterclassChatConfirmation')) closeMasterclassChatConfirmation();
+});
+$('#masterclassChatConfirmationConfirm').addEventListener('click', async () => {
+  const button = $('#masterclassChatConfirmationConfirm');
+  button.disabled = true;
+  button.textContent = 'Открываем…';
+  closeMasterclassChatConfirmation();
+  trackMasterclassAction('open_psychology_chat', 'masterclass_burnout');
+  try {
+    await openMasterclassPsychologyChat();
+  } finally {
+    button.disabled = false;
+    button.textContent = 'Перейти в чат';
+  }
 });
 $('#anonymousWarningConfirm').addEventListener('click', async () => {
   try {
@@ -3208,10 +3226,10 @@ $('#onboardingContent').addEventListener('click', async event => {
       trackEvent('anonymous_warning_viewed', {screen:'masterclass_landing',context:'masterclass'});
       $('#anonymousWarning').classList.remove('hidden');
     } else if (masterclassAction === 'open-psychology-chat') {
-      trackMasterclassAction('open_psychology_chat', 'masterclass_burnout');
-      await openMasterclassPsychologyChat();
-    } else if (masterclassAction === 'print-practices') {
-      printMasterclassPractices();
+      trackEvent('masterclass_psychology_chat_confirmation_viewed', {screen:'masterclass_burnout', context:'masterclass'});
+      $('#masterclassChatConfirmation').classList.remove('hidden');
+    } else if (masterclassAction === 'download-practices') {
+      downloadMasterclassPractices();
     }
     return;
   }
