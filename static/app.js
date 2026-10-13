@@ -856,13 +856,29 @@ function renderMasterclassBurnout(entry) {
       <article data-burnout-level="4"><b>9–10 «Да»: истощение</b><p>Вы не ленивый и не слабый — ресурс закончился. Стоит обсудить состояние со специалистом.</p></article>
     </div></section>
     <section><h2>Часть 2. Что происходит с вами</h2><div class="masterclass-stages"><article><i>1</i><b>Тревога</b><p>Сердце частит, мысли скачут, вы постоянно на взводе.</p></article><article><i>2</i><b>Сопротивление</b><p>Вы привыкли жить в напряжении. Силы ещё есть, но восстановление становится хуже.</p></article><article><i>3</i><b>Истощение</b><p>Появляются апатия, безразличие и ощущение, что сил больше нет.</p></article></div></section>
-    <section><h2>Часть 3. Пять практик, которые помогают вернуть силы</h2><div class="masterclass-practices">
-      <details open><summary><i>1</i><span><b>Стоп-кран</b><small>Когда накрывает</small></span></summary><p>Выйдите из комнаты, умойтесь прохладной водой, немного пройдитесь и только затем возвращайтесь к разговору или задаче.</p></details>
-      <details><summary><i>2</i><span><b>Спокойное дыхание</b><small>При тревоге и трудностях с засыпанием</small></span></summary><p>Сделайте несколько спокойных циклов дыхания с более длинным выдохом. Если кружится голова — вернитесь к обычному дыханию.</p></details>
-      <details><summary><i>3</i><span><b>Заземление 5–4–3–2–1</b><small>Чтобы вернуться в «здесь и сейчас»</small></span></summary><p>Назовите 5 вещей, которые видите, 4 звука, 3 телесных ощущения, 2 запаха и 1 вкус.</p></details>
-      <details><summary><i>4</i><span><b>Дневник «выжало / дало»</b><small>Чтобы увидеть источники усталости</small></span></summary><p>Вечером запишите, что сильнее всего вымотало, что придало сил и что завтра можно сделать иначе.</p></details>
-      <details><summary><i>5</i><span><b>Одно главное дело</b><small>Когда задач слишком много</small></span></summary><p>Выберите одно действительно важное дело на день, выполните его первым и вечером отметьте результат.</p></details>
-    </div></section>
+    <section class="masterclass-next-step"><h2>Часть 3. Что дальше?</h2><p class="masterclass-next-step-sub">Выберите, что вам сейчас важнее</p>
+      <div class="masterclass-next-step-buttons">
+        <button type="button" data-masterclass-panel="practices"><i>✓</i><b>Узнать, что поможет</b><span>5 практик, которые можно применить уже сегодня</span></button>
+        <button type="button" data-masterclass-panel="chat"><i>✉</i><b>Получить ответ специалиста</b><span>Специалист ГК «Человек» ответит бесплатно</span></button>
+      </div>
+      <div class="masterclass-next-panel" data-masterclass-panel-content="practices" hidden>
+        <h3>5 практик, которые помогают вернуть силы</h3><p>Это не позитивное мышление. Это конкретные инструменты, которые психологи дают клиентам на первых сессиях.</p>
+        <div class="masterclass-practices">
+          <article><header><i>1</i><span><b>Стоп-кран</b><small>Для момента, когда накрывает</small></span></header><ul><li>Встаньте и выйдите из комнаты</li><li>Умойтесь прохладной водой</li><li>Сделайте 10 медленных приседаний или пройдитесь по лестнице</li><li>Вернитесь и скажите то, что чувствуете, без обвинений</li></ul><p><b>Почему работает:</b> переключает тело, чтобы мозг вышел из режима «бей или беги». Это не слабость, это управление.</p></article>
+          <article><header><i>2</i><span><b>Дыхание 4–7–8</b><small>Для тревоги и бессонницы</small></span></header><ul><li>Вдохните носом на 4 счёта</li><li>Задержите дыхание на 7 счётов</li><li>Выдохните ртом на 8 счётов</li><li>Повторите 4 раза</li></ul><p><b>Почему работает:</b> длинный выдох включает в теле режим покоя. Если закружится голова, вернитесь к обычному дыханию.</p></article>
+          <article><header><i>3</i><span><b>Заземление 5–4–3–2–1</b><small>При панике и тревоге</small></span></header><ul><li>Назовите 5 предметов, которые видите вокруг</li><li>Прислушайтесь и назовите 4 звука</li><li>Почувствуйте 3 прикосновения к телу: одежда, стул, пол</li><li>Вдохните и почувствуйте 2 запаха</li><li>Почувствуйте 1 вкус: глоток воды или чай</li></ul><p><b>Почему работает:</b> вы возвращаетесь из головы в тело и в «здесь и сейчас».</p></article>
+          <article><header><i>4</i><span><b>Дневник «выжало / дало»</b><small>Чтобы понять, откуда уходит энергия</small></span></header><ul><li>Каждый вечер выделите 5 минут</li><li>Запишите, что за день вымотало вас больше всего</li><li>Что, наоборот, придало сил и порадовало</li><li>Что вы могли бы сделать по-другому завтра</li></ul><p><b>Почему работает:</b> записи показывают конкретные источники усталости и восстановления, а не оставляют ощущение сплошного тяжёлого дня.</p></article>
+          <article><header><i>5</i><span><b>Одно дело</b><small>Для тех, кто всё время в делах</small></span></header><ul><li>Утром выберите одно дело, которое важнее всего</li><li>Не список из 20 дел — одно</li><li>Сделайте его первым, остальное потом</li><li>Вечером отметьте, что получилось</li></ul><p><b>Почему работает:</b> снижает тревогу «я ничего не успеваю» до конкретного «я сделал главное».</p></article>
+        </div>
+        <div class="masterclass-practices-save"><b>Сохранить эти практики</b><span>Откройте версию для печати и сохраните её как PDF на телефон или компьютер.</span><button type="button" data-masterclass-action="print-practices">Скачать 5 практик (PDF)</button></div>
+      </div>
+      <div class="masterclass-next-panel masterclass-specialist-panel" data-masterclass-panel-content="chat" hidden>
+        <div class="masterclass-specialist-head"><i>ОП</i><span><b>Ольга поможет разобрать вашу ситуацию</b><small>Задайте вопрос о стрессе, выгорании или самочувствии</small></span></div>
+        <p>Мы поможем понять, что с вами происходит и какой следующий шаг будет полезен.</p>
+        <ul><li>«Как понять, что у меня выгорание, а не просто усталость?»</li><li>«Стоит ли идти к психологу или можно справиться самому?»</li><li>«Почему я постоянно чувствую усталость и раздражение?»</li></ul>
+        <p><small>Ответ бесплатно, без записи и обязательств. Просто напишите свой вопрос.</small></p>${masterclassChatButton()}
+      </div>
+    </section>
     <section><h2>Часть 4. Что рекомендуют психологи</h2><div class="masterclass-do-dont"><article><b>✓ Помогает</b><ul><li>Стабильный сон и час без телефона перед ним</li><li>Посильное движение каждый день</li><li>Честный разговор с человеком, которому доверяете</li><li>Ограничение новостей и соцсетей</li><li>Обращение за помощью, если легче не становится</li></ul></article><article><b>Не помогает</b><ul><li>Требовать от себя «просто собраться»</li><li>Использовать алкоголь для расслабления</li><li>Игнорировать постоянные телесные симптомы</li><li>Сравнивать себя с другими</li><li>Обесценивать собственную усталость</li></ul></article></div></section>
     <section><h2>Когда пора обратиться к специалисту</h2><ul class="masterclass-check-list"><li>Больше двух недель не становится легче</li><li>Нарушился сон</li><li>Появляются панические атаки</li><li>Пропадает интерес к привычным делам и людям</li><li>Состояние мешает работе, отношениям или повседневным делам</li></ul><p>Это забота о себе, а не слабость.</p>${masterclassChatButton()}</section>
     <footer><b>Позаботьтесь о себе. Это не эгоизм, это необходимость.</b><span>ГК «Человек» · Экосистема здоровья</span></footer>
@@ -886,6 +902,40 @@ function updateMasterclassBurnoutResult() {
   result.innerHTML = `<b>${yes} ответов «Да» · ${labels[level]}</b><span>Ниже подсвечена подходящая рекомендация. Это самопроверка, а не диагноз.</span>`;
   document.querySelectorAll('[data-burnout-level]').forEach(card => card.classList.toggle('active', Number(card.dataset.burnoutLevel) === level));
   trackEvent('masterclass_burnout_test_completed', {screen:'masterclass_burnout', context:'masterclass', yes_count:yes, level});
+}
+
+function toggleMasterclassBurnoutPanel(panelName) {
+  const section = document.querySelector('.masterclass-next-step');
+  if (!section) return;
+  const selected = section.querySelector(`[data-masterclass-panel-content="${panelName}"]`);
+  const willOpen = Boolean(selected?.hidden);
+  section.querySelectorAll('[data-masterclass-panel-content]').forEach(panel => { panel.hidden = true; });
+  section.querySelectorAll('[data-masterclass-panel]').forEach(button => {
+    button.classList.toggle('active', willOpen && button.dataset.masterclassPanel === panelName);
+    button.setAttribute('aria-expanded', String(willOpen && button.dataset.masterclassPanel === panelName));
+  });
+  if (selected && willOpen) {
+    selected.hidden = false;
+    selected.scrollIntoView({behavior:'smooth', block:'nearest'});
+  }
+  trackEvent('masterclass_burnout_next_step_selected', {
+    screen:'masterclass_burnout', context:'masterclass', choice:panelName,
+  });
+}
+
+function printMasterclassPractices() {
+  const practices = document.querySelector('[data-masterclass-panel-content="practices"] .masterclass-practices');
+  if (!practices) return;
+  const printWindow = window.open('', '_blank');
+  if (!printWindow) {
+    showOnboardingError('Браузер заблокировал окно. Разрешите всплывающие окна и попробуйте ещё раз.');
+    return;
+  }
+  printWindow.opener = null;
+  const company = escapeHtml(state.masterclassEntry?.company || 'вашей компании');
+  printWindow.document.write(`<!doctype html><html lang="ru"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>5 практик для восстановления</title><style>body{margin:0;background:#eef5f1;color:#17231f;font:16px/1.55 Arial,sans-serif}.page{max-width:760px;margin:auto;padding:36px}.head{padding:28px;border-radius:20px;background:#176f57;color:white}.head h1{margin:0 0 8px}.head p{margin:0;color:#d9eee6}.masterclass-practices{display:grid;gap:14px;margin-top:18px}.masterclass-practices article{padding:22px;border:1px solid #d8e7e0;border-radius:18px;background:#fff;break-inside:avoid}.masterclass-practices header{display:flex;gap:12px;align-items:flex-start}.masterclass-practices header i{display:grid;place-items:center;flex:0 0 34px;width:34px;height:34px;border-radius:10px;background:#e5f3ed;color:#176f57;font-style:normal;font-weight:700}.masterclass-practices header span{display:grid}.masterclass-practices small{color:#687a73}.masterclass-practices li{margin:6px 0}.masterclass-practices article>p{padding:12px;border-radius:10px;background:#eef6f2;color:#536860}.print{display:block;width:100%;margin:18px 0;padding:14px;border:0;border-radius:12px;background:#176f57;color:#fff;font:inherit;font-weight:700}@media print{body{background:#fff}.page{padding:0}.print{display:none}}</style></head><body><main class="page"><button class="print" onclick="window.print()">Сохранить как PDF / распечатать</button><div class="head"><h1>5 практик, которые помогают вернуть силы</h1><p>Материал для сотрудников ${company}</p></div>${practices.outerHTML}</main></body></html>`);
+  printWindow.document.close();
+  trackEvent('masterclass_burnout_practices_download_opened', {screen:'masterclass_burnout', context:'masterclass'});
 }
 
 async function saveMasterclassProfile(form) {
@@ -1478,6 +1528,7 @@ $('#anonymousWarningConfirm').addEventListener('click', async () => {
       method:'POST',
       body:JSON.stringify({ method:'anonymous' }),
     });
+    $('#anonymousWarning').classList.add('hidden');
     localStorage.setItem(ANONYMOUS_ACCESS_KEY, registration.chel_id || state.identity?.chel_id || '');
     if (state.masterclassAnonymousPending && isMasterclassEntryUrl()) {
       state.masterclassAnonymousPending = false;
@@ -3142,6 +3193,11 @@ async function openMainApp({ skipIntro = false, allowIncompleteOnboarding = fals
 }
 
 $('#onboardingContent').addEventListener('click', async event => {
+  const masterclassPanel = event.target.closest('[data-masterclass-panel]')?.dataset.masterclassPanel;
+  if (masterclassPanel) {
+    toggleMasterclassBurnoutPanel(masterclassPanel);
+    return;
+  }
   const masterclassAction = event.target.closest('[data-masterclass-action]')?.dataset.masterclassAction;
   if (masterclassAction) {
     if (['telegram','max','continue-account'].includes(masterclassAction)) {
@@ -3154,6 +3210,8 @@ $('#onboardingContent').addEventListener('click', async event => {
     } else if (masterclassAction === 'open-psychology-chat') {
       trackMasterclassAction('open_psychology_chat', 'masterclass_burnout');
       await openMasterclassPsychologyChat();
+    } else if (masterclassAction === 'print-practices') {
+      printMasterclassPractices();
     }
     return;
   }
