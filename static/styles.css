@@ -342,6 +342,44 @@ button { color: inherit; }
   .composer { margin-bottom:max(5px,env(safe-area-inset-bottom)); }
 }
 
+/* Master-class questionnaire: custom controls match the Consilium visual language. */
+.masterclass-profile-form label { transition:border-color .18s ease,box-shadow .18s ease,background .18s ease; }
+.masterclass-profile-form label:focus-within { border-color:#8fc5ae; background:#fff; box-shadow:0 0 0 3px rgba(23,125,92,.09); }
+.masterclass-profile-form input { outline:none; transition:border-color .18s ease,box-shadow .18s ease; }
+.masterclass-profile-form input:focus { border-color:#3c9677; box-shadow:0 0 0 3px rgba(23,125,92,.1); }
+.masterclass-custom-select { position:relative; min-width:0; }
+.masterclass-select-trigger { display:grid; grid-template-columns:minmax(0,1fr) 34px; align-items:center; gap:8px; width:100%; min-height:50px; padding:7px 7px 7px 14px; border:1px solid #c7dcd2; border-radius:13px; background:#fff; color:#74847d; font:inherit; text-align:left; cursor:pointer; transition:border-color .18s ease,box-shadow .18s ease,background .18s ease; }
+.masterclass-select-trigger>span { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.masterclass-select-trigger>i { position:relative; display:grid; place-items:center; width:34px; height:34px; border-radius:10px; background:#edf6f2; }
+.masterclass-select-trigger>i::before,.masterclass-select-trigger>i::after { position:absolute; top:16px; width:8px; height:2px; border-radius:2px; background:#176f57; content:""; transition:transform .18s ease; }
+.masterclass-select-trigger>i::before { left:10px; transform:rotate(45deg); }.masterclass-select-trigger>i::after { right:10px; transform:rotate(-45deg); }
+.masterclass-custom-select.has-value .masterclass-select-trigger { color:var(--ink); }
+.masterclass-custom-select.open .masterclass-select-trigger { border-color:#278b69; box-shadow:0 0 0 3px rgba(23,125,92,.12); }
+.masterclass-custom-select.open .masterclass-select-trigger>i::before { transform:rotate(-45deg); }.masterclass-custom-select.open .masterclass-select-trigger>i::after { transform:rotate(45deg); }
+.masterclass-custom-select.invalid .masterclass-select-trigger { border-color:#c84d45; box-shadow:0 0 0 3px rgba(200,77,69,.1); }
+.masterclass-select-options { position:absolute; z-index:20; top:calc(100% + 7px); left:0; right:0; display:grid; gap:4px; padding:7px; border:1px solid #cfe1d8; border-radius:15px; background:#fff; box-shadow:0 18px 42px rgba(25,65,51,.18); }
+.masterclass-select-options button { display:grid; grid-template-columns:28px minmax(0,1fr); align-items:center; gap:8px; width:100%; min-height:44px; padding:7px 10px; border:0; border-radius:10px; background:transparent; color:#2b443a; font:inherit; text-align:left; cursor:pointer; }
+.masterclass-select-options button:hover,.masterclass-select-options button:focus-visible { outline:0; background:#edf7f2; }
+.masterclass-select-options button>i { display:grid; place-items:center; width:28px; height:28px; border-radius:9px; background:#f0f5f2; color:transparent; font-size:12px; font-style:normal; font-weight:900; }
+.masterclass-select-options button[aria-selected="true"] { background:#e8f5ef; color:#126c50; font-weight:750; }.masterclass-select-options button[aria-selected="true"]>i { background:#176f57; color:#fff; }
+.masterclass-profile-form>.onboarding-next { min-height:56px; border:1px solid #176f57; border-radius:15px; background:linear-gradient(135deg,#1d8262,#176f57); box-shadow:0 10px 24px rgba(23,111,87,.22); color:#fff; font-size:16px; font-weight:800; transition:transform .18s ease,box-shadow .18s ease,background .18s ease; }
+.masterclass-profile-form>.onboarding-next:hover { transform:translateY(-1px); background:linear-gradient(135deg,#228f6c,#126349); box-shadow:0 13px 28px rgba(23,111,87,.27); }.masterclass-profile-form>.onboarding-next:focus-visible { outline:3px solid rgba(23,125,92,.25); outline-offset:3px; }
+
+/* First-open tour for the psychology chat. */
+.psychology-chat-guide { position:fixed; inset:0; z-index:1000; overflow:hidden; cursor:pointer; }
+.psychology-chat-guide.final { background:rgba(19,34,29,.72); backdrop-filter:blur(3px); }
+.psychology-guide-spotlight { position:fixed; z-index:1; border:2px solid rgba(255,255,255,.96); border-radius:15px; box-shadow:0 0 0 9999px rgba(14,29,24,.72),0 0 0 5px rgba(111,201,165,.28); pointer-events:none; transition:all .24s ease; }
+.psychology-guide-arrow { position:fixed; z-index:2; transform:translateX(-50%); color:#fff; font-size:32px; font-weight:900; line-height:1; filter:drop-shadow(0 3px 8px rgba(0,0,0,.28)); pointer-events:none; animation:psychology-guide-arrow 1.1s ease-in-out infinite; }
+.psychology-guide-card { position:fixed; z-index:3; display:grid; gap:10px; padding:20px; border:1px solid rgba(255,255,255,.75); border-radius:20px; background:#fff; box-shadow:0 22px 55px rgba(8,28,20,.3); cursor:default; transition:left .24s ease,top .24s ease; }
+.psychology-guide-progress { width:max-content; padding:5px 9px; border-radius:999px; background:#e7f4ee; color:#176f57; font-size:11px; font-weight:850; letter-spacing:.05em; }
+.psychology-guide-card h2 { margin:0; color:#17231f; font-size:22px; line-height:1.2; }.psychology-guide-card p { margin:0; color:#586b63; font-size:14px; line-height:1.55; }
+.psychology-guide-card>small { color:#87958f; font-size:11px; text-align:center; }
+.psychology-guide-next,.psychology-guide-finish button { min-height:45px; padding:10px 15px; border-radius:12px; font:inherit; font-weight:800; cursor:pointer; }
+.psychology-guide-next { border:0; background:#176f57; color:#fff; }.psychology-guide-next:hover { background:#105c48; }
+.psychology-guide-finish { display:grid; grid-template-columns:1fr 1.25fr; gap:9px; margin-top:4px; }.psychology-guide-finish button:first-child { border:1px solid #aac9bb; background:#f1f7f4; color:#176f57; }.psychology-guide-finish button:last-child { border:1px solid #704aa1; background:#704aa1; color:#fff; }
+@keyframes psychology-guide-arrow { 50% { transform:translate(-50%,5px); } }
+@media(max-width:720px){.masterclass-select-options{position:relative;top:auto;margin-top:7px}.psychology-guide-card{padding:17px;border-radius:17px}.psychology-guide-card h2{font-size:20px}.psychology-guide-finish{grid-template-columns:1fr}.psychology-guide-finish button:last-child{order:-1}}
+
 /* Stable mobile viewport: iOS may move the visual viewport when its keyboard opens. */
 @media (max-width: 720px) {
   /* iOS Safari zooms the whole page when a focused form control is below 16px. */

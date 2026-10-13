@@ -65,6 +65,7 @@ const state = {
   healthPassportCheckupMetric2: false,
   masterclassEntry: null,
   masterclassAnonymousPending: false,
+  psychologyChatGuideStep: -1,
 };
 
 const $ = selector => document.querySelector(selector);
@@ -79,6 +80,7 @@ const SPECIALIST_ANALYSIS_PENDING_KEY = 'consilium_specialist_analysis_pending';
 const REQUESTED_CONVERSATION_KEY = 'consilium_requested_conversation_id';
 const PAYMENT_PENDING_ORDER_KEY = 'consilium_pending_payment_order';
 const RESULT_FLOW_KEY = 'consilium_result_flow_v1';
+const PSYCHOLOGY_CHAT_GUIDE_KEY = 'consilium_psychology_chat_guide_v1';
 const INSTALL_REOFFER_AFTER_MS = 7 * 24 * 60 * 60 * 1000;
 let userAudioContext = null;
 let deferredInstallPrompt = null;
@@ -795,8 +797,34 @@ function masterclassAccessReady() {
   );
 }
 
-function masterclassSelect(value, label, selected) {
-  return `<option value="${value}" ${selected === value ? 'selected' : ''}>${label}</option>`;
+function masterclassDropdown(name, placeholder, options, selected = '') {
+  const current = options.find(item => item.value === selected);
+  return `<div class="masterclass-custom-select ${current ? 'has-value' : ''}" data-masterclass-select>
+    <input type="hidden" name="${name}" value="${escapeAttr(current?.value || '')}">
+    <button type="button" class="masterclass-select-trigger" aria-haspopup="listbox" aria-expanded="false">
+      <span>${escapeHtml(current?.label || placeholder)}</span><i aria-hidden="true"></i>
+    </button>
+    <div class="masterclass-select-options hidden" role="listbox" aria-label="${escapeAttr(placeholder)}">
+      ${options.map(item => `<button type="button" role="option" aria-selected="${String(item.value === current?.value)}" data-masterclass-select-value="${escapeAttr(item.value)}"><i aria-hidden="true">✓</i><span>${escapeHtml(item.label)}</span></button>`).join('')}
+    </div>
+  </div>`;
+}
+
+function closeMasterclassDropdowns(except = null) {
+  document.querySelectorAll('.masterclass-custom-select.open').forEach(select => {
+    if (select === except) return;
+    select.classList.remove('open');
+    select.querySelector('.masterclass-select-trigger')?.setAttribute('aria-expanded', 'false');
+    select.querySelector('.masterclass-select-options')?.classList.add('hidden');
+  });
+}
+
+function toggleMasterclassDropdown(select) {
+  const opening = !select.classList.contains('open');
+  closeMasterclassDropdowns(select);
+  select.classList.toggle('open', opening);
+  select.querySelector('.masterclass-select-trigger')?.setAttribute('aria-expanded', String(opening));
+  select.querySelector('.masterclass-select-options')?.classList.toggle('hidden', !opening);
 }
 
 async function renderMasterclassQuestionnaire(entry) {
@@ -812,10 +840,10 @@ async function renderMasterclassQuestionnaire(entry) {
     <p class="onboarding-lead">Ответы сохранятся в вашем профиле и помогут Ольге учитывать ваш контекст в психологическом чате.</p>
     <form id="masterclassProfileForm" class="masterclass-profile-form">
       <label><b><i>1</i>Как к вам обращаться?</b><input name="preferred_name" maxlength="100" autocomplete="name" required value="${escapeAttr(profile.preferred_name || '')}" placeholder="Например, Алексей"></label>
-      <label><b><i>2</i>Пол</b><select name="sex" required><option value="">Выберите</option>${masterclassSelect('female','Женский',profile.sex)}${masterclassSelect('male','Мужской',profile.sex)}</select></label>
+      <label><b><i>2</i>Пол</b>${masterclassDropdown('sex','Выберите пол',[{value:'female',label:'Женский'},{value:'male',label:'Мужской'}],profile.sex)}</label>
       <label><b><i>3</i>Возраст</b><input name="age" type="number" min="18" max="99" step="1" inputmode="numeric" required value="${escapeAttr(profile.age ?? '')}" placeholder="Полных лет"></label>
       <div class="masterclass-profile-pair"><label><b><i>4</i>Рост, см</b><input name="height_cm" type="number" min="50" max="250" step="0.1" inputmode="decimal" required value="${escapeAttr(profile.height_cm ?? '')}" placeholder="Например, 175"></label><label><b>Вес, кг</b><input name="weight_kg" type="number" min="40" max="250" step="0.1" inputmode="decimal" required value="${escapeAttr(profile.weight_kg ?? '')}" placeholder="Например, 72"></label></div>
-      <div class="masterclass-profile-pair"><label><b><i>5</i>Курение</b><select name="smoking" required><option value="">Выберите</option>${masterclassSelect('never','Не курю',profile.smoking)}${masterclassSelect('former','Курил(а) раньше',profile.smoking)}${masterclassSelect('current','Курю сейчас',profile.smoking)}</select></label><label><b>Алкоголь</b><select name="alcohol" required><option value="">Выберите</option>${masterclassSelect('never','Не употребляю',profile.alcohol)}${masterclassSelect('rarely','Редко / по праздникам',profile.alcohol)}${masterclassSelect('weekly','Примерно раз в неделю',profile.alcohol)}${masterclassSelect('often','Чаще раза в неделю',profile.alcohol)}</select></label></div>
+      <div class="masterclass-profile-pair"><label><b><i>5</i>Курение</b>${masterclassDropdown('smoking','Выберите вариант',[{value:'never',label:'Не курю'},{value:'former',label:'Курил(а) раньше'},{value:'current',label:'Курю сейчас'}],profile.smoking)}</label><label><b>Алкоголь</b>${masterclassDropdown('alcohol','Выберите вариант',[{value:'never',label:'Не употребляю'},{value:'rarely',label:'Редко / по праздникам'},{value:'weekly',label:'Примерно раз в неделю'},{value:'often',label:'Чаще раза в неделю'}],profile.alcohol)}</label></div>
       <p class="reminder-error hidden" id="masterclassProfileError" role="alert"></p>
       <button type="submit" class="onboarding-next">Перейти к материалу →</button>
     </form>
@@ -941,6 +969,16 @@ async function saveMasterclassProfile(form) {
   if (!form.reportValidity()) return;
   const button = form.querySelector('button[type="submit"]');
   const error = $('#masterclassProfileError');
+  const missingSelect = [...form.querySelectorAll('.masterclass-custom-select')]
+    .find(select => !select.querySelector('input[type="hidden"]')?.value);
+  form.querySelectorAll('.masterclass-custom-select.invalid').forEach(select => select.classList.remove('invalid'));
+  if (missingSelect) {
+    missingSelect.classList.add('invalid');
+    error.textContent = 'Выберите вариант во всех выпадающих полях';
+    error.classList.remove('hidden');
+    missingSelect.querySelector('.masterclass-select-trigger')?.focus();
+    return;
+  }
   button.disabled = true;
   error.classList.add('hidden');
   try {
@@ -3374,6 +3412,27 @@ async function openMainApp({ skipIntro = false, allowIncompleteOnboarding = fals
 }
 
 $('#onboardingContent').addEventListener('click', async event => {
+  const selectOption = event.target.closest('[data-masterclass-select-value]');
+  if (selectOption) {
+    const select = selectOption.closest('[data-masterclass-select]');
+    const input = select.querySelector('input[type="hidden"]');
+    input.value = selectOption.dataset.masterclassSelectValue;
+    select.querySelector('.masterclass-select-trigger span').textContent = selectOption.querySelector('span').textContent;
+    select.classList.add('has-value');
+    select.classList.remove('invalid');
+    select.querySelectorAll('[role="option"]').forEach(option => {
+      option.setAttribute('aria-selected', String(option === selectOption));
+    });
+    closeMasterclassDropdowns();
+    input.dispatchEvent(new Event('change', {bubbles:true}));
+    return;
+  }
+  const selectTrigger = event.target.closest('.masterclass-select-trigger');
+  if (selectTrigger) {
+    toggleMasterclassDropdown(selectTrigger.closest('[data-masterclass-select]'));
+    return;
+  }
+  closeMasterclassDropdowns();
   const masterclassPanel = event.target.closest('[data-masterclass-panel]')?.dataset.masterclassPanel;
   if (masterclassPanel) {
     toggleMasterclassBurnoutPanel(masterclassPanel);
@@ -4159,6 +4218,7 @@ async function openConversation(id) {
     await markConversationRead(id);
     await loadConversationList();
     document.body.classList.remove('show-team');
+    maybeOpenPsychologyChatGuide();
   } catch (error) {
     if (id === state.conversationId) {
       state.conversationId = null;
@@ -4241,6 +4301,151 @@ function updateWeightControlTools() {
   $('#weightToolsMenuWrap')?.classList.toggle('hidden', !weightVisible);
   $('#psychologySessionsMenuWrap')?.classList.toggle('hidden', !psychologyVisible);
   if (!weightVisible) closeWeightToolsMenu();
+}
+
+const PSYCHOLOGY_CHAT_GUIDE_SLIDES = [
+  {
+    target:'#psychologySessionsButton',
+    title:'Сессии с психологом',
+    text:'Здесь находится история созвонов, остаток предоплаченных сессий и кнопка новой заявки. Первая 30-минутная сессия бесплатна.',
+  },
+  {
+    target:'#messageInput',
+    title:'Напишите Ольге',
+    text:'Опишите ситуацию своими словами. Ольга поможет разобраться в состоянии, задаст уточняющие вопросы и предложит следующий шаг.',
+  },
+  {
+    target:'#attachButton',
+    title:'Можно приложить файл',
+    text:'Эта кнопка позволяет добавить фотографию или документ к сообщению, если без них трудно объяснить вопрос.',
+  },
+  {
+    target:'#functionMenuButton',
+    title:'Дополнительные функции',
+    text:'В общем меню доступны ваши данные, история, покупки, настройки текста и другие возможности Консилиума.',
+  },
+  {
+    target:() => window.matchMedia('(max-width: 720px)').matches
+      ? '#mobileHeaderDialogsButton' : '#newChatButton',
+    title:'Другие диалоги',
+    text:'Здесь можно открыть историю переписки или перейти в другой чат. Психологический диалог останется сохранённым.',
+  },
+];
+
+function psychologyChatGuideSeen() {
+  try { return localStorage.getItem(PSYCHOLOGY_CHAT_GUIDE_KEY) === '1'; }
+  catch { return false; }
+}
+
+function psychologyGuideTarget(slide) {
+  const selector = typeof slide?.target === 'function' ? slide.target() : slide?.target;
+  const target = selector ? document.querySelector(selector) : null;
+  if (!target || target.getClientRects().length === 0) return null;
+  return target;
+}
+
+function positionPsychologyChatGuide(target) {
+  const spotlight = $('#psychologyGuideSpotlight');
+  const arrow = $('#psychologyGuideArrow');
+  const card = $('#psychologyGuideCard');
+  const rect = target.getBoundingClientRect();
+  const padding = 7;
+  const spotlightLeft = Math.max(4, rect.left - padding);
+  const spotlightWidth = Math.max(1, Math.min(
+    window.innerWidth - spotlightLeft - 4,
+    rect.width + padding * 2,
+  ));
+  spotlight.style.cssText = `left:${spotlightLeft}px;top:${Math.max(4, rect.top - padding)}px;width:${spotlightWidth}px;height:${rect.height + padding * 2}px`;
+  const cardWidth = Math.min(390, window.innerWidth - 28);
+  card.style.width = `${cardWidth}px`;
+  card.style.transform = 'none';
+  card.style.left = '0px';
+  card.style.top = '0px';
+  const cardHeight = card.offsetHeight;
+  const roomBelow = window.innerHeight - rect.bottom;
+  const below = roomBelow >= cardHeight + 42 || rect.top < cardHeight + 42;
+  const top = below
+    ? Math.min(window.innerHeight - cardHeight - 14, rect.bottom + 30)
+    : Math.max(14, rect.top - cardHeight - 30);
+  const left = Math.max(14, Math.min(
+    window.innerWidth - cardWidth - 14,
+    rect.left + rect.width / 2 - cardWidth / 2,
+  ));
+  card.style.left = `${left}px`;
+  card.style.top = `${top}px`;
+  arrow.textContent = below ? '↑' : '↓';
+  arrow.style.left = `${Math.max(20, Math.min(window.innerWidth - 20, rect.left + rect.width / 2))}px`;
+  arrow.style.top = `${below ? rect.bottom + 3 : rect.top - 35}px`;
+}
+
+function renderPsychologyChatGuide() {
+  const guide = $('#psychologyChatGuide');
+  if (!guide || guide.classList.contains('hidden')) return;
+  const step = state.psychologyChatGuideStep;
+  const finalStep = step >= PSYCHOLOGY_CHAT_GUIDE_SLIDES.length;
+  guide.classList.toggle('final', finalStep);
+  $('#psychologyGuideFinish').classList.toggle('hidden', !finalStep);
+  $('#psychologyGuideNext').classList.toggle('hidden', finalStep);
+  $('#psychologyGuideTapHint').classList.toggle('hidden', finalStep);
+  $('#psychologyGuideSpotlight').classList.toggle('hidden', finalStep);
+  $('#psychologyGuideArrow').classList.toggle('hidden', finalStep);
+  if (finalStep) {
+    $('#psychologyGuideProgress').textContent = 'ГОТОВО';
+    $('#psychologyChatGuideTitle').textContent = 'Всё понятно?';
+    $('#psychologyChatGuideText').textContent = 'Обучение завершено. Его можно повторить сейчас или закрыть и начать общение с Ольгой.';
+    $('#psychologyGuideCard').style.cssText = 'left:50%;top:50%;transform:translate(-50%,-50%);width:min(410px,calc(100vw - 28px))';
+    return;
+  }
+  const slide = PSYCHOLOGY_CHAT_GUIDE_SLIDES[step];
+  $('#psychologyGuideProgress').textContent = `${step + 1} из ${PSYCHOLOGY_CHAT_GUIDE_SLIDES.length}`;
+  $('#psychologyChatGuideTitle').textContent = slide.title;
+  $('#psychologyChatGuideText').textContent = slide.text;
+  $('#psychologyGuideNext').textContent = step === PSYCHOLOGY_CHAT_GUIDE_SLIDES.length - 1 ? 'Понятно' : 'Далее';
+  requestAnimationFrame(() => {
+    const target = psychologyGuideTarget(slide);
+    if (target) positionPsychologyChatGuide(target);
+    else {
+      state.psychologyChatGuideStep += 1;
+      renderPsychologyChatGuide();
+    }
+  });
+}
+
+function startPsychologyChatGuide() {
+  state.psychologyChatGuideStep = 0;
+  closeFunctionMenu();
+  closeWeightToolsMenu();
+  document.body.classList.remove('show-team');
+  $('#psychologyChatGuide').classList.remove('hidden');
+  renderPsychologyChatGuide();
+  trackEvent('psychology_chat_guide_started', {screen:'psychology_chat'});
+}
+
+function maybeOpenPsychologyChatGuide() {
+  if (state.conversationType !== 'masterclass_psychology'
+      || psychologyChatGuideSeen()
+      || !$('#psychologyChatGuide').classList.contains('hidden')) return;
+  setTimeout(() => {
+    if (state.conversationType === 'masterclass_psychology'
+        && !psychologyChatGuideSeen()
+        && $('#psychologyChatGuide').classList.contains('hidden')) {
+      startPsychologyChatGuide();
+    }
+  }, 350);
+}
+
+function nextPsychologyChatGuideSlide() {
+  if (state.psychologyChatGuideStep < 0
+      || state.psychologyChatGuideStep >= PSYCHOLOGY_CHAT_GUIDE_SLIDES.length) return;
+  state.psychologyChatGuideStep += 1;
+  renderPsychologyChatGuide();
+}
+
+function closePsychologyChatGuide() {
+  try { localStorage.setItem(PSYCHOLOGY_CHAT_GUIDE_KEY, '1'); } catch {}
+  state.psychologyChatGuideStep = -1;
+  $('#psychologyChatGuide').classList.add('hidden');
+  trackEvent('psychology_chat_guide_completed', {screen:'psychology_chat'});
 }
 
 function psychologySessionDate(value) {
@@ -6958,6 +7163,28 @@ $('#purchasesList').addEventListener('click', handlePurchaseAction);
 $('#consultationsClose').addEventListener('click', closeConsultations);
 $('#consultationsModal').addEventListener('click', event => { if (event.target.id === 'consultationsModal') closeConsultations(); });
 $('#consultationPayButton').addEventListener('click', beginConsultationPurchase);
+$('#psychologyChatGuide').addEventListener('click', event => {
+  if (event.target.closest('#psychologyGuideFinish')) return;
+  if (event.target.closest('#psychologyGuideNext')) return;
+  nextPsychologyChatGuideSlide();
+});
+$('#psychologyGuideNext').addEventListener('click', event => {
+  event.stopPropagation();
+  nextPsychologyChatGuideSlide();
+});
+$('#psychologyGuideRepeat').addEventListener('click', event => {
+  event.stopPropagation();
+  state.psychologyChatGuideStep = 0;
+  renderPsychologyChatGuide();
+  trackEvent('psychology_chat_guide_repeated', {screen:'psychology_chat'});
+});
+$('#psychologyGuideClose').addEventListener('click', event => {
+  event.stopPropagation();
+  closePsychologyChatGuide();
+});
+window.addEventListener('resize', () => {
+  if (!$('#psychologyChatGuide').classList.contains('hidden')) renderPsychologyChatGuide();
+}, {passive:true});
 $('#psychologySessionsButton').addEventListener('click', openPsychologySessions);
 $('#psychologySessionsClose').addEventListener('click', closePsychologySessions);
 $('#psychologySessionsBottomClose').addEventListener('click', closePsychologySessions);
@@ -7294,6 +7521,7 @@ $('#mobileHeaderDialogsButton').addEventListener('click', openMobileSidebar);
 $('#mobileTeamClose').addEventListener('click', closeMobileTeam);
 $('#teamBackdrop').addEventListener('click', closeMobileTeam);
 document.addEventListener('click', event => {
+  if (!event.target.closest('[data-masterclass-select]')) closeMasterclassDropdowns();
   if (!event.target.closest('.new-chat-menu-wrap')) closeNewChatMenu();
   if (!event.target.closest('#functionMenuButton') && !event.target.closest('#functionMenu')) closeFunctionMenu();
   if (!event.target.closest('#weightToolsMenuWrap')) closeWeightToolsMenu();
@@ -7303,6 +7531,14 @@ document.addEventListener('keydown', event => {
   closeNewChatMenu();
   closeWeightToolsMenu();
   closeTopUiLayer();
+});
+document.addEventListener('keydown', event => {
+  if ($('#psychologyChatGuide').classList.contains('hidden')) return;
+  if (event.target.closest('button')) return;
+  if (event.key === 'Enter' || event.key === ' ') {
+    event.preventDefault();
+    nextPsychologyChatGuideSlide();
+  }
 });
 
 async function initMainApp() {

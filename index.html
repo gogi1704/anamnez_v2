@@ -17,7 +17,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/static/styles.css?v=20261013-psychologist-requests-v5">
+  <link rel="stylesheet" href="/static/styles.css?v=20261014-psychology-guide-v6">
   <link rel="stylesheet" href="/static/rich-text.2bf1f5fab764.css">
 </head>
 <body>
@@ -257,6 +257,22 @@
         <div><strong>Безопасный режим</strong><p>При тревожных симптомах система предложит срочную помощь.</p></div>
       </div>
     </aside>
+  </div>
+
+  <div class="psychology-chat-guide hidden" id="psychologyChatGuide" role="dialog" aria-modal="true" aria-live="polite" aria-labelledby="psychologyChatGuideTitle">
+    <div class="psychology-guide-spotlight" id="psychologyGuideSpotlight" aria-hidden="true"></div>
+    <div class="psychology-guide-arrow" id="psychologyGuideArrow" aria-hidden="true">↑</div>
+    <section class="psychology-guide-card" id="psychologyGuideCard">
+      <span class="psychology-guide-progress" id="psychologyGuideProgress"></span>
+      <h2 id="psychologyChatGuideTitle"></h2>
+      <p id="psychologyChatGuideText"></p>
+      <button type="button" class="psychology-guide-next" id="psychologyGuideNext">Далее</button>
+      <div class="psychology-guide-finish hidden" id="psychologyGuideFinish">
+        <button type="button" id="psychologyGuideRepeat">Повторить</button>
+        <button type="button" id="psychologyGuideClose">Закрыть обучение</button>
+      </div>
+      <small id="psychologyGuideTapHint">Можно нажать в любом месте экрана</small>
+    </section>
   </div>
 
   <div class="modal-backdrop hidden" id="purchasesModal" role="dialog" aria-modal="true" aria-labelledby="purchasesTitle">
@@ -853,9 +869,9 @@
     </div>
   </div>
 
-  <script src="/static/metrika.js?v=20261013-psychologist-requests-v5"></script>
-  <script src="/static/agents.js?v=20261013-psychologist-requests-v5"></script>
+  <script src="/static/metrika.js?v=20261014-psychology-guide-v6"></script>
+  <script src="/static/agents.js?v=20261014-psychology-guide-v6"></script>
   <script src="/static/rich-text.js?v=20260929-loose-lists-v1"></script>
-  <script src="/static/app.js?v=20261013-psychologist-requests-v5"></script>
+  <script src="/static/app.js?v=20261014-psychology-guide-v6"></script>
 </body>
 </html>

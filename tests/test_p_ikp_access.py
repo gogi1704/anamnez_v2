@@ -106,6 +106,27 @@ class IkpAccessTests(unittest.TestCase):
         dashboard = (project_root / 'dashboard.html').read_text(encoding='utf-8')
         self.assertIn('<option value="psychologist">Психолог</option>', dashboard)
 
+    def test_masterclass_questionnaire_and_psychology_chat_guide_are_styled(self):
+        project_root = Path(__file__).resolve().parents[1]
+        index = (project_root / 'index.html').read_text(encoding='utf-8')
+        script = (project_root / 'static' / 'app.js').read_text(encoding='utf-8')
+        styles = (project_root / 'static' / 'styles.css').read_text(encoding='utf-8')
+
+        self.assertIn('id="psychologyChatGuide"', index)
+        self.assertIn('id="psychologyGuideRepeat"', index)
+        self.assertIn('id="psychologyGuideClose"', index)
+        self.assertIn('PSYCHOLOGY_CHAT_GUIDE_SLIDES', script)
+        self.assertIn("target:'#psychologySessionsButton'", script)
+        self.assertIn("target:'#messageInput'", script)
+        self.assertIn("target:'#attachButton'", script)
+        self.assertIn("target:'#functionMenuButton'", script)
+        self.assertIn('maybeOpenPsychologyChatGuide();', script)
+        self.assertIn('masterclass-custom-select', script)
+        self.assertNotIn('<select name="smoking"', script)
+        self.assertIn('.masterclass-select-options', styles)
+        self.assertIn('.psychology-guide-spotlight', styles)
+        self.assertIn('.masterclass-profile-form>.onboarding-next', styles)
+
     def test_psychology_session_lifecycle_and_paid_balance(self):
         token = 's' * 43
         chel_id = 'chel_psychology_sessions_0001'
