@@ -91,6 +91,17 @@ class IkpAccessTests(unittest.TestCase):
         self.assertEqual(first_row['company'], 'ООО Ромашка новое имя')
         self.assertEqual((first_row['visit_count'], first_row['users'], first_row['continued_users']), (2, 1, 1))
 
+    def test_psychology_session_package_interface_has_seven_options(self):
+        project_root = Path(__file__).resolve().parents[1]
+        index = (project_root / 'index.html').read_text(encoding='utf-8')
+        script = (project_root / 'static' / 'app.js').read_text(encoding='utf-8')
+        self.assertIn('id="psychologySessionsBottomClose"', index)
+        self.assertIn('id="psychologySessionBuyButton"', index)
+        self.assertIn('id="psychologyPackagesModal"', index)
+        self.assertIn("Array.from({length:7}", script)
+        self.assertIn("session_count:psychologySessionPackage().sessions", script)
+        self.assertIn("sessionCount:psychologySessionPackage().sessions", script)
+
     def test_psychology_session_lifecycle_and_paid_balance(self):
         token = 's' * 43
         chel_id = 'chel_psychology_sessions_0001'
@@ -151,9 +162,23 @@ class IkpAccessTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'Купите следующую сессию'):
                 db.request_psychology_session(conversation['id'])
 
-            order = db.create_psychology_session_payment_order(conversation['id'])
+            expected_packages = [
+                (1, 2500, 2500), (2, 2350, 4700), (3, 2150, 6450),
+                (4, 2000, 8000), (5, 1850, 9250), (6, 1650, 9900),
+                (7, 1500, 10500),
+            ]
+            self.assertEqual([
+                (
+                    count,
+                    db.psychology_session_package(count)['unit_price'],
+                    db.psychology_session_package(count)['total_price'],
+                )
+                for count in range(1, 8)
+            ], expected_packages)
+            order = db.create_psychology_session_payment_order(conversation['id'], 7)
             self.assertEqual(order['order_type'], 'psychology_session')
-            self.assertEqual(order['amount'], '2000.00')
+            self.assertEqual(order['amount'], '10500.00')
+            self.assertEqual(order['items'][0]['sessions'], 7)
             with db.connection() as connection:
                 connection.execute(
                     """UPDATE payment_orders
@@ -164,15 +189,44 @@ class IkpAccessTests(unittest.TestCase):
                 connection.commit()
 
             paid_balance = db.psychology_session_summary(conversation['id'])
-            self.assertEqual(paid_balance['purchased_count'], 1)
-            self.assertEqual(paid_balance['remaining_paid'], 1)
+            self.assertEqual(paid_balance['purchased_count'], 7)
+            self.assertEqual(paid_balance['remaining_paid'], 7)
             paid_session = db.request_psychology_session(conversation['id'])
             self.assertEqual(paid_session['access_type'], 'paid')
             self.assertEqual(paid_session['session_number'], 2)
             self.assertEqual(
                 db.psychology_session_summary(conversation['id'])['remaining_paid'],
-                0,
+                6,
             )
+            with db.connection() as connection:
+                credit_use = connection.execute(
+                    """SELECT payment_order_id,credit_number
+                       FROM psychology_session_credit_uses WHERE session_id=?""",
+                    (paid_session['id'],),
+                ).fetchone()
+            self.assertEqual(credit_use['payment_order_id'], order['id'])
+            self.assertEqual(credit_use['credit_number'], 1)
+            for expected_remaining in range(5, -1, -1):
+                db.manager_complete_psychology_session(
+                    conversation['id'], 'Тестовый менеджер', 'manager',
+                )
+                next_session = db.request_psychology_session(conversation['id'])
+                self.assertEqual(next_session['access_type'], 'paid')
+                self.assertEqual(
+                    db.psychology_session_summary(conversation['id'])['remaining_paid'],
+                    expected_remaining,
+                )
+            with db.connection() as connection:
+                self.assertEqual(connection.execute(
+                    "SELECT COUNT(*) FROM psychology_session_credit_uses WHERE payment_order_id=?",
+                    (order['id'],),
+                ).fetchone()[0], 7)
+                self.assertIsNotNone(connection.execute(
+                    "SELECT fulfillment_at FROM payment_orders WHERE id=?",
+                    (order['id'],),
+                ).fetchone()['fulfillment_at'])
+            with self.assertRaisesRegex(ValueError, 'от 1 до 7'):
+                db.create_psychology_session_payment_order(conversation['id'], 8)
         finally:
             db.set_current_chel_id(previous_chel_id)
 

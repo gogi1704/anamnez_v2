@@ -17,7 +17,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/static/styles.css?v=20261013-psychology-payment-back-v3">
+  <link rel="stylesheet" href="/static/styles.css?v=20261013-psychology-packages-v4">
   <link rel="stylesheet" href="/static/rich-text.2bf1f5fab764.css">
 </head>
 <body>
@@ -298,12 +298,28 @@
       <div class="psychology-sessions-summary" id="psychologySessionsSummary"></div>
       <h3 class="psychology-sessions-list-title">Проведённые сессии</h3>
       <div class="psychology-sessions-list" id="psychologySessionsList" aria-live="polite"></div>
-      <section class="psychology-session-product">
-        <div><span>Дополнительная сессия</span><strong>1 сессия с психологом</strong><small>После оплаты она появится в доступном балансе.</small></div>
-        <b>2 000 ₽</b>
-      </section>
       <p class="reminder-error hidden" id="psychologySessionsError" role="alert"></p>
-      <button class="psychology-session-buy-button" id="psychologySessionBuyButton" type="button">Купить 1 сессию · 2 000 ₽</button>
+      <div class="psychology-sessions-footer">
+        <button id="psychologySessionsBottomClose" type="button">Закрыть</button>
+        <button id="psychologySessionBuyButton" type="button">Купить</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal-backdrop hidden" id="psychologyPackagesModal" role="dialog" aria-modal="true" aria-labelledby="psychologyPackagesTitle">
+    <div class="modal psychology-packages-modal">
+      <button class="modal-close" id="psychologyPackagesClose" type="button" aria-label="Закрыть">×</button>
+      <header class="psychology-sessions-heading">
+        <div class="psychology-sessions-heading-icon" aria-hidden="true">Ψ</div>
+        <div><span>Психологическая поддержка</span><h2 id="psychologyPackagesTitle">Выберите пакет сессий</h2></div>
+      </header>
+      <p class="psychology-sessions-lead">Чем больше пакет, тем ниже стоимость одной 30-минутной сессии. Оплаченные сессии сохранятся в вашем балансе.</p>
+      <div class="psychology-packages-list" id="psychologyPackagesList" role="radiogroup" aria-label="Количество сессий"></div>
+      <div class="psychology-package-total" id="psychologyPackageTotal" aria-live="polite"></div>
+      <div class="psychology-packages-actions">
+        <button id="psychologyPackagesCancel" type="button">Закрыть</button>
+        <button id="psychologyPackagesContinue" type="button">Купить</button>
+      </div>
       <p class="psychology-sessions-security"><span aria-hidden="true">✓</span> Оплата и статус подтверждаются напрямую через ЮKassa</p>
     </div>
   </div>
@@ -837,9 +853,9 @@
     </div>
   </div>
 
-  <script src="/static/metrika.js?v=20261013-psychology-payment-back-v3"></script>
-  <script src="/static/agents.js?v=20261013-psychology-payment-back-v3"></script>
+  <script src="/static/metrika.js?v=20261013-psychology-packages-v4"></script>
+  <script src="/static/agents.js?v=20261013-psychology-packages-v4"></script>
   <script src="/static/rich-text.js?v=20260929-loose-lists-v1"></script>
-  <script src="/static/app.js?v=20261013-psychology-payment-back-v3"></script>
+  <script src="/static/app.js?v=20261013-psychology-packages-v4"></script>
 </body>
 </html>

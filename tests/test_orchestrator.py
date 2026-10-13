@@ -4146,14 +4146,14 @@ class OrchestratorTests(unittest.TestCase):
         self.assertIn("controllerchange", script)
         self.assertIn("url.pathname.startsWith('/api/')", worker)
         self.assertIn("url.pathname.startsWith('/auth/')", worker)
-        self.assertIn("consilium-shell-v162", worker)
+        self.assertIn("consilium-shell-v163", worker)
         self.assertIn("fetch(request)", worker)
-        self.assertIn("/static/styles.css?v=20261013-psychology-payment-back-v3", index)
+        self.assertIn("/static/styles.css?v=20261013-psychology-packages-v4", index)
         self.assertIn("/static/rich-text.2bf1f5fab764.css", index)
         self.assertTrue((project_root / "static" / "styles.07ffaefb4795.css").is_file())
         self.assertTrue((project_root / "static" / "rich-text.2bf1f5fab764.css").is_file())
-        self.assertIn("/static/app.js?v=20261013-psychology-payment-back-v3", index)
-        self.assertIn("/static/metrika.js?v=20261013-psychology-payment-back-v3", index)
+        self.assertIn("/static/app.js?v=20261013-psychology-packages-v4", index)
+        self.assertIn("/static/metrika.js?v=20261013-psychology-packages-v4", index)
         self.assertIn("Enter — новая строка · отправка — кнопкой", index)
         self.assertIn('enterkeyhint="enter"', index)
         self.assertNotIn("$('#chatForm').requestSubmit()", script)
@@ -4239,7 +4239,7 @@ class OrchestratorTests(unittest.TestCase):
         main = (project_root / "backend" / "main.py").read_text(encoding="utf-8")
         config = (project_root / "backend" / "config.py").read_text(encoding="utf-8")
 
-        self.assertIn('src="/static/metrika.js?v=20261013-psychology-payment-back-v3"', index)
+        self.assertIn('src="/static/metrika.js?v=20261013-psychology-packages-v4"', index)
         self.assertIn('YANDEX_METRIKA_COUNTER_ID', config)
         self.assertIn('path == "/api/public-config"', main)
         self.assertIn('"metrika.js"', main)
@@ -4648,7 +4648,7 @@ class OrchestratorTests(unittest.TestCase):
                 "openMainApp({skipIntro:true, allowIncompleteOnboarding:true})",
                 flow,
             )
-        self.assertIn("await openPsychologySessions()", cancel_payment)
+        self.assertIn("openPsychologyPackages()", cancel_payment)
 
     def test_chat_access_requires_final_standard_onboarding_screen(self):
         chel_id = "chel_chat_funnel_guard"

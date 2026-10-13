@@ -777,16 +777,38 @@ article.capability-card strong { font-weight:650; }
 .psychology-session-product span { color:#765a99; font-size:11px; font-weight:800; letter-spacing:.05em; text-transform:uppercase; }
 .psychology-session-product small { color:#6d7773; line-height:1.4; }
 .psychology-session-product>b { color:#5d3e87; font-size:22px; white-space:nowrap; }
-.psychology-session-buy-button { width:100%; min-height:52px; margin-top:12px; padding:11px 16px; border:0; border-radius:13px; background:#704d98; color:#fff; font:inherit; font-weight:850; cursor:pointer; }
-.psychology-session-buy-button:hover { background:#5c3d82; }
-.psychology-session-buy-button:disabled { opacity:.55; cursor:not-allowed; }
+.psychology-sessions-footer,.psychology-packages-actions { display:grid; grid-template-columns:1fr 1.45fr; gap:10px; margin-top:16px; }
+.psychology-sessions-footer button,.psychology-packages-actions button { min-height:50px; padding:11px 16px; border:1px solid #cdbdde; border-radius:13px; background:#fff; color:#67478f; font:inherit; font-weight:850; cursor:pointer; }
+.psychology-sessions-footer button:last-child,.psychology-packages-actions button:last-child { border-color:#704d98; background:#704d98; color:#fff; }
+.psychology-sessions-footer button:hover,.psychology-packages-actions button:hover { border-color:#8e70b2; }
+.psychology-sessions-footer button:last-child:hover,.psychology-packages-actions button:last-child:hover { background:#5c3d82; }
+.psychology-sessions-footer button:disabled,.psychology-packages-actions button:disabled { opacity:.55; cursor:not-allowed; }
 .psychology-sessions-security { margin:10px 0 0; color:#74807b; font-size:12px; text-align:center; }
 .psychology-sessions-security span { color:#6f4d98; font-weight:900; }
+.psychology-packages-modal { width:min(690px,calc(100vw - 28px)); }
+.psychology-packages-list { display:grid; gap:8px; max-height:min(390px,48vh); overflow:auto; padding:2px; }
+.psychology-package-option { display:grid; grid-template-columns:auto minmax(0,1fr) auto; align-items:center; gap:12px; width:100%; padding:13px 14px; border:1px solid #ddd2e9; border-radius:14px; background:#fff; color:inherit; font:inherit; text-align:left; cursor:pointer; }
+.psychology-package-option:hover { border-color:#a889c9; background:#fbf9fd; }
+.psychology-package-option.selected { border-color:#704d98; background:#f5effb; box-shadow:0 0 0 1px #704d98; }
+.psychology-package-option>i { display:grid; place-items:center; width:25px; height:25px; border:2px solid #bba8d1; border-radius:50%; color:transparent; font-style:normal; }
+.psychology-package-option.selected>i { border-color:#704d98; background:#704d98; color:#fff; }
+.psychology-package-option>span { display:grid; gap:3px; min-width:0; }
+.psychology-package-option strong { font-size:15px; }
+.psychology-package-option small { color:#74807b; }
+.psychology-package-option>b { color:#5f3f88; font-size:17px; white-space:nowrap; }
+.psychology-package-option em { color:#1f7e62; font-size:11px; font-style:normal; font-weight:800; }
+.psychology-package-total { display:flex; align-items:center; justify-content:space-between; gap:14px; margin-top:12px; padding:13px 15px; border-radius:14px; background:#f3ecfa; }
+.psychology-package-total span { color:#696f6c; }
+.psychology-package-total strong { color:#5f3f88; font-size:21px; white-space:nowrap; }
 @media(max-width:720px) {
   .psychology-sessions-modal { width:calc(100vw - 16px); max-height:calc(var(--app-height,100dvh) - 16px); padding:22px 16px; border-radius:22px; }
   .psychology-session-card { grid-template-columns:auto minmax(0,1fr); }
   .psychology-session-card>b { grid-column:2; }
   .psychology-session-product { align-items:flex-start; }
+  .psychology-packages-modal { width:calc(100vw - 16px); max-height:calc(var(--app-height,100dvh) - 16px); padding:22px 16px; border-radius:22px; }
+  .psychology-package-option { grid-template-columns:auto minmax(0,1fr); }
+  .psychology-package-option>b { grid-column:2; }
+  .psychology-sessions-footer,.psychology-packages-actions { grid-template-columns:1fr 1.25fr; }
 }
 
 /* Human psychology sessions: compact counters, newest request first. */

@@ -58,6 +58,7 @@ const state = {
   weightBodyMeasurements: null,
   weightPersonality: null,
   psychologySessions: null,
+  psychologySessionPackageSize: 1,
   healthPassport: null,
   healthPassportOfferHandled: false,
   healthPassportProgressTimer: null,
@@ -2690,6 +2691,7 @@ async function handlePaymentReturn() {
   state.paymentReviewOrderId = orderId;
   state.paymentReviewConversationId = String(pendingOrder.conversationId || '');
   state.paymentReceiptEmail = String(pendingOrder.receiptEmail || '').trim();
+  state.psychologySessionPackageSize = Math.max(1, Math.min(7, Number(pendingOrder.sessionCount || 1)));
   state.returnToChatAfterExaminations = Boolean(
     pendingOrder.returnToChat || params.get('return_to_chat') === '1' || state.paymentReviewSource === 'purchases'
   );
@@ -2710,6 +2712,9 @@ async function handlePaymentReturn() {
       const currentStatus = result.order?.status;
       if (['succeeded','canceled','abandoned'].includes(currentStatus)) break;
       if (attempt < 7) await new Promise(resolve => setTimeout(resolve, 1500));
+    }
+    if (result.order?.order_type === 'psychology_session') {
+      state.psychologySessionPackageSize = psychologyPackageFromOrder(result.order).sessions;
     }
     let status = result.order?.status;
     if (status === 'succeeded' && result.order?.paid) {
@@ -2987,8 +2992,30 @@ async function finishConsultationPayment(openList = false) {
   state.paymentReceiptEmail = '';
 }
 
+function psychologySessionPackage(count = state.psychologySessionPackageSize) {
+  const sessions = Math.max(1, Math.min(7, Number(count || 1)));
+  const steps = 6;
+  const numerator = 2500 * steps - (sessions - 1) * 1000;
+  const unitPrice = Math.floor((numerator + 25 * steps) / (50 * steps)) * 50;
+  const totalPrice = sessions * unitPrice;
+  return {sessions,unitPrice,totalPrice,saving:sessions * 2500 - totalPrice};
+}
+
+function psychologySessionCountLabel(count) {
+  return `${count} ${count === 1 ? 'сессия' : count < 5 ? 'сессии' : 'сессий'}`;
+}
+
+function psychologyPackageFromOrder(order) {
+  const product = (order?.items || []).find(item => ['psychology_session','psychology_session_package'].includes(item.id));
+  return psychologySessionPackage(product?.sessions || 1);
+}
+
 function renderPsychologySessionPayment() {
   closePsychologySessions();
+  closePsychologyPackages();
+  const packageInfo = psychologySessionPackage();
+  const countLabel = psychologySessionCountLabel(packageInfo.sessions);
+  const totalLabel = packageInfo.totalPrice.toLocaleString('ru-RU');
   $('#appShell').classList.add('hidden');
   $('#onboarding').classList.remove('hidden');
   setOnboardingMeta('Сессия с психологом', 92);
@@ -2996,11 +3023,11 @@ function renderPsychologySessionPayment() {
     ? `<label class="payment-email-label">Электронная почта для онлайн-чека <span>обязательное поле</span><input id="psychologySessionReceiptEmail" type="email" autocomplete="email" maxlength="254" placeholder="name@example.ru" required value="${escapeAttr(state.paymentReceiptEmail)}"></label>` : '';
   $('#onboardingContent').innerHTML = `
     <span class="onboarding-kicker">Психологическая поддержка</span>
-    <h1>Оплата сессии</h1>
-    <p class="onboarding-lead">После подтверждения оплаты одна 30-минутная сессия появится в вашем балансе. Заявку на созвон можно будет оставить в меню психологического чата.</p>
-    <section class="consultation-payment-card"><header><strong>1 сессия с психологом</strong><b>2 000 ₽</b></header><p>История сессий и доступный баланс сохраняются в меню психологического чата.</p></section>
+    <h1>Оплата сессий</h1>
+    <p class="onboarding-lead">После подтверждения оплаты ${countLabel} появятся в вашем балансе. Заявку на созвон можно будет оставить в меню психологического чата.</p>
+    <section class="consultation-payment-card"><header><strong>${countLabel} с психологом</strong><b>${totalLabel} ₽</b></header><p>${packageInfo.unitPrice.toLocaleString('ru-RU')} ₽ за сессию. История сессий и доступный баланс сохраняются в меню психологического чата.</p></section>
     ${emailField}
-    <div class="onboarding-actions"><button type="button" class="onboarding-back" data-onboarding-action="cancel-psychology-session-payment">Назад</button><button type="button" class="onboarding-next" data-onboarding-action="pay-psychology-session">Оплатить 2 000 ₽</button></div>`;
+    <div class="onboarding-actions"><button type="button" class="onboarding-back" data-onboarding-action="cancel-psychology-session-payment">Назад</button><button type="button" class="onboarding-next" data-onboarding-action="pay-psychology-session">Оплатить ${totalLabel} ₽</button></div>`;
 }
 
 async function startPsychologySessionPayment() {
@@ -3018,6 +3045,7 @@ async function startPsychologySessionPayment() {
       method:'POST',
       body:JSON.stringify({
         conversation_id:state.paymentReviewConversationId || state.conversationId,
+        session_count:psychologySessionPackage().sessions,
         receipt_email:state.paymentReceiptEmail,
       }),
     });
@@ -3028,9 +3056,13 @@ async function startPsychologySessionPayment() {
     localStorage.setItem(PAYMENT_PENDING_ORDER_KEY, JSON.stringify({
       id:order.id, returnToChat:true, source:'psychology_session',
       conversationId:state.paymentReviewConversationId,
-      receiptEmail:state.paymentReceiptEmail, savedAt:Date.now(),
+      receiptEmail:state.paymentReceiptEmail,
+      sessionCount:psychologySessionPackage().sessions, savedAt:Date.now(),
     }));
-    trackEvent('psychology_session_payment_created', {provider:'yookassa', amount_kopecks:200000});
+    trackEvent('psychology_session_payment_created', {
+      provider:'yookassa', amount_kopecks:psychologySessionPackage().totalPrice * 100,
+      session_count:psychologySessionPackage().sessions,
+    });
     if (order.confirmation_url?.startsWith('https://')) {
       window.location.assign(order.confirmation_url);
       return;
@@ -3051,13 +3083,15 @@ async function startPsychologySessionPayment() {
 
 function renderPsychologySessionPaymentSuccess(order) {
   state.paymentReviewConversationId = order?.conversation_id || state.paymentReviewConversationId;
+  const packageInfo = psychologyPackageFromOrder(order);
+  const countLabel = psychologySessionCountLabel(packageInfo.sessions);
   setOnboardingMeta('Оплачено', 100);
   $('#onboardingContent').innerHTML = `
     <div class="payment-success-result">
       <span class="payment-result-icon success" aria-hidden="true">✓</span>
-      <span class="onboarding-kicker">Сессия оплачена</span>
-      <h1>Сессия добавлена</h1>
-      <p class="onboarding-lead">Оплата 2 000 ₽ подтверждена. Новая сессия доступна в балансе психологического чата.</p>
+      <span class="onboarding-kicker">Сессии оплачены</span>
+      <h1>${countLabel} добавлены</h1>
+      <p class="onboarding-lead">Оплата ${packageInfo.totalPrice.toLocaleString('ru-RU')} ₽ подтверждена. Сессии доступны в балансе психологического чата.</p>
       <section class="payment-find-guide"><strong>Как оставить заявку</strong><p>Откройте список сессий в психологическом чате и нажмите «Новая сессия». Менеджер свяжется с вами для согласования времени созвона.</p></section>
       <div class="onboarding-actions"><button type="button" class="onboarding-next" data-onboarding-action="open-psychology-sessions-after-payment">Оставить заявку</button><button type="button" class="onboarding-back" data-onboarding-action="open-psychology-session-chat">Вернуться в чат</button></div>
     </div>`;
@@ -3078,7 +3112,9 @@ function beginPsychologySessionPurchase() {
   state.paymentReviewSource = 'psychology_session';
   state.paymentReviewOrderId = '';
   state.paymentReviewConversationId = state.conversationId || '';
-  renderPsychologySessionPayment();
+  state.psychologySessionPackageSize = 1;
+  closePsychologySessions();
+  openPsychologyPackages();
 }
 
 async function returnToPsychologySessionPayment() {
@@ -3086,7 +3122,7 @@ async function returnToPsychologySessionPayment() {
   const receiptInput = $('#psychologySessionReceiptEmail');
   if (receiptInput && !receiptInput.value.trim()) {
     receiptInput.focus();
-    showOnboardingError('Укажите электронную почту для чека, затем нажмите «Оплатить 2 000 ₽».');
+    showOnboardingError(`Укажите электронную почту для чека, затем нажмите «Оплатить ${psychologySessionPackage().totalPrice.toLocaleString('ru-RU')} ₽».`);
     return;
   }
   await startPsychologySessionPayment();
@@ -3528,7 +3564,7 @@ $('#onboardingContent').addEventListener('click', async event => {
     state.paymentReceiptEmail = '';
     await openMainApp({skipIntro:true, allowIncompleteOnboarding:true});
     if (conversationId) await openConversation(conversationId);
-    await openPsychologySessions();
+    openPsychologyPackages();
   }
   else if (action === 'open-psychology-session-chat') await finishPsychologySessionPayment(false);
   else if (action === 'open-psychology-sessions-after-payment') await finishPsychologySessionPayment(true);
@@ -4242,7 +4278,7 @@ function renderPsychologySessions(summary = {}) {
   const paymentsEnabled = Boolean(state.publicConfig.online_payments_enabled);
   buyButton.disabled = !paymentsEnabled;
   buyButton.textContent = paymentsEnabled
-    ? 'Купить 1 сессию · 2 000 ₽'
+    ? 'Купить'
     : 'Онлайн-оплата временно недоступна';
 }
 
@@ -4268,6 +4304,37 @@ function closePsychologySessions() {
   $('#psychologySessionsModal').classList.add('hidden');
 }
 
+function renderPsychologyPackages() {
+  const selected = psychologySessionPackage();
+  $('#psychologyPackagesList').innerHTML = Array.from({length:7}, (_, index) => {
+    const item = psychologySessionPackage(index + 1);
+    const saving = item.saving > 0 ? `<em>Экономия ${item.saving.toLocaleString('ru-RU')} ₽</em>` : '<em>Без скидки</em>';
+    return `<button type="button" class="psychology-package-option ${item.sessions === selected.sessions ? 'selected' : ''}" data-psychology-package="${item.sessions}" role="radio" aria-checked="${item.sessions === selected.sessions}">
+      <i aria-hidden="true">✓</i><span><strong>${psychologySessionCountLabel(item.sessions)}</strong><small>${item.unitPrice.toLocaleString('ru-RU')} ₽ за сессию</small>${saving}</span><b>${item.totalPrice.toLocaleString('ru-RU')} ₽</b>
+    </button>`;
+  }).join('');
+  $('#psychologyPackageTotal').innerHTML = `<span>К оплате за ${psychologySessionCountLabel(selected.sessions)}</span><strong>${selected.totalPrice.toLocaleString('ru-RU')} ₽</strong>`;
+  $('#psychologyPackagesContinue').textContent = `Купить · ${selected.totalPrice.toLocaleString('ru-RU')} ₽`;
+}
+
+function openPsychologyPackages() {
+  renderPsychologyPackages();
+  $('#psychologyPackagesModal').classList.remove('hidden');
+  trackEvent('psychology_session_packages_viewed', {});
+}
+
+function closePsychologyPackages() {
+  $('#psychologyPackagesModal').classList.add('hidden');
+}
+
+function continuePsychologySessionPackagePurchase() {
+  const selected = psychologySessionPackage();
+  trackEvent('psychology_session_package_selected', {
+    session_count:selected.sessions, amount_kopecks:selected.totalPrice * 100,
+  });
+  renderPsychologySessionPayment();
+}
+
 function openPsychologySessionRequest() {
   const summary = state.psychologySessions || {};
   const button = $('#psychologySessionRequestConfirm');
@@ -4291,9 +4358,9 @@ function openPsychologySessionRequest() {
     $('#psychologySessionRequestCancel').classList.remove('hidden');
   } else {
     $('#psychologySessionRequestTitle').textContent = 'Нужна оплаченная сессия';
-    $('#psychologySessionRequestText').textContent = 'Бесплатная 30-минутная сессия уже использована. Купите следующую сессию за 2 000 ₽, после чего сможете оставить заявку на созвон.';
+    $('#psychologySessionRequestText').textContent = 'Бесплатная 30-минутная сессия уже использована. Выберите пакет сессий, после чего сможете оставить заявку на созвон.';
     button.dataset.mode = 'purchase';
-    button.textContent = 'Купить за 2 000 ₽';
+    button.textContent = 'Выбрать пакет';
     $('#psychologySessionRequestCancel').classList.remove('hidden');
   }
   $('#psychologySessionRequestModal').classList.remove('hidden');
@@ -5192,7 +5259,9 @@ function continuePurchase(item) {
   localStorage.setItem(PAYMENT_PENDING_ORDER_KEY, JSON.stringify({
     id:item.id, returnToChat:true,
     source:item.order_type === 'psychology_session' ? 'psychology_session' : item.order_type === 'consultation' ? 'consultation' : 'purchases',
-    conversationId:item.conversation_id || '', savedAt:Date.now(),
+    conversationId:item.conversation_id || '',
+    sessionCount:item.order_type === 'psychology_session' ? psychologyPackageFromOrder(item).sessions : undefined,
+    savedAt:Date.now(),
   }));
   trackEvent('payment_continued', {provider:'yookassa'});
   window.location.assign(item.confirmation_url);
@@ -5227,6 +5296,7 @@ async function retryPurchase(item) {
     state.paymentReviewSource = 'psychology_session';
     state.paymentReviewOrderId = item.id;
     state.paymentReviewConversationId = item.conversation_id || state.conversationId || '';
+    state.psychologySessionPackageSize = psychologyPackageFromOrder(item).sessions;
     renderPsychologySessionPayment();
     return true;
   }
@@ -6889,6 +6959,7 @@ $('#consultationsModal').addEventListener('click', event => { if (event.target.i
 $('#consultationPayButton').addEventListener('click', beginConsultationPurchase);
 $('#psychologySessionsButton').addEventListener('click', openPsychologySessions);
 $('#psychologySessionsClose').addEventListener('click', closePsychologySessions);
+$('#psychologySessionsBottomClose').addEventListener('click', closePsychologySessions);
 $('#psychologySessionsModal').addEventListener('click', event => {
   if (event.target.id === 'psychologySessionsModal') closePsychologySessions();
 });
@@ -6896,6 +6967,17 @@ $('#psychologySessionsList').addEventListener('click', event => {
   if (event.target.closest('[data-psychology-session-request]')) openPsychologySessionRequest();
 });
 $('#psychologySessionBuyButton').addEventListener('click', beginPsychologySessionPurchase);
+$('#psychologyPackagesClose').addEventListener('click', closePsychologyPackages);
+$('#psychologyPackagesCancel').addEventListener('click', closePsychologyPackages);
+$('#psychologyPackagesContinue').addEventListener('click', continuePsychologySessionPackagePurchase);
+$('#psychologyPackagesModal').addEventListener('click', event => {
+  if (event.target.id === 'psychologyPackagesModal') closePsychologyPackages();
+  const option = event.target.closest('[data-psychology-package]');
+  if (option) {
+    state.psychologySessionPackageSize = Number(option.dataset.psychologyPackage || 1);
+    renderPsychologyPackages();
+  }
+});
 $('#psychologySessionRequestClose').addEventListener('click', closePsychologySessionRequest);
 $('#psychologySessionRequestCancel').addEventListener('click', closePsychologySessionRequest);
 $('#psychologySessionRequestConfirm').addEventListener('click', confirmPsychologySessionRequest);

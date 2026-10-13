@@ -3741,19 +3741,74 @@ def create_consultation_payment_order(conversation_id: str) -> dict:
     return _public_payment_order(row)
 
 
-PSYCHOLOGY_SESSION_PRICE_RUB = 2000
+PSYCHOLOGY_SESSION_MIN_COUNT = 1
+PSYCHOLOGY_SESSION_MAX_COUNT = 7
+PSYCHOLOGY_SESSION_BASE_UNIT_PRICE_RUB = 2500
+PSYCHOLOGY_SESSION_MIN_UNIT_PRICE_RUB = 1500
 
 
-def create_psychology_session_payment_order(conversation_id: str) -> dict:
-    """Create one fixed-price credit for the master-class psychology chat."""
+def psychology_session_package(session_count: int) -> dict:
+    """Return the server-authoritative price for a 1–7 session package."""
+    if isinstance(session_count, bool) or (
+        isinstance(session_count, float) and not session_count.is_integer()
+    ):
+        raise ValueError("Выберите пакет от 1 до 7 сессий")
+    try:
+        count = int(session_count)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("Выберите пакет от 1 до 7 сессий") from exc
+    if not PSYCHOLOGY_SESSION_MIN_COUNT <= count <= PSYCHOLOGY_SESSION_MAX_COUNT:
+        raise ValueError("Выберите пакет от 1 до 7 сессий")
+    steps = PSYCHOLOGY_SESSION_MAX_COUNT - PSYCHOLOGY_SESSION_MIN_COUNT
+    numerator = (
+        PSYCHOLOGY_SESSION_BASE_UNIT_PRICE_RUB * steps
+        - (count - 1) * (
+            PSYCHOLOGY_SESSION_BASE_UNIT_PRICE_RUB
+            - PSYCHOLOGY_SESSION_MIN_UNIT_PRICE_RUB
+        )
+    )
+    unit_price = ((numerator + 25 * steps) // (50 * steps)) * 50
+    total_price = unit_price * count
+    return {
+        "sessions": count,
+        "unit_price": unit_price,
+        "total_price": total_price,
+        "saving": PSYCHOLOGY_SESSION_BASE_UNIT_PRICE_RUB * count - total_price,
+    }
+
+
+def _psychology_order_session_count(items_value) -> int:
+    items = items_value if isinstance(items_value, list) else _payment_items(items_value)
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        if item.get("id") not in {"psychology_session", "psychology_session_package"}:
+            continue
+        try:
+            count = int(item.get("sessions", 1))
+        except (TypeError, ValueError):
+            count = 1
+        return max(1, min(PSYCHOLOGY_SESSION_MAX_COUNT, count))
+    return 1
+
+
+def create_psychology_session_payment_order(
+    conversation_id: str, session_count: int = 1,
+) -> dict:
+    """Create a server-priced package for the master-class psychology chat."""
     conversation = get_conversation(conversation_id)
     if not conversation or conversation.get("dialog_type") != "masterclass_psychology":
         raise ValueError("Чат психологической поддержки не найден")
     chel_id = current_chel_id()
+    package = psychology_session_package(session_count)
+    count = package["sessions"]
+    noun = "сессия" if count == 1 else "сессии" if count < 5 else "сессий"
     items = [{
-        "id": "psychology_session",
-        "name": "Сессия с психологом",
-        "price": PSYCHOLOGY_SESSION_PRICE_RUB,
+        "id": "psychology_session_package",
+        "name": f"{count} {noun} с психологом",
+        "price": package["total_price"],
+        "sessions": count,
+        "unit_price": package["unit_price"],
     }]
     canonical = json.dumps(items, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     fingerprint = hashlib.sha256(
@@ -3776,10 +3831,10 @@ def create_psychology_session_payment_order(conversation_id: str) -> dict:
             """INSERT INTO payment_orders
             (id, chel_id, idempotence_key, selection_fingerprint, order_type,
              target_conversation_id, status, amount_kopecks, items, created_at, updated_at)
-            VALUES (?, ?, ?, ?, 'psychology_session', ?, 'creating', 200000, ?, ?, ?)""",
+            VALUES (?, ?, ?, ?, 'psychology_session', ?, 'creating', ?, ?, ?, ?)""",
             (
                 order_id, chel_id, str(uuid.uuid4()), fingerprint,
-                conversation_id, canonical, now, now,
+                conversation_id, package["total_price"] * 100, canonical, now, now,
             ),
         )
         conn.commit()
@@ -3803,7 +3858,7 @@ def psychology_session_summary(conversation_id: str) -> dict:
             (conversation_id, chel_id),
         ).fetchall()
         purchased = conn.execute(
-            """SELECT id,paid_at,created_at FROM payment_orders
+            """SELECT id,items,paid_at,created_at FROM payment_orders
                WHERE chel_id=? AND order_type='psychology_session'
                  AND target_conversation_id=? AND status='succeeded' AND paid=1
                ORDER BY COALESCE(paid_at,created_at),created_at""",
@@ -3814,7 +3869,8 @@ def psychology_session_summary(conversation_id: str) -> dict:
     free_used = any(item["access_type"] == "free" for item in session_items)
     completed = sum(1 for item in session_items if item["status"] == "completed")
     requested = next((item for item in session_items if item["status"] == "requested"), None)
-    remaining_paid = max(0, len(purchased) - paid_used)
+    purchased_count = sum(_psychology_order_session_count(row["items"]) for row in purchased)
+    remaining_paid = max(0, purchased_count - paid_used)
     return {
         "conversation_id": conversation_id,
         "sessions": session_items,
@@ -3822,14 +3878,10 @@ def psychology_session_summary(conversation_id: str) -> dict:
         "completed_count": completed,
         "pending_session": requested,
         "free_available": not free_used,
-        "purchased_count": len(purchased),
+        "purchased_count": purchased_count,
         "remaining_paid": remaining_paid,
         "available_total": remaining_paid + int(not free_used),
-        "product": {
-            "id": "psychology_session",
-            "name": "1 сессия с психологом",
-            "price": PSYCHOLOGY_SESSION_PRICE_RUB,
-        },
+        "packages": [psychology_session_package(count) for count in range(1, 8)],
     }
 
 
@@ -3860,20 +3912,35 @@ def request_psychology_session(conversation_id: str) -> dict:
         ).fetchone()
         access_type = "free"
         payment_order_id = None
+        payment_credit_number = None
+        paid_orders = []
         if free_used:
-            paid_order = conn.execute(
-                """SELECT po.id FROM payment_orders po
-                   LEFT JOIN psychology_sessions ps ON ps.payment_order_id=po.id
+            paid_orders = conn.execute(
+                """SELECT po.id,po.items FROM payment_orders po
                    WHERE po.chel_id=? AND po.order_type='psychology_session'
                      AND po.target_conversation_id=? AND po.status='succeeded'
-                     AND po.paid=1 AND ps.id IS NULL
-                   ORDER BY COALESCE(po.paid_at,po.created_at),po.created_at LIMIT 1""",
+                     AND po.paid=1
+                   ORDER BY COALESCE(po.paid_at,po.created_at),po.created_at""",
                 (chel_id, conversation_id),
-            ).fetchone()
-            if not paid_order:
+            ).fetchall()
+            for paid_order in paid_orders:
+                credit_count = _psychology_order_session_count(paid_order["items"])
+                legacy_uses = int(conn.execute(
+                    "SELECT COUNT(*) FROM psychology_sessions WHERE payment_order_id=?",
+                    (paid_order["id"],),
+                ).fetchone()[0])
+                package_uses = int(conn.execute(
+                    "SELECT COUNT(*) FROM psychology_session_credit_uses WHERE payment_order_id=?",
+                    (paid_order["id"],),
+                ).fetchone()[0])
+                used_count = legacy_uses + package_uses
+                if used_count < credit_count:
+                    payment_order_id = paid_order["id"]
+                    payment_credit_number = used_count + 1
+                    break
+            if not payment_order_id:
                 raise ValueError("Бесплатная сессия уже использована. Купите следующую сессию, чтобы оставить заявку")
             access_type = "paid"
-            payment_order_id = paid_order["id"]
         number = int(conn.execute(
             """SELECT COALESCE(MAX(session_number),0)+1 FROM psychology_sessions
                WHERE conversation_id=? AND chel_id=?""",
@@ -3887,10 +3954,29 @@ def request_psychology_session(conversation_id: str) -> dict:
                VALUES (?,?,?,?,?,?,'requested',?,?,?)""",
             (
                 session_id, conversation_id, chel_id, number, access_type,
-                payment_order_id, now, now, now,
+                None if payment_credit_number else payment_order_id, now, now, now,
             ),
         )
-        if payment_order_id:
+        if payment_order_id and payment_credit_number:
+            conn.execute(
+                """INSERT INTO psychology_session_credit_uses
+                   (id,payment_order_id,session_id,credit_number,created_at)
+                   VALUES (?,?,?,?,?)""",
+                (
+                    f"psycredit_{uuid.uuid4().hex}", payment_order_id, session_id,
+                    payment_credit_number, now,
+                ),
+            )
+            credit_count = _psychology_order_session_count(
+                next(row["items"] for row in paid_orders if row["id"] == payment_order_id)
+            )
+            if payment_credit_number >= credit_count:
+                conn.execute(
+                    """UPDATE payment_orders SET fulfillment_at=COALESCE(fulfillment_at,?),updated_at=?
+                       WHERE id=?""",
+                    (now, now, payment_order_id),
+                )
+        elif payment_order_id:
             conn.execute(
                 """UPDATE payment_orders SET fulfillment_at=COALESCE(fulfillment_at,?),updated_at=?
                    WHERE id=?""",
@@ -5738,6 +5824,17 @@ def init_db() -> None:
                 FOREIGN KEY(payment_order_id) REFERENCES payment_orders(id) ON DELETE SET NULL
             );
 
+            CREATE TABLE IF NOT EXISTS psychology_session_credit_uses (
+                id TEXT PRIMARY KEY,
+                payment_order_id TEXT NOT NULL,
+                session_id TEXT NOT NULL UNIQUE,
+                credit_number INTEGER NOT NULL,
+                created_at TEXT NOT NULL,
+                UNIQUE(payment_order_id,credit_number),
+                FOREIGN KEY(payment_order_id) REFERENCES payment_orders(id) ON DELETE CASCADE,
+                FOREIGN KEY(session_id) REFERENCES psychology_sessions(id) ON DELETE CASCADE
+            );
+
             CREATE TABLE IF NOT EXISTS enterprise_examination_schedule (
                 source_sheet_id TEXT NOT NULL,
                 source_row_id TEXT NOT NULL,
@@ -6480,6 +6577,10 @@ def init_db() -> None:
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_psychology_sessions_balance "
             "ON psychology_sessions(chel_id, access_type, status)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_psychology_session_credit_uses_order "
+            "ON psychology_session_credit_uses(payment_order_id, credit_number)"
         )
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_enterprise_schedule_inn_date "

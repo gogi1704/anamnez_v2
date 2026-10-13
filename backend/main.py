@@ -1537,14 +1537,19 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                 if not yookassa.configured():
                     raise yookassa.YooKassaUnavailable("Онлайн-оплата пока не настроена")
                 conversation_id = str(payload.get("conversation_id") or "").strip()
-                order = db.create_psychology_session_payment_order(conversation_id)
+                session_count = payload.get("session_count", 1)
+                order = db.create_psychology_session_payment_order(
+                    conversation_id, session_count,
+                )
                 private_order = db.payment_order_private(order["id"])
                 if private_order.get("provider_payment_id"):
                     verified = yookassa.get_payment(private_order["provider_payment_id"])
                     refreshed = db.apply_yookassa_status(order["id"], verified)
                     if refreshed["status"] != "canceled":
                         return self._json(200, {"order": refreshed})
-                    order = db.create_psychology_session_payment_order(conversation_id)
+                    order = db.create_psychology_session_payment_order(
+                        conversation_id, session_count,
+                    )
                     private_order = db.payment_order_private(order["id"])
                 return_url = (
                     f"{settings.public_base_url}/?payment_return={quote(order['id'])}"
@@ -1557,7 +1562,9 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                 if result["status"] in {"succeeded", "canceled", "waiting_for_capture"}:
                     result = db.apply_yookassa_status(order["id"], payment)
                 self._track_analytics("psychology_session_payment_created", {
-                    "provider": "yookassa", "amount_kopecks": 200000,
+                    "provider": "yookassa",
+                    "amount_kopecks": round(float(result.get("amount", "0")) * 100),
+                    "session_count": int(session_count),
                 })
                 return self._json(201, {"order": result})
             except (ValueError, TypeError, json.JSONDecodeError, UnicodeDecodeError) as exc:
