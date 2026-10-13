@@ -61,6 +61,8 @@ const state = {
   healthPassportOfferHandled: false,
   healthPassportProgressTimer: null,
   healthPassportCheckupMetric2: false,
+  masterclassEntry: null,
+  masterclassAnonymousPending: false,
 };
 
 const $ = selector => document.querySelector(selector);
@@ -721,67 +723,225 @@ function masterclassContinuationKey() {
   return `consilium_masterclass_continued_${token.slice(0,80)}`;
 }
 
-function trackMasterclassScreen() {
-  currentOnboardingAnalyticsScreen = 'masterclass_landing';
+function trackMasterclassScreen(screen = 'masterclass_landing') {
+  const previousScreen = currentOnboardingAnalyticsScreen;
+  currentOnboardingAnalyticsScreen = screen;
   trackEvent('onboarding_screen_viewed', {
-    screen:'masterclass_landing', previous_screen:'', context:'masterclass',
+    screen, previous_screen:previousScreen, context:'masterclass',
   });
 }
 
-function trackMasterclassAction(action) {
+function trackMasterclassAction(action, screen = currentOnboardingAnalyticsScreen || 'masterclass_landing') {
   trackEvent('onboarding_screen_action', {
-    screen:'masterclass_landing', action, context:'masterclass',
+    screen, action, context:'masterclass',
   });
 }
 
 function renderMasterclassLanding(entry) {
+  state.masterclassEntry = entry;
   hideEntryScreens();
   $('#onboarding').classList.remove('hidden');
-  setOnboardingMeta('Мастер-класс', 100);
+  setOnboardingMeta('Мастер-класс · Психология', 20);
+  const knownUser = Boolean(
+    state.identity?.authenticated
+    || localStorage.getItem(ANONYMOUS_ACCESS_KEY) === state.identity?.chel_id
+  );
   $('#onboardingContent').innerHTML = `<div class="masterclass-landing">
     <div class="masterclass-landing-orbit" aria-hidden="true"><i></i><i></i><i></i></div>
-    <span class="onboarding-kicker">Здоровье на вашем предприятии</span>
-    <h1>${escapeHtml(entry.masterclass_name || 'Мастер-класс')}</h1>
+    <span class="onboarding-kicker">${escapeHtml(entry.masterclass_name || 'Мастер-класс')} · Психология</span>
+    <h1>Это ещё стресс<br>или уже выгорание?</h1>
     <p class="masterclass-company">${escapeHtml(entry.company || `Предприятие · ИНН ${entry.inn || ''}`)}</p>
-    <p class="onboarding-lead">Добро пожаловать! Здесь начинается практическая встреча о здоровье, привычках и простых действиях, которые помогают чувствовать себя лучше каждый день.</p>
+    <p class="onboarding-lead">Короткая персональная анкета, тест на выгорание и практики, которые помогают вернуть силы и ясность.</p>
     <div class="masterclass-topics">
-      <article><i>01</i><strong>Понятно</strong><span>Без сложных терминов и длинных лекций</span></article>
-      <article><i>02</i><strong>Практично</strong><span>Идеи, которые можно применить сразу</span></article>
-      <article><i>03</i><strong>Персонально</strong><span>После встречи можно продолжить в Консилиуме</span></article>
+      <article><i>01</i><strong>Понять состояние</strong><span>10 вопросов о последних двух неделях</span></article>
+      <article><i>02</i><strong>Помочь себе</strong><span>Пять простых практик без сложных терминов</span></article>
+      <article><i>03</i><strong>Обсудить</strong><span>Отдельный чат психологической поддержки с Ольгой</span></article>
     </div>
-    <div class="masterclass-invitation"><b>Ваш следующий шаг</b><span>Откройте Консилиум, чтобы сохранить доступ к материалам и возможностям сервиса.</span></div>
-    <div class="onboarding-actions"><button type="button" class="onboarding-next" data-masterclass-action="continue">Открыть Консилиум →</button></div>
+    <div class="masterclass-invitation"><b>Сохраните доступ</b><span>Войдите через мессенджер, чтобы продолжить на любом устройстве, или откройте материал анонимно.</span></div>
+    ${knownUser ? `<div class="onboarding-actions"><button type="button" class="onboarding-next" data-masterclass-action="continue-account">Продолжить с текущим профилем →</button></div>` : `<div class="masterclass-auth-options">
+      <button type="button" class="messenger-auth telegram" data-masterclass-action="telegram"><span aria-hidden="true">➤</span><div><strong>Войти через Telegram</strong><small>Сохранить доступ на других устройствах</small></div></button>
+      <button type="button" class="messenger-auth max" data-masterclass-action="max"><span aria-hidden="true">М</span><div><strong>Войти через MAX</strong><small>Сохранить доступ на других устройствах</small></div></button>
+      <button type="button" class="anonymous-auth" data-masterclass-action="anonymous">Войти анонимно</button>
+    </div>`}
   </div>`;
   $('#onboarding').scrollTop = 0;
   trackMasterclassScreen();
 }
 
-async function continueMasterclassEntry() {
-  const button = $('#onboardingContent [data-masterclass-action="continue"]');
+async function continueMasterclassEntry(action = 'continue-account') {
+  const button = $(`#onboardingContent [data-masterclass-action="${action}"]`);
   if (button) button.disabled = true;
   try {
     await api('/api/masterclass-entry/start', {method:'POST', body:'{}'});
     localStorage.setItem(masterclassContinuationKey(), '1');
-    trackMasterclassAction('continue');
-    if (state.identity?.authenticated) await enterKnownUser();
-    else showAuthGate();
+    trackMasterclassAction(action);
+    if (action === 'telegram' || action === 'max') {
+      await startMessengerAuth(action, {source:'masterclass'});
+      return;
+    }
+    await enterMasterclassFlow();
   } catch (error) {
     showOnboardingError(error.message);
     if (button) button.disabled = false;
   }
 }
 
-async function enterMasterclassFlow() {
-  const entry = await api('/api/masterclass-entry');
-  if (entry.continued_at || localStorage.getItem(masterclassContinuationKey()) === '1') {
-    if (!entry.continued_at) {
-      await api('/api/masterclass-entry/start', {method:'POST', body:'{}'});
-    }
-    if (state.identity?.authenticated) await enterKnownUser();
-    else showAuthGate();
+function masterclassAccessReady() {
+  return Boolean(
+    state.identity?.authenticated
+    || localStorage.getItem(ANONYMOUS_ACCESS_KEY) === state.identity?.chel_id
+  );
+}
+
+function masterclassSelect(value, label, selected) {
+  return `<option value="${value}" ${selected === value ? 'selected' : ''}>${label}</option>`;
+}
+
+async function renderMasterclassQuestionnaire(entry) {
+  state.masterclassEntry = entry;
+  const profile = await api('/api/profile');
+  state.profile = profile;
+  hideEntryScreens();
+  $('#onboarding').classList.remove('hidden');
+  setOnboardingMeta('Мини-анкета', 48);
+  $('#onboardingContent').innerHTML = `<div class="masterclass-questionnaire">
+    <span class="onboarding-kicker">Перед материалом · 5 коротких пунктов</span>
+    <h1>Расскажите немного о себе</h1>
+    <p class="onboarding-lead">Ответы сохранятся в вашем профиле и помогут Ольге учитывать ваш контекст в психологическом чате.</p>
+    <form id="masterclassProfileForm" class="masterclass-profile-form">
+      <label><b><i>1</i>Как к вам обращаться?</b><input name="preferred_name" maxlength="100" autocomplete="name" required value="${escapeAttr(profile.preferred_name || '')}" placeholder="Например, Алексей"></label>
+      <label><b><i>2</i>Пол</b><select name="sex" required><option value="">Выберите</option>${masterclassSelect('female','Женский',profile.sex)}${masterclassSelect('male','Мужской',profile.sex)}</select></label>
+      <label><b><i>3</i>Возраст</b><input name="age" type="number" min="18" max="99" step="1" inputmode="numeric" required value="${escapeAttr(profile.age ?? '')}" placeholder="Полных лет"></label>
+      <div class="masterclass-profile-pair"><label><b><i>4</i>Рост, см</b><input name="height_cm" type="number" min="50" max="250" step="0.1" inputmode="decimal" required value="${escapeAttr(profile.height_cm ?? '')}" placeholder="Например, 175"></label><label><b>Вес, кг</b><input name="weight_kg" type="number" min="40" max="250" step="0.1" inputmode="decimal" required value="${escapeAttr(profile.weight_kg ?? '')}" placeholder="Например, 72"></label></div>
+      <div class="masterclass-profile-pair"><label><b><i>5</i>Курение</b><select name="smoking" required><option value="">Выберите</option>${masterclassSelect('never','Не курю',profile.smoking)}${masterclassSelect('former','Курил(а) раньше',profile.smoking)}${masterclassSelect('current','Курю сейчас',profile.smoking)}</select></label><label><b>Алкоголь</b><select name="alcohol" required><option value="">Выберите</option>${masterclassSelect('never','Не употребляю',profile.alcohol)}${masterclassSelect('rarely','Редко / по праздникам',profile.alcohol)}${masterclassSelect('weekly','Примерно раз в неделю',profile.alcohol)}${masterclassSelect('often','Чаще раза в неделю',profile.alcohol)}</select></label></div>
+      <p class="reminder-error hidden" id="masterclassProfileError" role="alert"></p>
+      <button type="submit" class="onboarding-next">Перейти к материалу →</button>
+    </form>
+  </div>`;
+  $('#onboarding').scrollTop = 0;
+  trackMasterclassScreen('masterclass_questionnaire');
+}
+
+function masterclassChatButton(label = 'Написать в чат') {
+  return `<button type="button" class="masterclass-chat-button" data-masterclass-action="open-psychology-chat">${label}</button>`;
+}
+
+function renderMasterclassBurnout(entry) {
+  state.masterclassEntry = entry;
+  hideEntryScreens();
+  $('#onboarding').classList.remove('hidden');
+  setOnboardingMeta('Материал мастер-класса', 100);
+  $('#onboardingContent').innerHTML = `<article class="masterclass-burnout">
+    <header class="masterclass-burnout-cover"><span>ГК «Человек» · Экосистема здоровья</span><h1>Это ещё стресс<br>или уже выгорание?</h1><p>Небольшой тест и 5 практик, которые помогают вернуть силы и ясность.</p><small>Материал для сотрудников ${escapeHtml(entry.company || 'вашей компании')}</small></header>
+    <section><p><strong>Здравствуйте.</strong></p><p>Стресс — это нормально. Ненормально, когда он не проходит месяцами. Этот материал поможет честно посмотреть на своё состояние и понять следующий шаг.</p><div class="masterclass-alert"><strong>Если вам плохо прямо сейчас</strong><span>Опишите своё состояние Ольге в <button type="button" class="masterclass-inline-chat" data-masterclass-action="open-psychology-chat">чате</button>. При непосредственной угрозе жизни или безопасности звоните 112.</span></div></section>
+    <section><h2>Часть 1. Самоанализ: где вы сейчас?</h2><p>Вспомните последние две недели и ответьте «Да» или «Нет» на каждый вопрос.</p><form id="masterclassBurnoutQuiz" class="masterclass-burnout-quiz">
+      ${[
+        'Утром вы просыпаетесь с мыслью «скорее бы этот день закончился»?',
+        'Вас раздражают вещи, которые раньше не задевали?',
+        'Вы проверяете рабочие чаты и почту в выходные и поздно вечером?',
+        'Вам стало сложно концентрироваться на одной задаче дольше 15 минут?',
+        'Вы стали хуже засыпать или часто просыпаетесь ночью?',
+        'Вы заедаете стресс или, наоборот, забываете поесть?',
+        'Вы чувствуете усталость, даже если спали 8 часов?',
+        'Вам стало всё равно на работу, хобби или общение?',
+        'Вы часто думаете: «я ничего не успеваю, я не справляюсь»?',
+        'Вы не помните, когда последний раз искренне радовались?',
+      ].map((question,index) => `<fieldset><legend><i>${index + 1}</i>${question}</legend><label><input type="radio" name="burnout_q${index + 1}" value="yes"><span>Да</span></label><label><input type="radio" name="burnout_q${index + 1}" value="no"><span>Нет</span></label></fieldset>`).join('')}
+    </form><div class="masterclass-burnout-result" id="masterclassBurnoutResult"><b>Результат появится здесь</b><span>Ответьте на все 10 вопросов.</span></div></section>
+    <section><h2>Как читать результат</h2><div class="masterclass-result-grid">
+      <article data-burnout-level="0"><b>0 «Да»: стресса нет</b><p>Вы в ресурсе. Продолжайте поддерживать сон, отдых и движение.</p></article>
+      <article data-burnout-level="1"><b>1–2 «Да»: небольшое напряжение</b><p>Вы справляетесь, но организму полезны регулярные паузы и восстановление.</p></article>
+      <article data-burnout-level="2"><b>3–5 «Да»: усталость накопилась</b><p>Напряжение уже влияет на силы и настроение. Сейчас хороший момент что-то изменить.</p></article>
+      <article data-burnout-level="3"><b>6–8 «Да»: вы на пределе</b><p>Многое держится на силе воли. Снижайте нагрузку там, где это возможно, и не оставайтесь без поддержки.</p></article>
+      <article data-burnout-level="4"><b>9–10 «Да»: истощение</b><p>Вы не ленивый и не слабый — ресурс закончился. Стоит обсудить состояние со специалистом.</p></article>
+    </div></section>
+    <section><h2>Часть 2. Что происходит с вами</h2><div class="masterclass-stages"><article><i>1</i><b>Тревога</b><p>Сердце частит, мысли скачут, вы постоянно на взводе.</p></article><article><i>2</i><b>Сопротивление</b><p>Вы привыкли жить в напряжении. Силы ещё есть, но восстановление становится хуже.</p></article><article><i>3</i><b>Истощение</b><p>Появляются апатия, безразличие и ощущение, что сил больше нет.</p></article></div></section>
+    <section><h2>Часть 3. Пять практик, которые помогают вернуть силы</h2><div class="masterclass-practices">
+      <details open><summary><i>1</i><span><b>Стоп-кран</b><small>Когда накрывает</small></span></summary><p>Выйдите из комнаты, умойтесь прохладной водой, немного пройдитесь и только затем возвращайтесь к разговору или задаче.</p></details>
+      <details><summary><i>2</i><span><b>Спокойное дыхание</b><small>При тревоге и трудностях с засыпанием</small></span></summary><p>Сделайте несколько спокойных циклов дыхания с более длинным выдохом. Если кружится голова — вернитесь к обычному дыханию.</p></details>
+      <details><summary><i>3</i><span><b>Заземление 5–4–3–2–1</b><small>Чтобы вернуться в «здесь и сейчас»</small></span></summary><p>Назовите 5 вещей, которые видите, 4 звука, 3 телесных ощущения, 2 запаха и 1 вкус.</p></details>
+      <details><summary><i>4</i><span><b>Дневник «выжало / дало»</b><small>Чтобы увидеть источники усталости</small></span></summary><p>Вечером запишите, что сильнее всего вымотало, что придало сил и что завтра можно сделать иначе.</p></details>
+      <details><summary><i>5</i><span><b>Одно главное дело</b><small>Когда задач слишком много</small></span></summary><p>Выберите одно действительно важное дело на день, выполните его первым и вечером отметьте результат.</p></details>
+    </div></section>
+    <section><h2>Часть 4. Что рекомендуют психологи</h2><div class="masterclass-do-dont"><article><b>✓ Помогает</b><ul><li>Стабильный сон и час без телефона перед ним</li><li>Посильное движение каждый день</li><li>Честный разговор с человеком, которому доверяете</li><li>Ограничение новостей и соцсетей</li><li>Обращение за помощью, если легче не становится</li></ul></article><article><b>Не помогает</b><ul><li>Требовать от себя «просто собраться»</li><li>Использовать алкоголь для расслабления</li><li>Игнорировать постоянные телесные симптомы</li><li>Сравнивать себя с другими</li><li>Обесценивать собственную усталость</li></ul></article></div></section>
+    <section><h2>Когда пора обратиться к специалисту</h2><ul class="masterclass-check-list"><li>Больше двух недель не становится легче</li><li>Нарушился сон</li><li>Появляются панические атаки</li><li>Пропадает интерес к привычным делам и людям</li><li>Состояние мешает работе, отношениям или повседневным делам</li></ul><p>Это забота о себе, а не слабость.</p>${masterclassChatButton()}</section>
+    <footer><b>Позаботьтесь о себе. Это не эгоизм, это необходимость.</b><span>ГК «Человек» · Экосистема здоровья</span></footer>
+  </article>`;
+  $('#onboarding').scrollTop = 0;
+  trackMasterclassScreen('masterclass_burnout');
+}
+
+function updateMasterclassBurnoutResult() {
+  const form = $('#masterclassBurnoutQuiz');
+  const result = $('#masterclassBurnoutResult');
+  if (!form || !result) return;
+  const answers = [...form.querySelectorAll('input:checked')];
+  const yes = answers.filter(input => input.value === 'yes').length;
+  if (answers.length < 10) {
+    result.innerHTML = `<b>Отвечено ${answers.length} из 10</b><span>Продолжайте — результат появится после последнего ответа.</span>`;
     return;
   }
-  renderMasterclassLanding(entry);
+  const level = yes === 0 ? 0 : yes <= 2 ? 1 : yes <= 5 ? 2 : yes <= 8 ? 3 : 4;
+  const labels = ['Стресса нет — вы в ресурсе','Небольшое напряжение','Усталость накопилась','Вы на пределе','Признаки истощения'];
+  result.innerHTML = `<b>${yes} ответов «Да» · ${labels[level]}</b><span>Ниже подсвечена подходящая рекомендация. Это самопроверка, а не диагноз.</span>`;
+  document.querySelectorAll('[data-burnout-level]').forEach(card => card.classList.toggle('active', Number(card.dataset.burnoutLevel) === level));
+  trackEvent('masterclass_burnout_test_completed', {screen:'masterclass_burnout', context:'masterclass', yes_count:yes, level});
+}
+
+async function saveMasterclassProfile(form) {
+  if (!form.reportValidity()) return;
+  const button = form.querySelector('button[type="submit"]');
+  const error = $('#masterclassProfileError');
+  button.disabled = true;
+  error.classList.add('hidden');
+  try {
+    const values = Object.fromEntries(new FormData(form));
+    const result = await api('/api/masterclass-entry/profile', {method:'POST', body:JSON.stringify(values)});
+    state.profile = result.profile;
+    state.masterclassEntry = result.entry;
+    trackMasterclassAction('complete', 'masterclass_questionnaire');
+    renderMasterclassBurnout(result.entry);
+  } catch (requestError) {
+    error.textContent = requestError.message;
+    error.classList.remove('hidden');
+    button.disabled = false;
+  }
+}
+
+async function openMasterclassPsychologyChat() {
+  beginUserProgress('Открываем чат психологической поддержки…');
+  try {
+    const conversation = await api('/api/masterclass-entry/psychology-chat', {method:'POST', body:'{}'});
+    localStorage.setItem(REQUESTED_CONVERSATION_KEY, conversation.id);
+    history.replaceState({}, '', `/?conversation=${encodeURIComponent(conversation.id)}`);
+    state.onboarding = await api('/api/onboarding');
+    state.profile = state.onboarding.profile;
+    await openMainApp({skipIntro:true, allowIncompleteOnboarding:true});
+    await openConversation(conversation.id);
+  } catch (error) {
+    showOnboardingError(error.message);
+  } finally {
+    endUserProgress();
+  }
+}
+
+async function enterMasterclassFlow() {
+  const entry = await api('/api/masterclass-entry');
+  state.masterclassEntry = entry;
+  if (!entry.continued_at && localStorage.getItem(masterclassContinuationKey()) !== '1') {
+    renderMasterclassLanding(entry);
+    return;
+  }
+  if (!entry.continued_at) await api('/api/masterclass-entry/start', {method:'POST', body:'{}'});
+  if (!masterclassAccessReady()) {
+    showAuthGate();
+    return;
+  }
+  if (!entry.profile_completed_at) {
+    await renderMasterclassQuestionnaire(entry);
+    return;
+  }
+  renderMasterclassBurnout(entry);
 }
 
 function readResultFlow() {
@@ -1263,6 +1423,7 @@ function returnFromAnonymousWarning(action = 'anonymous_close') {
   trackEvent('anonymous_warning_cancelled');
   trackOnboardingAction(action, 'anonymous_warning');
   closeAnonymousWarning();
+  state.masterclassAnonymousPending = false;
   trackOnboardingScreen('registration');
 }
 
@@ -1275,7 +1436,7 @@ async function startApplication(options = {}) {
 
 $('#welcomeNextButton').addEventListener('click', continueFromWelcome);
 
-async function startMessengerAuth(provider) {
+async function startMessengerAuth(provider, {source = 'registration'} = {}) {
   trackEvent('registration_method_selected', {provider,method:provider,screen:'registration'});
   trackOnboardingAction(provider, 'registration');
   trackEvent('messenger_auth_started', {provider,method:provider});
@@ -1289,6 +1450,7 @@ async function startMessengerAuth(provider) {
     });
     window.location.assign(result.bot_url);
   } catch (error) {
+    if (source === 'masterclass') throw error;
     setAuthStatus(`${error.message}. Анонимный вход уже доступен, а подключение бота можно завершить позже.`, true);
     button.disabled = false;
   }
@@ -1317,7 +1479,14 @@ $('#anonymousWarningConfirm').addEventListener('click', async () => {
       body:JSON.stringify({ method:'anonymous' }),
     });
     localStorage.setItem(ANONYMOUS_ACCESS_KEY, registration.chel_id || state.identity?.chel_id || '');
-    await startApplication();
+    if (state.masterclassAnonymousPending && isMasterclassEntryUrl()) {
+      state.masterclassAnonymousPending = false;
+      await api('/api/masterclass-entry/start', {method:'POST', body:'{}'});
+      localStorage.setItem(masterclassContinuationKey(), '1');
+      await enterMasterclassFlow();
+    } else {
+      await startApplication();
+    }
   } catch (error) {
     showAuthGate();
     setAuthStatus(`Не удалось открыть Консилиум: ${error.message}`, true);
@@ -2974,8 +3143,18 @@ async function openMainApp({ skipIntro = false, allowIncompleteOnboarding = fals
 
 $('#onboardingContent').addEventListener('click', async event => {
   const masterclassAction = event.target.closest('[data-masterclass-action]')?.dataset.masterclassAction;
-  if (masterclassAction === 'continue') {
-    await continueMasterclassEntry();
+  if (masterclassAction) {
+    if (['telegram','max','continue-account'].includes(masterclassAction)) {
+      await continueMasterclassEntry(masterclassAction);
+    } else if (masterclassAction === 'anonymous') {
+      state.masterclassAnonymousPending = true;
+      trackMasterclassAction('anonymous', 'masterclass_landing');
+      trackEvent('anonymous_warning_viewed', {screen:'masterclass_landing',context:'masterclass'});
+      $('#anonymousWarning').classList.remove('hidden');
+    } else if (masterclassAction === 'open-psychology-chat') {
+      trackMasterclassAction('open_psychology_chat', 'masterclass_burnout');
+      await openMasterclassPsychologyChat();
+    }
     return;
   }
   const resultAction = event.target.closest('[data-result-action]')?.dataset.resultAction;
@@ -3157,6 +3336,16 @@ $('#onboardingContent').addEventListener('click', async event => {
   else if (action === 'link-messenger-after-skip') { trackOnboardingAction('link_messenger', 'completion_skipped'); openMessengerLinkModal({source:'exam_skip_completion'}); }
   else if (action === 'skip-medical-exam') skipMedicalExam();
   else if (action === 'save-appearance') { trackOnboardingAction('continue', 'appearance'); saveAppearance(); }
+});
+
+$('#onboardingContent').addEventListener('submit', async event => {
+  if (event.target.id !== 'masterclassProfileForm') return;
+  event.preventDefault();
+  await saveMasterclassProfile(event.target);
+});
+
+$('#onboardingContent').addEventListener('change', event => {
+  if (event.target.closest('#masterclassBurnoutQuiz')) updateMasterclassBurnoutResult();
 });
 
 $('#onboardingContent').addEventListener('input', event => {
@@ -3531,9 +3720,9 @@ async function loadConversationList() {
     applyUnreadCounts(Object.fromEntries(items.map(item => [item.id, Number(item.unread_count || 0)])));
     $('#mobileConversationCount').textContent = String(items.length);
     $('#conversationList').innerHTML = items.length ? items.map(item => `
-      <button class="conversation-row ${item.id === state.conversationId ? 'active' : ''} ${Number(item.unread_count || 0) ? 'unread' : ''} ${item.dialog_type === 'weight_control' ? 'specialized' : ''}" data-id="${item.id}">
+      <button class="conversation-row ${item.id === state.conversationId ? 'active' : ''} ${Number(item.unread_count || 0) ? 'unread' : ''} ${['weight_control','masterclass_psychology'].includes(item.dialog_type) ? 'specialized' : ''}" data-id="${item.id}">
         <span class="conversation-row-title"><strong>${escapeHtml(item.title)}</strong>${item.pinned ? '<i class="conversation-pin" aria-label="Закреплён">●</i>' : ''}${Number(item.unread_count || 0) ? `<b>${formatUnreadCount(item.unread_count)}</b>` : ''}</span>
-        ${item.dialog_type === 'weight_control' ? '<span class="conversation-specialized-badge">Персональная программа</span>' : ''}
+        ${item.dialog_type === 'weight_control' ? '<span class="conversation-specialized-badge">Персональная программа</span>' : item.dialog_type === 'masterclass_psychology' ? '<span class="conversation-specialized-badge">Психологическая поддержка</span>' : ''}
         <span>${escapeHtml(conversationSummary(item))}</span><small>${formatRelative(item.updated_at)}</small>
       </button>`).join('') : '<p class="no-conversations">Пока нет сохранённых диалогов</p>';
   } catch {

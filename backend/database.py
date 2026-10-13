@@ -1410,7 +1410,8 @@ def current_masterclass_access() -> dict | None:
     with connection() as conn:
         row = conn.execute(
             """SELECT l.id,l.inn,l.company,l.masterclass_code,l.masterclass_name,
-                      u.first_seen_at,u.last_seen_at,u.continued_at
+                      u.first_seen_at,u.last_seen_at,u.continued_at,
+                      u.profile_completed_at
                FROM masterclass_access_users u
                JOIN masterclass_access_links l ON l.id=u.link_id
                WHERE u.chel_id=? ORDER BY u.last_seen_at DESC LIMIT 1""",
@@ -1434,6 +1435,29 @@ def mark_current_masterclass_continued() -> dict:
                SET continued_at=COALESCE(continued_at,?),last_seen_at=?
                WHERE link_id=? AND chel_id=?""",
             (now, now, row["link_id"], chel_id),
+        )
+        conn.commit()
+    return current_masterclass_access() or {}
+
+
+def mark_current_masterclass_profile_completed() -> dict:
+    """Persist completion of the short psychology master-class profile."""
+    now = utc_now()
+    chel_id = current_chel_id()
+    with _write_lock, connection() as conn:
+        row = conn.execute(
+            """SELECT link_id FROM masterclass_access_users
+               WHERE chel_id=? ORDER BY last_seen_at DESC LIMIT 1""", (chel_id,),
+        ).fetchone()
+        if not row:
+            raise ValueError("Сначала откройте ссылку мастер-класса")
+        conn.execute(
+            """UPDATE masterclass_access_users
+               SET continued_at=COALESCE(continued_at,?),
+                   profile_completed_at=COALESCE(profile_completed_at,?),
+                   last_seen_at=?
+               WHERE link_id=? AND chel_id=?""",
+            (now, now, now, row["link_id"], chel_id),
         )
         conn.commit()
     return current_masterclass_access() or {}
@@ -4940,6 +4964,7 @@ def init_db() -> None:
                 first_seen_at TEXT NOT NULL,
                 last_seen_at TEXT NOT NULL,
                 continued_at TEXT,
+                profile_completed_at TEXT,
                 visit_count INTEGER NOT NULL DEFAULT 1,
                 PRIMARY KEY(link_id,chel_id),
                 FOREIGN KEY(link_id) REFERENCES masterclass_access_links(id) ON DELETE CASCADE,
@@ -6063,6 +6088,16 @@ def init_db() -> None:
         if "marketer_result_seen" not in onboarding_columns:
             conn.execute("ALTER TABLE onboarding_state ADD COLUMN marketer_result_seen INTEGER NOT NULL DEFAULT 0")
 
+        masterclass_user_columns = {
+            row[1] for row in conn.execute(
+                "PRAGMA table_info(masterclass_access_users)"
+            ).fetchall()
+        }
+        if "profile_completed_at" not in masterclass_user_columns:
+            conn.execute(
+                "ALTER TABLE masterclass_access_users ADD COLUMN profile_completed_at TEXT"
+            )
+
         payment_columns = {row[1] for row in conn.execute("PRAGMA table_info(payment_orders)").fetchall()}
         if "hidden_at" not in payment_columns:
             conn.execute("ALTER TABLE payment_orders ADD COLUMN hidden_at TEXT")
@@ -6077,6 +6112,11 @@ def init_db() -> None:
         conn.execute("CREATE INDEX IF NOT EXISTS idx_users_registered_at ON users(registered_at)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_ikp_access_users_chel_id ON ikp_access_users(chel_id,last_seen_at)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_masterclass_access_users_chel_id ON masterclass_access_users(chel_id,last_seen_at)")
+        conn.execute(
+            """CREATE UNIQUE INDEX IF NOT EXISTS idx_masterclass_psychology_one_per_user
+            ON conversations(chel_id, dialog_type)
+            WHERE dialog_type = 'masterclass_psychology'"""
+        )
         conn.execute("CREATE INDEX IF NOT EXISTS idx_users_last_seen_at ON users(last_seen_at)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_conversations_updated_at ON conversations(updated_at)")
         conn.execute(
@@ -6788,7 +6828,7 @@ def create_conversation(
     title: str = "Новый диалог", *, dialog_type: str = "general", pinned: bool = False,
 ) -> dict:
     dialog_type = str(dialog_type or "general").strip().lower()
-    if dialog_type not in {"general", "weight_control"}:
+    if dialog_type not in {"general", "weight_control", "masterclass_psychology"}:
         raise ValueError("Неизвестный тип диалога")
     conversation_id = str(uuid.uuid4())
     now = utc_now()
@@ -6890,6 +6930,69 @@ def create_or_get_weight_control_conversation() -> dict:
         ),
         "manager",
         {"weight_control_stage": "intro", "specialized_dialog": True},
+    )
+    return get_conversation(conversation["id"])
+
+
+def create_or_get_masterclass_psychology_conversation() -> dict:
+    """Return one pinned psychology chat for the user's master-class journey."""
+    entry = current_masterclass_access()
+    if not entry or not entry.get("profile_completed_at"):
+        raise ValueError("Сначала завершите мини-анкету мастер-класса")
+    with connection() as conn:
+        existing = conn.execute(
+            """SELECT * FROM conversations
+            WHERE chel_id=? AND dialog_type='masterclass_psychology' LIMIT 1""",
+            (current_chel_id(),),
+        ).fetchone()
+    if existing:
+        return dict(existing)
+
+    conversation = create_conversation(
+        "Психологическая поддержка",
+        dialog_type="masterclass_psychology", pinned=True,
+    )
+    profile = get_profile()
+    preferred_name = str(profile.get("preferred_name") or "").strip()
+    greeting = f", {preferred_name}" if preferred_name else ""
+    context = {
+        "current_topic": "стресс, усталость и эмоциональное состояние",
+        "topic_relation": "new",
+        "user_goal": "получить психологическую поддержку после мастер-класса",
+        "known_facts": [
+            f"Пользователь пришёл с мастер-класса «{entry['masterclass_name']}»",
+            f"Предприятие: {entry['company']}",
+        ],
+        "open_questions": [],
+    }
+    with _write_lock, connection() as conn:
+        conn.execute(
+            """UPDATE conversations
+            SET active_agent='psychologist',context_summary=?,updated_at=?
+            WHERE id=? AND chel_id=?""",
+            (
+                json.dumps(context, ensure_ascii=False), utc_now(),
+                conversation["id"], current_chel_id(),
+            ),
+        )
+        conn.commit()
+    add_message(
+        conversation["id"], "assistant",
+        (
+            f"Здравствуйте{greeting}! Я Ольга. Это отдельный чат психологической "
+            "поддержки после мастер-класса. Здесь можно спокойно обсудить стресс, "
+            "усталость, выгорание, сон и то, что сейчас особенно беспокоит.\n\n"
+            "Я помогу разобрать ситуацию и выбрать небольшой следующий шаг. "
+            "Если понадобится помощь человека, вы сможете позвать специалиста. "
+            "При непосредственной угрозе жизни или безопасности нужна экстренная "
+            "помощь по номеру 112.\n\n**С чего хотите начать?**"
+        ),
+        "psychologist",
+        {
+            "specialized_dialog": "masterclass_psychology",
+            "masterclass_code": entry["masterclass_code"],
+            "company_inn": entry["inn"],
+        },
     )
     return get_conversation(conversation["id"])
 

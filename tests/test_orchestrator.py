@@ -262,6 +262,26 @@ class OrchestratorTests(unittest.TestCase):
         self.assertEqual(fake.route_calls[1]["conversation"]["active_agent"], "neurologist")
         self.assertGreaterEqual(len(fake.route_calls[1]["history"]), 3)
 
+    def test_masterclass_psychology_dialogue_stays_with_psychologist(self):
+        fake = FakeLLM()
+        conversation = db.create_conversation(
+            "Психологическая поддержка",
+            dialog_type="masterclass_psychology",
+            pinned=True,
+        )
+
+        result = ConversationOrchestrator(fake).process(
+            conversation["id"], "После мастер-класса хочу обсудить усталость",
+        )
+
+        self.assertEqual(result.agent, "psychologist")
+        self.assertEqual(fake.answer_calls[-1]["agent_id"], "psychologist")
+        self.assertEqual(fake.answer_calls[-1]["route"].action, "continue")
+        self.assertEqual(
+            db.get_conversation(conversation["id"])["active_agent"],
+            "psychologist",
+        )
+
     def test_retry_reuses_last_unanswered_user_message(self):
         conversation = db.create_conversation("Повтор сообщения")
         original = db.add_message(
@@ -4126,14 +4146,14 @@ class OrchestratorTests(unittest.TestCase):
         self.assertIn("controllerchange", script)
         self.assertIn("url.pathname.startsWith('/api/')", worker)
         self.assertIn("url.pathname.startsWith('/auth/')", worker)
-        self.assertIn("consilium-shell-v155", worker)
+        self.assertIn("consilium-shell-v156", worker)
         self.assertIn("fetch(request)", worker)
-        self.assertIn("/static/styles.css?v=20261011-weight-character-v1", index)
+        self.assertIn("/static/styles.css?v=20261013-masterclass-psychology-v1", index)
         self.assertIn("/static/rich-text.2bf1f5fab764.css", index)
         self.assertTrue((project_root / "static" / "styles.07ffaefb4795.css").is_file())
         self.assertTrue((project_root / "static" / "rich-text.2bf1f5fab764.css").is_file())
-        self.assertIn("/static/app.js?v=20261011-weight-character-v1", index)
-        self.assertIn("/static/metrika.js?v=20261011-weight-character-v1", index)
+        self.assertIn("/static/app.js?v=20261013-masterclass-psychology-v1", index)
+        self.assertIn("/static/metrika.js?v=20261013-masterclass-psychology-v1", index)
         self.assertIn("Enter — новая строка · отправка — кнопкой", index)
         self.assertIn('enterkeyhint="enter"', index)
         self.assertNotIn("$('#chatForm').requestSubmit()", script)
@@ -4219,7 +4239,7 @@ class OrchestratorTests(unittest.TestCase):
         main = (project_root / "backend" / "main.py").read_text(encoding="utf-8")
         config = (project_root / "backend" / "config.py").read_text(encoding="utf-8")
 
-        self.assertIn('src="/static/metrika.js?v=20261011-weight-character-v1"', index)
+        self.assertIn('src="/static/metrika.js?v=20261013-masterclass-psychology-v1"', index)
         self.assertIn('YANDEX_METRIKA_COUNTER_ID', config)
         self.assertIn('path == "/api/public-config"', main)
         self.assertIn('"metrika.js"', main)
@@ -4605,7 +4625,8 @@ class OrchestratorTests(unittest.TestCase):
         self.assertIn("state.returnToChatAfterExaminations && state.onboarding.intro_seen", script)
         self.assertIn("['questionnaire','not_medical_exam','exams','payment'].includes(onboarding.status)", script)
         self.assertIn("allowIncompleteOnboarding:true", script)
-        self.assertIn("if not _chat_access_allowed():", main_source)
+        self.assertIn("not _chat_access_allowed()", main_source)
+        self.assertIn('conversation.get("dialog_type") == "masterclass_psychology"', main_source)
         self.assertIn('if path == "/api/result-entry/start":', main_source)
         self.assertIn("if not _result_entry_can_start(onboarding):", main_source)
         self.assertIn('self.send_header("Location", "/?auth=messenger_login")', main_source)

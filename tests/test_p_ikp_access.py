@@ -56,6 +56,18 @@ class IkpAccessTests(unittest.TestCase):
             entry = db.current_masterclass_access()
             self.assertEqual(entry['masterclass_name'], 'Мастер-класс 1')
             db.mark_current_masterclass_continued()
+            completed = db.mark_current_masterclass_profile_completed()
+            self.assertTrue(completed['profile_completed_at'])
+            psychology = db.create_or_get_masterclass_psychology_conversation()
+            repeated_psychology = db.create_or_get_masterclass_psychology_conversation()
+            self.assertEqual(psychology['id'], repeated_psychology['id'])
+            self.assertEqual(psychology['dialog_type'], 'masterclass_psychology')
+            self.assertEqual(psychology['active_agent'], 'psychologist')
+            self.assertEqual(psychology['pinned'], 1)
+            self.assertIn(
+                'отдельный чат психологической поддержки',
+                db.list_messages(psychology['id'])[0]['content'],
+            )
         finally:
             db.set_current_chel_id(previous_chel_id)
         report = db.admin_masterclass_report()

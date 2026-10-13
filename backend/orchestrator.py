@@ -209,6 +209,15 @@ class ConversationOrchestrator:
         decision = self._normalize_route(
             self._decide(user_text, history, conversation, previous_context, attachments), previous_agent
         )
+        if (
+            conversation.get("dialog_type") == "masterclass_psychology"
+            and decision.action not in {"human", "emergency"}
+        ):
+            decision = RouteDecision(
+                "continue", "psychologist",
+                "Специализированный чат психологической поддержки мастер-класса",
+                decision.context,
+            )
         context = self._apply_topic_transition(previous_context, decision.context)
         decision.context = context
         previous_topic = " ".join(str(previous_context.get("current_topic", "")).lower().split())

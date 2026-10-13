@@ -1246,7 +1246,19 @@ class AnalyticsTests(unittest.TestCase):
              'properties':{'screen':'masterclass_landing', 'context':'masterclass'}},
             {'event_id':'masterclass-action-01', 'session_id':'masterclass-session',
              'event_name':'onboarding_screen_action',
-             'properties':{'screen':'masterclass_landing', 'action':'continue', 'context':'masterclass'}},
+             'properties':{'screen':'masterclass_landing', 'action':'anonymous', 'context':'masterclass'}},
+            {'event_id':'masterclass-profile-view', 'session_id':'masterclass-session',
+             'event_name':'onboarding_screen_viewed',
+             'properties':{'screen':'masterclass_questionnaire', 'context':'masterclass'}},
+            {'event_id':'masterclass-profile-done', 'session_id':'masterclass-session',
+             'event_name':'onboarding_screen_action',
+             'properties':{'screen':'masterclass_questionnaire', 'action':'complete', 'context':'masterclass'}},
+            {'event_id':'masterclass-burnout-view', 'session_id':'masterclass-session',
+             'event_name':'onboarding_screen_viewed',
+             'properties':{'screen':'masterclass_burnout', 'context':'masterclass'}},
+            {'event_id':'masterclass-chat-open', 'session_id':'masterclass-session',
+             'event_name':'onboarding_screen_action',
+             'properties':{'screen':'masterclass_burnout', 'action':'open_psychology_chat', 'context':'masterclass'}},
         ])
         analytics.record_events('CHEL-ORDINARY', [{
             'event_id':'ordinary-masterclass-view', 'session_id':'ordinary-session',
@@ -1259,7 +1271,12 @@ class AnalyticsTests(unittest.TestCase):
         self.assertEqual(report['summary']['start_users'], 1)
         self.assertEqual(report['summary']['reached_completion'], 1)
         self.assertEqual(report['screens'][0]['id'], 'masterclass_landing')
-        self.assertEqual(report['screens'][0]['actions'][0]['users'], 1)
+        landing_actions = {item['id']: item for item in report['screens'][0]['actions']}
+        self.assertEqual(landing_actions['anonymous']['users'], 1)
+        self.assertEqual([item['id'] for item in report['screens'][:3]], [
+            'masterclass_landing', 'masterclass_questionnaire', 'masterclass_burnout',
+        ])
+        self.assertEqual(report['screens'][2]['actions'][0]['users'], 1)
 
     def test_reports_support_inclusive_custom_date_range(self):
         for index in range(2):

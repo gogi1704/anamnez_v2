@@ -717,14 +717,39 @@ def _metric2_screen_definitions() -> list[dict]:
         "root": True,
         "flow": "masterclass",
         "legacy_reach": [],
-        "actions": [{
-            "id": "continue",
-            "label": "Открыть Консилиум",
-            "target_label": "Вход и дальнейшая работа в Консилиуме",
-            "terminal_outcome": True,
-            "legacy": [],
-        }],
+        "actions": [
+            {"id": "telegram", "label": "Войти через Telegram", "target": "masterclass_questionnaire", "legacy": []},
+            {"id": "max", "label": "Войти через MAX", "target": "masterclass_questionnaire", "legacy": []},
+            {"id": "anonymous", "label": "Войти анонимно", "target": "masterclass_questionnaire", "legacy": []},
+            {"id": "continue-account", "label": "Продолжить с текущим профилем", "target": "masterclass_questionnaire", "legacy": []},
+        ],
     })
+    screens.extend([
+        {
+            "id": "masterclass_questionnaire",
+            "title": "Мини-анкета мастер-класса",
+            "stage": "Мастер-класс · профиль",
+            "kind": "masterclass_questionnaire",
+            "description": "Имя, пол, возраст, рост, вес, курение и алкоголь.",
+            "parent_id": "masterclass_landing", "flow": "masterclass",
+            "legacy_reach": [],
+            "actions": [{"id": "complete", "label": "Перейти к материалу", "target": "masterclass_burnout", "legacy": []}],
+        },
+        {
+            "id": "masterclass_burnout",
+            "title": "Материал о стрессе и выгорании",
+            "stage": "Мастер-класс · материал",
+            "kind": "masterclass_burnout",
+            "description": "Самопроверка, практики и переход в отдельный психологический чат.",
+            "parent_id": "masterclass_questionnaire", "flow": "masterclass",
+            "legacy_reach": [],
+            "actions": [{
+                "id": "open_psychology_chat", "label": "Написать в чат",
+                "target_label": "Психологический чат с Ольгой",
+                "terminal_outcome": True, "legacy": [],
+            }],
+        },
+    ])
     screens.extend([
         {
             "id": "result_welcome", "title": "Получение результатов", "stage": "Результаты · начало",
@@ -2681,8 +2706,8 @@ def _metric2_report_uncached(
             chel_id
             for (screen_id, group_id, chel_id), (_, action_id)
             in final_group_action.items()
-            if screen_id == "masterclass_landing"
-            and group_id == "final_transition" and action_id == "continue"
+            if screen_id == "masterclass_burnout"
+            and group_id == "final_transition" and action_id == "open_psychology_chat"
         }
     marketer_business = (
         _marketer_variant_business_metrics(set(start_cohort))

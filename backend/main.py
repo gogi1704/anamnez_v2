@@ -1799,6 +1799,52 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                 return self._json(200, {"status": "continued", **entry})
             except ValueError as exc:
                 return self._json(422, {"detail": str(exc)})
+        if path == "/api/masterclass-entry/profile":
+            try:
+                entry = db.current_masterclass_access()
+                if not entry:
+                    raise ValueError("Ссылка мастер-класса не найдена")
+                payload = self._read_json(max_bytes=8_000)
+                existing = db.get_profile()
+                profile = self._validate_profile({
+                    **existing,
+                    **payload,
+                    "company_inn": entry["inn"],
+                    "pregnancy": existing.get("pregnancy", "not_applicable"),
+                    "conditions": existing.get("conditions", []),
+                    "medications": existing.get("medications", []),
+                    "allergies": existing.get("allergies", []),
+                })
+                required = (
+                    "preferred_name", "age", "sex", "height_cm", "weight_kg",
+                    "smoking", "alcohol",
+                )
+                if any(profile.get(name) in {None, "", "unknown"} for name in required):
+                    raise ValueError("Заполните все поля мини-анкеты")
+                saved = db.save_profile(profile)
+                updated_entry = db.mark_current_masterclass_profile_completed()
+                self._track_analytics("masterclass_profile_completed", {
+                    "screen": "masterclass_questionnaire",
+                    "context": "masterclass",
+                    "masterclass_code": entry["masterclass_code"],
+                })
+                return self._json(200, {
+                    "status": "completed", "profile": saved,
+                    "entry": updated_entry,
+                })
+            except (ValueError, TypeError, json.JSONDecodeError, UnicodeDecodeError) as exc:
+                return self._json(422, {"detail": str(exc)})
+        if path == "/api/masterclass-entry/psychology-chat":
+            try:
+                conversation = db.create_or_get_masterclass_psychology_conversation()
+                self._track_analytics("masterclass_psychology_chat_opened", {
+                    "screen": "masterclass_burnout",
+                    "context": "masterclass",
+                    "conversation_id": conversation["id"],
+                })
+                return self._json(200, conversation)
+            except ValueError as exc:
+                return self._json(422, {"detail": str(exc)})
         if path == "/api/memories":
             try:
                 payload = self._read_json()
@@ -2240,10 +2286,6 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
             return self._json(200, {**result, "unread_counts": db.conversation_unread_counts()})
         if path != "/api/chat":
             return self._json(404, {"detail": "Маршрут не найден"})
-        if not _chat_access_allowed():
-            return self._json(409, {
-                "detail": "Сначала завершите выбор обследований и финальный экран анкеты",
-            })
         try:
             chat_started = time.perf_counter()
             payload = self._read_json(max_bytes=17_000_000)
@@ -2253,6 +2295,16 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                 return self._json(422, {"detail": "Сообщение должно содержать от 1 до 12000 символов"})
             conversation_id = str(payload.get("conversation_id") or "")
             conversation = db.get_conversation(conversation_id) if conversation_id else None
+            if (
+                not _chat_access_allowed()
+                and not (
+                    conversation
+                    and conversation.get("dialog_type") == "masterclass_psychology"
+                )
+            ):
+                return self._json(409, {
+                    "detail": "Сначала завершите выбор обследований и финальный экран анкеты",
+                })
             if not message and not (
                 conversation and conversation.get("dialog_type") == "weight_control"
             ):
