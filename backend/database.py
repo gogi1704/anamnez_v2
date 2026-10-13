@@ -3024,8 +3024,8 @@ def _staff_messenger_id(value, label: str) -> str:
 
 def _staff_role(value: str) -> str:
     role = str(value or "manager").strip().lower()
-    if role not in {"manager", "doctor"}:
-        raise ValueError("Выберите роль: менеджер или врач-специалист")
+    if role not in {"manager", "doctor", "psychologist"}:
+        raise ValueError("Выберите роль: менеджер, врач-специалист или психолог")
     return role
 
 
@@ -3293,7 +3293,7 @@ def bind_staff_messenger(
 def enqueue_manager_notifications(
     event_type: str, conversation_id: str, *, message_id: int = 0,
     message_text: str = "", recipient_role: str | None = None,
-    request_kind: str = "",
+    request_kind: str = "", request_number: str = "",
 ) -> int:
     if event_type not in {
         "new_request", "new_message", "request_cancelled",
@@ -3318,6 +3318,7 @@ def enqueue_manager_notifications(
         if event_type == "psychology_session_requested":
             title = "Новая заявка на сессию с психологом"
             body = (
+                f"Заявка № {request_number or conversation['human_ticket_id'] or '—'}. "
                 f"{name} оставил заявку на 30-минутный созвон с психологом. "
                 "Откройте чат, чтобы связаться с пользователем и согласовать время."
             )
@@ -3363,7 +3364,11 @@ def enqueue_manager_notifications(
             preference = "notify_new_requests"
         else:
             title = "Новое сообщение пользователя"
-            destination = "врача" if recipient_role == "doctor" else "менеджера"
+            destination = (
+                "врача" if recipient_role == "doctor"
+                else "психолога" if recipient_role == "psychologist"
+                else "менеджера"
+            )
             body = f"{name} отправил новое сообщение. Откройте защищённую панель {destination}."
             preference = "notify_new_messages"
         recipients = conn.execute(
@@ -3383,6 +3388,7 @@ def enqueue_manager_notifications(
             ),
             "conversation_id": conversation_id,
             "ticket_id": conversation["human_ticket_id"] or "",
+            "request_number": str(request_number or conversation["human_ticket_id"] or ""),
             "recipient_role": recipient_role,
             "request_kind": str(request_kind or ""),
         }, ensure_ascii=False)
@@ -3792,6 +3798,18 @@ def _psychology_order_session_count(items_value) -> int:
     return 1
 
 
+def _new_psychology_request_number(conn: sqlite3.Connection) -> str:
+    """Generate a human-friendly unique five-digit psychology request number."""
+    for _ in range(200):
+        request_number = str(secrets.randbelow(90_000) + 10_000)
+        if not conn.execute(
+            "SELECT 1 FROM psychology_sessions WHERE request_number=?",
+            (request_number,),
+        ).fetchone():
+            return request_number
+    raise RuntimeError("Не удалось сформировать номер заявки. Попробуйте ещё раз")
+
+
 def create_psychology_session_payment_order(
     conversation_id: str, session_count: int = 1,
 ) -> dict:
@@ -3850,7 +3868,7 @@ def psychology_session_summary(conversation_id: str) -> dict:
     chel_id = current_chel_id()
     with connection() as conn:
         sessions = conn.execute(
-            """SELECT id,session_number,access_type,status,started_at,completed_at,
+            """SELECT id,session_number,request_number,access_type,status,started_at,completed_at,
                       payment_order_id
                FROM psychology_sessions
                WHERE conversation_id=? AND chel_id=?
@@ -3865,7 +3883,10 @@ def psychology_session_summary(conversation_id: str) -> dict:
             (chel_id, conversation_id),
         ).fetchall()
     session_items = [dict(row) for row in sessions]
-    paid_used = sum(1 for item in session_items if item["access_type"] == "paid")
+    paid_used = sum(
+        1 for item in session_items
+        if item["access_type"] == "paid" and item["status"] == "completed"
+    )
     free_used = any(item["access_type"] == "free" for item in session_items)
     completed = sum(1 for item in session_items if item["status"] == "completed")
     requested = next((item for item in session_items if item["status"] == "requested"), None)
@@ -3947,13 +3968,14 @@ def request_psychology_session(conversation_id: str) -> dict:
             (conversation_id, chel_id),
         ).fetchone()[0])
         session_id = f"psy_{uuid.uuid4().hex}"
+        request_number = _new_psychology_request_number(conn)
         conn.execute(
             """INSERT INTO psychology_sessions
-               (id,conversation_id,chel_id,session_number,access_type,payment_order_id,
-                status,started_at,created_at,updated_at)
-               VALUES (?,?,?,?,?,?,'requested',?,?,?)""",
+               (id,conversation_id,chel_id,session_number,request_number,
+                access_type,payment_order_id,status,started_at,created_at,updated_at)
+               VALUES (?,?,?,?,?,?,?,'requested',?,?,?)""",
             (
-                session_id, conversation_id, chel_id, number, access_type,
+                session_id, conversation_id, chel_id, number, request_number, access_type,
                 None if payment_credit_number else payment_order_id, now, now, now,
             ),
         )
@@ -3967,21 +3989,12 @@ def request_psychology_session(conversation_id: str) -> dict:
                     payment_credit_number, now,
                 ),
             )
-            credit_count = _psychology_order_session_count(
-                next(row["items"] for row in paid_orders if row["id"] == payment_order_id)
-            )
-            if payment_credit_number >= credit_count:
-                conn.execute(
-                    """UPDATE payment_orders SET fulfillment_at=COALESCE(fulfillment_at,?),updated_at=?
-                       WHERE id=?""",
-                    (now, now, payment_order_id),
-                )
-        elif payment_order_id:
-            conn.execute(
-                """UPDATE payment_orders SET fulfillment_at=COALESCE(fulfillment_at,?),updated_at=?
-                   WHERE id=?""",
-                (now, now, payment_order_id),
-            )
+        conn.execute(
+            """UPDATE conversations SET human_status='pending',human_ticket_id=?,
+               human_channel='call',human_recipient_role='psychologist',updated_at=?
+               WHERE id=? AND chel_id=?""",
+            (request_number, now, conversation_id, chel_id),
+        )
         conn.commit()
         row = conn.execute("SELECT * FROM psychology_sessions WHERE id=?", (session_id,)).fetchone()
     return {**dict(row), "created": True}
@@ -4017,10 +4030,10 @@ def complete_psychology_session(conversation_id: str) -> dict:
 
 
 def manager_complete_psychology_session(
-    conversation_id: str, manager_name: str, staff_role: str = "manager",
+    conversation_id: str, manager_name: str, staff_role: str = "psychologist",
 ) -> dict | None:
     """Mark the latest requested human psychology call as conducted."""
-    manager_name = " ".join(str(manager_name or "").split())[:80] or "Менеджер"
+    manager_name = " ".join(str(manager_name or "").split())[:80] or "Психолог"
     staff_role = _staff_role(staff_role)
     now = utc_now()
     with _write_lock, connection() as conn:
@@ -4046,6 +4059,42 @@ def manager_complete_psychology_session(
             (now, now, session["id"]),
         )
         conn.execute(
+            """UPDATE conversations SET human_status='closed',status='active',updated_at=?
+               WHERE id=?""",
+            (now, conversation_id),
+        )
+        credit_use = conn.execute(
+            """SELECT payment_order_id FROM psychology_session_credit_uses
+               WHERE session_id=?""",
+            (session["id"],),
+        ).fetchone()
+        payment_order_id = (
+            credit_use["payment_order_id"] if credit_use
+            else session["payment_order_id"]
+        )
+        if payment_order_id:
+            order = conn.execute(
+                "SELECT items FROM payment_orders WHERE id=?",
+                (payment_order_id,),
+            ).fetchone()
+            completed_uses = int(conn.execute(
+                """SELECT COUNT(*) FROM psychology_session_credit_uses uses
+                   JOIN psychology_sessions sessions ON sessions.id=uses.session_id
+                   WHERE uses.payment_order_id=? AND sessions.status='completed'""",
+                (payment_order_id,),
+            ).fetchone()[0])
+            legacy_completed = int(conn.execute(
+                """SELECT COUNT(*) FROM psychology_sessions
+                   WHERE payment_order_id=? AND status='completed'""",
+                (payment_order_id,),
+            ).fetchone()[0])
+            if order and completed_uses + legacy_completed >= _psychology_order_session_count(order["items"]):
+                conn.execute(
+                    """UPDATE payment_orders SET fulfillment_at=COALESCE(fulfillment_at,?),updated_at=?
+                       WHERE id=?""",
+                    (now, now, payment_order_id),
+                )
+        conn.execute(
             """INSERT INTO manager_actions
                (conversation_id, manager_name, action, details, created_at)
                VALUES (?, ?, 'complete_psychology_session', ?, ?)""",
@@ -4055,6 +4104,7 @@ def manager_complete_psychology_session(
                 json.dumps({
                     "session_id": session["id"],
                     "session_number": session["session_number"],
+                    "request_number": session["request_number"],
                     "access_type": session["access_type"],
                 }, ensure_ascii=False),
                 now,
@@ -4696,7 +4746,7 @@ def manager_list_conversations(
                     ORDER BY matched_updated DESC
                     LIMIT ?
                 )
-                SELECT c.id, c.chel_id, c.title, c.active_agent, c.status,
+                SELECT c.id, c.chel_id, c.title, c.active_agent, c.dialog_type, c.status,
                 c.ai_enabled, c.human_status, c.human_ticket_id,
                 COALESCE(c.human_recipient_role, 'manager') AS human_recipient_role,
                 COALESCE(c.human_channel, '') AS human_channel,
@@ -4722,7 +4772,7 @@ def manager_list_conversations(
             ).fetchall()
         else:
             rows = conn.execute(
-                f"""SELECT c.id, c.chel_id, c.title, c.active_agent, c.status,
+                f"""SELECT c.id, c.chel_id, c.title, c.active_agent, c.dialog_type, c.status,
                     c.ai_enabled, c.human_status, c.human_ticket_id,
                     COALESCE(c.human_recipient_role, 'manager') AS human_recipient_role,
                     COALESCE(c.human_channel, '') AS human_channel,
@@ -4909,7 +4959,7 @@ def manager_conversation_detail(
         psychology_session_row = None
         if conversation.get("dialog_type") == "masterclass_psychology":
             psychology_session_row = conn.execute(
-                """SELECT id,session_number,access_type,status,started_at,completed_at
+                """SELECT id,session_number,request_number,access_type,status,started_at,completed_at
                    FROM psychology_sessions
                    WHERE conversation_id=? AND status='requested'
                    ORDER BY session_number DESC LIMIT 1""",
@@ -5811,6 +5861,7 @@ def init_db() -> None:
                 conversation_id TEXT NOT NULL,
                 chel_id TEXT NOT NULL,
                 session_number INTEGER NOT NULL,
+                request_number TEXT,
                 access_type TEXT NOT NULL,
                 payment_order_id TEXT UNIQUE,
                 status TEXT NOT NULL DEFAULT 'active',
@@ -6577,6 +6628,40 @@ def init_db() -> None:
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_psychology_sessions_balance "
             "ON psychology_sessions(chel_id, access_type, status)"
+        )
+        psychology_session_columns = {
+            row[1] for row in conn.execute(
+                "PRAGMA table_info(psychology_sessions)"
+            ).fetchall()
+        }
+        if "request_number" not in psychology_session_columns:
+            conn.execute("ALTER TABLE psychology_sessions ADD COLUMN request_number TEXT")
+        used_request_numbers = {
+            str(row[0]) for row in conn.execute(
+                """SELECT request_number FROM psychology_sessions
+                   WHERE TRIM(COALESCE(request_number,'')) <> ''"""
+            ).fetchall()
+        }
+        sessions_without_request_number = conn.execute(
+            """SELECT id FROM psychology_sessions
+               WHERE TRIM(COALESCE(request_number,'')) = '' ORDER BY created_at,id"""
+        ).fetchall()
+        for session_row in sessions_without_request_number:
+            for _ in range(200):
+                request_number = str(secrets.randbelow(90_000) + 10_000)
+                if request_number not in used_request_numbers:
+                    break
+            else:
+                raise RuntimeError("Не удалось сформировать номера существующих заявок")
+            used_request_numbers.add(request_number)
+            conn.execute(
+                "UPDATE psychology_sessions SET request_number=? WHERE id=?",
+                (request_number, session_row["id"]),
+            )
+        conn.execute(
+            """CREATE UNIQUE INDEX IF NOT EXISTS idx_psychology_sessions_request_number
+               ON psychology_sessions(request_number)
+               WHERE request_number IS NOT NULL"""
         )
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_psychology_session_credit_uses_order "

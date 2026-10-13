@@ -11,7 +11,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/static/dashboard.css?v=20261008-model-priority-v3">
+  <link rel="stylesheet" href="/static/dashboard.css?v=20261013-psychologist-role-v4">
 </head>
 <body>
   <main class="dashboard-shell">
@@ -591,7 +591,7 @@
           <div class="panel-heading"><div><p class="eyebrow">Новая учётная запись</p><h2>Добавить сотрудника</h2></div></div>
           <form id="managerCreateForm" class="manager-create-form">
             <label>Имя сотрудника<input id="staffDisplayName" maxlength="80" autocomplete="off" placeholder="Ольга Иванова" required></label>
-            <label>Роль<select id="staffRole"><option value="manager">Менеджер</option><option value="doctor">Врач-специалист по расшифровке</option></select></label>
+            <label>Роль<select id="staffRole"><option value="manager">Менеджер</option><option value="doctor">Врач-специалист по расшифровке</option><option value="psychologist">Психолог</option></select></label>
             <label>Логин<input id="staffLogin" maxlength="64" autocomplete="off" placeholder="olga.ivanova" required></label>
             <label>Пароль<input id="staffPassword" type="text" minlength="6" maxlength="256" autocomplete="off" spellcheck="false" placeholder="Не короче 6 символов" required></label>
             <label>Telegram ID <small>(необязательно)</small><input id="staffTelegramId" inputmode="numeric" maxlength="30" autocomplete="off" placeholder="Например, 123456789"></label>
@@ -606,7 +606,7 @@
           <p class="manager-form-status hidden" id="managerFormStatus" role="status"></p>
         </article>
         <article class="panel table-panel">
-          <div class="panel-heading"><div><p class="eyebrow">Доступ к /manager</p><h2>Менеджеры и врачи</h2></div><span class="table-count" id="staffCount"></span></div>
+          <div class="panel-heading"><div><p class="eyebrow">Доступ к /manager</p><h2>Менеджеры, врачи и психологи</h2></div><span class="table-count" id="staffCount"></span></div>
           <div class="staff-list" id="staffList"></div>
         </article>
       </section>
@@ -823,6 +823,6 @@
       </div>
     </section>
   </div>
-  <script src="/static/dashboard.js?v=20261008-model-priority-v3" defer></script>
+  <script src="/static/dashboard.js?v=20261013-psychologist-role-v4" defer></script>
 </body>
 </html>

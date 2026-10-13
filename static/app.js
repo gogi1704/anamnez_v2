@@ -3092,7 +3092,7 @@ function renderPsychologySessionPaymentSuccess(order) {
       <span class="onboarding-kicker">Сессии оплачены</span>
       <h1>${countLabel} добавлены</h1>
       <p class="onboarding-lead">Оплата ${packageInfo.totalPrice.toLocaleString('ru-RU')} ₽ подтверждена. Сессии доступны в балансе психологического чата.</p>
-      <section class="payment-find-guide"><strong>Как оставить заявку</strong><p>Откройте список сессий в психологическом чате и нажмите «Новая сессия». Менеджер свяжется с вами для согласования времени созвона.</p></section>
+      <section class="payment-find-guide"><strong>Как оставить заявку</strong><p>Откройте список сессий в психологическом чате и нажмите «Новая сессия». Психолог получит заявку и свяжется с вами для согласования времени созвона.</p></section>
       <div class="onboarding-actions"><button type="button" class="onboarding-next" data-onboarding-action="open-psychology-sessions-after-payment">Оставить заявку</button><button type="button" class="onboarding-back" data-onboarding-action="open-psychology-session-chat">Вернуться в чат</button></div>
     </div>`;
 }
@@ -3704,7 +3704,8 @@ function addMessage(sender, text, agentId = state.active, urgent = false, create
   }
   const agent = AGENTS[agentId] || AGENTS.manager;
   const humanManager = sender === 'agent' && metadata.sender_type === 'human_manager';
-  const humanRole = metadata.staff_role === 'doctor' ? 'Врач-специалист' : 'Менеджер';
+  const humanRole = metadata.staff_role === 'doctor'
+    ? 'Врач-специалист' : metadata.staff_role === 'psychologist' ? 'Психолог' : 'Менеджер';
   const wrapper = document.createElement('div');
   const labInterpretation = sender === 'agent' && metadata.action === 'lab_interpretation';
   const weightConclusion = sender === 'agent' && metadata.action === 'weight_program_conclusion';
@@ -4252,14 +4253,14 @@ function psychologySessionDate(value) {
 function renderPsychologySessions(summary = {}) {
   state.psychologySessions = summary;
   const completed = Number(summary.completed_count || 0);
-  const paid = Number(summary.purchased_count || 0);
+  const prepaid = Number(summary.remaining_paid || 0);
   $('#psychologySessionsSummary').innerHTML = `
-    <span>Сессий было <strong>${completed}</strong></span>
-    <span>Оплачено <strong>${paid}</strong></span>`;
+    <span>Сессий проведено <strong>${completed}</strong></span>
+    <span>Сессий предоплачено <strong>${prepaid}</strong></span>`;
   const sessions = (summary.sessions || []).filter(item => item.status === 'completed');
   const pending = summary.pending_session;
   const newSessionSubtitle = pending
-    ? 'Заявка отправлена · менеджер свяжется для согласования времени'
+    ? `Заявка № ${escapeHtml(pending.request_number || '—')} отправлена · психолог свяжется для согласования времени`
     : summary.free_available
       ? 'Первая сессия · 30 минут абсолютно бесплатно'
       : Number(summary.remaining_paid || 0) > 0
@@ -4343,7 +4344,7 @@ function openPsychologySessionRequest() {
   $('#psychologySessionRequestError').classList.add('hidden');
   if (pending) {
     $('#psychologySessionRequestTitle').textContent = 'Заявка уже отправлена';
-    $('#psychologySessionRequestText').textContent = 'Менеджер свяжется с вами, чтобы согласовать удобное время 30-минутного созвона с психологом.';
+    $('#psychologySessionRequestText').textContent = `Заявка № ${pending.request_number || '—'} передана психологам. Психолог свяжется с вами, чтобы согласовать удобное время 30-минутного созвона.`;
     button.dataset.mode = 'close';
     button.textContent = 'Понятно';
     $('#psychologySessionRequestCancel').classList.add('hidden');
@@ -4351,8 +4352,8 @@ function openPsychologySessionRequest() {
     const free = Boolean(summary.free_available);
     $('#psychologySessionRequestTitle').textContent = 'Оставить заявку на сессию?';
     $('#psychologySessionRequestText').textContent = free
-      ? 'Первая 30-минутная сессия абсолютно бесплатна. Менеджер свяжется с вами и поможет согласовать удобное время созвона.'
-      : 'Будет использована одна оплаченная сессия. Менеджер свяжется с вами и поможет согласовать удобное время 30-минутного созвона.';
+      ? 'Первая 30-минутная сессия абсолютно бесплатна. Заявку получат психологи, после чего психолог свяжется с вами и согласует удобное время созвона.'
+      : 'Будет зарезервирована одна предоплаченная сессия. Заявку получат психологи, после чего психолог свяжется с вами и согласует удобное время 30-минутного созвона.';
     button.dataset.mode = 'request';
     button.textContent = 'Да, оставить заявку';
     $('#psychologySessionRequestCancel').classList.remove('hidden');

@@ -203,7 +203,8 @@ function enterWorkspace(manager) {
   $('#managerDisplayName').textContent = manager.display_name;
   $('#managerAvatar').textContent = initials(manager.display_name);
   document.querySelector('.manager-identity small').textContent = manager.role === 'doctor'
-    ? 'врач-специалист на связи' : 'менеджер на связи';
+    ? 'врач-специалист на связи'
+    : manager.role === 'psychologist' ? 'психолог на связи' : 'менеджер на связи';
   loadQueue().then(openLinkedConversation).catch(error => toast(error.message, true));
   pollManagerNotifications();
   clearInterval(state.queueTimer);
@@ -240,6 +241,7 @@ async function logout() {
 function queueLabel(item) {
   if (item.human_status === 'closed') return '<b>Закрыто</b>';
   if (!item.ai_enabled) return '<b class="ai-off">ИИ выключен</b>';
+  if (item.dialog_type === 'masterclass_psychology') return '<b>Сессия с психологом</b>';
   if (item.human_channel === 'call') return '<b>Созвон</b>';
   if (item.human_channel === 'paid_consultation') return '<b>Оплаченная консультация</b>';
   if (item.human_channel === 'chat') return '<b>Чат</b>';
@@ -317,7 +319,7 @@ async function loadQueue() {
       const cards = person.conversations.map(item => {
         const unread = Number(item.unread_user_messages || 0);
         const reference = item.human_ticket_id
-          ? `Обращение ${item.human_ticket_id}`
+          ? `${item.dialog_type === 'masterclass_psychology' ? 'Заявка №' : 'Обращение'} ${item.human_ticket_id}`
           : `Диалог ${item.id.slice(0, 8)}`;
         return `<button class="request-card ${item.id === state.selectedId ? 'active' : ''}" data-conversation-id="${escapeHtml(item.id)}">
           <span class="request-card-head"><strong>${escapeHtml(item.title || 'Новый диалог')}</strong><time>${formatDate(item.updated_at)}</time></span>
@@ -388,23 +390,26 @@ function renderHeader() {
   $('#profileName').textContent = name;
   $('#chatAvatar').textContent = initials(name);
   $('#chatTicket').textContent = conversation.human_ticket_id
-    ? `${conversation.human_ticket_id} · ${conversation.human_status === 'closed' ? 'закрыто' : conversation.human_channel === 'paid_consultation' ? 'оплаченная консультация' : conversation.human_channel === 'call' ? 'созвон' : conversation.human_channel === 'chat' ? 'чат' : 'формат не выбран'}`
+    ? `${conversation.dialog_type === 'masterclass_psychology' ? 'Заявка № ' : ''}${conversation.human_ticket_id} · ${conversation.human_status === 'closed' ? 'закрыто' : conversation.human_channel === 'paid_consultation' ? 'оплаченная консультация' : conversation.human_channel === 'call' ? 'созвон' : conversation.human_channel === 'chat' ? 'чат' : 'формат не выбран'}`
     : `Диалог ${conversation.id.slice(0, 8)}`;
   $('#aiEnabled').checked = Boolean(conversation.ai_enabled);
   $('#aiSwitchTitle').textContent = conversation.ai_enabled ? 'ИИ отвечает' : 'ИИ приостановлен';
-  const humanLabel = state.manager?.role === 'doctor' ? 'врач' : 'менеджер';
+  const humanLabel = state.manager?.role === 'doctor'
+    ? 'врач' : state.manager?.role === 'psychologist' ? 'психолог' : 'менеджер';
+  const humanLabelTitle = humanLabel[0].toUpperCase() + humanLabel.slice(1);
   $('#aiSwitchHint').textContent = conversation.ai_enabled
     ? 'Следующие сообщения сможет обрабатывать ИИ'
     : `Новые сообщения ожидает ${humanLabel}`;
   const notice = $('#managerModeNotice');
   notice.classList.toggle('ai-off', !conversation.ai_enabled);
   $('#managerModeText').textContent = conversation.ai_enabled
-    ? `ИИ включён и отвечает с учётом истории этого диалога. ${humanLabel === 'врач' ? 'Врач' : 'Менеджер'} также может писать пользователю.`
+    ? `ИИ включён и отвечает с учётом истории этого диалога. ${humanLabelTitle} также может писать пользователю.`
     : conversation.human_status === 'connected'
-      ? `ИИ приостановлен. Пользователь общается с ${humanLabel === 'врач' ? 'врачом' : 'менеджером'}; на новые сообщения ИИ не отвечает.`
-      : `ИИ автоматически приостановлен после обращения. Новые сообщения ждут ответа ${humanLabel === 'врач' ? 'врача' : 'менеджера'}.`;
+      ? `ИИ приостановлен. Пользователь общается с ${humanLabel === 'врач' ? 'врачом' : humanLabel === 'психолог' ? 'психологом' : 'менеджером'}; на новые сообщения ИИ не отвечает.`
+      : `ИИ автоматически приостановлен после обращения. Новые сообщения ждут ответа ${humanLabel === 'врач' ? 'врача' : humanLabel === 'психолог' ? 'психолога' : 'менеджера'}.`;
   const closeButton = $('#closeRequestButton');
-  const closable = conversation.human_status !== 'closed'
+  const psychologyRequest = conversation.dialog_type === 'masterclass_psychology';
+  const closable = !psychologyRequest && conversation.human_status !== 'closed'
     && (Boolean(conversation.human_ticket_id) || !conversation.ai_enabled);
   closeButton.classList.toggle('hidden', !closable);
   closeButton.disabled = state.busy;
@@ -415,7 +420,8 @@ function renderHeader() {
   consultationInstruction.classList.toggle('hidden', !canOfferConsultation);
   consultationInstruction.disabled = state.busy;
   const psychologyComplete = $('#psychologySessionCompleteButton');
-  const canCompletePsychologySession = conversation.dialog_type === 'masterclass_psychology'
+  const canCompletePsychologySession = state.manager?.role === 'psychologist'
+    && conversation.dialog_type === 'masterclass_psychology'
     && state.detail.psychology_session?.status === 'requested';
   psychologyComplete.classList.toggle('hidden', !canCompletePsychologySession);
   psychologyComplete.disabled = state.busy;
@@ -439,7 +445,7 @@ function renderMessages() {
     const isUser = message.role === 'user';
     const isHuman = metadata.sender_type === 'human_manager';
     const author = isUser ? 'Пользователь' : isHuman
-      ? (metadata.manager_name || (metadata.staff_role === 'doctor' ? 'Врач-специалист' : 'Менеджер'))
+      ? (metadata.manager_name || (metadata.staff_role === 'doctor' ? 'Врач-специалист' : metadata.staff_role === 'psychologist' ? 'Психолог' : 'Менеджер'))
       : `${agentName(message.agent_id)} · ИИ`;
     const docs = messageDocuments(metadata);
     const content = isUser

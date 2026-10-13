@@ -101,10 +101,18 @@ class IkpAccessTests(unittest.TestCase):
         self.assertIn("Array.from({length:7}", script)
         self.assertIn("session_count:psychologySessionPackage().sessions", script)
         self.assertIn("sessionCount:psychologySessionPackage().sessions", script)
+        self.assertIn('Сессий проведено', script)
+        self.assertIn('Сессий предоплачено', script)
+        dashboard = (project_root / 'dashboard.html').read_text(encoding='utf-8')
+        self.assertIn('<option value="psychologist">Психолог</option>', dashboard)
 
     def test_psychology_session_lifecycle_and_paid_balance(self):
         token = 's' * 43
         chel_id = 'chel_psychology_sessions_0001'
+        psychologist = db.admin_create_staff(
+            'Тестовый психолог', 'psychologist.sessions', '123456',
+            telegram_id='79990001122', role='psychologist',
+        )
         db.provision_masterclass_access(
             '7707083893', 'ООО Ромашка', 'masterclass_1', token,
         )
@@ -125,28 +133,54 @@ class IkpAccessTests(unittest.TestCase):
             self.assertEqual(free_session['access_type'], 'free')
             self.assertEqual(free_session['status'], 'requested')
             self.assertTrue(free_session['created'])
+            self.assertRegex(free_session['request_number'], r'^\d{5}$')
             self.assertEqual(
                 db.request_psychology_session(conversation['id'])['id'],
                 free_session['id'],
             )
 
-            manager_detail = db.manager_conversation_detail(conversation['id'], 'manager')
-            self.assertEqual(manager_detail['psychology_session']['id'], free_session['id'])
+            saved_conversation = db.get_conversation(conversation['id'])
+            self.assertEqual(saved_conversation['human_recipient_role'], 'psychologist')
+            self.assertEqual(saved_conversation['human_ticket_id'], free_session['request_number'])
+            self.assertIsNone(db.manager_conversation_detail(conversation['id'], 'manager'))
+            psychologist_detail = db.manager_conversation_detail(
+                conversation['id'], 'psychologist',
+            )
+            self.assertEqual(psychologist_detail['psychology_session']['id'], free_session['id'])
+            matching_queue = db.manager_list_conversations(
+                free_session['request_number'], 'all', staff_role='psychologist',
+            )
+            self.assertEqual([item['id'] for item in matching_queue], [conversation['id']])
+            self.assertEqual(matching_queue[0]['dialog_type'], 'masterclass_psychology')
+            self.assertEqual(db.enqueue_manager_notifications(
+                'psychology_session_requested', conversation['id'],
+                recipient_role='psychologist', request_kind='psychology_session',
+                request_number=free_session['request_number'],
+            ), 1)
+            notification = db.claim_manager_notifications('telegram')[0]
+            self.assertEqual(notification['recipient_id'], psychologist['telegram_id'])
+            self.assertEqual(notification['payload']['recipient_role'], 'psychologist')
+            self.assertEqual(
+                notification['payload']['request_number'], free_session['request_number'],
+            )
+            self.assertIn(f"Заявка № {free_session['request_number']}", notification['payload']['body'])
             completed_session = db.manager_complete_psychology_session(
-                conversation['id'], 'Тестовый менеджер', 'manager',
+                conversation['id'], 'Тестовый психолог', 'psychologist',
             )
             self.assertEqual(completed_session['status'], 'completed')
             self.assertIsNotNone(completed_session['completed_at'])
             self.assertIsNone(
-                db.manager_conversation_detail(conversation['id'], 'manager')['psychology_session'],
+                db.manager_conversation_detail(
+                    conversation['id'], 'psychologist',
+                )['psychology_session'],
             )
             with self.assertRaisesRegex(ValueError, 'Активная заявка'):
                 db.manager_complete_psychology_session(
-                    conversation['id'], 'Тестовый менеджер', 'manager',
+                    conversation['id'], 'Тестовый психолог', 'psychologist',
                 )
             self.assertIsNone(
                 db.manager_complete_psychology_session(
-                    conversation['id'], 'Тестовый врач', 'doctor',
+                    conversation['id'], 'Тестовый менеджер', 'manager',
                 ),
             )
             with db.connection() as connection:
@@ -196,7 +230,7 @@ class IkpAccessTests(unittest.TestCase):
             self.assertEqual(paid_session['session_number'], 2)
             self.assertEqual(
                 db.psychology_session_summary(conversation['id'])['remaining_paid'],
-                6,
+                7,
             )
             with db.connection() as connection:
                 credit_use = connection.execute(
@@ -206,12 +240,19 @@ class IkpAccessTests(unittest.TestCase):
                 ).fetchone()
             self.assertEqual(credit_use['payment_order_id'], order['id'])
             self.assertEqual(credit_use['credit_number'], 1)
+            db.manager_complete_psychology_session(
+                conversation['id'], 'Тестовый психолог', 'psychologist',
+            )
+            self.assertEqual(
+                db.psychology_session_summary(conversation['id'])['remaining_paid'], 6,
+            )
             for expected_remaining in range(5, -1, -1):
-                db.manager_complete_psychology_session(
-                    conversation['id'], 'Тестовый менеджер', 'manager',
-                )
                 next_session = db.request_psychology_session(conversation['id'])
                 self.assertEqual(next_session['access_type'], 'paid')
+                self.assertRegex(next_session['request_number'], r'^\d{5}$')
+                db.manager_complete_psychology_session(
+                    conversation['id'], 'Тестовый психолог', 'psychologist',
+                )
                 self.assertEqual(
                     db.psychology_session_summary(conversation['id'])['remaining_paid'],
                     expected_remaining,

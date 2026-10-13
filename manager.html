@@ -13,7 +13,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/static/manager.css?v=20261013-psychology-sessions-v2">
+  <link rel="stylesheet" href="/static/manager.css?v=20261013-psychologist-requests-v3">
   <link rel="stylesheet" href="/static/rich-text.css?v=20260816-rich-text">
 </head>
 <body>
@@ -46,8 +46,8 @@
         <div><strong id="managerDisplayName">Менеджер</strong><small>на связи</small></div>
       </div>
       <div class="queue-tools">
-        <label class="search-field"><span>⌕</span><input id="queueSearch" type="search" placeholder="chel_id, диалог или обращение"></label>
-        <small class="search-hint">Поиск выполняется по всем обращениям и диалогам</small>
+        <label class="search-field"><span>⌕</span><input id="queueSearch" type="search" placeholder="Номер заявки, chel_id или диалог"></label>
+        <small class="search-hint">Психолог может найти чат по пятизначному номеру заявки</small>
         <div class="queue-filters" id="queueFilters">
           <button class="active" data-queue="open">Открытые</button>
           <button data-queue="ai_off">ИИ выключен</button>
@@ -129,6 +129,6 @@
 
   <div class="toast hidden" id="managerToast" role="status"></div>
   <script src="/static/rich-text.js?v=20260929-loose-lists-v1"></script>
-  <script src="/static/manager.js?v=20261013-psychology-sessions-v2" defer></script>
+  <script src="/static/manager.js?v=20261013-psychologist-requests-v3" defer></script>
 </body>
 </html>

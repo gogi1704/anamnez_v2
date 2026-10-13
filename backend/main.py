@@ -1583,7 +1583,8 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                 if session.get("created"):
                     db.enqueue_manager_notifications(
                         "psychology_session_requested", conversation_id,
-                        recipient_role="manager", request_kind="psychology_session",
+                        recipient_role="psychologist", request_kind="psychology_session",
+                        request_number=session.get("request_number", ""),
                     )
                     self._track_analytics("psychology_session_requested", {
                         "conversation_id": conversation_id,

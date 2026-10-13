@@ -694,11 +694,11 @@ function renderStaff(items) {
     const telegramLinked = Boolean(item.telegram_id);
     const maxLinked = Boolean(item.max_id);
     const userIds = Array.isArray(item.user_chel_ids) ? item.user_chel_ids : [];
-    const roleLabel = item.role === 'doctor' ? 'Врач-специалист' : 'Менеджер';
-    const requestTitle = item.role === 'doctor' ? 'Расшифровки и консультации' : 'Новые обращения';
-    const requestHint = item.role === 'doctor' ? 'Новые расшифровки анализов и оплаченные консультации' : 'Сигнал при каждом новом обращении';
-    const messageTitle = item.role === 'doctor' ? 'Сообщения в активных расшифровках' : 'Сообщения без ИИ';
-    const messageHint = item.role === 'doctor' ? 'Только из чатов, переданных этому врачу' : 'Сигнал, когда пользователь ждёт человека';
+    const roleLabel = item.role === 'doctor' ? 'Врач-специалист' : item.role === 'psychologist' ? 'Психолог' : 'Менеджер';
+    const requestTitle = item.role === 'doctor' ? 'Расшифровки и консультации' : item.role === 'psychologist' ? 'Заявки на сессии' : 'Новые обращения';
+    const requestHint = item.role === 'doctor' ? 'Новые расшифровки анализов и оплаченные консультации' : item.role === 'psychologist' ? 'Новые заявки на 30-минутные сессии' : 'Сигнал при каждом новом обращении';
+    const messageTitle = item.role === 'doctor' ? 'Сообщения в активных расшифровках' : item.role === 'psychologist' ? 'Сообщения в чатах психолога' : 'Сообщения без ИИ';
+    const messageHint = item.role === 'doctor' ? 'Только из чатов, переданных этому врачу' : item.role === 'psychologist' ? 'Только из заявок, переданных психологам' : 'Сигнал, когда пользователь ждёт человека';
     const userIdBlock = userIds.length
       ? userIds.map(chelId => `
           <div class="staff-user-id-row">
@@ -768,15 +768,17 @@ function renderStaff(items) {
 }
 
 function updateStaffNotificationLabels() {
-  const doctor = $('#staffRole')?.value === 'doctor';
+  const role = $('#staffRole')?.value;
+  const doctor = role === 'doctor';
+  const psychologist = role === 'psychologist';
   const requests = $('#staffNotifyRequestsLabel');
   const messages = $('#staffNotifyMessagesLabel');
   if (requests) requests.textContent = doctor
     ? 'О расшифровках и оплаченных консультациях'
-    : 'О новых обращениях';
+    : psychologist ? 'О новых заявках на сессии' : 'О новых обращениях';
   if (messages) messages.textContent = doctor
     ? 'О сообщениях в активных расшифровках'
-    : 'О сообщениях, когда ИИ выключен';
+    : psychologist ? 'О сообщениях в чатах психолога' : 'О сообщениях, когда ИИ выключен';
 }
 
 function escapeHtml(value) {
@@ -2574,7 +2576,7 @@ async function updateManager(event) {
     if (displayName === null) return;
     payload.display_name = displayName.trim();
   } else if (action === 'role') {
-    const role = window.prompt('Роль: manager — менеджер, doctor — врач-специалист', manager.role || 'manager');
+    const role = window.prompt('Роль: manager — менеджер, doctor — врач-специалист, psychologist — психолог', manager.role || 'manager');
     if (role === null) return;
     payload.role = role.trim().toLowerCase();
   } else if (action === 'password') {
