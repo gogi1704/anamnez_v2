@@ -3665,6 +3665,15 @@ class OrchestratorTests(unittest.TestCase):
         self.assertIn("id=\"psychologySessionPaymentInstructionButton\"", manager)
         self.assertIn("/psychology-session-payment-instruction", manager_script)
         self.assertIn("sendPsychologySessionPaymentInstruction", manager_script)
+        self.assertIn(
+            "conversation.dialog_type === 'masterclass_psychology';",
+            manager_script,
+        )
+        self.assertNotIn(
+            "conversation.dialog_type === 'masterclass_psychology'\n"
+            "    && conversation.human_status !== 'closed'",
+            manager_script,
+        )
         self.assertIn("Отправить пользователю инструкцию по оплате консультации", manager_script)
         self.assertIn("if (!window.confirm(", manager_script)
         self.assertIn("playManagerSignal('request')", manager_script)
@@ -4776,6 +4785,44 @@ class OrchestratorTests(unittest.TestCase):
         handler = FakeHandler()
         ConsiliumHandler.do_POST(handler)
         self.assertEqual(handler.consumed, "fresh-login-token")
+
+    def test_psychologist_payment_instruction_post_route_is_reachable(self):
+        class FakeHandler:
+            path = (
+                "/api/manager/conversations/conversation-1/"
+                "psychology-session-payment-instruction"
+            )
+            response = None
+
+            def _manager_authorized(self):
+                return {
+                    "id": 7,
+                    "display_name": "Психолог",
+                    "role": "psychologist",
+                }
+
+            def _json(self, status, payload):
+                self.response = (status, payload)
+                return self.response
+
+        handler = FakeHandler()
+        with (
+            patch(
+                "backend.main.db.manager_send_psychology_session_payment_instruction",
+                return_value={"id": 41, "content": "Инструкция"},
+            ) as send_instruction,
+            patch(
+                "backend.main.db.manager_conversation_detail",
+                return_value={"conversation": {"id": "conversation-1"}},
+            ),
+        ):
+            ConsiliumHandler.do_POST(handler)
+
+        self.assertEqual(handler.response[0], 201)
+        self.assertEqual(handler.response[1]["message"]["id"], 41)
+        send_instruction.assert_called_once_with(
+            "conversation-1", "Психолог", "psychologist",
+        )
 
     def test_onboarding_state_and_lifestyle_profile_are_persisted(self):
         appearance = db.save_onboarding(status="questionnaire", font_size="large")

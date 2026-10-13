@@ -427,8 +427,7 @@ function renderHeader() {
   psychologyComplete.disabled = state.busy;
   const psychologyPayment = $('#psychologySessionPaymentInstructionButton');
   const canOfferPsychologySessions = state.manager?.role === 'psychologist'
-    && conversation.dialog_type === 'masterclass_psychology'
-    && conversation.human_status !== 'closed';
+    && conversation.dialog_type === 'masterclass_psychology';
   psychologyPayment.classList.toggle('hidden', !canOfferPsychologySessions);
   psychologyPayment.disabled = state.busy;
 }
