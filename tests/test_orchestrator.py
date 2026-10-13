@@ -4824,6 +4824,51 @@ class OrchestratorTests(unittest.TestCase):
             "conversation-1", "Психолог", "psychologist",
         )
 
+    def test_psychology_session_request_notifies_psychologists_with_request_number(self):
+        class FakeHandler:
+            path = "/api/psychology-sessions/request"
+            response = None
+
+            def _ensure_user_context(self):
+                return None
+
+            def _read_json(self, **_kwargs):
+                return {"conversation_id": "psychology-conversation-1"}
+
+            def _track_analytics(self, *_args, **_kwargs):
+                return None
+
+            def _json(self, status, payload):
+                self.response = (status, payload)
+                return self.response
+
+        handler = FakeHandler()
+        session = {
+            "id": "psy-session-1",
+            "created": True,
+            "request_number": "43817",
+            "access_type": "free",
+        }
+        with (
+            patch(
+                "backend.main.db.request_psychology_session",
+                return_value=session,
+            ),
+            patch(
+                "backend.main.db.psychology_session_summary",
+                return_value={"pending_session": session},
+            ),
+            patch("backend.main.db.enqueue_manager_notifications") as notify,
+        ):
+            ConsiliumHandler.do_POST(handler)
+
+        self.assertEqual(handler.response[0], 200)
+        notify.assert_called_once_with(
+            "psychology_session_requested", "psychology-conversation-1",
+            recipient_role="psychologist", request_kind="psychology_session",
+            request_number="43817",
+        )
+
     def test_onboarding_state_and_lifestyle_profile_are_persisted(self):
         appearance = db.save_onboarding(status="questionnaire", font_size="large")
         self.assertEqual(appearance["font_size"], "large")

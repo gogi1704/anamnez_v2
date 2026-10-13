@@ -3316,9 +3316,12 @@ def enqueue_manager_notifications(
         manager_url = f"{settings.public_base_url}/manager?conversation={conversation_id}"
         name = conversation["preferred_name"] or f"Пользователь {conversation['chel_id'][-6:]}"
         if event_type == "psychology_session_requested":
-            title = "Новая заявка на сессию с психологом"
+            visible_request_number = str(
+                request_number or conversation["human_ticket_id"] or "—"
+            )
+            title = f"Заявка № {visible_request_number} — новая сессия"
             body = (
-                f"Заявка № {request_number or conversation['human_ticket_id'] or '—'}. "
+                f"Номер заявки: {visible_request_number}. "
                 f"{name} оставил заявку на 30-минутный созвон с психологом. "
                 "Откройте чат, чтобы связаться с пользователем и согласовать время."
             )

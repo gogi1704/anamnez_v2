@@ -134,7 +134,8 @@ class IkpAccessTests(unittest.TestCase):
         chel_id = 'chel_psychology_sessions_0001'
         psychologist = db.admin_create_staff(
             'Тестовый психолог', 'psychologist.sessions', '123456',
-            telegram_id='79990001122', role='psychologist',
+            telegram_id='79990001122', max_id='79990002233',
+            role='psychologist',
         )
         db.provision_masterclass_access(
             '7707083893', 'ООО Ромашка', 'masterclass_1', token,
@@ -179,14 +180,28 @@ class IkpAccessTests(unittest.TestCase):
                 'psychology_session_requested', conversation['id'],
                 recipient_role='psychologist', request_kind='psychology_session',
                 request_number=free_session['request_number'],
-            ), 1)
+            ), 2)
             notification = db.claim_manager_notifications('telegram')[0]
             self.assertEqual(notification['recipient_id'], psychologist['telegram_id'])
             self.assertEqual(notification['payload']['recipient_role'], 'psychologist')
             self.assertEqual(
                 notification['payload']['request_number'], free_session['request_number'],
             )
-            self.assertIn(f"Заявка № {free_session['request_number']}", notification['payload']['body'])
+            self.assertIn(
+                f"Заявка № {free_session['request_number']}",
+                notification['payload']['title'],
+            )
+            self.assertIn(
+                f"Номер заявки: {free_session['request_number']}",
+                notification['payload']['body'],
+            )
+            max_notification = db.claim_manager_notifications('max')[0]
+            self.assertEqual(max_notification['recipient_id'], psychologist['max_id'])
+            self.assertEqual(
+                max_notification['payload']['request_number'],
+                free_session['request_number'],
+            )
+            self.assertEqual(max_notification['payload'], notification['payload'])
             with self.assertRaisesRegex(ValueError, 'только психолог'):
                 db.manager_send_psychology_session_payment_instruction(
                     conversation['id'], 'Тестовый менеджер', 'manager',
