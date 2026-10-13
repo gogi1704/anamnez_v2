@@ -62,6 +62,8 @@ def create_payment(order: dict, return_url: str, receipt_email: str = "") -> dic
             # so the number the customer sees in YooKassa matches ours exactly.
             f"Консультация врача, заказ {order['id'][-8:].upper()}"
             if order.get("order_type") == "consultation"
+            else f"Сессия с психологом, заказ {order['id'][-8:].upper()}"
+            if order.get("order_type") == "psychology_session"
             else f"Дополнительные обследования, заказ {order['id'][-8:].upper()}"
         ),
         "metadata": {"order_id": order["id"]},

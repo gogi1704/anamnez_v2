@@ -3733,6 +3733,190 @@ def create_consultation_payment_order(conversation_id: str) -> dict:
     return _public_payment_order(row)
 
 
+PSYCHOLOGY_SESSION_PRICE_RUB = 2000
+
+
+def create_psychology_session_payment_order(conversation_id: str) -> dict:
+    """Create one fixed-price credit for the master-class psychology chat."""
+    conversation = get_conversation(conversation_id)
+    if not conversation or conversation.get("dialog_type") != "masterclass_psychology":
+        raise ValueError("Чат психологической поддержки не найден")
+    chel_id = current_chel_id()
+    items = [{
+        "id": "psychology_session",
+        "name": "Сессия с психологом",
+        "price": PSYCHOLOGY_SESSION_PRICE_RUB,
+    }]
+    canonical = json.dumps(items, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    fingerprint = hashlib.sha256(
+        f"psychology-session:{conversation_id}:{canonical}".encode("utf-8")
+    ).hexdigest()
+    now = utc_now()
+    with _write_lock, connection() as conn:
+        existing = conn.execute(
+            """SELECT * FROM payment_orders
+            WHERE chel_id = ? AND order_type = 'psychology_session'
+              AND selection_fingerprint = ?
+              AND status IN ('creating', 'pending', 'abandoned')
+            ORDER BY created_at DESC LIMIT 1""",
+            (chel_id, fingerprint),
+        ).fetchone()
+        if existing:
+            return _public_payment_order(existing)
+        order_id = f"ord_{uuid.uuid4().hex}"
+        conn.execute(
+            """INSERT INTO payment_orders
+            (id, chel_id, idempotence_key, selection_fingerprint, order_type,
+             target_conversation_id, status, amount_kopecks, items, created_at, updated_at)
+            VALUES (?, ?, ?, ?, 'psychology_session', ?, 'creating', 200000, ?, ?, ?)""",
+            (
+                order_id, chel_id, str(uuid.uuid4()), fingerprint,
+                conversation_id, canonical, now, now,
+            ),
+        )
+        conn.commit()
+        row = conn.execute("SELECT * FROM payment_orders WHERE id = ?", (order_id,)).fetchone()
+    return _public_payment_order(row)
+
+
+def psychology_session_summary(conversation_id: str) -> dict:
+    """Return session history and the free/paid balance for one psychology chat."""
+    conversation = get_conversation(conversation_id)
+    if not conversation or conversation.get("dialog_type") != "masterclass_psychology":
+        raise ValueError("Чат психологической поддержки не найден")
+    chel_id = current_chel_id()
+    with connection() as conn:
+        sessions = conn.execute(
+            """SELECT id,session_number,access_type,status,started_at,completed_at,
+                      payment_order_id
+               FROM psychology_sessions
+               WHERE conversation_id=? AND chel_id=?
+               ORDER BY session_number DESC""",
+            (conversation_id, chel_id),
+        ).fetchall()
+        purchased = conn.execute(
+            """SELECT id,paid_at,created_at FROM payment_orders
+               WHERE chel_id=? AND order_type='psychology_session'
+                 AND target_conversation_id=? AND status='succeeded' AND paid=1
+               ORDER BY COALESCE(paid_at,created_at),created_at""",
+            (chel_id, conversation_id),
+        ).fetchall()
+    session_items = [dict(row) for row in sessions]
+    paid_used = sum(1 for item in session_items if item["access_type"] == "paid")
+    free_used = any(item["access_type"] == "free" for item in session_items)
+    completed = sum(1 for item in session_items if item["status"] == "completed")
+    active = next((item for item in session_items if item["status"] == "active"), None)
+    remaining_paid = max(0, len(purchased) - paid_used)
+    return {
+        "conversation_id": conversation_id,
+        "sessions": session_items,
+        "total_started": len(session_items),
+        "completed_count": completed,
+        "active_session": active,
+        "free_available": not free_used,
+        "purchased_count": len(purchased),
+        "remaining_paid": remaining_paid,
+        "available_total": remaining_paid + int(not free_used),
+        "product": {
+            "id": "psychology_session",
+            "name": "1 сессия с психологом",
+            "price": PSYCHOLOGY_SESSION_PRICE_RUB,
+        },
+    }
+
+
+def ensure_psychology_session_access(conversation_id: str) -> dict:
+    """Start a free or paid session on the first message, reusing an active one."""
+    chel_id = current_chel_id()
+    now = utc_now()
+    with _write_lock, connection() as conn:
+        conversation = conn.execute(
+            """SELECT id FROM conversations
+               WHERE id=? AND chel_id=? AND dialog_type='masterclass_psychology'""",
+            (str(conversation_id or ""), chel_id),
+        ).fetchone()
+        if not conversation:
+            raise ValueError("Чат психологической поддержки не найден")
+        active = conn.execute(
+            """SELECT * FROM psychology_sessions
+               WHERE conversation_id=? AND chel_id=? AND status='active'
+               ORDER BY session_number DESC LIMIT 1""",
+            (conversation_id, chel_id),
+        ).fetchone()
+        if active:
+            return dict(active)
+        free_used = conn.execute(
+            """SELECT 1 FROM psychology_sessions
+               WHERE conversation_id=? AND chel_id=? AND access_type='free' LIMIT 1""",
+            (conversation_id, chel_id),
+        ).fetchone()
+        access_type = "free"
+        payment_order_id = None
+        if free_used:
+            paid_order = conn.execute(
+                """SELECT po.id FROM payment_orders po
+                   LEFT JOIN psychology_sessions ps ON ps.payment_order_id=po.id
+                   WHERE po.chel_id=? AND po.order_type='psychology_session'
+                     AND po.target_conversation_id=? AND po.status='succeeded'
+                     AND po.paid=1 AND ps.id IS NULL
+                   ORDER BY COALESCE(po.paid_at,po.created_at),po.created_at LIMIT 1""",
+                (chel_id, conversation_id),
+            ).fetchone()
+            if not paid_order:
+                raise ValueError("Бесплатная сессия завершена. Купите следующую сессию, чтобы продолжить чат")
+            access_type = "paid"
+            payment_order_id = paid_order["id"]
+        number = int(conn.execute(
+            """SELECT COALESCE(MAX(session_number),0)+1 FROM psychology_sessions
+               WHERE conversation_id=? AND chel_id=?""",
+            (conversation_id, chel_id),
+        ).fetchone()[0])
+        session_id = f"psy_{uuid.uuid4().hex}"
+        conn.execute(
+            """INSERT INTO psychology_sessions
+               (id,conversation_id,chel_id,session_number,access_type,payment_order_id,
+                status,started_at,created_at,updated_at)
+               VALUES (?,?,?,?,?,?,'active',?,?,?)""",
+            (
+                session_id, conversation_id, chel_id, number, access_type,
+                payment_order_id, now, now, now,
+            ),
+        )
+        if payment_order_id:
+            conn.execute(
+                """UPDATE payment_orders SET fulfillment_at=COALESCE(fulfillment_at,?),updated_at=?
+                   WHERE id=?""",
+                (now, now, payment_order_id),
+            )
+        conn.commit()
+        row = conn.execute("SELECT * FROM psychology_sessions WHERE id=?", (session_id,)).fetchone()
+    return dict(row)
+
+
+def complete_psychology_session(conversation_id: str) -> dict:
+    """Finish the current session so the next message uses the next credit."""
+    chel_id = current_chel_id()
+    now = utc_now()
+    with _write_lock, connection() as conn:
+        row = conn.execute(
+            """SELECT ps.id FROM psychology_sessions ps
+               JOIN conversations c ON c.id=ps.conversation_id
+               WHERE ps.conversation_id=? AND ps.chel_id=? AND c.chel_id=?
+                 AND c.dialog_type='masterclass_psychology' AND ps.status='active'
+               ORDER BY ps.session_number DESC LIMIT 1""",
+            (str(conversation_id or ""), chel_id, chel_id),
+        ).fetchone()
+        if not row:
+            raise ValueError("Активная сессия не найдена")
+        conn.execute(
+            """UPDATE psychology_sessions SET status='completed',completed_at=?,updated_at=?
+               WHERE id=?""",
+            (now, now, row["id"]),
+        )
+        conn.commit()
+    return psychology_session_summary(conversation_id)
+
+
 def list_paid_consultations(limit: int = 100) -> list[dict]:
     with connection() as conn:
         rows = conn.execute(
@@ -5460,6 +5644,24 @@ def init_db() -> None:
                 FOREIGN KEY(chel_id) REFERENCES users(chel_id) ON DELETE CASCADE
             );
 
+            CREATE TABLE IF NOT EXISTS psychology_sessions (
+                id TEXT PRIMARY KEY,
+                conversation_id TEXT NOT NULL,
+                chel_id TEXT NOT NULL,
+                session_number INTEGER NOT NULL,
+                access_type TEXT NOT NULL,
+                payment_order_id TEXT UNIQUE,
+                status TEXT NOT NULL DEFAULT 'active',
+                started_at TEXT NOT NULL,
+                completed_at TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                UNIQUE(conversation_id,session_number),
+                FOREIGN KEY(conversation_id) REFERENCES conversations(id) ON DELETE CASCADE,
+                FOREIGN KEY(chel_id) REFERENCES users(chel_id) ON DELETE CASCADE,
+                FOREIGN KEY(payment_order_id) REFERENCES payment_orders(id) ON DELETE SET NULL
+            );
+
             CREATE TABLE IF NOT EXISTS enterprise_examination_schedule (
                 source_sheet_id TEXT NOT NULL,
                 source_row_id TEXT NOT NULL,
@@ -6194,6 +6396,14 @@ def init_db() -> None:
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_payment_orders_type_user "
             "ON payment_orders(order_type, chel_id, paid_at DESC)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_psychology_sessions_conversation "
+            "ON psychology_sessions(conversation_id, session_number DESC)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_psychology_sessions_balance "
+            "ON psychology_sessions(chel_id, access_type, status)"
         )
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_enterprise_schedule_inn_date "

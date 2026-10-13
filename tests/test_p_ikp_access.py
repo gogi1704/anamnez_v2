@@ -91,6 +91,64 @@ class IkpAccessTests(unittest.TestCase):
         self.assertEqual(first_row['company'], 'ООО Ромашка новое имя')
         self.assertEqual((first_row['visit_count'], first_row['users'], first_row['continued_users']), (2, 1, 1))
 
+    def test_psychology_session_lifecycle_and_paid_balance(self):
+        token = 's' * 43
+        chel_id = 'chel_psychology_sessions_0001'
+        db.provision_masterclass_access(
+            '7707083893', 'ООО Ромашка', 'masterclass_1', token,
+        )
+        db.ensure_user(chel_id, pending=True)
+        db.record_masterclass_access(token, chel_id)
+        previous_chel_id = db.current_chel_id()
+        try:
+            db.set_current_chel_id(chel_id)
+            db.mark_current_masterclass_profile_completed()
+            conversation = db.create_or_get_masterclass_psychology_conversation()
+
+            initial = db.psychology_session_summary(conversation['id'])
+            self.assertTrue(initial['free_available'])
+            self.assertEqual(initial['total_started'], 0)
+            self.assertEqual(initial['remaining_paid'], 0)
+
+            free_session = db.ensure_psychology_session_access(conversation['id'])
+            self.assertEqual(free_session['access_type'], 'free')
+            self.assertEqual(free_session['status'], 'active')
+            self.assertEqual(
+                db.ensure_psychology_session_access(conversation['id'])['id'],
+                free_session['id'],
+            )
+
+            completed = db.complete_psychology_session(conversation['id'])
+            self.assertEqual(completed['completed_count'], 1)
+            self.assertFalse(completed['free_available'])
+            with self.assertRaisesRegex(ValueError, 'Купите следующую сессию'):
+                db.ensure_psychology_session_access(conversation['id'])
+
+            order = db.create_psychology_session_payment_order(conversation['id'])
+            self.assertEqual(order['order_type'], 'psychology_session')
+            self.assertEqual(order['amount'], '2000.00')
+            with db.connection() as connection:
+                connection.execute(
+                    """UPDATE payment_orders
+                       SET status='succeeded',paid=1,paid_at=?,updated_at=?
+                       WHERE id=?""",
+                    ('2026-10-13T10:00:00+00:00', '2026-10-13T10:00:00+00:00', order['id']),
+                )
+                connection.commit()
+
+            paid_balance = db.psychology_session_summary(conversation['id'])
+            self.assertEqual(paid_balance['purchased_count'], 1)
+            self.assertEqual(paid_balance['remaining_paid'], 1)
+            paid_session = db.ensure_psychology_session_access(conversation['id'])
+            self.assertEqual(paid_session['access_type'], 'paid')
+            self.assertEqual(paid_session['session_number'], 2)
+            self.assertEqual(
+                db.psychology_session_summary(conversation['id'])['remaining_paid'],
+                0,
+            )
+        finally:
+            db.set_current_chel_id(previous_chel_id)
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -763,6 +763,12 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
             return self._json(200, {"purchases": db.list_payment_orders()})
         if path == "/api/consultations":
             return self._json(200, {"consultations": db.list_paid_consultations()})
+        if path == "/api/psychology-sessions":
+            try:
+                conversation_id = parse_qs(parsed.query).get("conversation_id", [""])[0]
+                return self._json(200, db.psychology_session_summary(conversation_id))
+            except ValueError as exc:
+                return self._json(422, {"detail": str(exc)})
         if path.startswith("/api/payments/"):
             order_id = path.removeprefix("/api/payments/").strip("/")
             order = db.payment_order_private(order_id)
@@ -1501,6 +1507,57 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                 return self._json(422, {"detail": str(exc)})
             except yookassa.YooKassaUnavailable as exc:
                 return self._json(503, {"detail": str(exc)})
+        if path == "/api/payments/yookassa/create-psychology-session":
+            order = None
+            try:
+                payload = self._read_json()
+                if not settings.online_payments_enabled:
+                    raise yookassa.YooKassaUnavailable("Онлайн-оплата временно недоступна")
+                if not yookassa.configured():
+                    raise yookassa.YooKassaUnavailable("Онлайн-оплата пока не настроена")
+                conversation_id = str(payload.get("conversation_id") or "").strip()
+                order = db.create_psychology_session_payment_order(conversation_id)
+                private_order = db.payment_order_private(order["id"])
+                if private_order.get("provider_payment_id"):
+                    verified = yookassa.get_payment(private_order["provider_payment_id"])
+                    refreshed = db.apply_yookassa_status(order["id"], verified)
+                    if refreshed["status"] != "canceled":
+                        return self._json(200, {"order": refreshed})
+                    order = db.create_psychology_session_payment_order(conversation_id)
+                    private_order = db.payment_order_private(order["id"])
+                return_url = (
+                    f"{settings.public_base_url}/?payment_return={quote(order['id'])}"
+                    "&return_to_chat=1&payment_source=psychology_session"
+                )
+                payment = yookassa.create_payment(
+                    private_order, return_url, str(payload.get("receipt_email", "")),
+                )
+                result = db.attach_yookassa_payment(order["id"], payment)
+                if result["status"] in {"succeeded", "canceled", "waiting_for_capture"}:
+                    result = db.apply_yookassa_status(order["id"], payment)
+                self._track_analytics("psychology_session_payment_created", {
+                    "provider": "yookassa", "amount_kopecks": 200000,
+                })
+                return self._json(201, {"order": result})
+            except (ValueError, TypeError, json.JSONDecodeError, UnicodeDecodeError) as exc:
+                if order:
+                    db.mark_payment_creation_failed(order["id"], str(exc))
+                return self._json(422, {"detail": str(exc)})
+            except yookassa.YooKassaUnavailable as exc:
+                return self._json(503, {"detail": str(exc)})
+        if path == "/api/psychology-sessions/complete":
+            try:
+                payload = self._read_json(max_bytes=4_000)
+                result = db.complete_psychology_session(
+                    str(payload.get("conversation_id") or "").strip(),
+                )
+                self._track_analytics("psychology_session_completed", {
+                    "conversation_id": result.get("conversation_id", ""),
+                    "completed_count": result.get("completed_count", 0),
+                })
+                return self._json(200, result)
+            except (ValueError, TypeError, json.JSONDecodeError, UnicodeDecodeError) as exc:
+                return self._json(422, {"detail": str(exc)})
         if path.startswith("/api/payments/") and path.endswith("/abandon"):
             order_id = path.removeprefix("/api/payments/").removesuffix("/abandon").strip("/")
             try:
@@ -2319,6 +2376,14 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                 return self._json(409, {
                     "detail": "Сначала завершите выбор обследований и финальный экран анкеты",
                 })
+            if conversation and conversation.get("dialog_type") == "masterclass_psychology":
+                try:
+                    db.ensure_psychology_session_access(conversation["id"])
+                except ValueError as exc:
+                    return self._json(402, {
+                        "detail": str(exc),
+                        "code": "psychology_session_required",
+                    })
             if not message and not (
                 conversation and conversation.get("dialog_type") == "weight_control"
             ):

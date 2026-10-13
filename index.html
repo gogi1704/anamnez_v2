@@ -17,7 +17,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/static/styles.css?v=20261013-masterclass-psychology-v4">
+  <link rel="stylesheet" href="/static/styles.css?v=20261013-psychology-sessions-v1">
   <link rel="stylesheet" href="/static/rich-text.2bf1f5fab764.css">
 </head>
 <body>
@@ -164,6 +164,9 @@
               <button id="menuWeightPersonalityButton" role="menuitem"><i>☺</i><span>Характер<small>Стиль общения Ольги</small></span></button>
             </div>
           </div>
+          <div class="function-menu-wrap hidden" id="psychologySessionsMenuWrap">
+            <button class="header-action-button psychology-sessions-button" id="psychologySessionsButton" type="button" aria-label="Открыть список психологических сессий" title="Сессии с психологом"><span aria-hidden="true">Ψ</span></button>
+          </div>
           <div class="function-menu-wrap">
             <button class="header-action-button" id="functionMenuButton" aria-label="Открыть меню функций" aria-expanded="false" title="Функции"><span>☰</span></button>
             <div class="function-menu hidden" id="functionMenu" role="menu">
@@ -281,6 +284,35 @@
       <div class="consultations-list" id="consultationsList" aria-live="polite"></div>
       <button class="consultation-pay-button" id="consultationPayButton" type="button">Оплатить консультацию · 1 000 ₽</button>
       <p class="consultations-security"><span aria-hidden="true">✓</span> Оплата и статус подтверждаются напрямую через ЮKassa</p>
+    </div>
+  </div>
+
+  <div class="modal-backdrop hidden" id="psychologySessionsModal" role="dialog" aria-modal="true" aria-labelledby="psychologySessionsTitle">
+    <div class="modal psychology-sessions-modal">
+      <button class="modal-close" id="psychologySessionsClose" type="button" aria-label="Закрыть">×</button>
+      <header class="psychology-sessions-heading">
+        <div class="psychology-sessions-heading-icon" aria-hidden="true">Ψ</div>
+        <div><span>Психологическая поддержка</span><h2 id="psychologySessionsTitle">Сессии с психологом</h2></div>
+      </header>
+      <p class="psychology-sessions-lead">Первая сессия бесплатна. Она начинается с первого сообщения и продолжается, пока вы сами её не завершите.</p>
+      <div class="psychology-sessions-summary" id="psychologySessionsSummary"></div>
+      <section class="psychology-current-session hidden" id="psychologyCurrentSession">
+        <div><strong>Текущая сессия активна</strong><span id="psychologyCurrentSessionText"></span></div>
+        <button type="button" id="psychologySessionCompleteButton">Завершить сессию</button>
+        <div class="psychology-session-complete-confirm hidden" id="psychologySessionCompleteConfirm">
+          <p>После завершения следующее сообщение начнёт новую сессию. Если бесплатная сессия уже использована, понадобится оплаченная.</p>
+          <button type="button" id="psychologySessionCompleteCancel">Отмена</button>
+          <button type="button" id="psychologySessionCompleteConfirmButton">Да, завершить</button>
+        </div>
+      </section>
+      <div class="psychology-sessions-list" id="psychologySessionsList" aria-live="polite"></div>
+      <section class="psychology-session-product">
+        <div><span>Дополнительная сессия</span><strong>1 сессия с психологом</strong><small>После оплаты она появится в доступном балансе.</small></div>
+        <b>2 000 ₽</b>
+      </section>
+      <p class="reminder-error hidden" id="psychologySessionsError" role="alert"></p>
+      <button class="psychology-session-buy-button" id="psychologySessionBuyButton" type="button">Купить 1 сессию · 2 000 ₽</button>
+      <p class="psychology-sessions-security"><span aria-hidden="true">✓</span> Оплата и статус подтверждаются напрямую через ЮKassa</p>
     </div>
   </div>
 
@@ -798,9 +830,9 @@
     </div>
   </div>
 
-  <script src="/static/metrika.js?v=20261013-masterclass-psychology-v4"></script>
-  <script src="/static/agents.js?v=20261013-masterclass-psychology-v4"></script>
+  <script src="/static/metrika.js?v=20261013-psychology-sessions-v1"></script>
+  <script src="/static/agents.js?v=20261013-psychology-sessions-v1"></script>
   <script src="/static/rich-text.js?v=20260929-loose-lists-v1"></script>
-  <script src="/static/app.js?v=20261013-masterclass-psychology-v4"></script>
+  <script src="/static/app.js?v=20261013-psychology-sessions-v1"></script>
 </body>
 </html>
