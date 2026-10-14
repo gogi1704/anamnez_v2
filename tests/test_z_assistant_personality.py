@@ -66,6 +66,53 @@ class AssistantPersonalityTests(unittest.TestCase):
         self.assertIn("Никогда не шути", prompt)
         self.assertIn("не отменяет медицинскую точность", prompt)
 
+    def test_dialog_types_have_independent_personality_profiles(self):
+        psychology = db.admin_assistant_personality_settings(
+            "masterclass_psychology"
+        )
+        self.assertEqual(psychology["initiative"], 25)
+        self.assertEqual(psychology["address_mode"], "contextual")
+
+        saved = db.admin_update_assistant_personality_settings({
+            "profile_key": "masterclass_psychology",
+            "preset": "custom",
+            "initiative": 10,
+            "emoji": 0,
+        })
+        self.assertEqual(saved["profile_key"], "masterclass_psychology")
+        self.assertEqual(saved["initiative"], 10)
+        self.assertEqual(saved["emoji"], 0)
+        self.assertEqual(db.admin_assistant_personality_settings()["initiative"], 60)
+        self.assertEqual(
+            db.admin_assistant_personality_settings("weight_control")["initiative"],
+            60,
+        )
+
+        profiles = db.admin_assistant_personality_profiles()
+        self.assertEqual(
+            set(profiles), {"general", "weight_control", "masterclass_psychology"},
+        )
+
+    def test_llm_selects_personality_by_dialog_type(self):
+        db.ensure_user("chel_profile_scoping", pending=True)
+        db.set_current_chel_id("chel_profile_scoping")
+        db.set_ai_branch("chel_profile_scoping", db.AI_BRANCH_TEST)
+        db.admin_update_assistant_personality_settings({
+            "profile_key": "general", "preset": "custom", "formality": 80,
+        })
+        db.admin_update_assistant_personality_settings({
+            "profile_key": "masterclass_psychology", "preset": "custom",
+            "formality": 10,
+        })
+
+        service = LLMService()
+        general = service._assistant_personality_prompt({"dialog_type": "general"})
+        psychology = service._assistant_personality_prompt({
+            "dialog_type": "masterclass_psychology",
+        })
+        self.assertIn("Формальность 80/100", general)
+        self.assertIn("Формальность 10/100", psychology)
+
     def test_invalid_personality_values_are_rejected(self):
         invalid_payloads = (
             {"preset": "unknown"},
@@ -182,16 +229,20 @@ class AssistantPersonalityTests(unittest.TestCase):
         self.assertIn('id="personalityYandexOnly"', html)
         self.assertIn('id="personalityTestBranchModel"', html)
         self.assertIn('id="personalityTestBranchFallbackModel"', html)
+        self.assertIn('data-personality-profile="general"', html)
+        self.assertIn('data-personality-profile="weight_control"', html)
+        self.assertIn('data-personality-profile="masterclass_psychology"', html)
+        self.assertIn("profile_key:activePersonalityProfile", javascript)
         self.assertIn("apply_to_all:!$('#personalityYandexOnly').checked", javascript)
         self.assertIn("test_branch_model:$('#personalityTestBranchModel').value", javascript)
         self.assertIn("test_branch_fallback_model:$('#personalityTestBranchFallbackModel').value", javascript)
         self.assertIn(".dashboard.show-personality", (project / "static" / "dashboard.css").read_text(encoding="utf-8"))
         self.assertIn("/api/admin/assistant-personality", javascript)
         self.assertIn("schedulePersonalitySave", javascript)
-        self.assertGreaterEqual(llm.count("self._assistant_personality_prompt()"), 4)
+        self.assertGreaterEqual(llm.count("self._assistant_personality_prompt"), 6)
         self.assertGreaterEqual(llm.count("self._weight_control_personality_prompt(state)"), 2)
         self.assertLess(
-            llm.index("self._assistant_personality_prompt()"),
+            llm.index("self._assistant_personality_prompt(conversation)"),
             llm.index("def generate_health_passport"),
         )
 

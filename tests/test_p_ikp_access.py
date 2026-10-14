@@ -80,10 +80,11 @@ class IkpAccessTests(unittest.TestCase):
             self.assertEqual(psychology['dialog_type'], 'masterclass_psychology')
             self.assertEqual(psychology['active_agent'], 'psychologist')
             self.assertEqual(psychology['pinned'], 1)
-            self.assertIn(
-                'отдельный чат психологической поддержки',
-                db.list_messages(psychology['id'])[0]['content'],
-            )
+            greeting = db.list_messages(psychology['id'])[0]['content']
+            self.assertEqual(greeting, db.MASTERCLASS_PSYCHOLOGY_WELCOME)
+            self.assertIn('Я Ольга, помощник-психолог', greeting)
+            self.assertIn('без ограничений по времени', greeting)
+            self.assertIn('первые 30 минут бесплатно', greeting)
         finally:
             db.set_current_chel_id(previous_chel_id)
         report = db.admin_masterclass_report()

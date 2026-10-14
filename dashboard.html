@@ -11,7 +11,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/static/dashboard.css?v=20261014-masterclass-metric-v5">
+  <link rel="stylesheet" href="/static/dashboard.css?v=20261014-personality-tabs-v6">
 </head>
 <body>
   <main class="dashboard-shell">
@@ -461,20 +461,26 @@
 
       <section class="personality-admin hidden" id="personalityAdminView">
         <article class="panel personality-heading-panel">
-          <div class="panel-heading"><div><p class="eyebrow">Стиль общения ИИ</p><h2>Характер Ольги</h2><p>По умолчанию галочка ниже ограничивает настройки секретной веткой Яндекс ИИ. Снимите её, чтобы изменить все новые ответы, включая основную ветку OpenAI. Медицинские ограничения, срочные предупреждения и точность ответов остаются прежними.</p></div><span class="personality-state" id="personalityState">Загрузка…</span></div>
+          <div class="panel-heading"><div><p class="eyebrow">Стиль общения ИИ</p><h2>Характер Ольги</h2><p>У каждого типа диалога свой независимый характер. Выбор моделей и область применения остаются общими. Медицинские ограничения, срочные предупреждения и точность ответов не меняются.</p></div><span class="personality-state" id="personalityState">Загрузка…</span></div>
         </article>
         <form class="panel personality-form" id="personalityForm">
+          <div class="personality-model-priority">
+            <label class="personality-model"><span><b>Главная модель</b><small>Получает все запросы скрытой ветки Яндекс ИИ и локального Yandex-режима.</small></span><select id="personalityTestBranchModel"><option value="deepseek-v4.1-flash">DeepSeek V4.1 Flash</option><option value="qwen3.6-35b-a3b">Qwen 3.6</option><option value="gpt-oss-120b">OpenAI GPT-OSS 120B через Yandex</option></select></label>
+            <label class="personality-model"><span><b>Второстепенная модель</b><small>Автоматически получает тот же запрос, только если главная модель вернула ошибку или не дала ответа.</small></span><select id="personalityTestBranchFallbackModel"><option value="deepseek-v4.1-flash">DeepSeek V4.1 Flash</option><option value="qwen3.6-35b-a3b">Qwen 3.6</option><option value="gpt-oss-120b">OpenAI GPT-OSS 120B через Yandex</option></select></label>
+          </div>
+          <label class="personality-scope"><input id="personalityYandexOnly" type="checkbox" checked><span><b>Только секретная ветка Яндекс ИИ</b><small>Если галочка включена — настройки характера получает только секретная ветка. Снимите её, чтобы применять характер ко всем ответам, включая основную ветку OpenAI.</small></span></label>
+          <nav class="personality-dialog-tabs" aria-label="Тип диалога">
+            <button class="active" type="button" data-personality-profile="general"><strong>Обычный чат</strong><small>Медицинские и общие диалоги</small></button>
+            <button type="button" data-personality-profile="weight_control"><strong>Контроль веса</strong><small>Дневник питания и программа</small></button>
+            <button type="button" data-personality-profile="masterclass_psychology"><strong>Психологический</strong><small>Поддержка после мастер-класса</small></button>
+          </nav>
+          <p class="personality-profile-hint" id="personalityProfileHint">Настройки ниже влияют только на обычные диалоги.</p>
           <fieldset class="personality-presets"><legend>Готовый характер</legend>
             <button type="button" data-personality-preset="professional"><strong>Деловой</strong><small>Сдержанно и короче</small></button>
             <button type="button" data-personality-preset="balanced"><strong>Сбалансированный</strong><small>Тепло и профессионально</small></button>
             <button type="button" data-personality-preset="friendly"><strong>Тёплый</strong><small>Живо, бережно и с лёгким юмором</small></button>
             <button type="button" data-personality-preset="companion"><strong>По-дружески</strong><small>На «ты», общительно и с юмором</small></button>
           </fieldset>
-          <div class="personality-model-priority">
-            <label class="personality-model"><span><b>Главная модель</b><small>Получает все запросы скрытой ветки Яндекс ИИ и локального Yandex-режима.</small></span><select id="personalityTestBranchModel"><option value="deepseek-v4.1-flash">DeepSeek V4.1 Flash</option><option value="qwen3.6-35b-a3b">Qwen 3.6</option><option value="gpt-oss-120b">OpenAI GPT-OSS 120B через Yandex</option></select></label>
-            <label class="personality-model"><span><b>Второстепенная модель</b><small>Автоматически получает тот же запрос, только если главная модель вернула ошибку или не дала ответа.</small></span><select id="personalityTestBranchFallbackModel"><option value="deepseek-v4.1-flash">DeepSeek V4.1 Flash</option><option value="qwen3.6-35b-a3b">Qwen 3.6</option><option value="gpt-oss-120b">OpenAI GPT-OSS 120B через Yandex</option></select></label>
-          </div>
-          <label class="personality-scope"><input id="personalityYandexOnly" type="checkbox" checked><span><b>Только секретная ветка Яндекс ИИ</b><small>Если галочка включена — настройки характера получает только секретная ветка. Снимите её, чтобы применять характер ко всем ответам, включая основную ветку OpenAI.</small></span></label>
           <div class="personality-layout">
             <section class="personality-controls">
               <label class="personality-address"><span><b>Как обращаться</b></span><small>Можно всегда сохранять «вы», подстраиваться под пользователя или сразу общаться на «ты».</small><select id="personalityAddressMode"><option value="formal">Всегда на «вы»</option><option value="contextual">По контексту</option><option value="informal">На «ты»</option></select></label>
@@ -832,6 +838,6 @@
       </div>
     </section>
   </div>
-  <script src="/static/dashboard.js?v=20261014-masterclass-metric-v5" defer></script>
+  <script src="/static/dashboard.js?v=20261014-personality-tabs-v6" defer></script>
 </body>
 </html>

@@ -557,6 +557,7 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
             if path == "/api/admin/assistant-personality":
                 return self._json(200, {
                     "settings": db.admin_assistant_personality_settings(),
+                    "profiles": db.admin_assistant_personality_profiles(),
                     "presets": db.ASSISTANT_PERSONALITY_PRESETS,
                     "test_branch_models": db.TEST_BRANCH_MODEL_OPTIONS,
                 })
@@ -2056,6 +2057,7 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                 payload = self._read_json(max_bytes=8_000)
                 return self._json(200, {
                     "settings": db.admin_update_assistant_personality_settings(payload),
+                    "profiles": db.admin_assistant_personality_profiles(),
                     "presets": db.ASSISTANT_PERSONALITY_PRESETS,
                     "test_branch_models": db.TEST_BRANCH_MODEL_OPTIONS,
                 })
@@ -2419,6 +2421,30 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                     "assistant_message": message,
                 })
             except (ValueError, TypeError) as exc:
+                return self._json(422, {"detail": str(exc)})
+        if path.startswith("/api/conversations/") and path.endswith("/compress-context"):
+            conversation_id = path.removeprefix("/api/conversations/").removesuffix(
+                "/compress-context"
+            ).strip("/")
+            try:
+                payload = self._read_json(max_bytes=2_000)
+                through_message_id = int(payload.get("through_message_id") or 0)
+                if through_message_id <= 0:
+                    raise ValueError("Не указано сообщение для сжатия")
+                result = orchestrator.compress_context(
+                    conversation_id, through_message_id,
+                )
+                self._track_analytics("conversation_context_compacted", {
+                    "dialog_type": (db.get_conversation(conversation_id) or {}).get(
+                        "dialog_type", "general"
+                    ),
+                })
+                return self._json(200, result)
+            except LLMNotConfigured as exc:
+                return self._json(503, {"detail": str(exc)})
+            except LLMProviderError as exc:
+                return self._json(502, {"detail": str(exc)})
+            except (ValueError, TypeError, json.JSONDecodeError, UnicodeDecodeError) as exc:
                 return self._json(422, {"detail": str(exc)})
         if path.startswith("/api/conversations/") and path.endswith("/read"):
             conversation_id = path.removeprefix("/api/conversations/").removesuffix("/read").strip("/")

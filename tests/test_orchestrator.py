@@ -49,6 +49,7 @@ class FakeLLM:
         self.route_calls = []
         self.answer_calls = []
         self.interpret_calls = []
+        self.compress_calls = []
 
     def route(self, history, context, conversation, attachments=None):
         self.route_calls.append({"history": history, "context": context, "conversation": dict(conversation)})
@@ -81,6 +82,13 @@ class FakeLLM:
             "Общий вывод: результаты сопоставлены с анкетой.\n\n"
             "Отклонения: тестовая расшифровка."
         )
+
+    def compress_conversation_context(self, history, *, previous_summary="", context=None):
+        self.compress_calls.append({
+            "history": list(history), "previous_summary": previous_summary,
+            "context": dict(context or {}),
+        })
+        return '{"goal":"разобраться с жалобой","key_facts":["важный факт"],"important_preferences":[],"steps_and_results":[],"safety_and_handoffs":[],"unresolved":[]}'
 
 
 class StickyHumanLLM(FakeLLM):
@@ -277,6 +285,11 @@ class OrchestratorTests(unittest.TestCase):
         self.assertEqual(result.agent, "psychologist")
         self.assertEqual(fake.answer_calls[-1]["agent_id"], "psychologist")
         self.assertEqual(fake.answer_calls[-1]["route"].action, "continue")
+        session_status = fake.route_calls[-1]["conversation"]["_psychology_session_status"]
+        self.assertTrue(session_status["free_available"])
+        self.assertEqual(session_status["completed_count"], 0)
+        self.assertEqual(session_status["remaining_paid"], 0)
+        self.assertEqual(len(session_status["packages"]), 7)
         self.assertEqual(
             db.get_conversation(conversation["id"])["active_agent"],
             "psychologist",
@@ -1516,7 +1529,7 @@ class OrchestratorTests(unittest.TestCase):
 
     def test_long_dialogue_warns_once_before_context_window_is_full(self):
         conversation = db.create_conversation("Длинный диалог")
-        for index in range(settings.max_history_messages - 5):
+        for index in range(settings.max_history_messages - 2):
             db.add_message(
                 conversation["id"],
                 "user" if index % 2 == 0 else "assistant",
@@ -1533,6 +1546,49 @@ class OrchestratorTests(unittest.TestCase):
         self.assertIn("последних 30 сообщений", warned.assistant_message["content"])
         self.assertFalse(repeated.assistant_message["metadata"]["context_limit_warning"])
         self.assertNotIn("Диалог стал длинным", repeated.assistant_message["content"])
+
+    def test_context_compaction_resets_counter_and_preserves_summary(self):
+        conversation = db.create_conversation("Сжимаемый диалог")
+        for index in range(settings.max_history_messages - 2):
+            db.add_message(
+                conversation["id"],
+                "user" if index % 2 == 0 else "assistant",
+                f"Старое сообщение {index + 1}",
+                "therapist" if index % 2 else None,
+            )
+        fake = FakeLLM()
+        service = ConversationOrchestrator(fake)
+        warned = service.process(conversation["id"], "Продолжим")
+        warning_id = warned.assistant_message["id"]
+
+        compacted = service.compress_context(conversation["id"], warning_id)
+
+        self.assertEqual(compacted["message_count"], 0)
+        self.assertEqual(compacted["remaining_until_warning"], 29)
+        self.assertEqual(len(fake.compress_calls), 1)
+        checkpoint = db.conversation_context_compaction(conversation["id"])
+        self.assertEqual(checkpoint["through_message_id"], warning_id)
+        warning = next(
+            item for item in db.list_messages(conversation["id"])
+            if item["id"] == warning_id
+        )
+        self.assertTrue(warning["metadata"]["context_compacted"])
+        recent = service._recent_history(conversation["id"])
+        self.assertEqual(len(recent), 1)
+        self.assertTrue(recent[0]["metadata"]["context_compaction"])
+        self.assertIn("важный факт", recent[0]["content"])
+
+        for index in range(settings.max_history_messages - 2):
+            db.add_message(
+                conversation["id"],
+                "user" if index % 2 == 0 else "assistant",
+                f"Новое сообщение {index + 1}",
+                "therapist" if index % 2 else None,
+            )
+        warned_again = service.process(conversation["id"], "Продолжим ещё")
+        self.assertTrue(
+            warned_again.assistant_message["metadata"]["context_limit_warning"]
+        )
 
     def test_human_reminder_has_two_blank_lines(self):
         text = "Да, я здесь. Обращение H-939398 уже передано человеку; ожидайте ответа специалиста."
@@ -1946,6 +2002,53 @@ class OrchestratorTests(unittest.TestCase):
 
         self.assertEqual(manager_payload["model"], settings.orchestrator_model)
         self.assertEqual(specialist_payload["model"], settings.specialist_model)
+
+    def test_masterclass_psychologist_gets_scoped_dialogue_and_session_guide(self):
+        response = {
+            "output": [{
+                "type": "message",
+                "content": [{
+                    "type": "output_text",
+                    "text": json.dumps({
+                        "message": "Давайте разберёмся", "next_action": "respond",
+                        "target_agent": None, "handoff_reason": "",
+                        "urgency": "routine", "missing_information": [],
+                    }),
+                }],
+            }],
+        }
+        service = LLMService()
+        decision = RouteDecision(
+            "continue", "psychologist", "Тест", normalize_context(None),
+        )
+        session_status = {
+            "free_available": True, "completed_count": 0,
+            "purchased_count": 0, "remaining_paid": 0,
+            "pending_request": None, "packages": [],
+        }
+        with patch.object(service, "_request", return_value=response) as request:
+            service.answer(
+                "psychologist", [{"role": "user", "content": "Мне тяжело"}],
+                {}, decision, {
+                    "active_agent": "psychologist",
+                    "dialog_type": "masterclass_psychology",
+                    "_psychology_session_status": session_status,
+                },
+            )
+            specialized_payload = request.call_args.args[0]
+            service.answer(
+                "psychologist", [{"role": "user", "content": "Мне тревожно"}],
+                {}, decision, {"active_agent": "psychologist", "dialog_type": "general"},
+            )
+            ordinary_payload = request.call_args.args[0]
+
+        self.assertIn("Кнопка с фиолетовым символом «Ψ»", specialized_payload["instructions"])
+        self.assertIn("Не предлагай сессию механически", specialized_payload["instructions"])
+        self.assertIn("не используй страх, вину", specialized_payload["instructions"].lower())
+        runtime = json.loads(specialized_payload["input"])
+        self.assertEqual(runtime["psychology_session_status"], session_status)
+        self.assertNotIn("Кнопка с фиолетовым символом «Ψ»", ordinary_payload["instructions"])
+        self.assertNotIn("psychology_session_status", json.loads(ordinary_payload["input"]))
 
     def test_other_person_profile_request_uses_normal_router(self):
         fake = FakeLLM()
@@ -4161,14 +4264,14 @@ class OrchestratorTests(unittest.TestCase):
         self.assertIn("controllerchange", script)
         self.assertIn("url.pathname.startsWith('/api/')", worker)
         self.assertIn("url.pathname.startsWith('/auth/')", worker)
-        self.assertIn("consilium-shell-v167", worker)
+        self.assertIn("consilium-shell-v168", worker)
         self.assertIn("fetch(request)", worker)
-        self.assertIn("/static/styles.css?v=20261014-masterclass-metric-v8", index)
+        self.assertIn("/static/styles.css?v=20261014-context-compact-v9", index)
         self.assertIn("/static/rich-text.2bf1f5fab764.css", index)
         self.assertTrue((project_root / "static" / "styles.07ffaefb4795.css").is_file())
         self.assertTrue((project_root / "static" / "rich-text.2bf1f5fab764.css").is_file())
-        self.assertIn("/static/app.js?v=20261014-masterclass-metric-v8", index)
-        self.assertIn("/static/metrika.js?v=20261014-masterclass-metric-v8", index)
+        self.assertIn("/static/app.js?v=20261014-context-compact-v9", index)
+        self.assertIn("/static/metrika.js?v=20261014-context-compact-v9", index)
         self.assertIn("Enter — новая строка · отправка — кнопкой", index)
         self.assertIn('enterkeyhint="enter"', index)
         self.assertNotIn("$('#chatForm').requestSubmit()", script)
@@ -4254,7 +4357,7 @@ class OrchestratorTests(unittest.TestCase):
         main = (project_root / "backend" / "main.py").read_text(encoding="utf-8")
         config = (project_root / "backend" / "config.py").read_text(encoding="utf-8")
 
-        self.assertIn('src="/static/metrika.js?v=20261014-masterclass-metric-v8"', index)
+        self.assertIn('src="/static/metrika.js?v=20261014-context-compact-v9"', index)
         self.assertIn('YANDEX_METRIKA_COUNTER_ID', config)
         self.assertIn('path == "/api/public-config"', main)
         self.assertIn('"metrika.js"', main)

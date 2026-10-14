@@ -130,9 +130,70 @@ def _checkup_catalog_for_ai() -> list[dict]:
     ]
 
 
+def _psychology_session_status_for_ai(conversation_id: str) -> dict:
+    """Expose only grounded session state needed by the psychology assistant."""
+    summary = db.psychology_session_summary(conversation_id)
+    pending = summary.get("pending_session") or {}
+    return {
+        "free_available": bool(summary.get("free_available")),
+        "completed_count": int(summary.get("completed_count") or 0),
+        "purchased_count": int(summary.get("purchased_count") or 0),
+        "remaining_paid": int(summary.get("remaining_paid") or 0),
+        "pending_request": ({
+            "request_number": str(pending.get("request_number") or ""),
+            "status": str(pending.get("status") or ""),
+        } if pending else None),
+        "packages": [
+            {
+                "sessions": int(item.get("sessions") or 0),
+                "unit_price_rub": int(item.get("unit_price") or 0),
+                "total_price_rub": int(item.get("total_price") or 0),
+            }
+            for item in summary.get("packages", [])
+        ],
+    }
+
+
 class ConversationOrchestrator:
     def __init__(self, llm: LLMService = llm_service) -> None:
         self.llm = llm
+
+    def compress_context(
+        self, conversation_id: str, through_message_id: int,
+    ) -> dict:
+        conversation = db.get_conversation(conversation_id)
+        if not conversation:
+            raise ValueError("Диалог не найден")
+        _, previous = db.validate_context_compaction_warning(
+            conversation_id, through_message_id,
+        )
+        previous_through = int((previous or {}).get("through_message_id") or 0)
+        segment = db.list_messages_for_context_compaction(
+            conversation_id,
+            after_id=previous_through,
+            through_id=through_message_id,
+        )
+        if not segment:
+            raise ValueError("В диалоге нет новых сообщений для сжатия")
+        summary = self.llm.compress_conversation_context(
+            segment,
+            previous_summary=str((previous or {}).get("summary") or ""),
+            context=self._load_context(conversation.get("context_summary", "")),
+        )
+        checkpoint = db.save_context_compaction(
+            conversation_id, through_message_id, summary,
+        )
+        usage = db.conversation_context_usage(conversation_id)
+        return {
+            "conversation_id": conversation_id,
+            "compressed_through_message_id": int(
+                checkpoint.get("through_message_id") or through_message_id
+            ),
+            "message_count": usage["message_count"],
+            "remaining_until_warning": max(
+                0, settings.max_history_messages - 1 - usage["message_count"],
+            ),
+        }
 
     @staticmethod
     def _retryable_user_message(
@@ -168,6 +229,10 @@ class ConversationOrchestrator:
         conversation["_device"] = _device_for_ai()
         conversation["_messenger_access"] = _messenger_access_for_ai()
         conversation["_body_symptoms"] = db.list_body_symptoms(status="active", limit=20)
+        if conversation.get("dialog_type") == "masterclass_psychology":
+            conversation["_psychology_session_status"] = (
+                _psychology_session_status_for_ai(conversation_id)
+            )
         if (
             conversation.get("dialog_type") == "weight_control"
             and not HUMAN_REQUEST.search(user_text)
@@ -349,7 +414,7 @@ class ConversationOrchestrator:
         context_limit_warning = False
         if action not in {"human", "emergency"}:
             context_usage = db.conversation_context_usage(conversation_id)
-            warning_message_threshold = max(4, settings.max_history_messages - 4)
+            warning_message_threshold = max(4, settings.max_history_messages - 1)
             warning_char_threshold = max(1000, int(settings.max_history_chars * 0.85))
             context_limit_warning = bool(
                 not context_usage["warning_shown"]
@@ -363,8 +428,8 @@ class ConversationOrchestrator:
                     f"{answer}\n\n"
                     "💡 **Диалог стал длинным.** Скоро часть ранних сообщений может "
                     f"перестать попадать в контекст: я учитываю до последних "
-                    f"{settings.max_history_messages} сообщений. Если хотите обсудить "
-                    "новую тему и сохранить её полный контекст, лучше начать новый диалог."
+                    f"{settings.max_history_messages} сообщений. Нажмите «Сжать контекст», "
+                    "чтобы сохранить главное из предыдущей части и продолжить здесь."
                 )
         metadata = {
             "action": action,
@@ -1298,8 +1363,31 @@ class ConversationOrchestrator:
         return list(reversed(selected))
 
     def _recent_history(self, conversation_id: str) -> list[dict]:
-        history = db.list_messages(conversation_id, settings.max_history_messages)
-        return self._bound_history(history, settings.max_history_chars)
+        checkpoint = db.conversation_context_compaction(conversation_id)
+        if not checkpoint:
+            history = db.list_messages(conversation_id, settings.max_history_messages)
+            return self._bound_history(history, settings.max_history_chars)
+        summary = str(checkpoint.get("summary") or "").strip()
+        recent_limit = max(1, settings.max_history_messages - 1)
+        history = db.list_messages_since_context_compaction(
+            conversation_id,
+            int(checkpoint.get("through_message_id") or 0),
+            recent_limit,
+        )
+        summary_budget = min(len(summary), max(1000, settings.max_history_chars // 3))
+        bounded = self._bound_history(
+            history, max(1000, settings.max_history_chars - summary_budget),
+        )
+        if not summary:
+            return bounded
+        return [{
+            "id": int(checkpoint.get("through_message_id") or 0),
+            "role": "assistant",
+            "agent_id": "manager",
+            "content": "Сжатый контекст предыдущей части диалога:\n" + summary,
+            "metadata": {"context_compaction": True},
+            "created_at": checkpoint.get("updated_at"),
+        }, *bounded]
 
     @classmethod
     def _limit_questions(cls, text: str, limit: int) -> str:

@@ -3838,10 +3838,15 @@ function addMessage(sender, text, agentId = state.active, urgent = false, create
       && metadata.action === 'psychology_session_payment_instruction'
     ? '<div class="message-messenger-actions message-psychology-session-actions"><button type="button" class="message-checkup-reoffer" data-psychology-sessions-open>Открыть меню сессий</button></div>'
     : '';
+  const contextCompactAction = sender === 'agent' && metadata.context_limit_warning
+    ? metadata.context_compacted
+      ? '<div class="message-context-compaction compacted"><small>✓ Предыдущая часть диалога сжата — новый отсчёт начат</small></div>'
+      : `<div class="message-context-compaction"><button type="button" class="message-checkup-reoffer" data-context-compact="${messageId}">Сжать контекст</button><small>История останется видимой. ИИ сохранит главное и начнёт новый отсчёт сообщений.</small></div>`
+    : '';
   const userTextMarkup = String(text || '').trim() ? `<p>${escapeHtml(text)}</p>` : '';
   wrapper.innerHTML = sender === 'user'
     ? `<div class="bubble user-bubble">${attachmentMarkup}${userTextMarkup}<span>${time}</span></div><div class="message-send-error hidden" role="status"><span>Ошибка отправки</span><button type="button" data-message-retry>Повторить</button></div>`
-    : `<div class="message-avatar">${humanManager ? (metadata.staff_role === 'doctor' ? 'В' : metadata.staff_role === 'psychologist' ? 'Ψ' : 'Ч') : agent.initials}</div><div><div class="message-author"><strong>${humanManager ? escapeHtml(metadata.manager_name || humanRole) : agent.name}</strong><span>${humanManager ? humanRole : agent.role}</span>${cached}</div><div class="bubble agent-bubble">${assistantContent}${labDocuments}${reofferAction}${reminderAction}${weightDiaryAction}${messengerLinkAction}${bodyParametersAction}${mealConfirmationAction}${checkupPurchaseCancelAction}${psychologySessionPaymentAction}<span>${time}</span></div></div>`;
+    : `<div class="message-avatar">${humanManager ? (metadata.staff_role === 'doctor' ? 'В' : metadata.staff_role === 'psychologist' ? 'Ψ' : 'Ч') : agent.initials}</div><div><div class="message-author"><strong>${humanManager ? escapeHtml(metadata.manager_name || humanRole) : agent.name}</strong><span>${humanManager ? humanRole : agent.role}</span>${cached}</div><div class="bubble agent-bubble">${assistantContent}${labDocuments}${reofferAction}${reminderAction}${weightDiaryAction}${messengerLinkAction}${bodyParametersAction}${mealConfirmationAction}${checkupPurchaseCancelAction}${psychologySessionPaymentAction}${contextCompactAction}<span>${time}</span></div></div>`;
   messages.appendChild(wrapper);
   scrollChatToBottom();
   return wrapper;
@@ -7359,6 +7364,30 @@ async function cancelCheckupPurchaseRequest(button) {
     addSystemError(error.message);
   }
 }
+async function compactConversationContext(button) {
+  const container = button.closest('.message-context-compaction');
+  const throughMessageId = Number(button.dataset.contextCompact || 0);
+  if (!state.conversationId || !throughMessageId) return;
+  button.disabled = true;
+  button.textContent = 'Сжимаем…';
+  try {
+    const result = await api(`/api/conversations/${encodeURIComponent(state.conversationId)}/compress-context`, {
+      method:'POST', body:JSON.stringify({through_message_id:throughMessageId}),
+    });
+    if (container) {
+      container.classList.add('compacted');
+      container.innerHTML = '<small>✓ Предыдущая часть диалога сжата — новый отсчёт начат</small>';
+    }
+    trackEvent('conversation_context_compacted', {
+      remaining_until_warning:Number(result.remaining_until_warning || 0),
+      dialog_type:state.conversationType || 'general',
+    });
+  } catch (error) {
+    button.disabled = false;
+    button.textContent = 'Сжать контекст';
+    addSystemError(error.message);
+  }
+}
 function handleLabInterpretClick(event) {
   const retryButton = event.target.closest('[data-message-retry]');
   if (retryButton) {
@@ -7381,6 +7410,11 @@ function handleLabInterpretClick(event) {
   if (psychologySessionsButton) {
     openPsychologySessions();
     trackEvent('psychology_sessions_opened_from_message', {source:'psychologist_instruction'});
+    return;
+  }
+  const contextCompactButton = event.target.closest('[data-context-compact]');
+  if (contextCompactButton) {
+    compactConversationContext(contextCompactButton);
     return;
   }
   const weightDiaryButton = event.target.closest('[data-weight-diary-open]');

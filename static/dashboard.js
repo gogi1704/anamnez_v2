@@ -70,6 +70,8 @@ let metric2ActiveFlow = 'standard';
 let activeContentTextPanel = 'offer';
 let contentTextPreviewExaminations = [];
 let personalityPreset = 'balanced';
+let activePersonalityProfile = 'general';
+let personalityProfiles = {};
 let personalitySaveTimer = null;
 let personalitySaveInFlight = false;
 let personalitySaveQueued = false;
@@ -2162,6 +2164,7 @@ const personalityFields = [
 
 function personalityValues() {
   return {
+    profile_key:activePersonalityProfile,
     apply_to_all:!$('#personalityYandexOnly').checked,
     address_mode:$('#personalityAddressMode').value,
     test_branch_model:$('#personalityTestBranchModel').value,
@@ -2210,7 +2213,11 @@ function renderPersonalitySettings() {
   };
   const primary = modelLabels[values.test_branch_model] || 'модель Яндекс';
   const fallback = modelLabels[values.test_branch_fallback_model] || 'резервная модель';
-  $('#personalityState').textContent = `${presetLabels[personalityPreset] || presetLabels.custom} · ${scope} · ${primary} → ${fallback}`;
+  const profileLabels = {general:'Обычный чат',weight_control:'Контроль веса',masterclass_psychology:'Психологический'};
+  $('#personalityState').textContent = `${profileLabels[activePersonalityProfile]} · ${presetLabels[personalityPreset] || presetLabels.custom} · ${scope} · ${primary} → ${fallback}`;
+  document.querySelectorAll('[data-personality-profile]').forEach(button => {
+    button.classList.toggle('active',button.dataset.personalityProfile === activePersonalityProfile);
+  });
 }
 
 function applyPersonalityPreset(name) {
@@ -2224,19 +2231,32 @@ function applyPersonalityPreset(name) {
   renderPersonalitySettings();
 }
 
-function fillPersonalitySettings(item = {}, presets = {}) {
-  personalityPresets = {...personalityPresets,...presets};
+function fillActivePersonalityProfile() {
+  const item = personalityProfiles[activePersonalityProfile] || personalityProfiles.general || {};
   personalityPreset = item.preset || 'balanced';
-  $('#personalityYandexOnly').checked = !Boolean(item.apply_to_all);
-  $('#personalityTestBranchModel').value = item.test_branch_model || 'deepseek-v4.1-flash';
-  $('#personalityTestBranchFallbackModel').value = item.test_branch_fallback_model || 'qwen3.6-35b-a3b';
-  ensureDifferentPersonalityModels();
   $('#personalityAddressMode').value = item.address_mode || personalityPresets.balanced.address_mode;
   for (const field of personalityFields) {
     const fallback = personalityPresets.balanced[field];
     $(`#personality${field[0].toUpperCase()}${field.slice(1)}`).value = Number(item[field] ?? fallback);
   }
+  const hints = {
+    general:'Настройки ниже влияют только на обычные медицинские и общие диалоги.',
+    weight_control:'Настройки ниже задают базовый характер чата «Контроль веса». Выбор самого пользователя в меню чата уточняет этот стиль.',
+    masterclass_psychology:'Настройки ниже влияют только на психологический чат после мастер-класса.',
+  };
+  $('#personalityProfileHint').textContent = hints[activePersonalityProfile];
   renderPersonalitySettings();
+}
+
+function fillPersonalitySettings(item = {}, presets = {}, profiles = {}) {
+  personalityPresets = {...personalityPresets,...presets};
+  personalityProfiles = Object.keys(profiles).length ? profiles : {general:item};
+  if (!personalityProfiles.general) personalityProfiles.general = item;
+  $('#personalityYandexOnly').checked = !Boolean(item.apply_to_all);
+  $('#personalityTestBranchModel').value = item.test_branch_model || 'deepseek-v4.1-flash';
+  $('#personalityTestBranchFallbackModel').value = item.test_branch_fallback_model || 'qwen3.6-35b-a3b';
+  ensureDifferentPersonalityModels();
+  fillActivePersonalityProfile();
 }
 
 function showPersonalityStatus(message = '', error = false) {
@@ -2249,7 +2269,7 @@ function showPersonalityStatus(message = '', error = false) {
 async function loadPersonality() {
   return withPanelLoading('#personalityAdminView', async () => {
     const data = await adminFetch('/api/admin/assistant-personality');
-    fillPersonalitySettings(data.settings || {},data.presets || {});
+    fillPersonalitySettings(data.settings || {},data.presets || {},data.profiles || {});
   }, 'Загружаем характер Ольги…');
 }
 
@@ -2269,8 +2289,11 @@ async function savePersonality(event) {
     const result = await adminFetch('/api/admin/assistant-personality',undefined,{
       method:'POST',body:JSON.stringify({preset:personalityPreset,...personalityValues()}),
     });
+    personalityProfiles = result.profiles || personalityProfiles;
+    personalityProfiles[activePersonalityProfile] = result.settings || personalityProfiles[activePersonalityProfile];
     const scope = result.settings?.apply_to_all ? 'ко всем новым ответам Ольги' : 'только к новым ответам в ветке Яндекс ИИ';
-    showPersonalityStatus(`Характер сохранён. Настройка применяется ${scope}.`);
+    const profileLabels = {general:'обычного чата',weight_control:'«Контроля веса»',masterclass_psychology:'психологического чата'};
+    showPersonalityStatus(`Характер ${profileLabels[activePersonalityProfile]} сохранён. Настройка применяется ${scope}.`);
   } catch (error) {
     showPersonalityStatus(error.message,true);
   } finally {
@@ -2287,6 +2310,16 @@ function schedulePersonalitySave() {
   clearTimeout(personalitySaveTimer);
   showPersonalityStatus('Сохраняем изменения…');
   personalitySaveTimer = setTimeout(() => savePersonality(),600);
+}
+
+async function switchPersonalityProfile(profileKey) {
+  if (!personalityProfiles[profileKey] || profileKey === activePersonalityProfile) return;
+  clearTimeout(personalitySaveTimer);
+  personalitySaveTimer = null;
+  await savePersonality();
+  activePersonalityProfile = profileKey;
+  fillActivePersonalityProfile();
+  showPersonalityStatus('');
 }
 
 function showContentTextsStatus(message = '', error = false) {
@@ -2943,6 +2976,9 @@ $('#metric2Tab').addEventListener('click', () => showAdminView('metric2'));
 $('#contentTextsTab').addEventListener('click', () => showAdminView('content_texts'));
 $('#personalityTab').addEventListener('click', () => showAdminView('personality'));
 $('#personalityForm').addEventListener('submit', savePersonality);
+document.querySelectorAll('[data-personality-profile]').forEach(button => {
+  button.addEventListener('click', () => switchPersonalityProfile(button.dataset.personalityProfile));
+});
 document.querySelectorAll('[data-personality-preset]').forEach(button => {
   button.addEventListener('click', () => {
     applyPersonalityPreset(button.dataset.personalityPreset);

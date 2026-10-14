@@ -21,6 +21,17 @@ TEST_COMPANY_INN = "123123"
 WEIGHT_ANALYSIS_MIN_CONFIRMED_MEALS = 20
 WEIGHT_CONTROL_PERSONALITY_MODES = {"friendly", "balanced", "strict"}
 WEIGHT_CONTROL_ADDRESS_MODES = {"formal", "informal"}
+MASTERCLASS_PSYCHOLOGY_WELCOME = (
+    "Здравствуйте! Я Ольга, помощник-психолог.\n\n"
+    "Если вы здесь — скорее всего, что-то беспокоит: усталость, тревога, "
+    "сон, отношения или просто ощущение, что сил больше нет. Это нормально "
+    "— с этим приходят, и с этим можно работать.\n\n"
+    "Напишите мне как есть, без правильных формулировок. Я рядом и помогу "
+    "разобраться — сколько понадобится, без ограничений по времени. Если "
+    "захотите поговорить с живым психологом — в любой момент можно попросить "
+    "меня позвать человека или нажать на фиолетовую кнопку в верхней части "
+    "экрана, первые 30 минут бесплатно."
+)
 
 
 def normalize_tube_number(value: object) -> str:
@@ -124,6 +135,24 @@ ASSISTANT_PERSONALITY_DEFAULTS = {
     "test_branch_model": "deepseek-v4.1-flash",
     "test_branch_fallback_model": "qwen3.6-35b-a3b",
 }
+ASSISTANT_PERSONALITY_PROFILE_KEYS = {
+    "general", "weight_control", "masterclass_psychology",
+}
+ASSISTANT_PERSONALITY_PROFILE_DEFAULTS = {
+    "general": {},
+    "weight_control": {},
+    "masterclass_psychology": {
+        "preset": "balanced",
+        "address_mode": "contextual",
+        "formality": 20,
+        "warmth": 90,
+        "sociability": 55,
+        "supportiveness": 90,
+        "humor": 5,
+        "emoji": 5,
+        "initiative": 25,
+    },
+}
 ASSISTANT_PERSONALITY_PRESETS = {
     "professional": {
         "address_mode": "formal", "formality": 75, "warmth": 55,
@@ -174,14 +203,45 @@ def apply_ai_branch_link(token: str) -> None:
         set_ai_branch(current_chel_id(), AI_BRANCH_TEST)
 
 
-def admin_assistant_personality_settings() -> dict:
+def _personality_profile_key(value: object) -> str:
+    key = str(value or "general").strip().lower()
+    if key not in ASSISTANT_PERSONALITY_PROFILE_KEYS:
+        raise ValueError("Неизвестный тип диалога для характера Ольги")
+    return key
+
+
+def admin_assistant_personality_settings(profile_key: str = "general") -> dict:
     """Return the safe, admin-controlled communication style for Olga."""
+    profile_key = _personality_profile_key(profile_key)
     with connection() as conn:
         row = conn.execute(
             "SELECT * FROM assistant_personality_settings WHERE id = 1"
         ).fetchone()
-    item = dict(row) if row else {}
-    result = {**ASSISTANT_PERSONALITY_DEFAULTS, **item}
+        profile_row = None
+        if profile_key != "general":
+            profile_row = conn.execute(
+                "SELECT * FROM assistant_personality_profiles WHERE profile_key = ?",
+                (profile_key,),
+            ).fetchone()
+    global_item = dict(row) if row else {}
+    profile_defaults = ASSISTANT_PERSONALITY_PROFILE_DEFAULTS.get(profile_key, {})
+    style_item = global_item if profile_key == "general" else dict(profile_row or {})
+    result = {
+        **ASSISTANT_PERSONALITY_DEFAULTS,
+        **profile_defaults,
+        **style_item,
+        "apply_to_all": global_item.get(
+            "apply_to_all", ASSISTANT_PERSONALITY_DEFAULTS["apply_to_all"],
+        ),
+        "test_branch_model": global_item.get(
+            "test_branch_model", ASSISTANT_PERSONALITY_DEFAULTS["test_branch_model"],
+        ),
+        "test_branch_fallback_model": global_item.get(
+            "test_branch_fallback_model",
+            ASSISTANT_PERSONALITY_DEFAULTS["test_branch_fallback_model"],
+        ),
+        "profile_key": profile_key,
+    }
     result["apply_to_all"] = bool(result.get("apply_to_all"))
     for key in (
         "formality", "warmth", "sociability", "supportiveness",
@@ -204,11 +264,20 @@ def admin_assistant_personality_settings() -> dict:
     return result
 
 
+def admin_assistant_personality_profiles() -> dict[str, dict]:
+    return {
+        key: admin_assistant_personality_settings(key)
+        for key in ("general", "weight_control", "masterclass_psychology")
+    }
+
+
 def admin_update_assistant_personality_settings(payload: dict) -> dict:
     """Validate and persist personality controls without accepting raw prompts."""
     if not isinstance(payload, dict):
         raise ValueError("Ожидается объект настроек характера")
-    current = admin_assistant_personality_settings()
+    profile_key = _personality_profile_key(payload.get("profile_key", "general"))
+    current = admin_assistant_personality_settings(profile_key)
+    global_current = admin_assistant_personality_settings("general")
     preset = str(payload.get("preset", current["preset"])).strip().lower()
     if preset not in {*ASSISTANT_PERSONALITY_PRESETS, "custom"}:
         raise ValueError("Неизвестный пресет характера")
@@ -216,7 +285,7 @@ def admin_update_assistant_personality_settings(payload: dict) -> dict:
     if address_mode not in {"formal", "contextual", "informal"}:
         raise ValueError("Неизвестный формат обращения")
     test_branch_model = str(
-        payload.get("test_branch_model", current["test_branch_model"])
+        payload.get("test_branch_model", global_current["test_branch_model"])
     ).strip().lower()
     if test_branch_model not in TEST_BRANCH_MODEL_OPTIONS:
         raise ValueError("Неизвестная модель секретной ветки")
@@ -224,17 +293,17 @@ def admin_update_assistant_personality_settings(payload: dict) -> dict:
     test_branch_fallback_model = str(
         payload.get(
             "test_branch_fallback_model",
-            current["test_branch_fallback_model"],
+            global_current["test_branch_fallback_model"],
         )
     ).strip().lower()
     if test_branch_fallback_model not in TEST_BRANCH_MODEL_OPTIONS:
         raise ValueError("Неизвестная резервная модель секретной ветки")
     if test_branch_fallback_model == test_branch_model:
-        if not fallback_explicit and current["test_branch_model"] != test_branch_model:
-            test_branch_fallback_model = current["test_branch_model"]
+        if not fallback_explicit and global_current["test_branch_model"] != test_branch_model:
+            test_branch_fallback_model = global_current["test_branch_model"]
         else:
             raise ValueError("Основная и резервная модели должны различаться")
-    apply_to_all_raw = payload.get("apply_to_all", current["apply_to_all"])
+    apply_to_all_raw = payload.get("apply_to_all", global_current["apply_to_all"])
     if apply_to_all_raw in (True, 1, "1"):
         apply_to_all = True
     elif apply_to_all_raw in (False, 0, "0"):
@@ -255,32 +324,62 @@ def admin_update_assistant_personality_settings(payload: dict) -> dict:
         values[key] = value
     now = utc_now()
     with _write_lock, connection() as conn:
-        conn.execute(
-            """INSERT INTO assistant_personality_settings
-               (id,preset,address_mode,formality,warmth,sociability,supportiveness,
-                humor,emoji,initiative,apply_to_all,test_branch_model,
-                test_branch_fallback_model,updated_at)
-               VALUES (1,?,?,?,?,?,?,?,?,?,?,?,?,?)
-               ON CONFLICT(id) DO UPDATE SET
-                preset=excluded.preset,address_mode=excluded.address_mode,
-                formality=excluded.formality,
-                warmth=excluded.warmth,sociability=excluded.sociability,
-                supportiveness=excluded.supportiveness,humor=excluded.humor,
-                emoji=excluded.emoji,initiative=excluded.initiative,
-                apply_to_all=excluded.apply_to_all,
-                test_branch_model=excluded.test_branch_model,
-                test_branch_fallback_model=excluded.test_branch_fallback_model,
-                updated_at=excluded.updated_at""",
-            (
-                preset, address_mode, values["formality"], values["warmth"],
-                values["sociability"], values["supportiveness"],
-                values["humor"], values["emoji"], values["initiative"],
-                int(apply_to_all), test_branch_model,
-                test_branch_fallback_model, now,
-            ),
-        )
+        if profile_key == "general":
+            conn.execute(
+                """INSERT INTO assistant_personality_settings
+                   (id,preset,address_mode,formality,warmth,sociability,supportiveness,
+                    humor,emoji,initiative,apply_to_all,test_branch_model,
+                    test_branch_fallback_model,updated_at)
+                   VALUES (1,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                   ON CONFLICT(id) DO UPDATE SET
+                    preset=excluded.preset,address_mode=excluded.address_mode,
+                    formality=excluded.formality,
+                    warmth=excluded.warmth,sociability=excluded.sociability,
+                    supportiveness=excluded.supportiveness,humor=excluded.humor,
+                    emoji=excluded.emoji,initiative=excluded.initiative,
+                    apply_to_all=excluded.apply_to_all,
+                    test_branch_model=excluded.test_branch_model,
+                    test_branch_fallback_model=excluded.test_branch_fallback_model,
+                    updated_at=excluded.updated_at""",
+                (
+                    preset, address_mode, values["formality"], values["warmth"],
+                    values["sociability"], values["supportiveness"],
+                    values["humor"], values["emoji"], values["initiative"],
+                    int(apply_to_all), test_branch_model,
+                    test_branch_fallback_model, now,
+                ),
+            )
+        else:
+            conn.execute(
+                """INSERT INTO assistant_personality_profiles
+                   (profile_key,preset,address_mode,formality,warmth,sociability,
+                    supportiveness,humor,emoji,initiative,updated_at)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?)
+                   ON CONFLICT(profile_key) DO UPDATE SET
+                    preset=excluded.preset,address_mode=excluded.address_mode,
+                    formality=excluded.formality,warmth=excluded.warmth,
+                    sociability=excluded.sociability,
+                    supportiveness=excluded.supportiveness,humor=excluded.humor,
+                    emoji=excluded.emoji,initiative=excluded.initiative,
+                    updated_at=excluded.updated_at""",
+                (
+                    profile_key, preset, address_mode, values["formality"],
+                    values["warmth"], values["sociability"],
+                    values["supportiveness"], values["humor"], values["emoji"],
+                    values["initiative"], now,
+                ),
+            )
+            conn.execute(
+                """UPDATE assistant_personality_settings
+                   SET apply_to_all=?,test_branch_model=?,
+                       test_branch_fallback_model=?,updated_at=? WHERE id=1""",
+                (
+                    int(apply_to_all), test_branch_model,
+                    test_branch_fallback_model, now,
+                ),
+            )
         conn.commit()
-    return admin_assistant_personality_settings()
+    return admin_assistant_personality_settings(profile_key)
 
 
 def assistant_personality_prompt(item: dict | None = None) -> str:
@@ -5456,6 +5555,16 @@ def init_db() -> None:
             CREATE INDEX IF NOT EXISTS idx_message_deletions_conversation
             ON message_deletions(conversation_id, message_id);
 
+            CREATE TABLE IF NOT EXISTS conversation_context_compactions (
+                conversation_id TEXT PRIMARY KEY,
+                through_message_id INTEGER NOT NULL,
+                summary TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY(conversation_id) REFERENCES conversations(id) ON DELETE CASCADE,
+                FOREIGN KEY(through_message_id) REFERENCES messages(id) ON DELETE CASCADE
+            );
+
             CREATE TABLE IF NOT EXISTS conversation_reads (
                 conversation_id TEXT PRIMARY KEY,
                 last_read_message_id INTEGER NOT NULL DEFAULT 0,
@@ -5705,6 +5814,22 @@ def init_db() -> None:
             INSERT OR IGNORE INTO assistant_personality_settings
             (id,preset,formality,warmth,sociability,supportiveness,updated_at)
             VALUES (1,'balanced',35,80,70,85,CURRENT_TIMESTAMP);
+
+            CREATE TABLE IF NOT EXISTS assistant_personality_profiles (
+                profile_key TEXT PRIMARY KEY CHECK(
+                    profile_key IN ('weight_control','masterclass_psychology')
+                ),
+                preset TEXT NOT NULL DEFAULT 'balanced',
+                address_mode TEXT NOT NULL DEFAULT 'formal',
+                formality INTEGER NOT NULL DEFAULT 35 CHECK(formality BETWEEN 0 AND 100),
+                warmth INTEGER NOT NULL DEFAULT 80 CHECK(warmth BETWEEN 0 AND 100),
+                sociability INTEGER NOT NULL DEFAULT 70 CHECK(sociability BETWEEN 0 AND 100),
+                supportiveness INTEGER NOT NULL DEFAULT 85 CHECK(supportiveness BETWEEN 0 AND 100),
+                humor INTEGER NOT NULL DEFAULT 15 CHECK(humor BETWEEN 0 AND 100),
+                emoji INTEGER NOT NULL DEFAULT 5 CHECK(emoji BETWEEN 0 AND 100),
+                initiative INTEGER NOT NULL DEFAULT 60 CHECK(initiative BETWEEN 0 AND 100),
+                updated_at TEXT NOT NULL
+            );
 
             CREATE INDEX IF NOT EXISTS idx_experiment_assignments_variant_time
             ON experiment_assignments(experiment_key,variant,assigned_at);
@@ -6170,6 +6295,27 @@ def init_db() -> None:
                 conn.execute(
                     f"ALTER TABLE assistant_personality_settings ADD COLUMN {name} {declaration}"
                 )
+        psychology_defaults = {
+            **ASSISTANT_PERSONALITY_DEFAULTS,
+            **ASSISTANT_PERSONALITY_PROFILE_DEFAULTS["masterclass_psychology"],
+        }
+        for profile_key, defaults in (
+            ("weight_control", ASSISTANT_PERSONALITY_DEFAULTS),
+            ("masterclass_psychology", psychology_defaults),
+        ):
+            conn.execute(
+                """INSERT OR IGNORE INTO assistant_personality_profiles
+                   (profile_key,preset,address_mode,formality,warmth,sociability,
+                    supportiveness,humor,emoji,initiative,updated_at)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+                (
+                    profile_key, defaults["preset"], defaults["address_mode"],
+                    defaults["formality"], defaults["warmth"],
+                    defaults["sociability"], defaults["supportiveness"],
+                    defaults["humor"], defaults["emoji"],
+                    defaults["initiative"], now,
+                ),
+            )
         conn.execute(
             "INSERT OR IGNORE INTO checkup_reoffer_settings (id,enabled,updated_at) VALUES (1,1,?)",
             (now,),
@@ -6723,6 +6869,22 @@ def init_db() -> None:
             "ON lab_result_value_estimates(status, updated_at)"
         )
         _backfill_known_ai_usage_pricing(conn)
+
+        # Keep the canonical welcome text in chats created by earlier versions.
+        # Only the first automatic psychologist message is touched; the user's
+        # conversation and all later assistant replies remain unchanged.
+        conn.execute(
+            """UPDATE messages SET content=?
+               WHERE id IN (
+                   SELECT MIN(m.id)
+                   FROM messages m
+                   JOIN conversations c ON c.id=m.conversation_id
+                   WHERE c.dialog_type='masterclass_psychology'
+                     AND m.role='assistant' AND m.agent_id='psychologist'
+                   GROUP BY m.conversation_id
+               )""",
+            (MASTERCLASS_PSYCHOLOGY_WELCOME,),
+        )
 
         # Preserve tickets created by earlier versions without rewriting messages.
         conversations = conn.execute("SELECT id, status, human_status, human_ticket_id FROM conversations").fetchall()
@@ -7459,9 +7621,6 @@ def create_or_get_masterclass_psychology_conversation() -> dict:
         "Психологическая поддержка",
         dialog_type="masterclass_psychology", pinned=True,
     )
-    profile = get_profile()
-    preferred_name = str(profile.get("preferred_name") or "").strip()
-    greeting = f", {preferred_name}" if preferred_name else ""
     context = {
         "current_topic": "стресс, усталость и эмоциональное состояние",
         "topic_relation": "new",
@@ -7485,15 +7644,7 @@ def create_or_get_masterclass_psychology_conversation() -> dict:
         conn.commit()
     add_message(
         conversation["id"], "assistant",
-        (
-            f"Здравствуйте{greeting}! Я Ольга. Это отдельный чат психологической "
-            "поддержки после мастер-класса. Здесь можно спокойно обсудить стресс, "
-            "усталость, выгорание, сон и то, что сейчас особенно беспокоит.\n\n"
-            "Я помогу разобрать ситуацию и выбрать небольшой следующий шаг. "
-            "Если понадобится помощь человека, вы сможете позвать специалиста. "
-            "При непосредственной угрозе жизни или безопасности нужна экстренная "
-            "помощь по номеру 112.\n\n**С чего хотите начать?**"
-        ),
+        MASTERCLASS_PSYCHOLOGY_WELCOME,
         "psychologist",
         {
             "specialized_dialog": "masterclass_psychology",
@@ -8913,6 +9064,13 @@ def list_messages(conversation_id: str, limit: int | None = None) -> list[dict]:
 def conversation_context_usage(conversation_id: str) -> dict:
     """Return lightweight transcript usage data for the context-limit notice."""
     with connection() as conn:
+        checkpoint = conn.execute(
+            """SELECT through_message_id FROM conversation_context_compactions cc
+               JOIN conversations c ON c.id=cc.conversation_id
+               WHERE cc.conversation_id=? AND c.chel_id=?""",
+            (conversation_id, current_chel_id()),
+        ).fetchone()
+        after_id = int(checkpoint["through_message_id"] or 0) if checkpoint else 0
         row = conn.execute(
             """SELECT COUNT(m.id) AS message_count,
                 COALESCE(SUM(LENGTH(m.content)), 0) AS content_chars,
@@ -8921,14 +9079,154 @@ def conversation_context_usage(conversation_id: str) -> dict:
                     ELSE 0 END), 0) AS warning_shown
             FROM messages m
             JOIN conversations c ON c.id = m.conversation_id
-            WHERE m.conversation_id = ? AND c.chel_id = ?""",
-            (conversation_id, current_chel_id()),
+            WHERE m.conversation_id = ? AND c.chel_id = ? AND m.id > ?""",
+            (conversation_id, current_chel_id(), after_id),
         ).fetchone()
     return {
         "message_count": int(row["message_count"] or 0),
         "content_chars": int(row["content_chars"] or 0),
         "warning_shown": bool(row["warning_shown"]),
+        "compressed_through_message_id": after_id,
     }
+
+
+def conversation_context_compaction(conversation_id: str) -> dict | None:
+    with connection() as conn:
+        row = conn.execute(
+            """SELECT cc.* FROM conversation_context_compactions cc
+               JOIN conversations c ON c.id=cc.conversation_id
+               WHERE cc.conversation_id=? AND c.chel_id=?""",
+            (conversation_id, current_chel_id()),
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def list_messages_for_context_compaction(
+    conversation_id: str, *, after_id: int = 0, through_id: int | None = None,
+) -> list[dict]:
+    upper = int(through_id or 0)
+    with connection() as conn:
+        rows = conn.execute(
+            """SELECT m.* FROM messages m
+               JOIN conversations c ON c.id=m.conversation_id
+               WHERE m.conversation_id=? AND c.chel_id=? AND m.id>?
+                 AND (?=0 OR m.id<=?)
+               ORDER BY m.id""",
+            (
+                conversation_id, current_chel_id(), max(0, int(after_id)),
+                upper, upper,
+            ),
+        ).fetchall()
+    result = []
+    for row in rows:
+        item = dict(row)
+        try:
+            item["metadata"] = json.loads(item.get("metadata") or "{}")
+        except json.JSONDecodeError:
+            item["metadata"] = {}
+        result.append(item)
+    return result
+
+
+def list_messages_since_context_compaction(
+    conversation_id: str, after_id: int, limit: int,
+) -> list[dict]:
+    with connection() as conn:
+        rows = conn.execute(
+            """SELECT * FROM (
+                 SELECT m.* FROM messages m
+                 JOIN conversations c ON c.id=m.conversation_id
+                 WHERE m.conversation_id=? AND c.chel_id=? AND m.id>?
+                 ORDER BY m.id DESC LIMIT ?
+               ) ORDER BY id""",
+            (
+                conversation_id, current_chel_id(), max(0, int(after_id)),
+                max(1, int(limit)),
+            ),
+        ).fetchall()
+    result = []
+    for row in rows:
+        item = dict(row)
+        try:
+            item["metadata"] = json.loads(item.get("metadata") or "{}")
+        except json.JSONDecodeError:
+            item["metadata"] = {}
+        result.append(item)
+    return result
+
+
+def validate_context_compaction_warning(
+    conversation_id: str, through_message_id: int,
+) -> tuple[dict, dict | None]:
+    with connection() as conn:
+        row = conn.execute(
+            """SELECT m.* FROM messages m
+               JOIN conversations c ON c.id=m.conversation_id
+               WHERE m.id=? AND m.conversation_id=? AND c.chel_id=?""",
+            (int(through_message_id), conversation_id, current_chel_id()),
+        ).fetchone()
+    if not row:
+        raise ValueError("Сообщение для сжатия контекста не найдено")
+    message = dict(row)
+    try:
+        message["metadata"] = json.loads(message.get("metadata") or "{}")
+    except json.JSONDecodeError:
+        message["metadata"] = {}
+    if not message["metadata"].get("context_limit_warning"):
+        raise ValueError("Сжатие доступно только по кнопке под предупреждением")
+    current = conversation_context_compaction(conversation_id)
+    if current and int(current["through_message_id"]) >= int(through_message_id):
+        raise ValueError("Эта часть диалога уже сжата")
+    return message, current
+
+
+def save_context_compaction(
+    conversation_id: str, through_message_id: int, summary: str,
+) -> dict:
+    summary = str(summary or "").strip()
+    if not summary:
+        raise ValueError("Не удалось сформировать сжатый контекст")
+    now = utc_now()
+    with _write_lock, connection() as conn:
+        owner = conn.execute(
+            "SELECT 1 FROM conversations WHERE id=? AND chel_id=?",
+            (conversation_id, current_chel_id()),
+        ).fetchone()
+        if not owner:
+            raise ValueError("Диалог не найден")
+        message = conn.execute(
+            "SELECT metadata FROM messages WHERE id=? AND conversation_id=?",
+            (int(through_message_id), conversation_id),
+        ).fetchone()
+        if not message:
+            raise ValueError("Сообщение для сжатия контекста не найдено")
+        try:
+            metadata = json.loads(message["metadata"] or "{}")
+        except json.JSONDecodeError:
+            metadata = {}
+        if not metadata.get("context_limit_warning"):
+            raise ValueError("Сжатие доступно только по кнопке под предупреждением")
+        metadata["context_compacted"] = True
+        conn.execute(
+            """INSERT INTO conversation_context_compactions
+               (conversation_id,through_message_id,summary,created_at,updated_at)
+               VALUES (?,?,?,?,?)
+               ON CONFLICT(conversation_id) DO UPDATE SET
+                 through_message_id=excluded.through_message_id,
+                 summary=excluded.summary,updated_at=excluded.updated_at""",
+            (
+                conversation_id, int(through_message_id), summary, now, now,
+            ),
+        )
+        conn.execute(
+            "UPDATE messages SET metadata=? WHERE id=? AND conversation_id=?",
+            (
+                json.dumps(metadata, ensure_ascii=False), int(through_message_id),
+                conversation_id,
+            ),
+        )
+        conn.commit()
+    return conversation_context_compaction(conversation_id) or {}
 
 
 def list_messages_after(conversation_id: str, after_id: int = 0) -> list[dict]:
