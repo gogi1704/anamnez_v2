@@ -560,6 +560,8 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                     "profiles": db.admin_assistant_personality_profiles(),
                     "presets": db.ASSISTANT_PERSONALITY_PRESETS,
                     "test_branch_models": db.TEST_BRANCH_MODEL_OPTIONS,
+                    "provider_options": db.CHAT_PROVIDER_OPTIONS,
+                    "openai_models": db.OPENAI_CHAT_MODEL_OPTIONS,
                 })
             if path == "/api/admin/metric2":
                 try:
@@ -2056,11 +2058,17 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                 return
             try:
                 payload = self._read_json(max_bytes=8_000)
+                if payload.get("settings_scope") == "yandex":
+                    settings_item = db.admin_update_yandex_model_settings(payload)
+                else:
+                    settings_item = db.admin_update_assistant_personality_settings(payload)
                 return self._json(200, {
-                    "settings": db.admin_update_assistant_personality_settings(payload),
+                    "settings": settings_item,
                     "profiles": db.admin_assistant_personality_profiles(),
                     "presets": db.ASSISTANT_PERSONALITY_PRESETS,
                     "test_branch_models": db.TEST_BRANCH_MODEL_OPTIONS,
+                    "provider_options": db.CHAT_PROVIDER_OPTIONS,
+                    "openai_models": db.OPENAI_CHAT_MODEL_OPTIONS,
                 })
             except (ValueError, TypeError, json.JSONDecodeError, UnicodeDecodeError) as exc:
                 return self._json(422, {"detail": str(exc)})

@@ -3059,7 +3059,21 @@ class OrchestratorTests(unittest.TestCase):
         self.assertIn('id="paymentRecentTable"', dashboard)
         self.assertIn('id="metric2DateFrom" type="date"', dashboard)
         self.assertIn('id="metric2DateTo" type="date"', dashboard)
+        self.assertIn('<option value="" selected disabled>Выберите период</option>', dashboard)
+        self.assertIn('id="metric2Apply" disabled', dashboard)
+        self.assertIn('id="metric2PeriodPrompt"', dashboard)
         self.assertIn("/api/admin/metric2", script)
+        self.assertIn("if (!selection.selected)", script)
+        self.assertIn("showMetric2PeriodPrompt();", script)
+        self.assertIn("period:selection.period || 'all'", script)
+        metric2_loader = script[
+            script.index("async function loadMetric2"):
+            script.index("function showReofferDiagnosticStatus")
+        ]
+        self.assertLess(
+            metric2_loader.index("if (!selection.selected)"),
+            metric2_loader.index("adminReportFetch(`/api/admin/metric2"),
+        )
         self.assertIn("function appendDateRange", script)
         self.assertIn("params.set('date_from', dateFrom)", script)
         self.assertIn("function metric2PreviewMarkup", script)

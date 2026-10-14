@@ -1645,6 +1645,8 @@ function renderMetric2(data) {
       : screen),
   };
   latestMetric2Data = data;
+  $('#metric2AdminView').classList.remove('awaiting-period');
+  $('#metric2PeriodPrompt').classList.add('hidden');
   metric2ActiveFlow = ['result','experiment','marketer_b','marketer_c','reoffer','masterclass'].includes(data.flow) ? data.flow : 'standard';
   const resultFlow = metric2ActiveFlow === 'result';
   const marketerBFlow = ['experiment','marketer_b'].includes(metric2ActiveFlow);
@@ -1893,11 +1895,41 @@ function closeMetric2Modal() {
   document.body.classList.remove('metric2-modal-open');
 }
 
+function metric2PeriodSelection() {
+  const period = $('#metric2Period').value;
+  const dateFrom = $('#metric2DateFrom').value;
+  const dateTo = $('#metric2DateTo').value;
+  return {period,dateFrom,dateTo,selected:Boolean(period || dateFrom || dateTo)};
+}
+
+function showMetric2PeriodPrompt() {
+  const selection = metric2PeriodSelection();
+  $('#metric2Apply').disabled = !selection.selected;
+  const selectedTab = {
+    standard:'#metric2StandardFlow', result:'#metric2ResultFlow',
+    masterclass:'#metric2MasterclassFlow', marketer_b:'#metric2ExperimentFlow',
+    marketer_c:'#metric2MarketerCFlow', reoffer:'#metric2ReofferFlow',
+  }[metric2ActiveFlow] || '#metric2StandardFlow';
+  document.querySelectorAll('.metric2-flow-tabs button').forEach(button => {
+    const active = button.matches(selectedTab);
+    button.classList.toggle('active', active);
+    button.setAttribute('aria-selected', String(active));
+  });
+  if (latestMetric2Data) return;
+  $('#metric2AdminView').classList.add('awaiting-period');
+  $('#metric2PeriodPrompt').classList.remove('hidden');
+}
+
 async function loadMetric2(flow = metric2ActiveFlow) {
   metric2ActiveFlow = ['result','experiment','marketer_b','marketer_c','reoffer','masterclass'].includes(flow) ? flow : 'standard';
   closeMetric2Modal();
+  const selection = metric2PeriodSelection();
+  if (!selection.selected) {
+    showMetric2PeriodPrompt();
+    return;
+  }
   return withPanelLoading('#metric2AdminView', async () => {
-    const params = new URLSearchParams({period:$('#metric2Period').value,flow:metric2ActiveFlow});
+    const params = new URLSearchParams({period:selection.period || 'all',flow:metric2ActiveFlow});
     for (const [key,selector] of [['device','#metric2Device'],['method','#metric2Method'],['source','#metric2Source']]) {
       if ($(selector).value) params.set(key,$(selector).value);
     }
@@ -2165,10 +2197,9 @@ const personalityFields = [
 function personalityValues() {
   return {
     profile_key:activePersonalityProfile,
-    apply_to_all:!$('#personalityYandexOnly').checked,
+    provider:$('#personalityProvider').value,
+    openai_model:$('#personalityOpenAIModel').value,
     address_mode:$('#personalityAddressMode').value,
-    test_branch_model:$('#personalityTestBranchModel').value,
-    test_branch_fallback_model:$('#personalityTestBranchFallbackModel').value,
     ...Object.fromEntries(personalityFields.map(name => [
     name, Number($(`#personality${name[0].toUpperCase()}${name.slice(1)}`).value),
   ]))};
@@ -2184,6 +2215,12 @@ function ensureDifferentPersonalityModels() {
 
 function renderPersonalitySettings() {
   const values = personalityValues();
+  const directOpenAI = values.provider === 'openai';
+  $('#personalityOpenAIModelField').classList.toggle('hidden',!directOpenAI);
+  $('#personalityOpenAIModel').disabled = !directOpenAI;
+  $('#personalityProviderHint').textContent = directOpenAI
+    ? 'Запросы этого диалога идут напрямую в OpenAI на выбранную ниже модель.'
+    : `Запросы этого диалога идут через Yandex AI Studio: ${$('#personalityTestBranchModel').selectedOptions[0]?.textContent || 'основная модель'} → ${$('#personalityTestBranchFallbackModel').selectedOptions[0]?.textContent || 'резервная модель'}.`;
   for (const name of personalityFields) {
     $(`#personality${name[0].toUpperCase()}${name.slice(1)}Value`).textContent = String(values[name]);
   }
@@ -2205,16 +2242,12 @@ function renderPersonalitySettings() {
         ? 'Спасибо за информацию. Уточним ключевые обстоятельства и определим наиболее безопасный следующий шаг.'
         : `${informal ? 'Поняла тебя. Давай' : 'Поняла вас. Давайте'} разберём главное и решим, что можно сделать дальше.`;
   const presetLabels = {professional:'Деловой',balanced:'Сбалансированный',friendly:'Тёплый',companion:'По-дружески',custom:'Своя настройка'};
-  const scope = values.apply_to_all ? 'все ветки' : 'только Яндекс';
-  const modelLabels = {
-    'deepseek-v4.1-flash':'DeepSeek → Qwen',
-    'qwen3.6-35b-a3b':'Qwen 3.6',
-    'gpt-oss-120b':'GPT-OSS 120B',
-  };
-  const primary = modelLabels[values.test_branch_model] || 'модель Яндекс';
-  const fallback = modelLabels[values.test_branch_fallback_model] || 'резервная модель';
+  const providerLabel = directOpenAI ? 'OpenAI напрямую' : 'Yandex AI Studio';
+  const modelLabel = directOpenAI
+    ? ($('#personalityOpenAIModel').selectedOptions[0]?.textContent || values.openai_model)
+    : ($('#personalityTestBranchModel').selectedOptions[0]?.textContent || 'основная модель Яндекса');
   const profileLabels = {general:'Обычный чат',weight_control:'Контроль веса',masterclass_psychology:'Психологический'};
-  $('#personalityState').textContent = `${profileLabels[activePersonalityProfile]} · ${presetLabels[personalityPreset] || presetLabels.custom} · ${scope} · ${primary} → ${fallback}`;
+  $('#personalityState').textContent = `${profileLabels[activePersonalityProfile]} · ${providerLabel} · ${modelLabel} · ${presetLabels[personalityPreset] || presetLabels.custom}`;
   document.querySelectorAll('[data-personality-profile]').forEach(button => {
     button.classList.toggle('active',button.dataset.personalityProfile === activePersonalityProfile);
   });
@@ -2234,6 +2267,8 @@ function applyPersonalityPreset(name) {
 function fillActivePersonalityProfile() {
   const item = personalityProfiles[activePersonalityProfile] || personalityProfiles.general || {};
   personalityPreset = item.preset || 'balanced';
+  $('#personalityProvider').value = item.provider || 'openai';
+  $('#personalityOpenAIModel').value = item.openai_model || 'gpt-5.6-sol';
   $('#personalityAddressMode').value = item.address_mode || personalityPresets.balanced.address_mode;
   for (const field of personalityFields) {
     const fallback = personalityPresets.balanced[field];
@@ -2252,7 +2287,6 @@ function fillPersonalitySettings(item = {}, presets = {}, profiles = {}) {
   personalityPresets = {...personalityPresets,...presets};
   personalityProfiles = Object.keys(profiles).length ? profiles : {general:item};
   if (!personalityProfiles.general) personalityProfiles.general = item;
-  $('#personalityYandexOnly').checked = !Boolean(item.apply_to_all);
   $('#personalityTestBranchModel').value = item.test_branch_model || 'deepseek-v4.1-flash';
   $('#personalityTestBranchFallbackModel').value = item.test_branch_fallback_model || 'qwen3.6-35b-a3b';
   ensureDifferentPersonalityModels();
@@ -2264,6 +2298,37 @@ function showPersonalityStatus(message = '', error = false) {
   node.textContent = message;
   node.classList.toggle('hidden',!message);
   node.classList.toggle('error',error);
+}
+
+function showPersonalityYandexStatus(message = '', error = false) {
+  const node = $('#personalityYandexStatus');
+  node.textContent = message;
+  node.classList.toggle('hidden',!message);
+  node.classList.toggle('error',error);
+}
+
+async function savePersonalityYandex(event) {
+  event?.preventDefault();
+  ensureDifferentPersonalityModels();
+  const button = $('#personalityYandexForm').querySelector('button[type="submit"]');
+  button.disabled = true;
+  showPersonalityYandexStatus('Сохраняем…');
+  try {
+    const result = await adminFetch('/api/admin/assistant-personality',undefined,{
+      method:'POST',body:JSON.stringify({
+        settings_scope:'yandex',
+        test_branch_model:$('#personalityTestBranchModel').value,
+        test_branch_fallback_model:$('#personalityTestBranchFallbackModel').value,
+      }),
+    });
+    personalityProfiles = result.profiles || personalityProfiles;
+    showPersonalityYandexStatus('Основная и резервная модели Яндекса сохранены.');
+    renderPersonalitySettings();
+  } catch (error) {
+    showPersonalityYandexStatus(error.message,true);
+  } finally {
+    button.disabled = false;
+  }
 }
 
 async function loadPersonality() {
@@ -2291,9 +2356,9 @@ async function savePersonality(event) {
     });
     personalityProfiles = result.profiles || personalityProfiles;
     personalityProfiles[activePersonalityProfile] = result.settings || personalityProfiles[activePersonalityProfile];
-    const scope = result.settings?.apply_to_all ? 'ко всем новым ответам Ольги' : 'только к новым ответам в ветке Яндекс ИИ';
     const profileLabels = {general:'обычного чата',weight_control:'«Контроля веса»',masterclass_psychology:'психологического чата'};
-    showPersonalityStatus(`Характер ${profileLabels[activePersonalityProfile]} сохранён. Настройка применяется ${scope}.`);
+    const provider = result.settings?.provider === 'yandex' ? 'Yandex AI Studio' : 'OpenAI напрямую';
+    showPersonalityStatus(`Настройки ${profileLabels[activePersonalityProfile]} сохранены. Провайдер: ${provider}.`);
   } catch (error) {
     showPersonalityStatus(error.message,true);
   } finally {
@@ -2975,6 +3040,7 @@ $('#experimentsTab').addEventListener('click', () => showAdminView('experiments'
 $('#metric2Tab').addEventListener('click', () => showAdminView('metric2'));
 $('#contentTextsTab').addEventListener('click', () => showAdminView('content_texts'));
 $('#personalityTab').addEventListener('click', () => showAdminView('personality'));
+$('#personalityYandexForm').addEventListener('submit', savePersonalityYandex);
 $('#personalityForm').addEventListener('submit', savePersonality);
 document.querySelectorAll('[data-personality-profile]').forEach(button => {
   button.addEventListener('click', () => switchPersonalityProfile(button.dataset.personalityProfile));
@@ -2990,9 +3056,10 @@ document.querySelectorAll('#personalityForm input[type="range"]').forEach(input 
   input.addEventListener('change', schedulePersonalitySave);
 });
 $('#personalityAddressMode').addEventListener('change', () => { personalityPreset = 'custom'; renderPersonalitySettings(); schedulePersonalitySave(); });
-$('#personalityTestBranchModel').addEventListener('change', () => { ensureDifferentPersonalityModels(); renderPersonalitySettings(); schedulePersonalitySave(); });
-$('#personalityTestBranchFallbackModel').addEventListener('change', () => { ensureDifferentPersonalityModels(); renderPersonalitySettings(); schedulePersonalitySave(); });
-$('#personalityYandexOnly').addEventListener('change', () => { renderPersonalitySettings(); schedulePersonalitySave(); });
+$('#personalityProvider').addEventListener('change', () => { renderPersonalitySettings(); schedulePersonalitySave(); });
+$('#personalityOpenAIModel').addEventListener('change', () => { renderPersonalitySettings(); schedulePersonalitySave(); });
+$('#personalityTestBranchModel').addEventListener('change', () => { ensureDifferentPersonalityModels(); renderPersonalitySettings(); showPersonalityYandexStatus('Есть несохранённые изменения.'); });
+$('#personalityTestBranchFallbackModel').addEventListener('change', () => { ensureDifferentPersonalityModels(); renderPersonalitySettings(); showPersonalityYandexStatus('Есть несохранённые изменения.'); });
 $('#personalityReset').addEventListener('click', () => { applyPersonalityPreset('balanced'); schedulePersonalitySave(); });
 document.querySelectorAll('[data-content-text-tab]').forEach(button => {
   button.addEventListener('click', () => selectContentTextPanel(button.dataset.contentTextTab));
@@ -3015,6 +3082,9 @@ document.querySelectorAll('[data-monitor-analysis]').forEach(button => button.ad
   testFunnelMonitor(button.dataset.monitorAnalysis,button).catch(error => showMonitorStatus(error.message,true));
 }));
 $('#metric2Apply').addEventListener('click', () => loadMetric2().catch(showDashboardError));
+['#metric2Period','#metric2DateFrom','#metric2DateTo'].forEach(selector => {
+  $(selector).addEventListener('change', showMetric2PeriodPrompt);
+});
 $('#metric2StandardFlow').addEventListener('click', () => {
   if (metric2ActiveFlow !== 'standard') loadMetric2('standard').catch(showDashboardError);
 });

@@ -32,6 +32,8 @@ class AssistantPersonalityTests(unittest.TestCase):
         self.assertEqual(item["humor"], 15)
         self.assertEqual(item["emoji"], 5)
         self.assertEqual(item["initiative"], 60)
+        self.assertEqual(item["provider"], "openai")
+        self.assertEqual(item["openai_model"], "gpt-5.6-sol")
         self.assertFalse(item["apply_to_all"])
         self.assertEqual(item["test_branch_model"], "deepseek-v4.1-flash")
         self.assertEqual(item["test_branch_fallback_model"], "qwen3.6-35b-a3b")
@@ -48,6 +50,8 @@ class AssistantPersonalityTests(unittest.TestCase):
             "humor": 80,
             "emoji": 30,
             "initiative": 90,
+            "provider": "yandex",
+            "openai_model": "gpt-5.6-terra",
             "test_branch_model": "qwen3.6-35b-a3b",
             "test_branch_fallback_model": "gpt-oss-120b",
         })
@@ -56,6 +60,8 @@ class AssistantPersonalityTests(unittest.TestCase):
         self.assertEqual(db.admin_assistant_personality_settings()["sociability"], 90)
         self.assertEqual(saved["test_branch_model"], "qwen3.6-35b-a3b")
         self.assertEqual(saved["test_branch_fallback_model"], "gpt-oss-120b")
+        self.assertEqual(saved["provider"], "yandex")
+        self.assertEqual(saved["openai_model"], "gpt-5.6-terra")
 
         prompt = db.assistant_personality_prompt()
         self.assertIn("Формальность 10/100", prompt)
@@ -78,10 +84,15 @@ class AssistantPersonalityTests(unittest.TestCase):
             "preset": "custom",
             "initiative": 10,
             "emoji": 0,
+            "provider": "yandex",
+            "openai_model": "gpt-5.6-luna",
         })
         self.assertEqual(saved["profile_key"], "masterclass_psychology")
         self.assertEqual(saved["initiative"], 10)
         self.assertEqual(saved["emoji"], 0)
+        self.assertEqual(saved["provider"], "yandex")
+        self.assertEqual(saved["openai_model"], "gpt-5.6-luna")
+        self.assertEqual(db.admin_assistant_personality_settings()["provider"], "openai")
         self.assertEqual(db.admin_assistant_personality_settings()["initiative"], 60)
         self.assertEqual(
             db.admin_assistant_personality_settings("weight_control")["initiative"],
@@ -124,6 +135,8 @@ class AssistantPersonalityTests(unittest.TestCase):
             {"apply_to_all": "везде"},
             {"test_branch_model": "some-unknown-model"},
             {"test_branch_fallback_model": "some-unknown-model"},
+            {"provider": "unknown"},
+            {"openai_model": "unknown"},
             {
                 "test_branch_model": "qwen3.6-35b-a3b",
                 "test_branch_fallback_model": "qwen3.6-35b-a3b",
@@ -153,24 +166,101 @@ class AssistantPersonalityTests(unittest.TestCase):
         self.assertEqual(item["humor"], 15)
         self.assertEqual(item["emoji"], 5)
         self.assertEqual(item["initiative"], 60)
+        self.assertEqual(item["provider"], "openai")
+        self.assertEqual(item["openai_model"], "gpt-5.6-sol")
         self.assertFalse(item["apply_to_all"])
         self.assertEqual(item["test_branch_model"], "deepseek-v4.1-flash")
         self.assertEqual(item["test_branch_fallback_model"], "qwen3.6-35b-a3b")
 
-    def test_personality_prompt_is_enabled_only_for_yandex_test_branch(self):
+    def test_existing_profile_table_gets_provider_columns_without_losing_style(self):
+        with db.connection() as connection:
+            connection.execute("DROP TABLE assistant_personality_profiles")
+            connection.execute("""CREATE TABLE assistant_personality_profiles (
+                profile_key TEXT PRIMARY KEY,
+                preset TEXT NOT NULL,
+                address_mode TEXT NOT NULL,
+                formality INTEGER NOT NULL,
+                warmth INTEGER NOT NULL,
+                sociability INTEGER NOT NULL,
+                supportiveness INTEGER NOT NULL,
+                humor INTEGER NOT NULL,
+                emoji INTEGER NOT NULL,
+                initiative INTEGER NOT NULL,
+                updated_at TEXT NOT NULL
+            )""")
+            connection.execute(
+                """INSERT INTO assistant_personality_profiles VALUES
+                   ('weight_control','custom','informal',11,92,83,94,22,17,73,'now')"""
+            )
+            connection.commit()
+
+        db.init_db()
+        item = db.admin_assistant_personality_settings("weight_control")
+        self.assertEqual(item["preset"], "custom")
+        self.assertEqual(item["formality"], 11)
+        self.assertEqual(item["provider"], "openai")
+        self.assertEqual(item["openai_model"], "gpt-5.6-sol")
+
+    def test_yandex_model_update_does_not_change_dialog_profiles(self):
+        db.admin_update_assistant_personality_settings({
+            "profile_key": "masterclass_psychology",
+            "preset": "custom",
+            "provider": "openai",
+            "openai_model": "gpt-5.6-terra",
+            "warmth": 97,
+        })
+        before = db.admin_assistant_personality_settings("masterclass_psychology")
+        db.admin_update_yandex_model_settings({
+            "test_branch_model": "gpt-oss-120b",
+            "test_branch_fallback_model": "qwen3.6-35b-a3b",
+        })
+        after = db.admin_assistant_personality_settings("masterclass_psychology")
+        for key in ("preset", "provider", "openai_model", "warmth"):
+            self.assertEqual(after[key], before[key])
+
+    def test_personality_prompt_is_enabled_for_every_selected_chat_provider(self):
         service = LLMService()
         db.ensure_user("chel_personality_test", pending=True)
         db.set_current_chel_id("chel_personality_test")
 
         self.assertEqual(db.current_ai_branch(), db.AI_BRANCH_MAIN)
-        self.assertEqual(service._assistant_personality_prompt(), "")
+        self.assertIn("Настройка характера Ольги", service._assistant_personality_prompt())
 
         db.set_ai_branch("chel_personality_test", db.AI_BRANCH_TEST)
         self.assertIn("Настройка характера Ольги", service._assistant_personality_prompt())
 
-        db.set_ai_branch("chel_personality_test", db.AI_BRANCH_MAIN)
-        db.admin_update_assistant_personality_settings({"apply_to_all": True})
-        self.assertIn("Настройка характера Ольги", service._assistant_personality_prompt())
+    def test_each_chat_profile_routes_to_its_selected_provider_and_model(self):
+        db.admin_update_yandex_model_settings({
+            "test_branch_model": "qwen3.6-35b-a3b",
+            "test_branch_fallback_model": "gpt-oss-120b",
+        })
+        db.admin_update_assistant_personality_settings({
+            "profile_key": "masterclass_psychology",
+            "provider": "yandex",
+        })
+        db.admin_update_assistant_personality_settings({
+            "profile_key": "weight_control",
+            "provider": "openai",
+            "openai_model": "gpt-5.6-luna",
+        })
+        service = LLMService()
+        response = {"output": [{"type": "message", "content": [{
+            "type": "output_text", "text": "ok",
+        }]}]}
+
+        with mock.patch.object(service, "_yandex_request", return_value=response) as yandex:
+            service._request({
+                "_personality_profile_key": "masterclass_psychology",
+                "model": "ignored",
+            })
+        self.assertEqual(yandex.call_args.kwargs["model"], "qwen3.6-35b-a3b")
+
+        with mock.patch.object(service, "_openai_request", return_value=response) as openai:
+            service._request({
+                "_personality_profile_key": "weight_control",
+                "model": "ignored",
+            })
+        self.assertEqual(openai.call_args.args[0]["model"], "gpt-5.6-luna")
 
     def test_informal_address_and_emoji_reach_actual_answer_request(self):
         db.ensure_user("chel_personality_request", pending=True)
@@ -226,16 +316,18 @@ class AssistantPersonalityTests(unittest.TestCase):
 
         self.assertIn('id="personalityTab"', html)
         self.assertIn('id="personalityForm"', html)
-        self.assertIn('id="personalityYandexOnly"', html)
+        self.assertIn('id="personalityYandexForm"', html)
         self.assertIn('id="personalityTestBranchModel"', html)
         self.assertIn('id="personalityTestBranchFallbackModel"', html)
+        self.assertIn('id="personalityProvider"', html)
+        self.assertIn('id="personalityOpenAIModel"', html)
         self.assertIn('data-personality-profile="general"', html)
         self.assertIn('data-personality-profile="weight_control"', html)
         self.assertIn('data-personality-profile="masterclass_psychology"', html)
         self.assertIn("profile_key:activePersonalityProfile", javascript)
-        self.assertIn("apply_to_all:!$('#personalityYandexOnly').checked", javascript)
-        self.assertIn("test_branch_model:$('#personalityTestBranchModel').value", javascript)
-        self.assertIn("test_branch_fallback_model:$('#personalityTestBranchFallbackModel').value", javascript)
+        self.assertIn("provider:$('#personalityProvider').value", javascript)
+        self.assertIn("openai_model:$('#personalityOpenAIModel').value", javascript)
+        self.assertIn("settings_scope:'yandex'", javascript)
         self.assertIn(".dashboard.show-personality", (project / "static" / "dashboard.css").read_text(encoding="utf-8"))
         self.assertIn("/api/admin/assistant-personality", javascript)
         self.assertIn("schedulePersonalitySave", javascript)

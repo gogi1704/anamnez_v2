@@ -83,6 +83,12 @@ button:hover,.button:hover { background:var(--green-dark); }
 @keyframes favoritePulse { 0%,100% { box-shadow:var(--shadow); } 35% { box-shadow:0 0 0 5px rgba(192,140,0,.25),var(--shadow); } }
 .analytics-admin { display:grid; gap:20px; }
 .metric2-admin { display:grid; gap:20px; }
+.metric2-admin.awaiting-period > :not(.metric2-heading-panel):not(.metric2-period-prompt) { display:none!important; }
+.metric2-period-prompt { display:flex; align-items:center; justify-content:center; gap:16px; min-height:190px; text-align:left; }
+.metric2-period-prompt > span { display:grid; place-items:center; width:52px; height:52px; flex:0 0 52px; border-radius:16px; color:var(--green-dark); background:#e7f3ed; font-size:24px; }
+.metric2-period-prompt h2 { margin:0 0 7px; font-size:20px; }
+.metric2-period-prompt p { max-width:650px; margin:0; color:var(--muted); font-size:12px; line-height:1.55; }
+.metric2-filters #metric2Apply:disabled { cursor:not-allowed; opacity:.48; }
 .monitor-admin { display:grid; gap:20px; }
 .experiments-admin { display:grid; gap:20px; }
 .experiment-settings-panel,.experiment-statistics-panel { display:grid; gap:20px; }
@@ -713,6 +719,9 @@ tbody tr:hover { background:#f8fbf9; }
 .personality-heading-panel .panel-heading p:last-child { max-width:850px; margin:7px 0 0; color:var(--muted); font-size:12px; line-height:1.55; }
 .personality-state { align-self:flex-start; padding:7px 11px; border-radius:999px; color:#126549; background:#e4f3eb; font-size:10px; font-weight:800; white-space:nowrap; }
 .personality-form { display:grid; gap:22px; }
+.personality-yandex-form { display:grid; gap:18px; }
+.personality-yandex-form .panel-heading { align-items:flex-start; }
+.personality-yandex-form .panel-heading p:last-child { max-width:820px; margin:6px 0 0; color:var(--muted); font-size:11px; line-height:1.5; }
 .personality-presets { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:12px; margin:0; padding:0; border:0; }
 .personality-presets legend { margin-bottom:10px; color:#263a31; font-size:13px; font-weight:800; }
 .personality-presets button { display:grid; gap:4px; min-height:78px; padding:14px 16px; border:1px solid #cbdcd3; border-radius:15px; color:#32483e; background:#fff; text-align:left; cursor:pointer; }
@@ -731,6 +740,15 @@ tbody tr:hover { background:#f8fbf9; }
 .personality-dialog-tabs button.active { border-color:#71b69e; color:#164f3d; background:#fff; box-shadow:0 7px 18px rgba(31,134,103,.1); }
 .personality-dialog-tabs strong { font-size:13px; }.personality-dialog-tabs small { color:var(--muted); font-size:10px; line-height:1.35; }
 .personality-profile-hint { margin:-10px 2px 0; color:var(--muted); font-size:11px; line-height:1.5; }
+.personality-routing { display:grid; grid-template-columns:minmax(220px,.7fr) minmax(420px,1.3fr); gap:18px; align-items:start; padding:18px; border:1px solid #cbdcd3; border-radius:17px; background:#f7fbf9; }
+.personality-routing h3 { margin:4px 0 7px; color:#20352c; font-size:17px; }
+.personality-routing > div > p:last-child { margin:0; color:var(--muted); font-size:10px; line-height:1.5; }
+.personality-routing-fields { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; }
+.personality-routing-fields label { display:grid; gap:10px; padding:14px; border:1px solid #d5e3dc; border-radius:13px; background:#fff; }
+.personality-routing-fields label span { display:grid; gap:4px; }
+.personality-routing-fields label b { color:#164f3d; font-size:12px; }
+.personality-routing-fields label small { color:var(--muted); font-size:9px; line-height:1.45; }
+.personality-routing-fields select { width:100%; min-height:44px; padding:0 11px; border:1px solid #b9d8c9; border-radius:10px; color:#263a31; background:#fff; font:inherit; }
 .personality-layout { display:grid; grid-template-columns:minmax(0,1.25fr) minmax(300px,.75fr); gap:22px; align-items:start; }
 .personality-controls { display:grid; gap:14px; }
 .personality-controls label { display:grid; gap:8px; padding:16px; border:1px solid #dce8e2; border-radius:15px; background:#fbfdfc; }
@@ -747,4 +765,4 @@ tbody tr:hover { background:#f8fbf9; }
 .personality-actions { display:flex; align-items:center; flex-wrap:wrap; gap:12px; }
 .personality-actions button { min-height:46px; }.personality-actions .form-status { flex:1 1 280px; }
 @media(max-width:1050px){.personality-presets{grid-template-columns:repeat(2,minmax(0,1fr))}}
-@media(max-width:850px){.personality-layout,.personality-model-priority,.personality-dialog-tabs{grid-template-columns:1fr}.personality-presets{grid-template-columns:1fr}.personality-heading-panel .panel-heading{align-items:flex-start;flex-direction:column}.personality-actions button{width:100%}}
+@media(max-width:850px){.personality-layout,.personality-model-priority,.personality-dialog-tabs,.personality-routing,.personality-routing-fields{grid-template-columns:1fr}.personality-presets{grid-template-columns:1fr}.personality-heading-panel .panel-heading{align-items:flex-start;flex-direction:column}.personality-actions button{width:100%}}

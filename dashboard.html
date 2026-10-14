@@ -11,7 +11,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/static/dashboard.css?v=20261014-personality-tabs-v6">
+  <link rel="stylesheet" href="/static/dashboard.css?v=20261014-personality-routing-v8">
 </head>
 <body>
   <main class="dashboard-shell">
@@ -276,7 +276,7 @@
         </article>
       </section>
 
-      <section class="metric2-admin hidden" id="metric2AdminView">
+      <section class="metric2-admin hidden awaiting-period" id="metric2AdminView">
         <article class="panel metric2-heading-panel">
           <div class="panel-heading"><div><p class="eyebrow">Путь глазами пользователя</p><h2>Метрика 2.0</h2><p>Все мобильные экраны стартового пути по порядку. Процент показывает долю уникальных пользователей, которые действительно увидели экран. После анкеты отдельно учитываются предложение паспорта здоровья, готовый паспорт и переход к рекомендованным чекапам.</p></div></div>
           <div class="metric2-flow-tabs" role="tablist" aria-label="Ветка Метрики 2.0">
@@ -288,15 +288,22 @@
             <button id="metric2ReofferFlow" type="button" role="tab" aria-selected="false">Повторное предложение</button>
           </div>
           <div class="analytics-filters metric2-filters">
-            <label>Период<select id="metric2Period"><option value="today" selected>Сегодня</option><option value="7">7 дней</option><option value="30">30 дней</option><option value="90">90 дней</option><option value="all">Всё время</option></select></label>
+            <label>Период<select id="metric2Period"><option value="" selected disabled>Выберите период</option><option value="today">Сегодня</option><option value="7">7 дней</option><option value="30">30 дней</option><option value="90">90 дней</option><option value="all">Всё время</option></select></label>
             <label>Устройство<select id="metric2Device"><option value="">Все устройства</option></select></label>
             <label>Регистрация<select id="metric2Method"><option value="">Все способы</option></select></label>
             <label>Источник<select id="metric2Source"><option value="">Все источники</option></select></label>
             <label>Дата с<input id="metric2DateFrom" type="date"></label>
             <label>Дата по<input id="metric2DateTo" type="date"></label>
-            <button type="button" id="metric2Apply">Применить</button>
+            <button type="button" id="metric2Apply" disabled>Применить</button>
           </div>
           <p class="analytics-date-note">Если указаны даты «с» или «по», они заменяют готовый период выше. Дата «по» включается целиком.</p>
+        </article>
+        <article class="panel metric2-period-prompt" id="metric2PeriodPrompt">
+          <span aria-hidden="true">⌛</span>
+          <div>
+            <h2>Выберите период</h2>
+            <p>Данные Метрики 2.0 не загружаются автоматически. Выберите готовый период или укажите даты, затем нажмите «Применить».</p>
+          </div>
         </article>
         <section class="metric2-summary" id="metric2Summary"></section>
         <article class="panel metric2-masterclass-stats hidden" id="metric2MasterclassStats">
@@ -461,20 +468,30 @@
 
       <section class="personality-admin hidden" id="personalityAdminView">
         <article class="panel personality-heading-panel">
-          <div class="panel-heading"><div><p class="eyebrow">Стиль общения ИИ</p><h2>Характер Ольги</h2><p>У каждого типа диалога свой независимый характер. Выбор моделей и область применения остаются общими. Медицинские ограничения, срочные предупреждения и точность ответов не меняются.</p></div><span class="personality-state" id="personalityState">Загрузка…</span></div>
+          <div class="panel-heading"><div><p class="eyebrow">Стиль общения ИИ</p><h2>Характер Ольги</h2><p>Для каждого типа диалога отдельно выбираются провайдер, модель и характер. Медицинские ограничения, срочные предупреждения и точность ответов не меняются.</p></div><span class="personality-state" id="personalityState">Загрузка…</span></div>
         </article>
-        <form class="panel personality-form" id="personalityForm">
+        <form class="panel personality-yandex-form" id="personalityYandexForm">
+          <div class="panel-heading"><div><p class="eyebrow">Общие настройки провайдера</p><h2>Модели Яндекса</h2><p>Эта пара используется во всех типах чата, где выбран Yandex AI Studio. При ошибке основной модели запрос автоматически повторяется через резервную.</p></div></div>
           <div class="personality-model-priority">
-            <label class="personality-model"><span><b>Главная модель</b><small>Получает все запросы скрытой ветки Яндекс ИИ и локального Yandex-режима.</small></span><select id="personalityTestBranchModel"><option value="deepseek-v4.1-flash">DeepSeek V4.1 Flash</option><option value="qwen3.6-35b-a3b">Qwen 3.6</option><option value="gpt-oss-120b">OpenAI GPT-OSS 120B через Yandex</option></select></label>
+            <label class="personality-model"><span><b>Основная модель Яндекса</b><small>Получает запрос первой во всех диалогах, настроенных на Yandex AI Studio.</small></span><select id="personalityTestBranchModel"><option value="deepseek-v4.1-flash">DeepSeek V4.1 Flash</option><option value="qwen3.6-35b-a3b">Qwen 3.6</option><option value="gpt-oss-120b">OpenAI GPT-OSS 120B через Yandex</option></select></label>
             <label class="personality-model"><span><b>Второстепенная модель</b><small>Автоматически получает тот же запрос, только если главная модель вернула ошибку или не дала ответа.</small></span><select id="personalityTestBranchFallbackModel"><option value="deepseek-v4.1-flash">DeepSeek V4.1 Flash</option><option value="qwen3.6-35b-a3b">Qwen 3.6</option><option value="gpt-oss-120b">OpenAI GPT-OSS 120B через Yandex</option></select></label>
           </div>
-          <label class="personality-scope"><input id="personalityYandexOnly" type="checkbox" checked><span><b>Только секретная ветка Яндекс ИИ</b><small>Если галочка включена — настройки характера получает только секретная ветка. Снимите её, чтобы применять характер ко всем ответам, включая основную ветку OpenAI.</small></span></label>
+          <div class="personality-actions"><button type="submit">Сохранить модели Яндекса</button><span class="form-status hidden" id="personalityYandexStatus" role="status"></span></div>
+        </form>
+        <form class="panel personality-form" id="personalityForm">
           <nav class="personality-dialog-tabs" aria-label="Тип диалога">
             <button class="active" type="button" data-personality-profile="general"><strong>Обычный чат</strong><small>Медицинские и общие диалоги</small></button>
             <button type="button" data-personality-profile="weight_control"><strong>Контроль веса</strong><small>Дневник питания и программа</small></button>
             <button type="button" data-personality-profile="masterclass_psychology"><strong>Психологический</strong><small>Поддержка после мастер-класса</small></button>
           </nav>
           <p class="personality-profile-hint" id="personalityProfileHint">Настройки ниже влияют только на обычные диалоги.</p>
+          <section class="personality-routing" aria-labelledby="personalityRoutingTitle">
+            <div><p class="eyebrow">Модель этого диалога</p><h3 id="personalityRoutingTitle">Провайдер и модель</h3><p id="personalityProviderHint">Выберите, куда отправлять запросы этого типа диалога.</p></div>
+            <div class="personality-routing-fields">
+              <label><span><b>Провайдер</b><small>Yandex использует пару моделей выше. OpenAI работает напрямую.</small></span><select id="personalityProvider"><option value="yandex">Yandex AI Studio</option><option value="openai">OpenAI напрямую</option></select></label>
+              <label id="personalityOpenAIModelField"><span><b>Модель OpenAI</b><small>Используется только когда выбран прямой OpenAI.</small></span><select id="personalityOpenAIModel"><option value="gpt-5.6-luna">GPT-5.6 Luna — экономичная</option><option value="gpt-5.6-terra">GPT-5.6 Terra — сбалансированная</option><option value="gpt-5.6-sol">GPT-5.6 Sol — максимальное качество</option></select></label>
+            </div>
+          </section>
           <fieldset class="personality-presets"><legend>Готовый характер</legend>
             <button type="button" data-personality-preset="professional"><strong>Деловой</strong><small>Сдержанно и короче</small></button>
             <button type="button" data-personality-preset="balanced"><strong>Сбалансированный</strong><small>Тепло и профессионально</small></button>
@@ -838,6 +855,6 @@
       </div>
     </section>
   </div>
-  <script src="/static/dashboard.js?v=20261014-personality-tabs-v6" defer></script>
+  <script src="/static/dashboard.js?v=20261014-personality-routing-v8" defer></script>
 </body>
 </html>

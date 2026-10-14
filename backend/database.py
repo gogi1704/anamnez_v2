@@ -121,6 +121,32 @@ TEST_BRANCH_MODEL_OPTIONS = {
     },
 }
 
+CHAT_PROVIDER_OPTIONS = {
+    "yandex": {
+        "label": "Yandex AI Studio",
+        "description": "Использует общую основную и резервную модели Яндекса.",
+    },
+    "openai": {
+        "label": "OpenAI напрямую",
+        "description": "Отправляет запросы напрямую в OpenAI, без Yandex AI Studio.",
+    },
+}
+
+OPENAI_CHAT_MODEL_OPTIONS = {
+    "gpt-5.6-luna": {
+        "label": "GPT-5.6 Luna",
+        "description": "Экономичная модель для простых диалогов.",
+    },
+    "gpt-5.6-terra": {
+        "label": "GPT-5.6 Terra",
+        "description": "Баланс стоимости и качества.",
+    },
+    "gpt-5.6-sol": {
+        "label": "GPT-5.6 Sol",
+        "description": "Максимальное качество для сложных диалогов.",
+    },
+}
+
 ASSISTANT_PERSONALITY_DEFAULTS = {
     "preset": "balanced",
     "apply_to_all": False,
@@ -132,6 +158,8 @@ ASSISTANT_PERSONALITY_DEFAULTS = {
     "humor": 15,
     "emoji": 5,
     "initiative": 60,
+    "provider": "openai",
+    "openai_model": "gpt-5.6-sol",
     "test_branch_model": "deepseek-v4.1-flash",
     "test_branch_fallback_model": "qwen3.6-35b-a3b",
 }
@@ -243,6 +271,10 @@ def admin_assistant_personality_settings(profile_key: str = "general") -> dict:
         "profile_key": profile_key,
     }
     result["apply_to_all"] = bool(result.get("apply_to_all"))
+    if result.get("provider") not in CHAT_PROVIDER_OPTIONS:
+        result["provider"] = ASSISTANT_PERSONALITY_DEFAULTS["provider"]
+    if result.get("openai_model") not in OPENAI_CHAT_MODEL_OPTIONS:
+        result["openai_model"] = ASSISTANT_PERSONALITY_DEFAULTS["openai_model"]
     for key in (
         "formality", "warmth", "sociability", "supportiveness",
         "humor", "emoji", "initiative",
@@ -284,6 +316,14 @@ def admin_update_assistant_personality_settings(payload: dict) -> dict:
     address_mode = str(payload.get("address_mode", current["address_mode"])).strip().lower()
     if address_mode not in {"formal", "contextual", "informal"}:
         raise ValueError("Неизвестный формат обращения")
+    provider = str(payload.get("provider", current["provider"])).strip().lower()
+    if provider not in CHAT_PROVIDER_OPTIONS:
+        raise ValueError("Неизвестный провайдер модели для диалога")
+    openai_model = str(
+        payload.get("openai_model", current["openai_model"])
+    ).strip().lower()
+    if openai_model not in OPENAI_CHAT_MODEL_OPTIONS:
+        raise ValueError("Неизвестная модель OpenAI для диалога")
     test_branch_model = str(
         payload.get("test_branch_model", global_current["test_branch_model"])
     ).strip().lower()
@@ -328,15 +368,16 @@ def admin_update_assistant_personality_settings(payload: dict) -> dict:
             conn.execute(
                 """INSERT INTO assistant_personality_settings
                    (id,preset,address_mode,formality,warmth,sociability,supportiveness,
-                    humor,emoji,initiative,apply_to_all,test_branch_model,
+                    humor,emoji,initiative,provider,openai_model,apply_to_all,test_branch_model,
                     test_branch_fallback_model,updated_at)
-                   VALUES (1,?,?,?,?,?,?,?,?,?,?,?,?,?)
+                   VALUES (1,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)
                    ON CONFLICT(id) DO UPDATE SET
                     preset=excluded.preset,address_mode=excluded.address_mode,
                     formality=excluded.formality,
                     warmth=excluded.warmth,sociability=excluded.sociability,
                     supportiveness=excluded.supportiveness,humor=excluded.humor,
                     emoji=excluded.emoji,initiative=excluded.initiative,
+                    provider=excluded.provider,openai_model=excluded.openai_model,
                     apply_to_all=excluded.apply_to_all,
                     test_branch_model=excluded.test_branch_model,
                     test_branch_fallback_model=excluded.test_branch_fallback_model,
@@ -345,7 +386,7 @@ def admin_update_assistant_personality_settings(payload: dict) -> dict:
                     preset, address_mode, values["formality"], values["warmth"],
                     values["sociability"], values["supportiveness"],
                     values["humor"], values["emoji"], values["initiative"],
-                    int(apply_to_all), test_branch_model,
+                    provider, openai_model, int(apply_to_all), test_branch_model,
                     test_branch_fallback_model, now,
                 ),
             )
@@ -353,20 +394,21 @@ def admin_update_assistant_personality_settings(payload: dict) -> dict:
             conn.execute(
                 """INSERT INTO assistant_personality_profiles
                    (profile_key,preset,address_mode,formality,warmth,sociability,
-                    supportiveness,humor,emoji,initiative,updated_at)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?)
+                    supportiveness,humor,emoji,initiative,provider,openai_model,updated_at)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)
                    ON CONFLICT(profile_key) DO UPDATE SET
                     preset=excluded.preset,address_mode=excluded.address_mode,
                     formality=excluded.formality,warmth=excluded.warmth,
                     sociability=excluded.sociability,
                     supportiveness=excluded.supportiveness,humor=excluded.humor,
                     emoji=excluded.emoji,initiative=excluded.initiative,
+                    provider=excluded.provider,openai_model=excluded.openai_model,
                     updated_at=excluded.updated_at""",
                 (
                     profile_key, preset, address_mode, values["formality"],
                     values["warmth"], values["sociability"],
                     values["supportiveness"], values["humor"], values["emoji"],
-                    values["initiative"], now,
+                    values["initiative"], provider, openai_model, now,
                 ),
             )
             conn.execute(
@@ -380,6 +422,37 @@ def admin_update_assistant_personality_settings(payload: dict) -> dict:
             )
         conn.commit()
     return admin_assistant_personality_settings(profile_key)
+
+
+def admin_update_yandex_model_settings(payload: dict) -> dict:
+    """Update the shared Yandex primary/fallback pair without changing chat profiles."""
+    if not isinstance(payload, dict):
+        raise ValueError("Ожидается объект настроек моделей Яндекса")
+    current = admin_assistant_personality_settings("general")
+    primary = str(
+        payload.get("test_branch_model", current["test_branch_model"])
+    ).strip().lower()
+    fallback = str(
+        payload.get(
+            "test_branch_fallback_model",
+            current["test_branch_fallback_model"],
+        )
+    ).strip().lower()
+    if primary not in TEST_BRANCH_MODEL_OPTIONS:
+        raise ValueError("Неизвестная основная модель Яндекса")
+    if fallback not in TEST_BRANCH_MODEL_OPTIONS:
+        raise ValueError("Неизвестная резервная модель Яндекса")
+    if primary == fallback:
+        raise ValueError("Основная и резервная модели Яндекса должны различаться")
+    with _write_lock, connection() as conn:
+        conn.execute(
+            """UPDATE assistant_personality_settings
+               SET test_branch_model=?,test_branch_fallback_model=?,updated_at=?
+               WHERE id=1""",
+            (primary, fallback, utc_now()),
+        )
+        conn.commit()
+    return admin_assistant_personality_settings("general")
 
 
 def assistant_personality_prompt(item: dict | None = None) -> str:
@@ -5884,6 +5957,8 @@ def init_db() -> None:
                 humor INTEGER NOT NULL DEFAULT 15 CHECK(humor BETWEEN 0 AND 100),
                 emoji INTEGER NOT NULL DEFAULT 5 CHECK(emoji BETWEEN 0 AND 100),
                 initiative INTEGER NOT NULL DEFAULT 60 CHECK(initiative BETWEEN 0 AND 100),
+                provider TEXT NOT NULL DEFAULT 'openai',
+                openai_model TEXT NOT NULL DEFAULT 'gpt-5.6-sol',
                 apply_to_all INTEGER NOT NULL DEFAULT 0 CHECK(apply_to_all IN (0,1)),
                 test_branch_model TEXT NOT NULL DEFAULT 'deepseek-v4.1-flash',
                 test_branch_fallback_model TEXT NOT NULL DEFAULT 'qwen3.6-35b-a3b',
@@ -5907,6 +5982,8 @@ def init_db() -> None:
                 humor INTEGER NOT NULL DEFAULT 15 CHECK(humor BETWEEN 0 AND 100),
                 emoji INTEGER NOT NULL DEFAULT 5 CHECK(emoji BETWEEN 0 AND 100),
                 initiative INTEGER NOT NULL DEFAULT 60 CHECK(initiative BETWEEN 0 AND 100),
+                provider TEXT NOT NULL DEFAULT 'openai',
+                openai_model TEXT NOT NULL DEFAULT 'gpt-5.6-sol',
                 updated_at TEXT NOT NULL
             );
 
@@ -6367,6 +6444,8 @@ def init_db() -> None:
             "humor": "INTEGER NOT NULL DEFAULT 15",
             "emoji": "INTEGER NOT NULL DEFAULT 5",
             "initiative": "INTEGER NOT NULL DEFAULT 60",
+            "provider": "TEXT NOT NULL DEFAULT 'openai'",
+            "openai_model": "TEXT NOT NULL DEFAULT 'gpt-5.6-sol'",
             "apply_to_all": "INTEGER NOT NULL DEFAULT 0",
             "test_branch_model": "TEXT NOT NULL DEFAULT 'deepseek-v4.1-flash'",
             "test_branch_fallback_model": "TEXT NOT NULL DEFAULT 'qwen3.6-35b-a3b'",
@@ -6375,6 +6454,19 @@ def init_db() -> None:
             if name not in personality_columns:
                 conn.execute(
                     f"ALTER TABLE assistant_personality_settings ADD COLUMN {name} {declaration}"
+                )
+        profile_personality_columns = {
+            row[1] for row in conn.execute(
+                "PRAGMA table_info(assistant_personality_profiles)"
+            ).fetchall()
+        }
+        for name, declaration in {
+            "provider": "TEXT NOT NULL DEFAULT 'openai'",
+            "openai_model": "TEXT NOT NULL DEFAULT 'gpt-5.6-sol'",
+        }.items():
+            if name not in profile_personality_columns:
+                conn.execute(
+                    f"ALTER TABLE assistant_personality_profiles ADD COLUMN {name} {declaration}"
                 )
         psychology_defaults = {
             **ASSISTANT_PERSONALITY_DEFAULTS,
@@ -6387,14 +6479,15 @@ def init_db() -> None:
             conn.execute(
                 """INSERT OR IGNORE INTO assistant_personality_profiles
                    (profile_key,preset,address_mode,formality,warmth,sociability,
-                    supportiveness,humor,emoji,initiative,updated_at)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
+                    supportiveness,humor,emoji,initiative,provider,openai_model,updated_at)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (
                     profile_key, defaults["preset"], defaults["address_mode"],
                     defaults["formality"], defaults["warmth"],
                     defaults["sociability"], defaults["supportiveness"],
                     defaults["humor"], defaults["emoji"],
-                    defaults["initiative"], now,
+                    defaults["initiative"], defaults["provider"],
+                    defaults["openai_model"], now,
                 ),
             )
         conn.execute(

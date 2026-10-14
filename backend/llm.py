@@ -48,20 +48,22 @@ class LLMService:
     )
 
     @staticmethod
+    def _chat_profile_key(conversation: dict | None = None) -> str:
+        dialog_type = str((conversation or {}).get("dialog_type") or "general")
+        return (
+            dialog_type
+            if dialog_type in {"weight_control", "masterclass_psychology"}
+            else "general"
+        )
+
+    @staticmethod
     def _assistant_personality_prompt(
         conversation: dict | None = None, *, profile_key: str | None = None,
     ) -> str:
         """Apply the personality profile matching the current dialogue type."""
         if profile_key is None:
-            dialog_type = str((conversation or {}).get("dialog_type") or "general")
-            profile_key = (
-                dialog_type
-                if dialog_type in {"weight_control", "masterclass_psychology"}
-                else "general"
-            )
+            profile_key = LLMService._chat_profile_key(conversation)
         settings_item = db.admin_assistant_personality_settings(profile_key)
-        if db.current_ai_branch() != db.AI_BRANCH_TEST and not settings_item["apply_to_all"]:
-            return ""
         return db.assistant_personality_prompt(settings_item)
 
     @staticmethod
@@ -107,27 +109,41 @@ class LLMService:
         )
 
     def _request(self, payload: dict) -> dict:
+        payload = dict(payload)
+        profile_key = payload.pop("_personality_profile_key", None)
+        if profile_key is not None:
+            profile_settings = db.admin_assistant_personality_settings(profile_key)
+            if profile_settings["provider"] == "yandex":
+                return self._yandex_request_with_fallback(payload)
+            payload["model"] = profile_settings["openai_model"]
+            return self._openai_request(payload)
         ai_branch = db.current_ai_branch()
         if ai_branch == db.AI_BRANCH_TEST or settings.llm_provider == "yandex":
-            model_settings = db.admin_assistant_personality_settings()
-            model = model_settings["test_branch_model"]
-            fallback_model = model_settings["test_branch_fallback_model"]
+            return self._yandex_request_with_fallback(payload)
+        return self._openai_request(payload)
+
+    def _yandex_request_with_fallback(self, payload: dict) -> dict:
+        model_settings = db.admin_assistant_personality_settings("general")
+        model = model_settings["test_branch_model"]
+        fallback_model = model_settings["test_branch_fallback_model"]
+        try:
+            return self._yandex_request(payload, model=model)
+        except LLMProviderError as primary_error:
+            print(
+                f"[llm] yandex {model}: no answer, falling back to "
+                f"{fallback_model}: {primary_error}",
+                flush=True,
+            )
             try:
-                return self._yandex_request(payload, model=model)
-            except LLMProviderError as primary_error:
-                print(
-                    f"[llm] yandex {model}: no answer, falling back to "
-                    f"{fallback_model}: {primary_error}",
-                    flush=True,
-                )
-                try:
-                    return self._yandex_request(payload, model=fallback_model)
-                except LLMProviderError as fallback_error:
-                    raise LLMProviderError(
-                        f"Yandex AI Studio: основная модель {model} не ответила, "
-                        f"резервная модель {fallback_model} также недоступна "
-                        f"({fallback_error})"
-                    ) from fallback_error
+                return self._yandex_request(payload, model=fallback_model)
+            except LLMProviderError as fallback_error:
+                raise LLMProviderError(
+                    f"Yandex AI Studio: основная модель {model} не ответила, "
+                    f"резервная модель {fallback_model} также недоступна "
+                    f"({fallback_error})"
+                ) from fallback_error
+
+    def _openai_request(self, payload: dict) -> dict:
         if not settings.openai_api_key:
             raise LLMNotConfigured("OPENAI_API_KEY не задан. Создайте .env, добавьте ключ и перезапустите сервер.")
         request = urllib.request.Request(
@@ -493,6 +509,7 @@ class LLMService:
     def route(self, history: list[dict], context: dict, conversation: dict, attachments: list[dict] | None = None) -> RouteDecision:
         runtime = self.runtime_context(history, context, conversation, view="route")
         response = self._request({
+            "_personality_profile_key": self._chat_profile_key(conversation),
             "model": settings.orchestrator_model,
             "reasoning": {"effort": "low"},
             "instructions": ORCHESTRATOR_PROMPT,
@@ -536,6 +553,7 @@ Input contract: Вход — JSON runtime_context. latest_user_message и histor
         )
         model = settings.orchestrator_model if agent_id == "manager" else settings.specialist_model
         response = self._request({
+            "_personality_profile_key": self._chat_profile_key(conversation),
             "model": model,
             "reasoning": {"effort": "low" if low_detail else "medium"},
             "instructions": instructions,
@@ -790,6 +808,7 @@ Input contract: Вход — JSON runtime_context. latest_user_message и histor
         )
         instructions += "\n\n" + self._weight_control_personality_prompt(state)
         response = self._request({
+            "_personality_profile_key": "weight_control",
             "model": settings.specialist_model,
             "reasoning": {"effort": "medium"},
             "store": False,
@@ -858,6 +877,7 @@ Input contract: Вход — JSON runtime_context. latest_user_message и histor
         )
         instructions += "\n\n" + self._weight_control_personality_prompt(state)
         response = self._request({
+            "_personality_profile_key": "weight_control",
             "model": settings.specialist_model,
             "reasoning": {"effort": "medium"},
             "store": False,
@@ -1040,7 +1060,7 @@ Input contract: Вход — JSON runtime_context. latest_user_message и histor
         profile = PROFILES[agent_id]
         instructions = f"""{profile.prompt}
 
-{self._assistant_personality_prompt()}
+{self._assistant_personality_prompt(conversation)}
 
 Ты участвуешь в консилиуме как независимый профильный эксперт.
 Твоя персональная задача: {focus}
@@ -1062,6 +1082,7 @@ Input contract: Вход — JSON runtime_context. latest_user_message и histor
         )
         council_input = runtime + "\n\nprevious_opinions:\n" + json.dumps(previous_opinions, ensure_ascii=False)
         response = self._request({
+            "_personality_profile_key": self._chat_profile_key(conversation),
             "model": settings.specialist_model,
             "reasoning": {"effort": "medium"},
             "instructions": instructions,
@@ -1079,8 +1100,9 @@ Input contract: Вход — JSON runtime_context. latest_user_message и histor
     def synthesize_council(self, history: list[dict], context: dict, opinions: list[dict], conversation: dict) -> str:
         payload = self.runtime_context(history, context, conversation)
         instructions = """Ты — ведущий консилиума. Синтезируй независимые мнения специалистов в один ответ пользователю. Каждый объект содержит отдельный focus: сохрани различия специальностей, но не копируй их ответы подряд и не повторяй одинаковые советы. Явно отдели: общий вывод; уникальный вклад каждого профиля; в чём специалисты согласны или расходятся; что остаётся неизвестным; следующий безопасный шаг. Не упоминай скрытые рассуждения, не ставь окончательный диагноз и не добавляй факты, которых нет во входе."""
-        instructions += "\n\n" + self._assistant_personality_prompt()
+        instructions += "\n\n" + self._assistant_personality_prompt(conversation)
         response = self._request({
+            "_personality_profile_key": self._chat_profile_key(conversation),
             "model": settings.specialist_model,
             "reasoning": {"effort": "medium"},
             "instructions": instructions,
