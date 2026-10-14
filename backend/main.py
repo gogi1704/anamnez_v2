@@ -577,7 +577,21 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                     report["examinations"] = db.list_examinations()
                     report["marketer_examination_texts"] = db.admin_marketer_examination_texts()
                     if report.get("flow") == "masterclass":
-                        report["masterclasses"] = db.admin_masterclass_report()
+                        masterclasses = db.admin_masterclass_report()
+                        test_company = "Тестовая ветка Метрики 2.0"
+                        source_key, inn, company, code, _ = db.normalize_masterclass_identity(
+                            "", test_company, "masterclass_1",
+                        )
+                        test_link = db.provision_masterclass_access(
+                            inn, company, code, _masterclass_access_token(source_key),
+                        )
+                        masterclasses["test_url"] = (
+                            f"{settings.public_base_url}/masterclass/{test_link['access_token']}"
+                        )
+                        masterclasses["test_path"] = (
+                            f"/masterclass/{test_link['access_token']}"
+                        )
+                        report["masterclasses"] = masterclasses
                     return self._json(200, report)
                 except analytics.ReportBuilding:
                     return self._json(202, {"status": "building", "retry_after_ms": 750})

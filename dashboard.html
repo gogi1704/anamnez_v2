@@ -11,7 +11,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/static/dashboard.css?v=20261013-psychologist-role-v4">
+  <link rel="stylesheet" href="/static/dashboard.css?v=20261014-masterclass-metric-v5">
 </head>
 <body>
   <main class="dashboard-shell">
@@ -302,6 +302,15 @@
         <article class="panel metric2-masterclass-stats hidden" id="metric2MasterclassStats">
           <div class="panel-heading"><div><p class="eyebrow">QR-коды предприятий</p><h2>Новые пользователи по предприятиям</h2><p>Уникальные посетители считаются по ИНН, названию предприятия и выбранному мастер-классу.</p></div></div>
           <div class="table-scroll"><table><thead><tr><th>Предприятие</th><th>ИНН</th><th>Мастер-класс</th><th>Новые пользователи</th><th>Продолжили</th><th>Все открытия QR</th></tr></thead><tbody id="metric2MasterclassTable"></tbody></table></div>
+        </article>
+        <article class="metric2-experiment-note hidden" id="metric2MasterclassTestNote">
+          <strong>Тестовая ссылка ветки мастер-класса</strong>
+          <p>Ссылка подписана сервером и обязательно открывает посадочную страницу мастер-класса, минуя остальные стартовые ветки.</p>
+          <div class="metric2-experiment-link-row">
+            <code id="metric2MasterclassTestLink"></code>
+            <a id="metric2MasterclassTestLinkOpen" href="/" target="_blank" rel="noopener">Открыть мастер-класс</a>
+            <button type="button" id="metric2MasterclassTestLinkCopy">Скопировать</button>
+          </div>
         </article>
         <article class="metric2-experiment-note hidden" id="metric2ExperimentNote">
           <strong id="metric2ExperimentLinkTitle">Тестовая ссылка ветки маркетолога</strong>
@@ -823,6 +832,6 @@
       </div>
     </section>
   </div>
-  <script src="/static/dashboard.js?v=20261013-psychologist-role-v4" defer></script>
+  <script src="/static/dashboard.js?v=20261014-masterclass-metric-v5" defer></script>
 </body>
 </html>

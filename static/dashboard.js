@@ -1479,6 +1479,14 @@ function metric2PreviewMarkup(screen, large = false, suppliedData = null) {
   else if (kind === 'masterclass_landing') content = `<small>● МАСТЕР-КЛАСС · ПСИХОЛОГИЯ</small><b>Это ещё стресс или уже выгорание?</b><p>Короткая персональная анкета, тест и практики для восстановления.</p>${messengerAction('➤','Войти через Telegram')}${messengerAction('М','Войти через MAX')}<span class="metric2-mock-link">Войти анонимно</span>`;
   else if (kind === 'masterclass_questionnaire') content = `<small>МИНИ-АНКЕТА</small><b>Расскажите немного о себе</b><p>Пять коротких пунктов: имя, пол, возраст, рост и вес, вредные привычки.</p><span class="metric2-mock-input">Как к вам обращаться?</span><span class="metric2-mock-choice-grid"><span class="metric2-mock-choice">Женский</span><span class="metric2-mock-choice">Мужской</span></span>${action('Перейти к материалу →')}`;
   else if (kind === 'masterclass_burnout') content = `<small>● ЭКОСИСТЕМА ЗДОРОВЬЯ</small><b>Это ещё стресс или уже выгорание?</b><p>Самопроверка из 10 вопросов, объяснение стадий стресса и пять практик.</p><span class="metric2-mock-info"><b>Отдельный чат психологической поддержки</b><small>Ольга учитывает ответы мини-анкеты.</small></span>${action('Написать в чат')}`;
+  else if (kind === 'masterclass_chat_confirmation') content = `<small>ПСИХОЛОГИЧЕСКАЯ ПОДДЕРЖКА</small><b>Перейти в отдельный чат?</b><p>Создадим специальный диалог с Ольгой для обсуждения стресса, усталости и выгорания.</p>${action('Перейти в чат')}${action('Остаться на материале',true)}`;
+  else if (kind === 'psychology_chat') content = `<small>● ПСИХОЛОГИЧЕСКАЯ ПОДДЕРЖКА</small><b>Чат с Ольгой</b><p>Отдельный диалог после мастер-класса. Здесь можно обсудить эмоциональное состояние и получить следующий небольшой шаг.</p><span class="metric2-mock-info"><b>Сессии с психологом</b><small>Первая 30-минутная сессия бесплатна.</small></span><span class="metric2-mock-input">Напишите сообщение…</span>`;
+  else if (kind === 'psychology_chat_guide') content = `<small>ОБУЧЕНИЕ · 1 ИЗ 4</small><b>Сессии с психологом</b><p>По этой кнопке открываются проведённые и предоплаченные сессии, новая заявка и покупка пакета.</p>${action('Далее')}`;
+  else if (kind === 'psychology_sessions') content = `<small>Ψ ПСИХОЛОГИЧЕСКАЯ ПОДДЕРЖКА</small><b>Сессии с психологом</b><p>Сессий проведено: <strong>0</strong> · Сессий предоплачено: <strong>0</strong></p><span class="metric2-mock-info"><b>＋ Новая сессия</b><small>Первая сессия · 30 минут бесплатно</small></span>${action('Закрыть',true)}${action('Купить')}`;
+  else if (kind === 'psychology_session_request') content = `<small>НОВАЯ СЕССИЯ</small><b>Оставить заявку?</b><p>Заявку получат психологи. Психолог свяжется с пользователем и согласует время 30-минутного созвона.</p>${action('Да, оставить заявку')}${action('Отмена',true)}`;
+  else if (kind === 'psychology_session_packages') content = `<small>ПАКЕТЫ СЕССИЙ</small><b>Выберите количество</b><p>От 1 до 7 сессий. Чем больше пакет, тем ниже цена одной сессии.</p><span class="metric2-mock-info"><b>1 сессия · 2 500 ₽</b><small>Без скидки</small></span><span class="metric2-mock-info"><b>7 сессий · 10 500 ₽</b><small>1 500 ₽ за сессию</small></span>${action('Продолжить к оплате')}`;
+  else if (kind === 'psychology_session_payment') content = `<small>ПСИХОЛОГИЧЕСКАЯ ПОДДЕРЖКА</small><b>Оплата сессий</b><p>Выбранный пакет будет добавлен в баланс после подтверждения оплаты.</p><span class="metric2-mock-input">Электронная почта для чека</span>${action('Оплатить')}${action('Назад',true)}`;
+  else if (kind === 'psychology_session_payment_success') content = `<small>✓ СЕССИИ ОПЛАЧЕНЫ</small><b>Пакет добавлен</b><p>Сессии доступны в балансе психологического чата.</p>${action('Оставить заявку')}${action('Вернуться в чат',true)}`;
   else if (kind === 'registration') content = `<div class="metric2-mock-brand"><span>К</span><div><strong>Консилиум</strong><small>Ваше личное пространство здоровья</small></div></div><small>БЕЗ ПАРОЛЯ</small><b>Войдите через удобный мессенджер</b><p>Так анкета, история диалогов и результаты останутся доступны на другом устройстве и после очистки браузера.</p>${messengerAction('➤','Продолжить с Telegram')}${messengerAction('М','Продолжить с MAX')}<span class="metric2-mock-link">Войти анонимно</span><p class="metric2-mock-note">Консилиум не получает пароль от мессенджера. Сохраняется только его технический ID для восстановления доступа.</p>`;
   else if (kind === 'warning') content = `<div class="metric2-mock-modal"><span class="metric2-mock-close">×</span><span class="metric2-mock-icon">!</span><b>Продолжить без мессенджера?</b><p>Данные будут связаны только с этим браузером.</p><ul><li>после очистки cookies доступ может потеряться;</li><li>на другом телефоне или компьютере история не откроется;</li><li>восстановить анонимный профиль служба поддержки не сможет.</li></ul><p class="metric2-mock-note">Мессенджер можно будет привязать позже без повторного заполнения анкеты.</p><div class="metric2-mock-actions">${action('Назад',true)}${action('Понимаю, продолжить')}</div></div>`;
   else if (kind === 'appearance') content = `<small>ПЕРЕД НАЧАЛОМ</small><b>Какой размер текста вам удобен?</b><p>Вы увидите изменение сразу. Позже размер можно поменять через меню функций.</p><span class="metric2-mock-choice"><b>Аа &nbsp; Обычный</b><small>Чуть крупнее базового интерфейса</small></span><span class="metric2-mock-choice"><b>Аа &nbsp; Крупный</b><small>Комфортно для большинства экранов</small></span><span class="metric2-mock-choice selected"><b>Аа &nbsp; Очень крупный</b><small>Максимальная читаемость</small></span>${action('Продолжить')}`;
@@ -1657,6 +1665,7 @@ function renderMetric2(data) {
   $('#metric2ExperimentNote').classList.toggle('hidden', !experimentFlow);
   $('#metric2ReofferDiagnostics').classList.toggle('hidden', !reofferFlow);
   $('#metric2MasterclassStats').classList.toggle('hidden', !masterclassFlow);
+  $('#metric2MasterclassTestNote').classList.toggle('hidden', !masterclassFlow);
   if (experimentFlow) {
     const link = `${location.origin}/?preview_funnel=marketer&preview_marketer_variant=${marketerCFlow ? 'c' : 'b'}`;
     $('#metric2ExperimentLink').textContent = link;
@@ -1702,6 +1711,15 @@ function renderMetric2(data) {
     summary.innerHTML += (reoffer.duration_buckets || []).map(item => `<article class="analytics-metric"><span>${escapeHtml(item.label)}</span><strong>${Number(item.users || 0).toLocaleString('ru-RU')}</strong><small>активное время на экране предложения</small></article>`).join('');
   }
   if (masterclassFlow) {
+    const testPath = String(data.masterclasses?.test_path || '');
+    const testLink = testPath
+      ? new URL(testPath, location.origin).href
+      : String(data.masterclasses?.test_url || '');
+    $('#metric2MasterclassTestLink').textContent = testLink || 'Ссылка пока недоступна';
+    $('#metric2MasterclassTestLink').dataset.link = testLink;
+    $('#metric2MasterclassTestLinkOpen').href = testLink || '/';
+    $('#metric2MasterclassTestLinkOpen').classList.toggle('hidden', !testLink);
+    $('#metric2MasterclassTestLinkCopy').disabled = !testLink;
     const table = $('#metric2MasterclassTable');
     table.replaceChildren();
     for (const item of data.masterclasses?.enterprises || []) {
@@ -2979,6 +2997,17 @@ $('#metric2MarketerCFlow').addEventListener('click', () => {
 $('#metric2ExperimentLinkCopy').addEventListener('click', async () => {
   const link = $('#metric2ExperimentLink').dataset.link || '';
   const button = $('#metric2ExperimentLinkCopy');
+  try {
+    await navigator.clipboard.writeText(link);
+    const previousText = button.textContent;
+    button.textContent = 'Скопировано';
+    setTimeout(() => { button.textContent = previousText; }, 1500);
+  } catch {}
+});
+$('#metric2MasterclassTestLinkCopy').addEventListener('click', async () => {
+  const link = $('#metric2MasterclassTestLink').dataset.link || '';
+  const button = $('#metric2MasterclassTestLinkCopy');
+  if (!link) return;
   try {
     await navigator.clipboard.writeText(link);
     const previousText = button.textContent;

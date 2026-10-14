@@ -1005,6 +1005,7 @@ async function openMasterclassPsychologyChat() {
     state.profile = state.onboarding.profile;
     await openMainApp({skipIntro:true, allowIncompleteOnboarding:true});
     await openConversation(conversation.id);
+    trackMasterclassScreen('psychology_chat');
   } catch (error) {
     showOnboardingError(error.message);
   } finally {
@@ -1557,11 +1558,15 @@ $('#anonymousWarningCancel').addEventListener('click', () => returnFromAnonymous
 $('#anonymousWarning').addEventListener('click', event => {
   if (event.target === $('#anonymousWarning')) returnFromAnonymousWarning('anonymous_close');
 });
-function closeMasterclassChatConfirmation() {
+function closeMasterclassChatConfirmation(trackCancel = true) {
   $('#masterclassChatConfirmation').classList.add('hidden');
+  if (trackCancel) {
+    trackMasterclassAction('cancel', 'masterclass_chat_confirmation');
+    trackMasterclassScreen('masterclass_burnout');
+  }
 }
-$('#masterclassChatConfirmationClose').addEventListener('click', closeMasterclassChatConfirmation);
-$('#masterclassChatConfirmationCancel').addEventListener('click', closeMasterclassChatConfirmation);
+$('#masterclassChatConfirmationClose').addEventListener('click', () => closeMasterclassChatConfirmation());
+$('#masterclassChatConfirmationCancel').addEventListener('click', () => closeMasterclassChatConfirmation());
 $('#masterclassChatConfirmation').addEventListener('click', event => {
   if (event.target === $('#masterclassChatConfirmation')) closeMasterclassChatConfirmation();
 });
@@ -1569,8 +1574,8 @@ $('#masterclassChatConfirmationConfirm').addEventListener('click', async () => {
   const button = $('#masterclassChatConfirmationConfirm');
   button.disabled = true;
   button.textContent = 'Открываем…';
-  closeMasterclassChatConfirmation();
-  trackMasterclassAction('open_psychology_chat', 'masterclass_burnout');
+  closeMasterclassChatConfirmation(false);
+  trackMasterclassAction('continue', 'masterclass_chat_confirmation');
   try {
     await openMasterclassPsychologyChat();
   } finally {
@@ -3066,6 +3071,7 @@ function renderPsychologySessionPayment() {
     <section class="consultation-payment-card"><header><strong>${countLabel} с психологом</strong><b>${totalLabel} ₽</b></header><p>${packageInfo.unitPrice.toLocaleString('ru-RU')} ₽ за сессию. История сессий и доступный баланс сохраняются в меню психологического чата.</p></section>
     ${emailField}
     <div class="onboarding-actions"><button type="button" class="onboarding-back" data-onboarding-action="cancel-psychology-session-payment">Назад</button><button type="button" class="onboarding-next" data-onboarding-action="pay-psychology-session">Оплатить ${totalLabel} ₽</button></div>`;
+  trackMasterclassScreen('psychology_session_payment');
 }
 
 async function startPsychologySessionPayment() {
@@ -3075,6 +3081,7 @@ async function startPsychologySessionPayment() {
     return;
   }
   state.paymentReceiptEmail = receiptInput?.value?.trim() || '';
+  trackMasterclassAction('pay', 'psychology_session_payment');
   const buttons = [...document.querySelectorAll('#onboardingContent button')];
   buttons.forEach(button => { button.disabled = true; });
   beginUserProgress('Открываем безопасную оплату…');
@@ -3133,13 +3140,19 @@ function renderPsychologySessionPaymentSuccess(order) {
       <section class="payment-find-guide"><strong>Как оставить заявку</strong><p>Откройте список сессий в психологическом чате и нажмите «Новая сессия». Психолог получит заявку и свяжется с вами для согласования времени созвона.</p></section>
       <div class="onboarding-actions"><button type="button" class="onboarding-next" data-onboarding-action="open-psychology-sessions-after-payment">Оставить заявку</button><button type="button" class="onboarding-back" data-onboarding-action="open-psychology-session-chat">Вернуться в чат</button></div>
     </div>`;
+  trackMasterclassScreen('psychology_session_payment_success');
 }
 
 async function finishPsychologySessionPayment(openList = false) {
   const conversationId = state.paymentReviewConversationId;
   await openMainApp({skipIntro:true, allowIncompleteOnboarding:true});
   if (conversationId) await openConversation(conversationId);
-  if (openList) await openPsychologySessions();
+  if (openList) {
+    await openPsychologySessions();
+  } else {
+    trackMasterclassAction('return_chat', 'psychology_session_payment_success');
+    trackMasterclassScreen('psychology_chat');
+  }
   state.paymentReviewSource = '';
   state.paymentReviewOrderId = '';
   state.paymentReviewConversationId = '';
@@ -3448,6 +3461,8 @@ $('#onboardingContent').addEventListener('click', async event => {
       trackEvent('anonymous_warning_viewed', {screen:'masterclass_landing',context:'masterclass'});
       $('#anonymousWarning').classList.remove('hidden');
     } else if (masterclassAction === 'open-psychology-chat') {
+      trackMasterclassAction('open_psychology_chat', 'masterclass_burnout');
+      trackMasterclassScreen('masterclass_chat_confirmation');
       trackEvent('masterclass_psychology_chat_confirmation_viewed', {screen:'masterclass_burnout', context:'masterclass'});
       $('#masterclassChatConfirmation').classList.remove('hidden');
     } else if (masterclassAction === 'download-practices') {
@@ -3616,6 +3631,7 @@ $('#onboardingContent').addEventListener('click', async event => {
   else if (action === 'open-consultations-after-payment') await finishConsultationPayment(true);
   else if (action === 'pay-psychology-session') await startPsychologySessionPayment();
   else if (action === 'cancel-psychology-session-payment') {
+    trackMasterclassAction('back', 'psychology_session_payment');
     const conversationId = state.paymentReviewConversationId;
     state.paymentReviewSource = '';
     state.paymentReviewOrderId = '';
@@ -4422,6 +4438,7 @@ function startPsychologyChatGuide() {
   document.body.classList.remove('show-team');
   $('#psychologyChatGuide').classList.remove('hidden');
   renderPsychologyChatGuide();
+  trackMasterclassScreen('psychology_chat_guide');
   trackEvent('psychology_chat_guide_started', {screen:'psychology_chat'});
 }
 
@@ -4449,6 +4466,8 @@ function closePsychologyChatGuide() {
   try { localStorage.setItem(PSYCHOLOGY_CHAT_GUIDE_KEY, '1'); } catch {}
   state.psychologyChatGuideStep = -1;
   $('#psychologyChatGuide').classList.add('hidden');
+  trackMasterclassAction('complete', 'psychology_chat_guide');
+  trackMasterclassScreen('psychology_chat');
   trackEvent('psychology_chat_guide_completed', {screen:'psychology_chat'});
 }
 
@@ -4494,6 +4513,10 @@ function renderPsychologySessions(summary = {}) {
 
 async function openPsychologySessions() {
   if (!state.conversationId || state.conversationType !== 'masterclass_psychology') return;
+  const sourceScreen = currentOnboardingAnalyticsScreen === 'psychology_session_payment_success'
+    ? 'psychology_session_payment_success' : 'psychology_chat';
+  trackMasterclassAction('open_sessions', sourceScreen);
+  trackMasterclassScreen('psychology_sessions');
   $('#psychologySessionsError').classList.add('hidden');
   $('#psychologySessionsList').innerHTML = '<div class="purchases-loading"><span></span><p>Загружаем сессии…</p></div>';
   $('#psychologySessionsModal').classList.remove('hidden');
@@ -4528,8 +4551,12 @@ function renderPsychologyPackages() {
 }
 
 function openPsychologyPackages() {
+  const sourceScreen = currentOnboardingAnalyticsScreen === 'psychology_session_request'
+    ? 'psychology_session_request' : 'psychology_sessions';
+  trackMasterclassAction('buy', sourceScreen);
   renderPsychologyPackages();
   $('#psychologyPackagesModal').classList.remove('hidden');
+  trackMasterclassScreen('psychology_session_packages');
   trackEvent('psychology_session_packages_viewed', {});
 }
 
@@ -4539,6 +4566,7 @@ function closePsychologyPackages() {
 
 function continuePsychologySessionPackagePurchase() {
   const selected = psychologySessionPackage();
+  trackMasterclassAction('continue', 'psychology_session_packages');
   trackEvent('psychology_session_package_selected', {
     session_count:selected.sessions, amount_kopecks:selected.totalPrice * 100,
   });
@@ -4550,6 +4578,8 @@ function openPsychologySessionRequest() {
   const button = $('#psychologySessionRequestConfirm');
   const pending = summary.pending_session;
   const canRequest = Boolean(summary.free_available || Number(summary.remaining_paid || 0) > 0);
+  trackMasterclassAction('request', 'psychology_sessions');
+  trackMasterclassScreen('psychology_session_request');
   $('#psychologySessionRequestError').classList.add('hidden');
   if (pending) {
     $('#psychologySessionRequestTitle').textContent = 'Заявка уже отправлена';
@@ -4584,6 +4614,8 @@ async function confirmPsychologySessionRequest() {
   const button = $('#psychologySessionRequestConfirm');
   const mode = button.dataset.mode;
   if (mode === 'close') {
+    trackMasterclassAction('close', 'psychology_session_request');
+    trackMasterclassScreen('psychology_sessions');
     closePsychologySessionRequest();
     return;
   }
@@ -4598,6 +4630,8 @@ async function confirmPsychologySessionRequest() {
       method:'POST', body:JSON.stringify({conversation_id:state.conversationId}),
     });
     renderPsychologySessions(result.summary || {});
+    trackMasterclassAction('submit', 'psychology_session_request');
+    trackMasterclassScreen('psychology_sessions');
     closePsychologySessionRequest();
     trackEvent('psychology_session_requested', {
       access_type:result.session?.access_type || '',
@@ -7180,6 +7214,7 @@ $('#psychologyGuideRepeat').addEventListener('click', event => {
   event.stopPropagation();
   state.psychologyChatGuideStep = 0;
   renderPsychologyChatGuide();
+  trackMasterclassAction('repeat', 'psychology_chat_guide');
   trackEvent('psychology_chat_guide_repeated', {screen:'psychology_chat'});
 });
 $('#psychologyGuideClose').addEventListener('click', event => {
@@ -7190,31 +7225,47 @@ window.addEventListener('resize', () => {
   if (!$('#psychologyChatGuide').classList.contains('hidden')) renderPsychologyChatGuide();
 }, {passive:true});
 $('#psychologySessionsButton').addEventListener('click', openPsychologySessions);
-$('#psychologySessionsClose').addEventListener('click', closePsychologySessions);
-$('#psychologySessionsBottomClose').addEventListener('click', closePsychologySessions);
+function closePsychologySessionsToChat() {
+  closePsychologySessions();
+  trackMasterclassAction('close', 'psychology_sessions');
+  trackMasterclassScreen('psychology_chat');
+}
+$('#psychologySessionsClose').addEventListener('click', closePsychologySessionsToChat);
+$('#psychologySessionsBottomClose').addEventListener('click', closePsychologySessionsToChat);
 $('#psychologySessionsModal').addEventListener('click', event => {
-  if (event.target.id === 'psychologySessionsModal') closePsychologySessions();
+  if (event.target.id === 'psychologySessionsModal') closePsychologySessionsToChat();
 });
 $('#psychologySessionsList').addEventListener('click', event => {
   if (event.target.closest('[data-psychology-session-request]')) openPsychologySessionRequest();
 });
 $('#psychologySessionBuyButton').addEventListener('click', beginPsychologySessionPurchase);
-$('#psychologyPackagesClose').addEventListener('click', closePsychologyPackages);
-$('#psychologyPackagesCancel').addEventListener('click', closePsychologyPackages);
+function closePsychologyPackagesToSessions() {
+  closePsychologyPackages();
+  trackMasterclassAction('close', 'psychology_session_packages');
+  trackMasterclassScreen('psychology_chat');
+}
+$('#psychologyPackagesClose').addEventListener('click', closePsychologyPackagesToSessions);
+$('#psychologyPackagesCancel').addEventListener('click', closePsychologyPackagesToSessions);
 $('#psychologyPackagesContinue').addEventListener('click', continuePsychologySessionPackagePurchase);
 $('#psychologyPackagesModal').addEventListener('click', event => {
-  if (event.target.id === 'psychologyPackagesModal') closePsychologyPackages();
+  if (event.target.id === 'psychologyPackagesModal') closePsychologyPackagesToSessions();
   const option = event.target.closest('[data-psychology-package]');
   if (option) {
     state.psychologySessionPackageSize = Number(option.dataset.psychologyPackage || 1);
+    trackMasterclassAction('select', 'psychology_session_packages');
     renderPsychologyPackages();
   }
 });
-$('#psychologySessionRequestClose').addEventListener('click', closePsychologySessionRequest);
-$('#psychologySessionRequestCancel').addEventListener('click', closePsychologySessionRequest);
+function closePsychologySessionRequestToSessions() {
+  closePsychologySessionRequest();
+  trackMasterclassAction('close', 'psychology_session_request');
+  trackMasterclassScreen('psychology_sessions');
+}
+$('#psychologySessionRequestClose').addEventListener('click', closePsychologySessionRequestToSessions);
+$('#psychologySessionRequestCancel').addEventListener('click', closePsychologySessionRequestToSessions);
 $('#psychologySessionRequestConfirm').addEventListener('click', confirmPsychologySessionRequest);
 $('#psychologySessionRequestModal').addEventListener('click', event => {
-  if (event.target.id === 'psychologySessionRequestModal') closePsychologySessionRequest();
+  if (event.target.id === 'psychologySessionRequestModal') closePsychologySessionRequestToSessions();
 });
 $('#profileButton').addEventListener('click', openProfile);
 $('#bodyMapButton').addEventListener('click', openBodyMap);

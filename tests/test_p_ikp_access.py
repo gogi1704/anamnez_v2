@@ -91,6 +91,28 @@ class IkpAccessTests(unittest.TestCase):
         self.assertEqual(first_row['company'], 'ООО Ромашка новое имя')
         self.assertEqual((first_row['visit_count'], first_row['users'], first_row['continued_users']), (2, 1, 1))
 
+    def test_psychology_chat_cannot_be_created_outside_completed_masterclass(self):
+        previous_chel_id = db.current_chel_id()
+        try:
+            db.ensure_user('chel_without_masterclass', pending=True)
+            db.set_current_chel_id('chel_without_masterclass')
+            with self.assertRaisesRegex(ValueError, 'мини-анкету мастер-класса'):
+                db.create_or_get_masterclass_psychology_conversation()
+
+            token = 'r' * 43
+            db.provision_masterclass_access(
+                '7707083893', 'ООО Ромашка', 'masterclass_1', token,
+            )
+            db.record_masterclass_access(token, 'chel_without_masterclass')
+            with self.assertRaisesRegex(ValueError, 'мини-анкету мастер-класса'):
+                db.create_or_get_masterclass_psychology_conversation()
+
+            db.mark_current_masterclass_profile_completed()
+            conversation = db.create_or_get_masterclass_psychology_conversation()
+            self.assertEqual(conversation['dialog_type'], 'masterclass_psychology')
+        finally:
+            db.set_current_chel_id(previous_chel_id)
+
     def test_psychology_session_package_interface_has_seven_options(self):
         project_root = Path(__file__).resolve().parents[1]
         index = (project_root / 'index.html').read_text(encoding='utf-8')

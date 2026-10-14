@@ -745,9 +745,112 @@ def _metric2_screen_definitions() -> list[dict]:
             "legacy_reach": [],
             "actions": [{
                 "id": "open_psychology_chat", "label": "Написать в чат",
-                "target_label": "Психологический чат с Ольгой",
-                "terminal_outcome": True, "legacy": [],
+                "target": "masterclass_chat_confirmation", "legacy": [],
             }],
+        },
+        {
+            "id": "masterclass_chat_confirmation",
+            "title": "Подтверждение перехода в чат",
+            "stage": "Мастер-класс · переход в чат",
+            "kind": "masterclass_chat_confirmation",
+            "description": "Подтверждение создания отдельного психологического диалога после материала мастер-класса.",
+            "parent_id": "masterclass_burnout", "flow": "masterclass",
+            "legacy_reach": [],
+            "actions": [
+                {"id": "continue", "label": "Перейти в чат", "target": "psychology_chat", "legacy": []},
+                {"id": "cancel", "label": "Остаться на материале", "target": "masterclass_burnout", "legacy": []},
+            ],
+        },
+        {
+            "id": "psychology_chat",
+            "title": "Психологический чат с Ольгой",
+            "stage": "Психологическая поддержка · чат",
+            "kind": "psychology_chat",
+            "description": "Отдельный чат психологической поддержки, доступный только после мастер-класса.",
+            "parent_id": "masterclass_chat_confirmation", "flow": "masterclass",
+            "legacy_reach": [],
+            "actions": [{"id": "open_sessions", "label": "Сессии с психологом", "target": "psychology_sessions", "legacy": []}],
+        },
+        {
+            "id": "psychology_chat_guide",
+            "title": "Обучение работе с психологическим чатом",
+            "stage": "Психологическая поддержка · обучение",
+            "kind": "psychology_chat_guide",
+            "description": "Первый запуск: подсказки по сообщениям, вложениям, функциям и меню сессий.",
+            "parent_id": "psychology_chat", "flow": "masterclass",
+            "legacy_reach": [],
+            "actions": [
+                {"id": "complete", "label": "Закрыть обучение", "target": "psychology_chat", "legacy": []},
+                {"id": "repeat", "label": "Повторить", "interaction": True, "legacy": []},
+            ],
+        },
+        {
+            "id": "psychology_sessions",
+            "title": "Сессии с психологом",
+            "stage": "Психологическая поддержка · сессии",
+            "kind": "psychology_sessions",
+            "description": "Проведённые и предоплаченные сессии, новая заявка и переход к покупке.",
+            "parent_id": "psychology_chat", "flow": "masterclass",
+            "legacy_reach": [],
+            "actions": [
+                {"id": "request", "label": "Новая сессия", "target": "psychology_session_request", "legacy": []},
+                {"id": "buy", "label": "Купить", "target": "psychology_session_packages", "legacy": []},
+                {"id": "close", "label": "Закрыть", "target": "psychology_chat", "legacy": []},
+            ],
+        },
+        {
+            "id": "psychology_session_request",
+            "title": "Заявка на сессию",
+            "stage": "Психологическая поддержка · заявка",
+            "kind": "psychology_session_request",
+            "description": "Подтверждение бесплатной или предоплаченной 30-минутной сессии с психологом.",
+            "parent_id": "psychology_sessions", "flow": "masterclass",
+            "legacy_reach": [],
+            "actions": [
+                {"id": "submit", "label": "Оставить заявку", "target": "psychology_sessions", "legacy": []},
+                {"id": "buy", "label": "Выбрать пакет", "target": "psychology_session_packages", "legacy": []},
+                {"id": "close", "label": "Отмена", "target": "psychology_sessions", "legacy": []},
+            ],
+        },
+        {
+            "id": "psychology_session_packages",
+            "title": "Пакеты сессий",
+            "stage": "Психологическая поддержка · покупка",
+            "kind": "psychology_session_packages",
+            "description": "Выбор от одной до семи сессий с пропорциональной скидкой.",
+            "parent_id": "psychology_sessions", "flow": "masterclass",
+            "legacy_reach": [],
+            "actions": [
+                {"id": "select", "label": "Выбрать пакет", "interaction": True, "legacy": []},
+                {"id": "continue", "label": "Продолжить к оплате", "target": "psychology_session_payment", "legacy": []},
+                {"id": "close", "label": "Закрыть", "target": "psychology_chat", "legacy": []},
+            ],
+        },
+        {
+            "id": "psychology_session_payment",
+            "title": "Оплата сессий",
+            "stage": "Психологическая поддержка · оплата",
+            "kind": "psychology_session_payment",
+            "description": "Состав пакета, итоговая сумма и электронная почта для чека.",
+            "parent_id": "psychology_session_packages", "flow": "masterclass",
+            "legacy_reach": [],
+            "actions": [
+                {"id": "pay", "label": "Оплатить", "target": "psychology_session_payment_success", "legacy": []},
+                {"id": "back", "label": "Назад к пакетам", "target": "psychology_session_packages", "legacy": []},
+            ],
+        },
+        {
+            "id": "psychology_session_payment_success",
+            "title": "Сессии оплачены",
+            "stage": "Психологическая поддержка · оплата завершена",
+            "kind": "psychology_session_payment_success",
+            "description": "Подтверждение пополнения баланса и дальнейший переход к заявке или в чат.",
+            "parent_id": "psychology_session_payment", "flow": "masterclass",
+            "legacy_reach": [],
+            "actions": [
+                {"id": "open_sessions", "label": "Оставить заявку", "target": "psychology_sessions", "legacy": []},
+                {"id": "return_chat", "label": "Вернуться в чат", "target": "psychology_chat", "legacy": []},
+            ],
         },
     ])
     screens.extend([
@@ -2702,6 +2805,7 @@ def _metric2_report_uncached(
         for item in result_screens if item.get("terminal")
     ))
     if flow == "masterclass":
+        completed_user_ids |= screen_users.get("psychology_chat", set())
         completed_user_ids |= {
             chel_id
             for (screen_id, group_id, chel_id), (_, action_id)

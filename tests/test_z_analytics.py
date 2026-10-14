@@ -1259,6 +1259,33 @@ class AnalyticsTests(unittest.TestCase):
             {'event_id':'masterclass-chat-open', 'session_id':'masterclass-session',
              'event_name':'onboarding_screen_action',
              'properties':{'screen':'masterclass_burnout', 'action':'open_psychology_chat', 'context':'masterclass'}},
+            {'event_id':'masterclass-confirm-view', 'session_id':'masterclass-session',
+             'event_name':'onboarding_screen_viewed',
+             'properties':{'screen':'masterclass_chat_confirmation', 'context':'masterclass'}},
+            {'event_id':'masterclass-confirm-continue', 'session_id':'masterclass-session',
+             'event_name':'onboarding_screen_action',
+             'properties':{'screen':'masterclass_chat_confirmation', 'action':'continue', 'context':'masterclass'}},
+            {'event_id':'psychology-chat-view', 'session_id':'masterclass-session',
+             'event_name':'onboarding_screen_viewed',
+             'properties':{'screen':'psychology_chat', 'context':'masterclass'}},
+            {'event_id':'psychology-sessions-open', 'session_id':'masterclass-session',
+             'event_name':'onboarding_screen_action',
+             'properties':{'screen':'psychology_chat', 'action':'open_sessions', 'context':'masterclass'}},
+            {'event_id':'psychology-sessions-view', 'session_id':'masterclass-session',
+             'event_name':'onboarding_screen_viewed',
+             'properties':{'screen':'psychology_sessions', 'context':'masterclass'}},
+            {'event_id':'psychology-buy', 'session_id':'masterclass-session',
+             'event_name':'onboarding_screen_action',
+             'properties':{'screen':'psychology_sessions', 'action':'buy', 'context':'masterclass'}},
+            {'event_id':'psychology-packages-view', 'session_id':'masterclass-session',
+             'event_name':'onboarding_screen_viewed',
+             'properties':{'screen':'psychology_session_packages', 'context':'masterclass'}},
+            {'event_id':'psychology-packages-continue', 'session_id':'masterclass-session',
+             'event_name':'onboarding_screen_action',
+             'properties':{'screen':'psychology_session_packages', 'action':'continue', 'context':'masterclass'}},
+            {'event_id':'psychology-payment-view', 'session_id':'masterclass-session',
+             'event_name':'onboarding_screen_viewed',
+             'properties':{'screen':'psychology_session_payment', 'context':'masterclass'}},
         ])
         analytics.record_events('CHEL-ORDINARY', [{
             'event_id':'ordinary-masterclass-view', 'session_id':'ordinary-session',
@@ -1277,6 +1304,12 @@ class AnalyticsTests(unittest.TestCase):
             'masterclass_landing', 'masterclass_questionnaire', 'masterclass_burnout',
         ])
         self.assertEqual(report['screens'][2]['actions'][0]['users'], 1)
+        screens = {item['id']: item for item in report['screens']}
+        self.assertEqual(screens['masterclass_chat_confirmation']['users'], 1)
+        self.assertEqual(screens['psychology_chat']['users'], 1)
+        self.assertEqual(screens['psychology_sessions']['users'], 1)
+        self.assertEqual(screens['psychology_session_packages']['users'], 1)
+        self.assertEqual(screens['psychology_session_payment']['users'], 1)
 
     def test_reports_support_inclusive_custom_date_range(self):
         for index in range(2):
