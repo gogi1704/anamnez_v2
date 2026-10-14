@@ -2036,7 +2036,29 @@ def _external_identity_recipient(identity) -> str:
     return str(identity["provider_user_id"] or "").strip()
 
 
-def create_auth_intent(provider: str) -> dict:
+def _masterclass_auth_return_path(
+    conn: sqlite3.Connection, chel_id: str, return_path: str,
+) -> str:
+    """Allow redirects only to a master-class link already opened by this user."""
+    return_path = str(return_path or "").strip()
+    if not return_path:
+        return ""
+    match = re.fullmatch(r"/masterclass/([A-Za-z0-9_-]{20,200})", return_path)
+    if not match:
+        raise ValueError("Некорректный адрес возврата после входа")
+    token_hash = hashlib.sha256(match.group(1).encode("utf-8")).hexdigest()
+    allowed = conn.execute(
+        """SELECT 1 FROM masterclass_access_links AS links
+           JOIN masterclass_access_users AS users ON users.link_id=links.id
+           WHERE links.token_hash=? AND users.chel_id=?""",
+        (token_hash, chel_id),
+    ).fetchone()
+    if not allowed:
+        raise ValueError("Ссылка мастер-класса не принадлежит текущему входу")
+    return return_path
+
+
+def create_auth_intent(provider: str, return_path: str = "") -> dict:
     """Create a short-lived token that lets a messenger bind the current browser user."""
     provider = _messenger_provider(provider)
     now = datetime.now(timezone.utc)
@@ -2046,11 +2068,15 @@ def create_auth_intent(provider: str) -> dict:
     with _write_lock, connection() as conn:
         if not conn.execute("SELECT 1 FROM users WHERE chel_id = ?", (chel_id,)).fetchone():
             raise ValueError("Пользователь не найден")
+        return_path = _masterclass_auth_return_path(conn, chel_id, return_path)
         conn.execute(
             """INSERT INTO auth_intents
-            (token_hash, chel_id, provider, expires_at, created_at)
-            VALUES (?, ?, ?, ?, ?)""",
-            (_token_hash(raw_token), chel_id, provider, expires_at.isoformat(), now.isoformat()),
+            (token_hash, chel_id, provider, return_path, expires_at, created_at)
+            VALUES (?, ?, ?, ?, ?, ?)""",
+            (
+                _token_hash(raw_token), chel_id, provider, return_path,
+                expires_at.isoformat(), now.isoformat(),
+            ),
         )
         conn.execute(
             "DELETE FROM auth_intents WHERE expires_at < ? OR used_at IS NOT NULL",
@@ -2061,6 +2087,7 @@ def create_auth_intent(provider: str) -> dict:
         "token": raw_token,
         "chel_id": chel_id,
         "provider": provider,
+        "return_path": return_path,
         "expires_at": expires_at.isoformat(),
     }
 
@@ -2119,6 +2146,29 @@ def create_messenger_login(
                 WHERE id = ?""",
                 (now.isoformat(), recipient_chat_id, recipient_chat_id, identity["id"]),
             )
+            if intent and intent["chel_id"] != chel_id:
+                # A returning messenger user may have opened the QR link in a new
+                # browser. Move that browser's master-class attribution to the
+                # durable account before issuing the login session.
+                conn.execute(
+                    """INSERT INTO masterclass_access_users
+                       (link_id,chel_id,first_seen_at,last_seen_at,continued_at,
+                        profile_completed_at,visit_count)
+                       SELECT link_id,?,first_seen_at,last_seen_at,continued_at,
+                              profile_completed_at,visit_count
+                       FROM masterclass_access_users WHERE chel_id=?
+                       ON CONFLICT(link_id,chel_id) DO UPDATE SET
+                         first_seen_at=MIN(masterclass_access_users.first_seen_at,excluded.first_seen_at),
+                         last_seen_at=MAX(masterclass_access_users.last_seen_at,excluded.last_seen_at),
+                         continued_at=COALESCE(masterclass_access_users.continued_at,excluded.continued_at),
+                         profile_completed_at=COALESCE(masterclass_access_users.profile_completed_at,excluded.profile_completed_at),
+                         visit_count=masterclass_access_users.visit_count+excluded.visit_count""",
+                    (chel_id, intent["chel_id"]),
+                )
+                conn.execute(
+                    "DELETE FROM masterclass_access_users WHERE chel_id=?",
+                    (intent["chel_id"],),
+                )
         else:
             if intent:
                 chel_id = intent["chel_id"]
@@ -2163,9 +2213,14 @@ def create_messenger_login(
             if updated.rowcount != 1:
                 raise ValueError("Запрос авторизации уже использован")
         conn.execute(
-            """INSERT INTO login_tokens (token_hash, chel_id, expires_at, created_at)
-            VALUES (?, ?, ?, ?)""",
-            (_token_hash(raw_token), chel_id, expires_at.isoformat(), now.isoformat()),
+            """INSERT INTO login_tokens
+               (token_hash, chel_id, return_path, expires_at, created_at)
+               VALUES (?, ?, ?, ?, ?)""",
+            (
+                _token_hash(raw_token), chel_id,
+                str(intent["return_path"] or "") if intent else "",
+                expires_at.isoformat(), now.isoformat(),
+            ),
         )
         conn.execute(
             """DELETE FROM login_tokens
@@ -2173,7 +2228,11 @@ def create_messenger_login(
             ((now - timedelta(days=1)).isoformat(),),
         )
         conn.commit()
-    return {"token": raw_token, "chel_id": chel_id, "expires_at": expires_at.isoformat()}
+    return {
+        "token": raw_token, "chel_id": chel_id,
+        "return_path": str(intent["return_path"] or "") if intent else "",
+        "expires_at": expires_at.isoformat(),
+    }
 
 
 def create_max_login(max_user_id: int, legacy_chel_id: int) -> dict:
@@ -2217,6 +2276,7 @@ def consume_login_token(raw_token: str) -> dict | None:
     return {
         "session": session_value,
         "chel_id": token["chel_id"],
+        "return_path": str(token["return_path"] or ""),
         "expires_at": session_expires.isoformat(),
     }
 
@@ -2232,6 +2292,19 @@ def get_consumed_login_owner(raw_token: str) -> str | None:
             (_token_hash(raw_token),),
         ).fetchone()
     return token["chel_id"] if token else None
+
+
+def get_consumed_login_return_path(raw_token: str) -> str:
+    """Return the validated redirect stored with an already-consumed login."""
+    if not raw_token:
+        return ""
+    with connection() as conn:
+        token = conn.execute(
+            """SELECT return_path FROM login_tokens
+            WHERE token_hash = ? AND used_at IS NOT NULL""",
+            (_token_hash(raw_token),),
+        ).fetchone()
+    return str(token["return_path"] or "") if token else ""
 
 
 def get_session_chel_id(session_value: str) -> str | None:
@@ -3450,6 +3523,12 @@ def enqueue_manager_notifications(
                         f"{name} просит врача расшифровать результаты. "
                         f"Обращение {conversation['human_ticket_id'] or conversation_id[:8]}."
                     )
+            elif recipient_role == "psychologist":
+                title = "Пользователь просит подключить психолога"
+                body = (
+                    f"{name} просит подключить психолога к переписке. "
+                    f"Обращение {conversation['human_ticket_id'] or conversation_id[:8]}."
+                )
             else:
                 if request_kind == "checkup_purchase":
                     title = "Пользователь хочет купить чекап"
@@ -6093,6 +6172,7 @@ def init_db() -> None:
             CREATE TABLE IF NOT EXISTS login_tokens (
                 token_hash TEXT PRIMARY KEY,
                 chel_id TEXT NOT NULL,
+                return_path TEXT NOT NULL DEFAULT '',
                 expires_at TEXT NOT NULL,
                 used_at TEXT,
                 created_at TEXT NOT NULL,
@@ -6103,6 +6183,7 @@ def init_db() -> None:
                 token_hash TEXT PRIMARY KEY,
                 chel_id TEXT NOT NULL,
                 provider TEXT NOT NULL,
+                return_path TEXT NOT NULL DEFAULT '',
                 expires_at TEXT NOT NULL,
                 used_at TEXT,
                 created_at TEXT NOT NULL,
@@ -6703,6 +6784,21 @@ def init_db() -> None:
         if "profile_completed_at" not in masterclass_user_columns:
             conn.execute(
                 "ALTER TABLE masterclass_access_users ADD COLUMN profile_completed_at TEXT"
+            )
+
+        login_token_columns = {
+            row[1] for row in conn.execute("PRAGMA table_info(login_tokens)").fetchall()
+        }
+        if "return_path" not in login_token_columns:
+            conn.execute(
+                "ALTER TABLE login_tokens ADD COLUMN return_path TEXT NOT NULL DEFAULT ''"
+            )
+        auth_intent_columns = {
+            row[1] for row in conn.execute("PRAGMA table_info(auth_intents)").fetchall()
+        }
+        if "return_path" not in auth_intent_columns:
+            conn.execute(
+                "ALTER TABLE auth_intents ADD COLUMN return_path TEXT NOT NULL DEFAULT ''"
             )
 
         payment_columns = {row[1] for row in conn.execute("PRAGMA table_info(payment_orders)").fetchall()}
@@ -9322,13 +9418,14 @@ def confirm_human_chat(
         ticket_id = (
             current["human_ticket_id"] if already_requested else proposed_ticket_id
         )
+        active_agent = "psychologist" if recipient_role == "psychologist" else "manager"
         conn.execute(
             """UPDATE conversations
-            SET active_agent = 'manager', status = 'waiting_human',
+            SET active_agent = ?, status = 'waiting_human',
                 human_status = 'pending', human_ticket_id = ?, human_channel = 'chat',
                 human_phone = NULL, human_recipient_role = ?, ai_enabled = 0, updated_at = ?
             WHERE id = ? AND chel_id = ?""",
-            (ticket_id, recipient_role, now, conversation_id, owner),
+            (active_agent, ticket_id, recipient_role, now, conversation_id, owner),
         )
         conn.commit()
         saved = conn.execute(

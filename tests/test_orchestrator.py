@@ -1458,6 +1458,57 @@ class OrchestratorTests(unittest.TestCase):
         self.assertEqual(result.agent, "safety")
         self.assertEqual(fake.route_calls, [])
 
+    def test_critical_phrase_wins_over_simultaneous_human_request(self):
+        fake = FakeLLM()
+        result = ConversationOrchestrator(fake).process(
+            None, "Я не хочу жить, позовите человека",
+        )
+
+        self.assertTrue(result.emergency)
+        self.assertFalse(result.human_escalation)
+        self.assertEqual(result.agent, "safety")
+        self.assertEqual(fake.route_calls, [])
+
+    def test_psychology_chat_human_request_is_confirmed_for_psychologist(self):
+        previous_chel_id = db.current_chel_id()
+        chel_id = f"chel_psychology_handoff_{secrets.token_hex(4)}"
+        try:
+            db.ensure_user(chel_id)
+            db.set_current_chel_id(chel_id)
+            conversation = db.create_conversation(
+                "Психологическая поддержка", dialog_type="masterclass_psychology",
+            )
+            offered = ConversationOrchestrator(FakeLLM()).process(
+                conversation["id"], "Позови человека",
+            )
+            self.assertTrue(offered.human_escalation)
+            self.assertEqual(offered.agent, "psychologist")
+            self.assertIn("подключу психолога", offered.assistant_message["content"])
+
+            handler = SimpleNamespace(
+                _json=lambda status, payload: (status, payload),
+                _track_analytics=lambda event, metadata=None: None,
+            )
+            complete_profile = {"sex": "female", "age": 40, "height_cm": 168, "weight_kg": 65}
+            with patch.object(db, "get_profile", return_value=complete_profile), \
+                    patch.object(db, "enqueue_manager_notifications") as notify:
+                status, response = ConsiliumHandler._set_human_preference(
+                    handler,
+                    {"conversation_id": conversation["id"], "channel": "chat"},
+                )
+
+            self.assertEqual(status, 200)
+            self.assertEqual(response["recipient_role"], "psychologist")
+            self.assertEqual(response["assistant_message"]["agent_id"], "psychologist")
+            saved = db.get_conversation(conversation["id"])
+            self.assertEqual(saved["human_recipient_role"], "psychologist")
+            self.assertEqual(saved["active_agent"], "psychologist")
+            notify.assert_called_once()
+            self.assertEqual(notify.call_args.kwargs["recipient_role"], "psychologist")
+        finally:
+            db.ensure_user(previous_chel_id)
+            db.set_current_chel_id(previous_chel_id)
+
     def test_old_human_request_cannot_trigger_again(self):
         service = ConversationOrchestrator(StickyHumanLLM())
         escalated = service.process(None, "Позови человека")
@@ -4264,14 +4315,14 @@ class OrchestratorTests(unittest.TestCase):
         self.assertIn("controllerchange", script)
         self.assertIn("url.pathname.startsWith('/api/')", worker)
         self.assertIn("url.pathname.startsWith('/auth/')", worker)
-        self.assertIn("consilium-shell-v168", worker)
+        self.assertIn("consilium-shell-v169", worker)
         self.assertIn("fetch(request)", worker)
-        self.assertIn("/static/styles.css?v=20261014-context-compact-v9", index)
+        self.assertIn("/static/styles.css?v=20261014-masterclass-handoff-v10", index)
         self.assertIn("/static/rich-text.2bf1f5fab764.css", index)
         self.assertTrue((project_root / "static" / "styles.07ffaefb4795.css").is_file())
         self.assertTrue((project_root / "static" / "rich-text.2bf1f5fab764.css").is_file())
-        self.assertIn("/static/app.js?v=20261014-context-compact-v9", index)
-        self.assertIn("/static/metrika.js?v=20261014-context-compact-v9", index)
+        self.assertIn("/static/app.js?v=20261014-masterclass-handoff-v10", index)
+        self.assertIn("/static/metrika.js?v=20261014-masterclass-handoff-v10", index)
         self.assertIn("Enter — новая строка · отправка — кнопкой", index)
         self.assertIn('enterkeyhint="enter"', index)
         self.assertNotIn("$('#chatForm').requestSubmit()", script)
@@ -4357,7 +4408,7 @@ class OrchestratorTests(unittest.TestCase):
         main = (project_root / "backend" / "main.py").read_text(encoding="utf-8")
         config = (project_root / "backend" / "config.py").read_text(encoding="utf-8")
 
-        self.assertIn('src="/static/metrika.js?v=20261014-context-compact-v9"', index)
+        self.assertIn('src="/static/metrika.js?v=20261014-masterclass-handoff-v10"', index)
         self.assertIn('YANDEX_METRIKA_COUNTER_ID', config)
         self.assertIn('path == "/api/public-config"', main)
         self.assertIn('"metrika.js"', main)
@@ -4590,6 +4641,48 @@ class OrchestratorTests(unittest.TestCase):
             db.ensure_user("chel_test_default")
             db.set_current_chel_id("chel_test_default")
 
+    def test_existing_messenger_account_keeps_masterclass_return_path(self):
+        token = "masterclass-returning-user-token-2026"
+        owner_login = db.create_messenger_login(
+            "telegram", "tg-masterclass-returning-user",
+        )
+        owner_chel_id = owner_login["chel_id"]
+        temporary_chel_id = "chel_masterclass_new_device"
+        previous_chel_id = db.current_chel_id()
+        try:
+            link = db.provision_masterclass_access(
+                "7707083893", "ООО Возврат", "masterclass_1", token,
+            )
+            token = link["access_token"]
+            return_path = f"/masterclass/{token}"
+            db.ensure_user(temporary_chel_id, pending=True)
+            db.record_masterclass_access(token, temporary_chel_id)
+            db.set_current_chel_id(temporary_chel_id)
+            db.mark_current_masterclass_continued()
+            intent = db.create_auth_intent("telegram", return_path=return_path)
+
+            restored = db.create_messenger_login(
+                "telegram", "tg-masterclass-returning-user",
+                intent_token=intent["token"],
+            )
+            self.assertEqual(restored["chel_id"], owner_chel_id)
+            self.assertEqual(restored["return_path"], return_path)
+            session = db.consume_login_token(restored["token"])
+            self.assertEqual(session["return_path"], return_path)
+
+            db.set_current_chel_id(owner_chel_id)
+            access = db.current_masterclass_access()
+            self.assertEqual(access["company"], "ООО Возврат")
+            self.assertTrue(access["continued_at"])
+            with db.connection() as connection:
+                self.assertEqual(connection.execute(
+                    "SELECT COUNT(*) FROM masterclass_access_users WHERE chel_id=?",
+                    (temporary_chel_id,),
+                ).fetchone()[0], 0)
+        finally:
+            db.ensure_user(previous_chel_id)
+            db.set_current_chel_id(previous_chel_id)
+
     def test_used_messenger_link_remains_bound_to_its_owner(self):
         login = db.create_messenger_login("telegram", "tg-repeat-link-owner")
         session = db.consume_login_token(login["token"])
@@ -4747,7 +4840,10 @@ class OrchestratorTests(unittest.TestCase):
         self.assertIn('conversation.get("dialog_type") == "masterclass_psychology"', main_source)
         self.assertIn('if path == "/api/result-entry/start":', main_source)
         self.assertIn("if not _result_entry_can_start(onboarding):", main_source)
-        self.assertIn('self.send_header("Location", "/?auth=messenger_login")', main_source)
+        self.assertIn(
+            'self.send_header("Location", login.get("return_path") or "/?auth=messenger_login")',
+            main_source,
+        )
 
     def test_psychology_payment_back_restores_chat_instead_of_medical_funnel(self):
         project_root = Path(__file__).resolve().parents[1]
@@ -4968,6 +5064,7 @@ class OrchestratorTests(unittest.TestCase):
         self.assertEqual(handler.response[0], 200)
         notify.assert_called_once_with(
             "psychology_session_requested", "psychology-conversation-1",
+            message_id=43817,
             recipient_role="psychologist", request_kind="psychology_session",
             request_number="43817",
         )

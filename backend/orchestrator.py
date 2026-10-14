@@ -321,7 +321,7 @@ class ConversationOrchestrator:
             human_ticket_id, answer = self._prepare_human_handoff(
                 history, context, decision, conversation, human_status, human_ticket_id, human_channel
             )
-            target = "manager"
+            target = self._human_agent(conversation)
         else:
             result = self.llm.answer(target, history, context, decision, conversation, attachments)
             answer = result.message
@@ -362,14 +362,17 @@ class ConversationOrchestrator:
                             max(self._question_count(answer), len(missing_information)),
                         )
                 if second_result.next_action == "human":
-                    human_decision = RouteDecision("human", "manager", second_result.handoff_reason, context)
+                    human_target = self._human_agent(conversation)
+                    human_decision = RouteDecision(
+                        "human", human_target, second_result.handoff_reason, context,
+                    )
                     human_ticket_id, answer = self._prepare_human_handoff(
                         history, context, human_decision, conversation, human_status, human_ticket_id, human_channel
                     )
-                    db.add_handoff(conversation_id, target, "manager", second_result.handoff_reason or "Агент запросил участие человека")
+                    db.add_handoff(conversation_id, target, human_target, second_result.handoff_reason or "Агент запросил участие человека")
                     handoff_from = target
                     handoff_reason = second_result.handoff_reason or "Агент запросил участие человека"
-                    target = "manager"
+                    target = human_target
                     action = "human"
                 elif second_result.next_action == "emergency" and target != "safety":
                     reason = second_result.handoff_reason or "Специалист обнаружил непосредственную угрозу"
@@ -396,15 +399,18 @@ class ConversationOrchestrator:
                 action = "emergency"
                 emergency = True
             elif result.next_action == "human":
-                human_decision = RouteDecision("human", "manager", result.handoff_reason, context)
+                human_target = self._human_agent(conversation)
+                human_decision = RouteDecision(
+                    "human", human_target, result.handoff_reason, context,
+                )
                 human_ticket_id, answer = self._prepare_human_handoff(
                     history, context, human_decision, conversation, human_status, human_ticket_id, human_channel
                 )
-                handoff_from = target if target != "manager" else handoff_from
+                handoff_from = target if target != human_target else handoff_from
                 handoff_reason = result.handoff_reason or "Агент запросил участие человека"
-                if target != "manager":
-                    db.add_handoff(conversation_id, target, "manager", handoff_reason)
-                target = "manager"
+                if target != human_target:
+                    db.add_handoff(conversation_id, target, human_target, handoff_reason)
+                target = human_target
                 action = "human"
             elif result.next_action == "emergency":
                 action = "emergency"
@@ -1144,14 +1150,17 @@ class ConversationOrchestrator:
         )
 
     def _decide(self, text: str, history: list[dict], conversation: dict, context: dict, attachments: list[dict] | None = None) -> RouteDecision:
-        if HUMAN_REQUEST.search(text):
-            return RouteDecision("human", "manager", "Пользователь явно запросил человека", context)
         if CRITICAL_RISK.search(text):
             updated = normalize_context(context)
             updated["known_facts"] = (updated["known_facts"] + [text])[-20:]
             return RouteDecision(
                 "emergency", "safety",
                 "Обнаружена формулировка возможной непосредственной угрозы", updated,
+            )
+        if HUMAN_REQUEST.search(text):
+            return RouteDecision(
+                "human", self._human_agent(conversation),
+                "Пользователь явно запросил человека", context,
             )
         if (
             not attachments
@@ -1468,16 +1477,27 @@ class ConversationOrchestrator:
     ) -> tuple[None, str]:
         # The confirmation dialog is a fixed product action. Generating its preface
         # with another model call added cost and latency without adding medical value.
+        psychology_chat = conversation.get("dialog_type") == "masterclass_psychology"
+        specialist_acc = "психолога" if psychology_chat else "медицинского специалиста"
+        specialist_dat = "психологу" if psychology_chat else "медицинскому специалисту"
         draft = (
-            "Понимаю — здесь может быть полезен разговор с медицинским "
-            "специалистом. Контекст этой переписки уже подготовлен."
+            f"Понимаю — здесь может быть полезен разговор со специалистом. "
+            f"Контекст этой переписки уже подготовлен и будет передан {specialist_dat}."
         )
         choice = (
-            "Если хотите, подключу медицинского специалиста к этому чату. "
+            f"Если хотите, подключу {specialist_acc} к этому чату. "
             "Обращение будет создано только после подтверждения в появившемся окне. "
             "Если специалист сейчас не нужен, оставайтесь в этом диалоге — ИИ продолжит отвечать."
         )
         return None, f"{draft}\n\n{choice}"
+
+    @staticmethod
+    def _human_agent(conversation: dict) -> str:
+        return (
+            "psychologist"
+            if conversation.get("dialog_type") == "masterclass_psychology"
+            else "manager"
+        )
 
     @staticmethod
     def _title(text: str) -> str:

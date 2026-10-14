@@ -1617,6 +1617,7 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                 if session.get("created"):
                     db.enqueue_manager_notifications(
                         "psychology_session_requested", conversation_id,
+                        message_id=int(session.get("request_number") or 0),
                         recipient_role="psychologist", request_kind="psychology_session",
                         request_number=session.get("request_number", ""),
                     )
@@ -2584,6 +2585,7 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
         try:
             payload = self._read_json()
             provider = str(payload.get("provider", "")).strip().lower()
+            return_path = str(payload.get("return_path", "")).strip()
             templates = {
                 "telegram": settings.telegram_bot_auth_url,
                 "max": settings.max_bot_auth_url,
@@ -2604,7 +2606,7 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                     "configured": False,
                 })
             db.mark_current_user_registered(provider)
-            intent = db.create_auth_intent(provider)
+            intent = db.create_auth_intent(provider, return_path=return_path)
             bot_url = template.replace("{token}", quote(intent["token"], safe=""))
             return self._json(201, {
                 "provider": provider,
@@ -2619,6 +2621,7 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
         login = db.consume_login_token(token)
         if not login:
             owner_chel_id = db.get_consumed_login_owner(token)
+            return_path = db.get_consumed_login_return_path(token)
             cookie = SimpleCookie()
             try:
                 cookie.load(self.headers.get("Cookie", ""))
@@ -2632,7 +2635,7 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                 db.set_current_chel_id(owner_chel_id)
                 self.send_response(303)
                 self._send_security_headers()
-                self.send_header("Location", "/?auth=messenger_login")
+                self.send_header("Location", return_path or "/?auth=messenger_login")
                 self.send_header("Cache-Control", "no-store")
                 self.end_headers()
                 return
@@ -2654,7 +2657,7 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
         })
         self.send_response(303)
         self._send_security_headers()
-        self.send_header("Location", "/?auth=messenger_login")
+        self.send_header("Location", login.get("return_path") or "/?auth=messenger_login")
         self.send_header("Cache-Control", "no-store")
         self._send_session_cookie(login["session"])
         self.send_header(
@@ -2700,6 +2703,8 @@ small{{display:block;color:#82918c;text-align:center;margin-top:18px}}
         conversation = db.get_conversation(conversation_id)
         if not conversation:
             return self._json(404, {"detail": "Диалог не найден"})
+        psychology_chat = conversation.get("dialog_type") == "masterclass_psychology"
+        recipient_role = "psychologist" if psychology_chat else "manager"
         missing_profile = ConsiliumHandler._interpretation_profile_missing(db.get_profile())
         if missing_profile:
             return self._json(422, {
@@ -2709,7 +2714,8 @@ small{{display:block;color:#82918c;text-align:center;margin-top:18px}}
             })
 
         confirmed, created = db.confirm_human_chat(
-            conversation_id, f"H-{secrets.token_hex(3).upper()}"
+            conversation_id, f"H-{secrets.token_hex(3).upper()}",
+            recipient_role=recipient_role,
         )
         if not confirmed:
             return self._json(404, {"detail": "Диалог не найден"})
@@ -2719,28 +2725,32 @@ small{{display:block;color:#82918c;text-align:center;margin-top:18px}}
         if not already_requested:
             self._track_analytics("human_requested")
 
+        specialist_name = "психологу" if psychology_chat else "медицинскому специалисту"
         text = (
-            "Обращение передано медицинскому специалисту. ИИ в этом диалоге приостановлен. "
+            f"Обращение передано {specialist_name}. ИИ в этом диалоге приостановлен. "
             "Пишите сюда — специалист увидит сообщения и ответит в этой переписке. "
             "Пока ожидаете ответа, для общения с ИИ можно открыть новый диалог."
         )
         message = db.add_message(
-            conversation_id, "assistant", text, "manager",
+            conversation_id, "assistant", text, recipient_role,
             {
                 "action": "human_preference",
                 "human_channel": "chat",
                 "human_ticket_id": ticket_id,
+                "human_recipient_role": recipient_role,
             },
         )
         if not already_requested:
             db.enqueue_manager_notifications(
                 "new_request", conversation_id, message_id=message["id"],
+                recipient_role=recipient_role,
             )
         return self._json(200, {
             "conversation_id": conversation_id,
             "ticket_id": ticket_id,
             "channel": "chat",
             "human_status": "pending",
+            "recipient_role": recipient_role,
             "ai_enabled": False,
             "assistant_message": message,
         })

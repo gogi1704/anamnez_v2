@@ -201,6 +201,7 @@ class IkpAccessTests(unittest.TestCase):
             self.assertEqual(matching_queue[0]['dialog_type'], 'masterclass_psychology')
             self.assertEqual(db.enqueue_manager_notifications(
                 'psychology_session_requested', conversation['id'],
+                message_id=int(free_session['request_number']),
                 recipient_role='psychologist', request_kind='psychology_session',
                 request_number=free_session['request_number'],
             ), 2)
@@ -303,6 +304,12 @@ class IkpAccessTests(unittest.TestCase):
             paid_session = db.request_psychology_session(conversation['id'])
             self.assertEqual(paid_session['access_type'], 'paid')
             self.assertEqual(paid_session['session_number'], 2)
+            self.assertEqual(db.enqueue_manager_notifications(
+                'psychology_session_requested', conversation['id'],
+                message_id=int(paid_session['request_number']),
+                recipient_role='psychologist', request_kind='psychology_session',
+                request_number=paid_session['request_number'],
+            ), 2)
             self.assertEqual(
                 db.psychology_session_summary(conversation['id'])['remaining_paid'],
                 7,

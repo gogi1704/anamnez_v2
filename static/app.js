@@ -1534,7 +1534,10 @@ async function startMessengerAuth(provider, {source = 'registration'} = {}) {
   try {
     const result = await api('/api/auth/messenger/start', {
       method:'POST',
-      body:JSON.stringify({ provider }),
+      body:JSON.stringify({
+        provider,
+        return_path:source === 'masterclass' ? window.location.pathname : '',
+      }),
     });
     window.location.assign(result.bot_url);
   } catch (error) {
@@ -3859,6 +3862,8 @@ function updateChatMode(aiEnabled = true, humanStatus = 'none', humanTicketId = 
   const newDialogButton = $('#chatModeNewDialog');
   const toggleButton = $('#chatModeToggle');
   const relevant = !state.aiEnabled || ['pending', 'connected'].includes(state.humanStatus);
+  const psychologyChat = state.conversationType === 'masterclass_psychology';
+  const specialist = psychologyChat ? 'психолог' : 'медицинский специалист';
   const expandable = !state.aiEnabled && relevant;
   banner.classList.toggle('hidden', !relevant);
   banner.classList.toggle('ai-paused', !state.aiEnabled);
@@ -3873,16 +3878,16 @@ function updateChatMode(aiEnabled = true, humanStatus = 'none', humanTicketId = 
   newDialogButton.classList.toggle('hidden', state.aiEnabled || !relevant);
   toggleButton.classList.toggle('hidden', state.aiEnabled || !relevant);
   input.placeholder = state.aiEnabled
-    ? 'Задайте вопрос о здоровье...'
-    : 'Напишите медицинскому специалисту...';
+    ? psychologyChat ? 'Расскажите, что вас беспокоит...' : 'Задайте вопрос о здоровье...'
+    : psychologyChat ? 'Напишите психологу...' : 'Напишите медицинскому специалисту...';
   if (!relevant) return;
   $('#chatModeIcon').textContent = state.aiEnabled ? '✓' : '♙';
   $('#chatModeTitle').textContent = state.aiEnabled
     ? 'ИИ снова отвечает в этом диалоге'
-    : state.humanStatus === 'connected' ? 'С вами общается медицинский специалист' : 'Ожидаем ответа медицинского специалиста';
+    : state.humanStatus === 'connected' ? `С вами общается ${specialist}` : `Ожидаем ответа: ${specialist}`;
   $('#chatModeText').textContent = state.aiEnabled
     ? `Специалист включил ИИ${humanTicketId ? ` · обращение ${humanTicketId}` : ''}.`
-    : 'ИИ в этом диалоге приостановлен. Новые сообщения получит медицинский специалист.';
+    : `ИИ в этом диалоге приостановлен. Новые сообщения получит ${specialist}.`;
   $('#chatModeDetailsText').textContent = state.aiEnabled
     ? ''
     : 'Пока ожидаете ответ, вы можете продолжить общение с ИИ в новом диалоге.';
@@ -4123,9 +4128,13 @@ function conversationSummary(item) {
       return `Тема: ${topic}`;
     }
   } catch {}
-  if (item.human_status === 'pending') return 'Ожидает ответа медицинского специалиста';
+  if (item.human_status === 'pending') return item.human_recipient_role === 'psychologist'
+    ? 'Ожидает ответа психолога' : 'Ожидает ответа медицинского специалиста';
   if (item.human_status === 'connected') return item.human_recipient_role === 'doctor'
-    ? 'Врач-специалист подключён' : 'Менеджер подключён';
+    ? 'Врач-специалист подключён'
+    : item.human_recipient_role === 'psychologist'
+      ? 'Психолог подключён'
+      : 'Менеджер подключён';
   return 'История разговора сохранена';
 }
 
@@ -5279,6 +5288,21 @@ async function handleWeightReminderAction(event) {
 }
 
 async function openHumanModal() {
+  const psychologyChat = state.conversationType === 'masterclass_psychology';
+  $('#humanTitle').textContent = psychologyChat
+    ? 'Подключить психолога?'
+    : 'Подключить медицинского специалиста?';
+  const option = $('#humanChatButton');
+  option.querySelector('strong').textContent = psychologyChat
+    ? 'Чат с психологом'
+    : 'Чат с медицинским специалистом';
+  option.querySelector('small').textContent = psychologyChat
+    ? 'Психолог получит обращение и ответит в этой переписке'
+    : 'Специалист получит обращение и ответит в этой переписке';
+  const decline = $('#humanDeclineButton');
+  decline.querySelector('strong').textContent = psychologyChat
+    ? 'Не звать психолога'
+    : 'Не звать медицинского специалиста';
   setHumanChoiceDisabled(false);
   $('#handoffPreview').innerHTML = '<span>Подготавливаю сводку…</span>';
   $('#humanModal').classList.remove('hidden');
@@ -5321,14 +5345,20 @@ async function chooseHumanSpecialistChat() {
     });
     closeHumanModal();
     updateChatMode(false, result.human_status, result.ticket_id);
-    setActiveAgent('manager');
+    const recipientRole = result.recipient_role || 'manager';
+    setActiveAgent(recipientRole);
     addMessage(
-      'agent', result.assistant_message.content, 'manager', false,
+      'agent', result.assistant_message.content, recipientRole, false,
       result.assistant_message.created_at,
       { ...(result.assistant_message.metadata || {}), _message_id:result.assistant_message.id },
     );
-    $('#taskStatus').textContent = 'Сообщения ждут ответа медицинского специалиста';
-    input.placeholder = 'Напишите медицинскому специалисту...';
+    const psychologyChat = recipientRole === 'psychologist';
+    $('#taskStatus').textContent = psychologyChat
+      ? 'Сообщения ждут ответа психолога'
+      : 'Сообщения ждут ответа медицинского специалиста';
+    input.placeholder = psychologyChat
+      ? 'Напишите психологу...'
+      : 'Напишите медицинскому специалисту...';
     await markConversationRead(state.conversationId);
     await loadConversationList();
   } catch (error) {
