@@ -609,10 +609,11 @@ async function withPanelLoading(target, operation, label = 'Загружаем �
 }
 
 function setTopProgress(loading, label = 'Обновляем данные…') {
+  const wasActive = topProgressRequests > 0;
   topProgressRequests = Math.max(0, topProgressRequests + (loading ? 1 : -1));
   const progress = $('#adminTopProgress');
   if (!progress) return;
-  if (loading && label) $('#adminTopProgressLabel').textContent = label;
+  if (loading && label && !wasActive) $('#adminTopProgressLabel').textContent = label;
   const active = topProgressRequests > 0;
   progress.classList.toggle('hidden', !active);
   progress.setAttribute('aria-busy', String(active));
@@ -665,20 +666,25 @@ async function adminFetchRequest(path, token, options = {}, retryAttempt = 0) {
   return data;
 }
 
-async function adminReportFetch(path) {
-  const startedAt = Date.now();
-  let requestPath = path;
-  while (Date.now() - startedAt < 120000) {
-    const data = await adminFetch(requestPath);
-    if (data?.status !== 'building') return data;
-    // refresh=1 invalidates the cache only on the initial request. Repeating
-    // it while polling would remove the freshly completed report.
-    const pollingUrl = new URL(requestPath, window.location.origin);
-    pollingUrl.searchParams.delete('refresh');
-    requestPath = `${pollingUrl.pathname}${pollingUrl.search}`;
-    await wait(Math.max(250, Math.min(Number(data.retry_after_ms) || 750, 2000)));
+async function adminReportFetch(path, label = 'Готовим отчёт…') {
+  setTopProgress(true, label);
+  try {
+    const startedAt = Date.now();
+    let requestPath = path;
+    while (Date.now() - startedAt < 120000) {
+      const data = await adminFetch(requestPath);
+      if (data?.status !== 'building') return data;
+      // Keep the top indicator active while the server calculates the report,
+      // including the pauses between short polling requests.
+      const pollingUrl = new URL(requestPath, window.location.origin);
+      pollingUrl.searchParams.delete('refresh');
+      requestPath = `${pollingUrl.pathname}${pollingUrl.search}`;
+      await wait(Math.max(250, Math.min(Number(data.retry_after_ms) || 750, 2000)));
+    }
+    throw new Error('Расчёт занимает слишком много времени. Попробуйте обновить отчёт ещё раз.');
+  } finally {
+    setTopProgress(false);
   }
-  throw new Error('Расчёт занимает слишком много времени. Попробуйте обновить отчёт ещё раз.');
 }
 
 function showManagerStatus(message, error = false) {
@@ -1397,7 +1403,9 @@ async function loadAnalytics() {
       if ($(selector).value) params.set(key,$(selector).value);
     }
     appendDateRange(params, '#analyticsDateFrom', '#analyticsDateTo');
-    renderAnalytics(await adminReportFetch(`/api/admin/analytics?${params}`));
+    renderAnalytics(await adminReportFetch(
+      `/api/admin/analytics?${params}`, 'Считаем воронку и поведение…',
+    ));
   }, 'Считаем воронку и поведение…');
 }
 
@@ -1407,7 +1415,9 @@ async function loadServiceResults() {
     params.set('date_basis', $('#serviceResultsDateBasis').value || 'any');
     appendDateRange(params, '#serviceResultsDateFrom', '#serviceResultsDateTo');
     renderServiceResultAnalytics(
-      await adminReportFetch(`/api/admin/service-results?${params}`),
+      await adminReportFetch(
+        `/api/admin/service-results?${params}`, 'Сопоставляем заявки и результаты…',
+      ),
     );
   }, 'Сопоставляем заявки и результаты…');
 }
@@ -1926,6 +1936,10 @@ async function loadMetric2(flow = metric2ActiveFlow) {
     showMetric2PeriodPrompt();
     return;
   }
+  const loadingLabel = metric2ActiveFlow === 'result' ? 'Строим путь получения результатов…'
+    : metric2ActiveFlow === 'masterclass' ? 'Строим путь мастер-классов…'
+    : ['experiment','marketer_b','marketer_c'].includes(metric2ActiveFlow) ? 'Строим путь воронки маркетолога…'
+    : metric2ActiveFlow === 'reoffer' ? 'Строим путь повторного предложения…' : 'Строим обычный стартовый путь…';
   return withPanelLoading('#metric2AdminView', async () => {
     const params = new URLSearchParams({period:selection.period || 'all',flow:metric2ActiveFlow});
     for (const [key,selector] of [['device','#metric2Device'],['method','#metric2Method'],['source','#metric2Source']]) {
@@ -1933,15 +1947,12 @@ async function loadMetric2(flow = metric2ActiveFlow) {
     }
     appendDateRange(params, '#metric2DateFrom', '#metric2DateTo');
     const requestedFlow = metric2ActiveFlow;
-    const report = await adminReportFetch(`/api/admin/metric2?${params}`);
+    const report = await adminReportFetch(`/api/admin/metric2?${params}`, loadingLabel);
     if (requestedFlow === metric2ActiveFlow) {
       renderMetric2(report);
       if (requestedFlow === 'reoffer') await loadCheckupReofferDiagnostics();
     }
-  }, metric2ActiveFlow === 'result' ? 'Строим путь получения результатов…'
-    : metric2ActiveFlow === 'masterclass' ? 'Строим путь мастер-классов…'
-    : ['experiment','marketer_b','marketer_c'].includes(metric2ActiveFlow) ? 'Строим путь воронки маркетолога…'
-    : metric2ActiveFlow === 'reoffer' ? 'Строим путь повторного предложения…' : 'Строим обычный стартовый путь…');
+  }, loadingLabel);
 }
 
 function showReofferDiagnosticStatus(message, error = false) {

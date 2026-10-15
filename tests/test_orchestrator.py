@@ -3165,7 +3165,23 @@ class OrchestratorTests(unittest.TestCase):
         self.assertIn(".admin-panel-loader", styles)
         self.assertIn('id="adminTopProgress"', dashboard)
         self.assertIn("function setTopProgress", script)
+        self.assertIn("const wasActive = topProgressRequests > 0", script)
         self.assertIn(".admin-top-progress", styles)
+        self.assertLess(
+            dashboard.index('id="adminTopProgress"'),
+            dashboard.index('class="login-card"'),
+        )
+        report_fetch = script[
+            script.index("async function adminReportFetch"):
+            script.index("function showManagerStatus")
+        ]
+        self.assertLess(
+            report_fetch.index("setTopProgress(true, label)"),
+            report_fetch.index("while (Date.now() - startedAt < 120000)"),
+        )
+        self.assertIn("finally", report_fetch)
+        self.assertIn("setTopProgress(false)", report_fetch)
+        self.assertIn("z-index:1000", styles)
         self.assertNotIn("setInterval(() => loadDashboard(),60000)", script)
         self.assertNotIn("автообновление раз в минуту", script)
         self.assertIn("следующее обновление только по кнопке", script)
