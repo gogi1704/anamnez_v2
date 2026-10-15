@@ -1397,7 +1397,6 @@ async function loadAnalytics() {
       if ($(selector).value) params.set(key,$(selector).value);
     }
     appendDateRange(params, '#analyticsDateFrom', '#analyticsDateTo');
-    params.set('refresh','1');
     renderAnalytics(await adminReportFetch(`/api/admin/analytics?${params}`));
   }, 'Считаем воронку и поведение…');
 }
@@ -1407,7 +1406,6 @@ async function loadServiceResults() {
     const params = new URLSearchParams({period:$('#serviceResultsPeriod').value});
     params.set('date_basis', $('#serviceResultsDateBasis').value || 'any');
     appendDateRange(params, '#serviceResultsDateFrom', '#serviceResultsDateTo');
-    params.set('refresh','1');
     renderServiceResultAnalytics(
       await adminReportFetch(`/api/admin/service-results?${params}`),
     );
@@ -1934,7 +1932,6 @@ async function loadMetric2(flow = metric2ActiveFlow) {
       if ($(selector).value) params.set(key,$(selector).value);
     }
     appendDateRange(params, '#metric2DateFrom', '#metric2DateTo');
-    params.set('refresh','1');
     const requestedFlow = metric2ActiveFlow;
     const report = await adminReportFetch(`/api/admin/metric2?${params}`);
     if (requestedFlow === metric2ActiveFlow) {

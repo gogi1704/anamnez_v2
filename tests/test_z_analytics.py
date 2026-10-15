@@ -128,6 +128,30 @@ class AnalyticsTests(unittest.TestCase):
         self.assertEqual(result, {"report": "ready"})
         self.assertEqual(len(calls), 1)
 
+    def test_filter_options_are_built_from_compact_sessions_table(self):
+        with analytics.connection() as conn:
+            conn.execute(
+                """INSERT INTO analytics_sessions
+                   (session_id,chel_id,started_at,last_seen_at,entry_source,
+                    campaign,registration_method,device_type,operating_system,
+                    browser,app_mode,event_count)
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (
+                    "filters-session-01", "CHEL-FILTERS", "2026-10-15T00:00:00Z",
+                    "2026-10-15T00:00:00Z", "masterclass-qr", "", "max",
+                    "mobile", "Android", "Chrome", "browser", 0,
+                ),
+            )
+            conn.commit()
+
+        # No analytics event is needed: the filter choices come from the much
+        # smaller sessions table and therefore do not trigger a full event scan.
+        result = analytics._analytics_filter_options_uncached()
+
+        self.assertEqual(result["devices"], ["mobile"])
+        self.assertEqual(result["methods"], ["max"])
+        self.assertEqual(result["sources"], ["masterclass-qr"])
+
     def test_delete_user_data_removes_only_target_events_and_sessions(self):
         analytics.record_events("CHEL-DELETE", [{
             "event_id": "delete-event-0001", "session_id": "delete-session-0001",

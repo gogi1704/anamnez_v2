@@ -22,7 +22,10 @@ _report_cache_lock = threading.Lock()
 _report_cache: dict[tuple, tuple[float, dict]] = {}
 _report_builds: set[tuple] = set()
 _report_failures: dict[tuple, tuple[float, str]] = {}
-REPORT_CACHE_SECONDS = 15
+# Analytics reports are expensive on the production database.  Keeping a
+# completed report for one minute makes tab switches instantaneous while the
+# visible data can still be refreshed shortly after new events arrive.
+REPORT_CACHE_SECONDS = 60
 TEST_COMPANY_INN = "123123"
 REPORT_TIMEZONE = timezone(timedelta(hours=3))
 
@@ -1743,9 +1746,25 @@ def _cache_report_result(cache_key: tuple, result: dict) -> dict:
 
 
 def _build_report_in_background(cache_key: tuple, builder) -> None:
+    started_at = time.monotonic()
+    report_name = str(cache_key[0] or "analytics")
+    report_variant = (
+        f" flow={cache_key[-1]}" if report_name == "metric2" else ""
+    )
     try:
         _cache_report_result(cache_key, builder())
+        print(
+            f"[analytics] {report_name}{report_variant} built in "
+            f"{time.monotonic() - started_at:.2f}s",
+            flush=True,
+        )
     except Exception as exc:  # reported to the polling admin request
+        print(
+            f"[analytics] {report_name}{report_variant} failed after "
+            f"{time.monotonic() - started_at:.2f}s: "
+            f"{exc.__class__.__name__}: {str(exc)[:500]}",
+            flush=True,
+        )
         with _report_cache_lock:
             _report_failures[cache_key] = (
                 time.monotonic() + 30,
@@ -1803,6 +1822,45 @@ def _cached_report(
     return _cache_report_result(cache_key, result)
 
 
+def _analytics_filter_options_uncached() -> dict:
+    """Build dashboard filters from sessions instead of scanning every event.
+
+    ``analytics_events`` is by far the largest table in production.  The old
+    queries read it once for devices and again for registration methods for
+    every report/flow.  A session already stores the final values needed by
+    these filters, so one pass over the much smaller sessions table is enough.
+    """
+    devices: set[str] = set()
+    methods: set[str] = set()
+    sources: set[str] = set()
+    with connection() as conn:
+        for row in conn.execute(
+            """SELECT device_type,registration_method,entry_source
+               FROM analytics_sessions
+               WHERE IS_STATS_USER(chel_id) = 1"""
+        ):
+            device = str(row["device_type"] or "").strip()
+            method = str(row["registration_method"] or "").strip()
+            source = str(row["entry_source"] or "").strip()
+            if device:
+                devices.add(device)
+            if method in REGISTRATION_METHODS:
+                methods.add(method)
+            if source:
+                sources.add(source)
+    return {
+        "devices": sorted(devices),
+        "methods": sorted(methods),
+        "sources": sorted(sources)[:100],
+    }
+
+
+def _analytics_filter_options() -> dict:
+    return _cached_report(
+        "analytics_filter_options", (), _analytics_filter_options_uncached,
+    )
+
+
 def _admin_report_uncached(
     period: str = "30", device: str = "", method: str = "", source: str = "",
     recent_page: int = 1, recent_limit: int = 25,
@@ -1812,6 +1870,7 @@ def _admin_report_uncached(
     recent_limit = max(10, min(int(recent_limit), 100))
     where, params = _filters(period, device, method, source, date_from, date_to)
     join = " FROM analytics_events e LEFT JOIN analytics_sessions s ON s.session_id=e.session_id "
+    filter_options = _analytics_filter_options()
     with connection() as conn:
         totals = conn.execute(
             "SELECT COUNT(DISTINCT e.chel_id) total_users, "
@@ -1928,16 +1987,6 @@ def _admin_report_uncached(
             except json.JSONDecodeError:
                 item["properties"] = {}
             recent.append(item)
-        filter_options = {
-            "devices": [row[0] for row in conn.execute("SELECT DISTINCT device_type FROM analytics_events WHERE IS_STATS_USER(chel_id) = 1 ORDER BY device_type") if row[0]],
-            "methods": [row[0] for row in conn.execute(
-                "SELECT DISTINCT COALESCE(NULLIF(json_extract(properties,'$.method'),''),registration_method) method "
-                "FROM analytics_events WHERE IS_STATS_USER(chel_id) = 1 AND event_name='registration_completed' "
-                "AND COALESCE(NULLIF(json_extract(properties,'$.method'),''),registration_method) "
-                "IN ('anonymous','max','telegram','result') ORDER BY method"
-            )],
-            "sources": [row[0] for row in conn.execute("SELECT DISTINCT entry_source FROM analytics_sessions WHERE IS_STATS_USER(chel_id) = 1 AND entry_source<>'' ORDER BY entry_source LIMIT 100")],
-        }
         registrations = grouped("COALESCE(NULLIF(json_extract(e.properties,'$.method'),''),e.registration_method)", "registration_completed")
         devices = grouped("e.device_type")
         operating_systems = grouped("e.operating_system")
@@ -2256,6 +2305,7 @@ def _metric2_report_uncached(
         relevant_events.add("checkup_reoffer_candidate")
     relevant_events = sorted(relevant_events)
     event_filter = " AND e.event_name IN (" + ",".join("?" for _ in relevant_events) + ")"
+    filter_options = _analytics_filter_options()
     with connection() as conn:
         rows = conn.execute(
             "SELECT e.rowid event_order, e.event_name, e.chel_id, e.session_id, "
@@ -2784,22 +2834,6 @@ def _metric2_report_uncached(
             finally:
                 if main_conn is not None:
                     main_conn.close()
-        filter_options = {
-            "devices": [row[0] for row in conn.execute(
-                "SELECT DISTINCT device_type FROM analytics_events "
-                "WHERE IS_STATS_USER(chel_id) = 1 ORDER BY device_type"
-            ) if row[0]],
-            "methods": [row[0] for row in conn.execute(
-                "SELECT DISTINCT COALESCE(NULLIF(json_extract(properties,'$.method'),''),registration_method) method "
-                "FROM analytics_events WHERE IS_STATS_USER(chel_id) = 1 AND event_name='registration_completed' "
-                "AND COALESCE(NULLIF(json_extract(properties,'$.method'),''),registration_method) "
-                "IN ('anonymous','max','telegram','result') ORDER BY method"
-            ) if row[0]],
-            "sources": [row[0] for row in conn.execute(
-                "SELECT DISTINCT entry_source FROM analytics_sessions "
-                "WHERE IS_STATS_USER(chel_id) = 1 AND entry_source<>'' ORDER BY entry_source LIMIT 100"
-            ) if row[0]],
-        }
     completed_user_ids = set().union(*(
         screen_users.get(item["id"], set())
         for item in result_screens if item.get("terminal")

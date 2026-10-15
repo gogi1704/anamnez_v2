@@ -530,7 +530,7 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                         background=True,
                     ))
                 except analytics.ReportBuilding:
-                    return self._json(202, {"status": "building", "retry_after_ms": 750})
+                    return self._json(202, {"status": "building", "retry_after_ms": 1500})
                 except analytics.ReportBuildFailed as exc:
                     return self._json(503, {"detail": f"Не удалось рассчитать отчёт: {exc}"})
                 except (ValueError, TypeError) as exc:
@@ -597,7 +597,7 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                         report["masterclasses"] = masterclasses
                     return self._json(200, report)
                 except analytics.ReportBuilding:
-                    return self._json(202, {"status": "building", "retry_after_ms": 750})
+                    return self._json(202, {"status": "building", "retry_after_ms": 1500})
                 except analytics.ReportBuildFailed as exc:
                     return self._json(503, {"detail": f"Не удалось рассчитать отчёт: {exc}"})
                 except (ValueError, TypeError) as exc:
@@ -625,7 +625,7 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                     )
                     return self._json(200, report)
                 except analytics.ReportBuilding:
-                    return self._json(202, {"status": "building", "retry_after_ms": 750})
+                    return self._json(202, {"status": "building", "retry_after_ms": 1500})
                 except analytics.ReportBuildFailed as exc:
                     return self._json(503, {"detail": f"Не удалось рассчитать отчёт: {exc}"})
                 except (ValueError, TypeError) as exc:
