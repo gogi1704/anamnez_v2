@@ -4352,14 +4352,14 @@ class OrchestratorTests(unittest.TestCase):
         self.assertIn("controllerchange", script)
         self.assertIn("url.pathname.startsWith('/api/')", worker)
         self.assertIn("url.pathname.startsWith('/auth/')", worker)
-        self.assertIn("consilium-shell-v182", worker)
+        self.assertIn("consilium-shell-v183", worker)
         self.assertIn("fetch(request)", worker)
-        self.assertIn("/static/styles.css?v=20261018-psychology-release-v22", index)
+        self.assertIn("/static/styles.css?v=20261018-psychology-payment-v23", index)
         self.assertIn("/static/rich-text.2bf1f5fab764.css", index)
         self.assertTrue((project_root / "static" / "styles.07ffaefb4795.css").is_file())
         self.assertTrue((project_root / "static" / "rich-text.2bf1f5fab764.css").is_file())
-        self.assertIn("/static/app.js?v=20261018-psychology-release-v22", index)
-        self.assertIn("/static/metrika.js?v=20261018-psychology-release-v22", index)
+        self.assertIn("/static/app.js?v=20261018-psychology-payment-v23", index)
+        self.assertIn("/static/metrika.js?v=20261018-psychology-payment-v23", index)
         self.assertIn("function safeUrl(value)", script)
         self.assertIn("error.code === 'http_404'", script)
         self.assertIn("fallback && fallback.id !== id", script)
@@ -4448,7 +4448,7 @@ class OrchestratorTests(unittest.TestCase):
         main = (project_root / "backend" / "main.py").read_text(encoding="utf-8")
         config = (project_root / "backend" / "config.py").read_text(encoding="utf-8")
 
-        self.assertIn('src="/static/metrika.js?v=20261018-psychology-release-v22"', index)
+        self.assertIn('src="/static/metrika.js?v=20261018-psychology-payment-v23"', index)
         self.assertIn('YANDEX_METRIKA_COUNTER_ID', config)
         self.assertIn('path == "/api/public-config"', main)
         self.assertIn('"metrika.js"', main)
@@ -5153,8 +5153,6 @@ class OrchestratorTests(unittest.TestCase):
                     "conversation_id": "psychology-1",
                     "session_count": 1,
                     "receipt_email": "person@example.ru",
-                    "accept_offer": True,
-                    "accept_personal_data": True,
                 }
 
             def _track_analytics(self, event, params):
@@ -5187,12 +5185,8 @@ class OrchestratorTests(unittest.TestCase):
         original_policy_url = settings.personal_data_policy_url
         try:
             object.__setattr__(settings, "online_payments_enabled", True)
-            object.__setattr__(
-                settings, "psychology_offer_url", "https://example.ru/offer",
-            )
-            object.__setattr__(
-                settings, "personal_data_policy_url", "https://example.ru/privacy",
-            )
+            object.__setattr__(settings, "psychology_offer_url", "")
+            object.__setattr__(settings, "personal_data_policy_url", "")
             with (
                 patch("backend.main.yookassa.configured", return_value=True),
                 patch(
@@ -5239,8 +5233,10 @@ class OrchestratorTests(unittest.TestCase):
         self.assertNotIn("Имитировать оплату", app)
         self.assertIn('id="psychologyAcceptOffer"', app)
         self.assertIn('id="psychologyAcceptPersonalData"', app)
-        self.assertIn("accept_offer:true", app)
-        self.assertIn("accept_personal_data:true", app)
+        self.assertIn("accept_offer:offerConsent?.checked === true", app)
+        self.assertIn(
+            "accept_personal_data:personalDataConsent?.checked === true", app,
+        )
 
     def test_psychology_payment_requires_both_legal_consents_server_side(self):
         class FakeHandler:

@@ -406,8 +406,6 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                 "psychology_session_payments_enabled": bool(
                     settings.online_payments_enabled
                     and yookassa.configured()
-                    and psychology_offer_url
-                    and personal_data_policy_url
                 ),
                 "psychology_offer_url": psychology_offer_url,
                 "personal_data_policy_url": personal_data_policy_url,
@@ -1688,16 +1686,13 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                     raise yookassa.YooKassaUnavailable("Онлайн-оплата временно недоступна")
                 if not yookassa.configured():
                     raise yookassa.YooKassaUnavailable("Онлайн-оплата пока не настроена")
-                if not (
+                legal_links_configured = bool(
                     _public_https_url(settings.psychology_offer_url)
                     and _public_https_url(settings.personal_data_policy_url)
-                ):
-                    raise yookassa.YooKassaUnavailable(
-                        "Документы для оплаты сессии пока не настроены"
-                    )
-                if payload.get("accept_offer") is not True:
+                )
+                if legal_links_configured and payload.get("accept_offer") is not True:
                     raise ValueError("Подтвердите согласие с условиями оферты")
-                if payload.get("accept_personal_data") is not True:
+                if legal_links_configured and payload.get("accept_personal_data") is not True:
                     raise ValueError("Подтвердите согласие на обработку персональных данных")
                 conversation_id = str(payload.get("conversation_id") or "").strip()
                 session_count = payload.get("session_count", 1)

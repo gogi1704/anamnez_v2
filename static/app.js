@@ -3122,6 +3122,11 @@ function renderPsychologySessionPayment() {
   const totalLabel = packageInfo.totalPrice.toLocaleString('ru-RU');
   const offerUrl = safeUrl(state.publicConfig.psychology_offer_url);
   const personalDataUrl = safeUrl(state.publicConfig.personal_data_policy_url);
+  const legalConsents = offerUrl !== '#' && personalDataUrl !== '#'
+    ? `<div class="psychology-payment-consents">
+      <label><input id="psychologyAcceptOffer" type="checkbox" required><span>Я принимаю условия <a href="${escapeAttr(offerUrl)}" target="_blank" rel="noopener noreferrer">публичной оферты</a></span></label>
+      <label><input id="psychologyAcceptPersonalData" type="checkbox" required><span>Я даю согласие на обработку персональных данных и ознакомлен(а) с <a href="${escapeAttr(personalDataUrl)}" target="_blank" rel="noopener noreferrer">политикой обработки данных</a></span></label>
+    </div>` : '';
   $('#appShell').classList.add('hidden');
   $('#onboarding').classList.remove('hidden');
   setOnboardingMeta('Сессия с психологом', 92);
@@ -3133,10 +3138,7 @@ function renderPsychologySessionPayment() {
     <p class="onboarding-lead">После подтверждения оплаты одна 60-минутная сессия появится в вашем балансе. Заявку на онлайн-встречу можно будет оставить в меню психологического чата.</p>
     <section class="consultation-payment-card"><header><strong>${countLabel} с психологом · 60 минут</strong><b>${totalLabel} ₽</b></header><p>История сессий и доступный баланс сохраняются в меню психологического чата.</p></section>
     ${emailField}
-    <div class="psychology-payment-consents">
-      <label><input id="psychologyAcceptOffer" type="checkbox" required><span>Я принимаю условия <a href="${escapeAttr(offerUrl)}" target="_blank" rel="noopener noreferrer">публичной оферты</a></span></label>
-      <label><input id="psychologyAcceptPersonalData" type="checkbox" required><span>Я даю согласие на обработку персональных данных и ознакомлен(а) с <a href="${escapeAttr(personalDataUrl)}" target="_blank" rel="noopener noreferrer">политикой обработки данных</a></span></label>
-    </div>
+    ${legalConsents}
     <div class="onboarding-actions"><button type="button" class="onboarding-back" data-onboarding-action="cancel-psychology-session-payment">Назад</button><button type="button" class="onboarding-next" data-onboarding-action="pay-psychology-session">Оплатить ${totalLabel} ₽</button></div>`;
   trackMasterclassScreen('psychology_session_payment');
 }
@@ -3149,7 +3151,7 @@ async function startPsychologySessionPayment() {
   }
   const offerConsent = $('#psychologyAcceptOffer');
   const personalDataConsent = $('#psychologyAcceptPersonalData');
-  if (!offerConsent?.checked || !personalDataConsent?.checked) {
+  if ((offerConsent || personalDataConsent) && (!offerConsent?.checked || !personalDataConsent?.checked)) {
     showOnboardingError('Подтвердите оба согласия перед переходом к оплате');
     return;
   }
@@ -3165,8 +3167,8 @@ async function startPsychologySessionPayment() {
         conversation_id:state.paymentReviewConversationId || state.conversationId,
         session_count:psychologySessionPackage().sessions,
         receipt_email:state.paymentReceiptEmail,
-        accept_offer:true,
-        accept_personal_data:true,
+        accept_offer:offerConsent?.checked === true,
+        accept_personal_data:personalDataConsent?.checked === true,
       }),
     });
     const order = result.order || {};
