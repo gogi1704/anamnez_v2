@@ -10,6 +10,7 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal, InvalidOperation
+from urllib.parse import urlparse
 
 from .config import settings
 
@@ -22,15 +23,15 @@ WEIGHT_ANALYSIS_MIN_CONFIRMED_MEALS = 20
 WEIGHT_CONTROL_PERSONALITY_MODES = {"friendly", "balanced", "strict"}
 WEIGHT_CONTROL_ADDRESS_MODES = {"formal", "informal"}
 MASTERCLASS_PSYCHOLOGY_WELCOME = (
-    "Здравствуйте! Я Ольга, помощник-психолог.\n\n"
+    "Здравствуйте! Я Вита, помощник-психолог.\n\n"
     "Если вы здесь — скорее всего, что-то беспокоит: усталость, тревога, "
     "сон, отношения или просто ощущение, что сил больше нет. Это нормально "
     "— с этим приходят, и с этим можно работать.\n\n"
     "Напишите мне как есть, без правильных формулировок. Я рядом и помогу "
     "разобраться — сколько понадобится, без ограничений по времени. Если "
-    "захотите поговорить с живым психологом — в любой момент можно попросить "
+    "захотите поговорить с психологом — в любой момент можно попросить "
     "меня позвать человека или нажать на фиолетовую кнопку в верхней части "
-    "экрана, первые 30 минут бесплатно."
+    "экрана. Первая консультация бесплатна."
 )
 
 
@@ -3278,7 +3279,8 @@ def admin_list_staff() -> list[dict]:
     with connection() as conn:
         rows = conn.execute(
             """SELECT id, display_name, login, role, is_active, telegram_id, max_id,
-            notify_new_requests, notify_new_messages, created_at, updated_at,
+            notify_new_requests, notify_new_messages, notify_successful_payments,
+            created_at, updated_at,
             last_login_at FROM staff_users ORDER BY is_active DESC, display_name"""
         ).fetchall()
         result = []
@@ -3301,6 +3303,7 @@ def admin_list_staff() -> list[dict]:
             item["is_active"] = bool(item["is_active"])
             item["notify_new_requests"] = bool(item["notify_new_requests"])
             item["notify_new_messages"] = bool(item["notify_new_messages"])
+            item["notify_successful_payments"] = bool(item["notify_successful_payments"])
             result.append(item)
     return result
 
@@ -3309,6 +3312,7 @@ def admin_create_staff(
     display_name: str, login: str, password: str, *, telegram_id="", max_id="",
     role: str = "manager",
     notify_new_requests: bool = True, notify_new_messages: bool = True,
+    notify_successful_payments: bool = True,
 ) -> dict:
     display_name = " ".join(str(display_name or "").split())[:80]
     if len(display_name) < 2:
@@ -3325,12 +3329,13 @@ def admin_create_staff(
                 """INSERT INTO staff_users
                 (display_name, login, password_hash, role, is_active, telegram_id,
                  telegram_chat_id, max_id, max_chat_id, notify_new_requests,
-                 notify_new_messages, created_at, updated_at)
-                VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?)""",
+                 notify_new_messages, notify_successful_payments, created_at, updated_at)
+                VALUES (?, ?, ?, ?, 1, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
                 (
                     display_name, login, encoded, role, telegram_id, telegram_id,
                     max_id, max_id, int(bool(notify_new_requests)),
-                    int(bool(notify_new_messages)), now, now,
+                    int(bool(notify_new_messages)), int(bool(notify_successful_payments)),
+                    now, now,
                 ),
             )
             conn.commit()
@@ -3352,6 +3357,7 @@ def admin_update_staff(
     telegram_id: str | None = None, max_id: str | None = None,
     notify_new_requests: bool | None = None,
     notify_new_messages: bool | None = None,
+    notify_successful_payments: bool | None = None,
 ) -> dict | None:
     updates: list[str] = []
     params: list = []
@@ -3384,6 +3390,9 @@ def admin_update_staff(
     if notify_new_messages is not None:
         updates.append("notify_new_messages = ?")
         params.append(int(bool(notify_new_messages)))
+    if notify_successful_payments is not None:
+        updates.append("notify_successful_payments = ?")
+        params.append(int(bool(notify_successful_payments)))
     if not updates:
         raise ValueError("Нет изменений")
     updates.append("updated_at = ?")
@@ -3425,6 +3434,13 @@ def admin_update_staff(
             conn.execute(
                 """UPDATE manager_notification_outbox SET status = 'cancelled'
                 WHERE staff_user_id = ? AND event_type = 'new_message' AND status <> 'sent'""",
+                (int(staff_id),),
+            )
+        if notify_successful_payments is False:
+            conn.execute(
+                """UPDATE manager_notification_outbox SET status = 'cancelled'
+                WHERE staff_user_id = ? AND event_type = 'psychology_payment_succeeded'
+                  AND status <> 'sent'""",
                 (int(staff_id),),
             )
         cursor = conn.execute(
@@ -3538,11 +3554,12 @@ def bind_staff_messenger(
 def enqueue_manager_notifications(
     event_type: str, conversation_id: str, *, message_id: int = 0,
     message_text: str = "", recipient_role: str | None = None,
-    request_kind: str = "", request_number: str = "",
+    request_kind: str = "", request_number: str = "", amount_kopecks: int = 0,
 ) -> int:
     if event_type not in {
         "new_request", "new_message", "request_cancelled",
         "weight_program_completed", "psychology_session_requested",
+        "psychology_payment_succeeded", "psychology_crisis",
     }:
         raise ValueError("Неизвестный тип уведомления")
     now = utc_now()
@@ -3560,14 +3577,31 @@ def enqueue_manager_notifications(
         recipient_role = _staff_role(recipient_role or conversation["human_recipient_role"])
         manager_url = f"{settings.public_base_url}/manager?conversation={conversation_id}"
         name = conversation["preferred_name"] or f"Пользователь {conversation['chel_id'][-6:]}"
-        if event_type == "psychology_session_requested":
+        if event_type == "psychology_crisis":
+            title = "Срочно: психологическая безопасность"
+            body = (
+                f"{name} отправил сообщение с признаками непосредственного риска "
+                "причинения вреда себе или другим. ИИ остановлен. Срочно откройте "
+                "защищённый чат и оцените ситуацию."
+            )
+            preference = None
+        elif event_type == "psychology_payment_succeeded":
+            amount = max(0, int(amount_kopecks or 0))
+            amount_label = f"{amount // 100:,}".replace(",", " ") + " ₽"
+            title = "Успешная оплата сессии"
+            body = (
+                f"{name} успешно оплатил сессию с психологом на сумму {amount_label}. "
+                "Откройте чат пользователя, чтобы согласовать онлайн-встречу."
+            )
+            preference = "notify_successful_payments"
+        elif event_type == "psychology_session_requested":
             visible_request_number = str(
                 request_number or conversation["human_ticket_id"] or "—"
             )
             title = f"Заявка № {visible_request_number} — новая сессия"
             body = (
                 f"Номер заявки: {visible_request_number}. "
-                f"{name} оставил заявку на 30-минутный созвон с психологом. "
+                f"{name} оставил заявку на онлайн-встречу с психологом. "
                 "Откройте чат, чтобы связаться с пользователем и согласовать время."
             )
             preference = "notify_new_requests"
@@ -3609,6 +3643,13 @@ def enqueue_manager_notifications(
                     body = f"{name} хочет приобрести чекап."
                     if excerpt:
                         body += f" Сообщение: «{excerpt}»."
+                elif request_kind == "psychology_session_messenger_help":
+                    title = "Нужно согласовать сессию без мессенджера"
+                    body = (
+                        f"{name} хочет обсудить проведение платной сессии без "
+                        "привязки Telegram или MAX. Откройте диалог психолога и помогите "
+                        "согласовать способ связи."
+                    )
                 else:
                     title = "Новое обращение в Консилиуме"
                     body = (
@@ -3625,18 +3666,28 @@ def enqueue_manager_notifications(
             )
             body = f"{name} отправил новое сообщение. Откройте защищённую панель {destination}."
             preference = "notify_new_messages"
-        recipients = conn.execute(
-            f"""SELECT id, telegram_chat_id, max_chat_id FROM staff_users
-            WHERE is_active = 1 AND role = ? AND {preference} = 1""",
-            (recipient_role,),
-        ).fetchall()
+        if preference:
+            recipients = conn.execute(
+                f"""SELECT id, telegram_chat_id, max_chat_id FROM staff_users
+                WHERE is_active = 1 AND role = ? AND {preference} = 1""",
+                (recipient_role,),
+            ).fetchall()
+        else:
+            recipients = conn.execute(
+                """SELECT id, telegram_chat_id, max_chat_id FROM staff_users
+                WHERE is_active = 1 AND role = ?""",
+                (recipient_role,),
+            ).fetchall()
         inserted = 0
         payload = json.dumps({
             "title": title, "body": body, "manager_url": manager_url,
             "action_url": manager_url,
             "action_label": (
                 "Открыть чат"
-                if event_type in {"weight_program_completed", "psychology_session_requested"}
+                if event_type in {
+                    "weight_program_completed", "psychology_session_requested",
+                    "psychology_payment_succeeded",
+                }
                 else "Открыть чат пользователя" if recipient_role == "doctor"
                 else "Открыть диалог"
             ),
@@ -3645,6 +3696,7 @@ def enqueue_manager_notifications(
             "request_number": str(request_number or conversation["human_ticket_id"] or ""),
             "recipient_role": recipient_role,
             "request_kind": str(request_kind or ""),
+            "amount_kopecks": max(0, int(amount_kopecks or 0)),
         }, ensure_ascii=False)
         for staff in recipients:
             for provider, recipient in (
@@ -3690,7 +3742,7 @@ def claim_manager_notifications(provider: str, limit: int = 20) -> list[dict]:
                 WHERE staff.id = outbox.staff_user_id AND staff.is_active = 1
                   AND staff.role = COALESCE(conversation.human_recipient_role, 'manager')
                   AND (
-                    outbox.event_type IN ('request_cancelled','weight_program_completed','psychology_session_requested')
+                    outbox.event_type IN ('request_cancelled','weight_program_completed','psychology_session_requested','psychology_payment_succeeded','psychology_crisis')
                     OR COALESCE(conversation.human_status, 'closed') <> 'closed'
                   )
                   AND (
@@ -3698,6 +3750,8 @@ def claim_manager_notifications(provider: str, limit: int = 20) -> list[dict]:
                     OR (outbox.event_type = 'request_cancelled' AND staff.notify_new_requests = 1)
                     OR (outbox.event_type = 'weight_program_completed' AND staff.notify_new_requests = 1)
                     OR (outbox.event_type = 'psychology_session_requested' AND staff.notify_new_requests = 1)
+                    OR (outbox.event_type = 'psychology_payment_succeeded' AND staff.notify_successful_payments = 1)
+                    OR outbox.event_type = 'psychology_crisis'
                     OR (outbox.event_type = 'new_message' AND staff.notify_new_messages = 1)
                   )
               )
@@ -4002,38 +4056,31 @@ def create_consultation_payment_order(conversation_id: str) -> dict:
 
 
 PSYCHOLOGY_SESSION_MIN_COUNT = 1
-PSYCHOLOGY_SESSION_MAX_COUNT = 7
-PSYCHOLOGY_SESSION_BASE_UNIT_PRICE_RUB = 2500
-PSYCHOLOGY_SESSION_MIN_UNIT_PRICE_RUB = 1500
+PSYCHOLOGY_SESSION_MAX_COUNT = 1
+PSYCHOLOGY_SESSION_LEGACY_MAX_COUNT = 7
+PSYCHOLOGY_SESSION_BASE_UNIT_PRICE_RUB = 3500
+PSYCHOLOGY_SESSION_MIN_UNIT_PRICE_RUB = 3500
 
 
 def psychology_session_package(session_count: int) -> dict:
-    """Return the server-authoritative price for a 1–7 session package."""
+    """Return the server-authoritative price for the single 60-minute session."""
     if isinstance(session_count, bool) or (
         isinstance(session_count, float) and not session_count.is_integer()
     ):
-        raise ValueError("Выберите пакет от 1 до 7 сессий")
+        raise ValueError("Можно приобрести одну сессию")
     try:
         count = int(session_count)
     except (TypeError, ValueError) as exc:
-        raise ValueError("Выберите пакет от 1 до 7 сессий") from exc
+        raise ValueError("Можно приобрести одну сессию") from exc
     if not PSYCHOLOGY_SESSION_MIN_COUNT <= count <= PSYCHOLOGY_SESSION_MAX_COUNT:
-        raise ValueError("Выберите пакет от 1 до 7 сессий")
-    steps = PSYCHOLOGY_SESSION_MAX_COUNT - PSYCHOLOGY_SESSION_MIN_COUNT
-    numerator = (
-        PSYCHOLOGY_SESSION_BASE_UNIT_PRICE_RUB * steps
-        - (count - 1) * (
-            PSYCHOLOGY_SESSION_BASE_UNIT_PRICE_RUB
-            - PSYCHOLOGY_SESSION_MIN_UNIT_PRICE_RUB
-        )
-    )
-    unit_price = ((numerator + 25 * steps) // (50 * steps)) * 50
-    total_price = unit_price * count
+        raise ValueError("Можно приобрести одну сессию")
+    unit_price = PSYCHOLOGY_SESSION_BASE_UNIT_PRICE_RUB
+    total_price = unit_price
     return {
         "sessions": count,
         "unit_price": unit_price,
         "total_price": total_price,
-        "saving": PSYCHOLOGY_SESSION_BASE_UNIT_PRICE_RUB * count - total_price,
+        "saving": 0,
     }
 
 
@@ -4048,7 +4095,9 @@ def _psychology_order_session_count(items_value) -> int:
             count = int(item.get("sessions", 1))
         except (TypeError, ValueError):
             count = 1
-        return max(1, min(PSYCHOLOGY_SESSION_MAX_COUNT, count))
+        # Orders created before the single-session product may contain up to
+        # seven already-paid credits. They must remain available to users.
+        return max(1, min(PSYCHOLOGY_SESSION_LEGACY_MAX_COUNT, count))
     return 1
 
 
@@ -4067,7 +4116,7 @@ def _new_psychology_request_number(conn: sqlite3.Connection) -> str:
 def create_psychology_session_payment_order(
     conversation_id: str, session_count: int = 1,
 ) -> dict:
-    """Create a server-priced package for the master-class psychology chat."""
+    """Create a server-priced 60-minute session for the psychology chat."""
     conversation = get_conversation(conversation_id)
     if not conversation or conversation.get("dialog_type") != "masterclass_psychology":
         raise ValueError("Чат психологической поддержки не найден")
@@ -4076,8 +4125,8 @@ def create_psychology_session_payment_order(
     count = package["sessions"]
     noun = "сессия" if count == 1 else "сессии" if count < 5 else "сессий"
     items = [{
-        "id": "psychology_session_package",
-        "name": f"{count} {noun} с психологом",
+        "id": "psychology_session",
+        "name": f"{count} {noun} с психологом · 60 минут",
         "price": package["total_price"],
         "sessions": count,
         "unit_price": package["unit_price"],
@@ -4156,12 +4205,12 @@ def psychology_session_summary(conversation_id: str) -> dict:
         "purchased_count": purchased_count,
         "remaining_paid": remaining_paid,
         "available_total": remaining_paid + int(not free_used),
-        "packages": [psychology_session_package(count) for count in range(1, 8)],
+        "packages": [psychology_session_package(1)],
     }
 
 
 def request_psychology_session(conversation_id: str) -> dict:
-    """Create a request for a 30-minute human call, consuming free/paid access once."""
+    """Create a request for a human consultation, consuming free/paid access once."""
     chel_id = current_chel_id()
     now = utc_now()
     with _write_lock, connection() as conn:
@@ -4214,7 +4263,7 @@ def request_psychology_session(conversation_id: str) -> dict:
                     payment_credit_number = used_count + 1
                     break
             if not payment_order_id:
-                raise ValueError("Бесплатная сессия уже использована. Купите следующую сессию, чтобы оставить заявку")
+                raise ValueError("Бесплатная консультация уже использована. Купите сессию, чтобы оставить заявку")
             access_type = "paid"
         number = int(conn.execute(
             """SELECT COALESCE(MAX(session_number),0)+1 FROM psychology_sessions
@@ -4313,9 +4362,32 @@ def manager_complete_psychology_session(
             (now, now, session["id"]),
         )
         conn.execute(
-            """UPDATE conversations SET human_status='closed',status='active',updated_at=?
-               WHERE id=?""",
+            """UPDATE conversations SET ai_enabled=1,human_status='closed',
+               status='active',updated_at=? WHERE id=?""",
             (now, conversation_id),
+        )
+        completion_text = (
+            "Сессия с психологом проведена. "
+            f"Заявка №{session['request_number']} завершена, "
+            "а сессия добавлена в вашу историю."
+        )
+        completion_metadata = {
+            "action": "psychology_session_completed",
+            "session_id": session["id"],
+            "session_number": session["session_number"],
+            "request_number": session["request_number"],
+            "sender_type": "human_manager",
+            "sender_name": manager_name,
+            "staff_role": "psychologist",
+        }
+        conn.execute(
+            """INSERT INTO messages
+               (conversation_id,role,agent_id,content,metadata,created_at)
+               VALUES (?, 'assistant', 'psychologist', ?, ?, ?)""",
+            (
+                conversation_id, completion_text,
+                json.dumps(completion_metadata, ensure_ascii=False), now,
+            ),
         )
         credit_use = conn.execute(
             """SELECT payment_order_id FROM psychology_session_credit_uses
@@ -4967,6 +5039,9 @@ def manager_list_conversations(
     profile_alias = "p0" if include_related else "p"
     staff_role = _staff_role(staff_role)
     where = [f"{conversation_alias}.chel_id NOT IN ('chel_legacy', 'chel_test_default')"]
+    # A short-lived draft created a second psychology_support conversation.
+    # It is obsolete now that the psychologist joins the main psychology chat.
+    where.append(f"{conversation_alias}.dialog_type <> 'psychology_support'")
     where.append(f"COALESCE({conversation_alias}.human_recipient_role, 'manager') = ?")
     params: list = [staff_role]
     if queue == "open":
@@ -5019,6 +5094,7 @@ def manager_list_conversations(
                 JOIN matched_users matched ON matched.chel_id = c.chel_id
                 LEFT JOIN user_profile p ON p.chel_id = c.chel_id
                 WHERE COALESCE(c.human_recipient_role, 'manager') = ?
+                  AND c.dialog_type <> 'psychology_support'
                 ORDER BY matched.matched_updated DESC,
                          CASE WHEN c.ai_enabled = 0 THEN 0 ELSE 1 END,
                          c.updated_at DESC""",
@@ -5258,6 +5334,7 @@ def _manager_profile_from_value(chel_id: str) -> dict:
 def manager_add_reply(
     conversation_id: str, content: str, manager_name: str,
     staff_role: str = "manager", message_action: str = "manager_reply",
+    extra_metadata: dict | None = None,
 ) -> dict:
     content = str(content or "").strip()
     manager_name = " ".join(str(manager_name or "").split())[:80] or "Менеджер"
@@ -5268,6 +5345,7 @@ def manager_add_reply(
     if message_action not in {
         "manager_reply", "consultation_payment_instruction",
         "psychology_session_payment_instruction",
+        "psychology_session_invitation",
     }:
         raise ValueError("Неизвестное действие сообщения")
     metadata = {
@@ -5276,6 +5354,8 @@ def manager_add_reply(
         "staff_role": staff_role,
         "action": message_action,
     }
+    if extra_metadata:
+        metadata.update(extra_metadata)
     with _write_lock, connection() as conn:
         conversation = conn.execute(
             """SELECT id FROM conversations WHERE id = ?
@@ -5410,7 +5490,7 @@ def manager_send_consultation_payment_instruction(
 def manager_send_psychology_session_payment_instruction(
     conversation_id: str, manager_name: str, staff_role: str = "psychologist",
 ) -> dict:
-    """Send package purchase instructions with an interactive sessions-menu action."""
+    """Send session purchase instructions with an interactive sessions-menu action."""
     if _staff_role(staff_role) != "psychologist":
         raise ValueError("Инструкцию по оплате сессий может отправить только психолог")
     with connection() as conn:
@@ -5426,7 +5506,7 @@ def manager_send_psychology_session_payment_instruction(
         "Как приобрести дополнительные сессии с психологом:\n\n"
         "1. Нажмите кнопку «Открыть меню сессий» под этим сообщением.\n"
         "2. В меню нажмите «Купить».\n"
-        "3. Выберите пакет от 1 до 7 сессий — чем больше пакет, тем ниже цена одной сессии.\n"
+        "3. Выберите одну 60-минутную сессию за 3 500 ₽.\n"
         "4. Укажите электронную почту для чека и завершите оплату через ЮKassa.\n\n"
         "После подтверждения оплаты сессии сразу появятся в предоплаченном балансе. "
         "Затем откройте меню ещё раз и оставьте заявку на удобное время созвона."
@@ -5434,6 +5514,64 @@ def manager_send_psychology_session_payment_instruction(
     return manager_add_reply(
         conversation_id, content, manager_name, "psychologist",
         message_action="psychology_session_payment_instruction",
+    )
+
+
+def manager_send_psychology_session_invitation(
+    conversation_id: str, manager_name: str, staff_role: str,
+    meeting_url: str, meeting_date: str, meeting_time: str,
+) -> dict:
+    """Send a validated video-meeting invitation to a psychology chat."""
+    if _staff_role(staff_role) != "psychologist":
+        raise ValueError("Приглашение на сессию может отправить только психолог")
+    meeting_url = str(meeting_url or "").strip()
+    parsed_url = urlparse(meeting_url)
+    if parsed_url.scheme != "https" or not parsed_url.hostname or len(meeting_url) > 2_000:
+        raise ValueError("Укажите корректную ссылку на видеовстречу, начинающуюся с https://")
+    try:
+        scheduled = datetime.fromisoformat(
+            f"{str(meeting_date or '').strip()}T{str(meeting_time or '').strip()}"
+        ).replace(tzinfo=MOSCOW_TZ)
+    except ValueError as exc:
+        raise ValueError("Укажите дату и время онлайн-встречи") from exc
+    now = datetime.now(MOSCOW_TZ)
+    if scheduled < now - timedelta(minutes=5):
+        raise ValueError("Дата и время встречи уже прошли")
+    if scheduled > now + timedelta(days=366):
+        raise ValueError("Встречу можно назначить не более чем на год вперёд")
+    with connection() as conn:
+        conversation = conn.execute(
+            """SELECT id FROM conversations
+               WHERE id=? AND dialog_type='masterclass_psychology'
+               AND COALESCE(human_recipient_role, 'manager')='psychologist'""",
+            (conversation_id,),
+        ).fetchone()
+    if not conversation:
+        raise ValueError("Психологический диалог не найден")
+    months = (
+        "января", "февраля", "марта", "апреля", "мая", "июня",
+        "июля", "августа", "сентября", "октября", "ноября", "декабря",
+    )
+    date_label = f"{scheduled.day} {months[scheduled.month - 1]} {scheduled.year} года"
+    time_label = scheduled.strftime("%H:%M")
+    content = (
+        "Ваша онлайн-встреча с психологом назначена.\n\n"
+        f"Дата: {date_label}\n"
+        f"Время: {time_label} (мск)\n\n"
+        "Нажмите кнопку ниже, чтобы подключиться к видеовстрече. "
+        "Пожалуйста, подключитесь за 5 минут до начала. Если планы изменятся, "
+        "напишите об этом в этом чате."
+    )
+    return manager_add_reply(
+        conversation_id, content, manager_name, "psychologist",
+        message_action="psychology_session_invitation",
+        extra_metadata={
+            "meeting_url": meeting_url,
+            "scheduled_at": scheduled.isoformat(),
+            "meeting_date": date_label,
+            "meeting_time": time_label,
+            "action_label": "Подключиться к видеовстрече",
+        },
     )
 
 
@@ -5483,7 +5621,7 @@ def manager_close_conversation(
     now = utc_now()
     with _write_lock, connection() as conn:
         previous = conn.execute(
-            """SELECT human_status, human_ticket_id, human_channel, ai_enabled
+            """SELECT *
             FROM conversations WHERE id = ?
             AND COALESCE(human_recipient_role, 'manager') = ?""",
             (conversation_id, staff_role),
@@ -5757,6 +5895,7 @@ def init_db() -> None:
                 max_chat_id TEXT NOT NULL DEFAULT '',
                 notify_new_requests INTEGER NOT NULL DEFAULT 1,
                 notify_new_messages INTEGER NOT NULL DEFAULT 1,
+                notify_successful_payments INTEGER NOT NULL DEFAULT 1,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
                 last_login_at TEXT
@@ -6745,7 +6884,10 @@ def init_db() -> None:
         for name in ("telegram_id", "telegram_chat_id", "max_id", "max_chat_id"):
             if name not in staff_columns:
                 conn.execute(f"ALTER TABLE staff_users ADD COLUMN {name} TEXT NOT NULL DEFAULT ''")
-        for name in ("notify_new_requests", "notify_new_messages"):
+        for name in (
+            "notify_new_requests", "notify_new_messages",
+            "notify_successful_payments",
+        ):
             if name not in staff_columns:
                 conn.execute(f"ALTER TABLE staff_users ADD COLUMN {name} INTEGER NOT NULL DEFAULT 1")
         if "role" not in staff_columns:
@@ -7686,7 +7828,9 @@ def create_conversation(
     title: str = "Новый диалог", *, dialog_type: str = "general", pinned: bool = False,
 ) -> dict:
     dialog_type = str(dialog_type or "general").strip().lower()
-    if dialog_type not in {"general", "weight_control", "masterclass_psychology"}:
+    if dialog_type not in {
+        "general", "weight_control", "masterclass_psychology",
+    }:
         raise ValueError("Неизвестный тип диалога")
     conversation_id = str(uuid.uuid4())
     now = utc_now()
@@ -7776,7 +7920,7 @@ def create_or_get_weight_control_conversation() -> dict:
     add_message(
         conversation["id"], "assistant",
         (
-            "Здравствуйте! Я Ольга, ваша медицинская ИИ-помощница. Это диалог "
+            "Здравствуйте! Я Ольга, ваша помощница. Это диалог "
             "**«Контроль питания»**. Здесь мы будем вести простой дневник еды: "
             "вы присылаете текстом или фотографией то, что съели, а я разбираю "
             "состав приёма пищи и предлагаю небольшие улучшения без жёстких диет.\n\n"
@@ -9189,7 +9333,8 @@ def list_conversations(limit: int = 50) -> list[dict]:
                 ), 0) AS unread_count
             FROM conversations c
             LEFT JOIN conversation_reads r ON r.conversation_id = c.id
-            WHERE c.chel_id = ? ORDER BY c.pinned DESC, c.updated_at DESC LIMIT ?""",
+            WHERE c.chel_id = ? AND c.dialog_type <> 'psychology_support'
+            ORDER BY c.pinned DESC, c.updated_at DESC LIMIT ?""",
             (current_chel_id(), limit),
         ).fetchall()
     return [dict(row) for row in rows]

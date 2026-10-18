@@ -33,7 +33,7 @@ from backend.lab_result_valuation import (  # noqa: E402
 )
 from backend.llm import LLMProviderError, LLMService  # noqa: E402
 from backend.health_passport import build_health_passport_pdf  # noqa: E402
-from backend.main import ConsiliumHandler, _chat_access_allowed, _lab_result_analytics_event, _normalize_health_passport, _result_entry_can_start, admin_token_valid  # noqa: E402
+from backend.main import ConsiliumHandler, _chat_access_allowed, _lab_result_analytics_event, _local_masterclass_test_url, _normalize_health_passport, _psychology_crisis_detected, _result_entry_can_start, admin_token_valid  # noqa: E402
 from backend.orchestrator import ConversationOrchestrator  # noqa: E402
 from backend.onboarding import (  # noqa: E402
     EXAMINATION_UPGRADE_PAIRS, TEST_CATALOG, effective_examination_price, online_examination_price, examination_recommendation_copy,
@@ -289,7 +289,9 @@ class OrchestratorTests(unittest.TestCase):
         self.assertTrue(session_status["free_available"])
         self.assertEqual(session_status["completed_count"], 0)
         self.assertEqual(session_status["remaining_paid"], 0)
-        self.assertEqual(len(session_status["packages"]), 7)
+        self.assertEqual(len(session_status["packages"]), 1)
+        self.assertEqual(session_status["packages"][0]["sessions"], 1)
+        self.assertEqual(session_status["packages"][0]["total_price_rub"], 3500)
         self.assertEqual(
             db.get_conversation(conversation["id"])["active_agent"],
             "psychologist",
@@ -2190,14 +2192,14 @@ class OrchestratorTests(unittest.TestCase):
         manager_script = (project_root / "static" / "manager.js").read_text(encoding="utf-8")
         public_ui = index + script
 
-        self.assertIn("Я Ольга, ваш медицинский помощник", script)
+        self.assertIn("Я Ольга, ваш помощник", script)
         self.assertIn("Ольга", index)
-        self.assertIn("Медицинский помощник", index)
+        self.assertIn("Помощник", index)
         self.assertIn("name: 'Ольга'", agents_script)
-        self.assertIn("role: 'Медицинский помощник'", agents_script)
+        self.assertIn("role: 'Помощник'", agents_script)
         self.assertIn("state.active = 'manager'", script)
         self.assertIn("$('#handoffBanner').classList.add('hidden')", script)
-        self.assertIn("Ольга · Медицинский помощник", manager_script)
+        self.assertIn("Ольга · Помощник", manager_script)
         for retired_name in ("Мария", "Ирина", "Дмитрий", "Анна", "Сергей", "Елена", "Максим"):
             self.assertNotIn(retired_name, agents_script)
         for retired_role in ("ИИ-менеджер", "Терапевт", "Кардиолог", "Невролог", "Дерматолог", "Педиатр", "Психолог"):
@@ -2206,7 +2208,8 @@ class OrchestratorTests(unittest.TestCase):
         self.assertNotIn("AI-оркестратор", public_ui)
         self.assertNotIn("Команда агентов", public_ui)
         self.assertNotIn("План проекта", public_ui)
-        self.assertIn("Медицинский помощник", public_ui)
+        self.assertNotIn("Медицинский помощник", public_ui)
+        self.assertNotIn("медицинский помощник", public_ui.lower())
         self.assertNotIn('id="stateQuestions"', index)
         self.assertNotIn("Осталось вопросов", script)
         self.assertNotIn("Вопросы собраны", script)
@@ -3828,6 +3831,9 @@ class OrchestratorTests(unittest.TestCase):
         self.assertIn("/api/manager/conversations/", manager_script)
         self.assertIn("/read", manager_script)
         self.assertIn("unread_user_messages", manager_script)
+        self.assertIn("detailRequestVersion", manager_script)
+        self.assertIn("state.detail = result.detail", manager_script)
+        self.assertIn("state.detailLoading", manager_script)
         self.assertEqual(manager_manifest["id"], "/manager")
         self.assertEqual(manager_manifest["start_url"], "/manager")
         self.assertEqual(manager_manifest["scope"], "/manager")
@@ -3942,7 +3948,8 @@ class OrchestratorTests(unittest.TestCase):
         self.assertIn('id="editHandoffContext"', app)
         self.assertIn("returnToHumanAfterContextEdit", app)
         self.assertIn("/updates?after_id=", app)
-        self.assertIn("Сообщение ожидает ответа медицинского специалиста", app)
+        self.assertIn("Сообщение ожидает ответа специалиста", app)
+        self.assertIn("Сообщение ожидает ответа психолога", app)
         self.assertIn("playUserMessageSound()", app)
         self.assertIn('id="mobileHeaderDialogsButton"', index)
         self.assertIn('id="mobileDialogsUnread"', index)
@@ -4345,14 +4352,17 @@ class OrchestratorTests(unittest.TestCase):
         self.assertIn("controllerchange", script)
         self.assertIn("url.pathname.startsWith('/api/')", worker)
         self.assertIn("url.pathname.startsWith('/auth/')", worker)
-        self.assertIn("consilium-shell-v169", worker)
+        self.assertIn("consilium-shell-v182", worker)
         self.assertIn("fetch(request)", worker)
-        self.assertIn("/static/styles.css?v=20261014-masterclass-handoff-v10", index)
+        self.assertIn("/static/styles.css?v=20261018-psychology-release-v22", index)
         self.assertIn("/static/rich-text.2bf1f5fab764.css", index)
         self.assertTrue((project_root / "static" / "styles.07ffaefb4795.css").is_file())
         self.assertTrue((project_root / "static" / "rich-text.2bf1f5fab764.css").is_file())
-        self.assertIn("/static/app.js?v=20261014-masterclass-handoff-v10", index)
-        self.assertIn("/static/metrika.js?v=20261014-masterclass-handoff-v10", index)
+        self.assertIn("/static/app.js?v=20261018-psychology-release-v22", index)
+        self.assertIn("/static/metrika.js?v=20261018-psychology-release-v22", index)
+        self.assertIn("function safeUrl(value)", script)
+        self.assertIn("error.code === 'http_404'", script)
+        self.assertIn("fallback && fallback.id !== id", script)
         self.assertIn("Enter — новая строка · отправка — кнопкой", index)
         self.assertIn('enterkeyhint="enter"', index)
         self.assertNotIn("$('#chatForm').requestSubmit()", script)
@@ -4438,7 +4448,7 @@ class OrchestratorTests(unittest.TestCase):
         main = (project_root / "backend" / "main.py").read_text(encoding="utf-8")
         config = (project_root / "backend" / "config.py").read_text(encoding="utf-8")
 
-        self.assertIn('src="/static/metrika.js?v=20261014-masterclass-handoff-v10"', index)
+        self.assertIn('src="/static/metrika.js?v=20261018-psychology-release-v22"', index)
         self.assertIn('YANDEX_METRIKA_COUNTER_ID', config)
         self.assertIn('path == "/api/public-config"', main)
         self.assertIn('"metrika.js"', main)
@@ -5053,6 +5063,450 @@ class OrchestratorTests(unittest.TestCase):
             "conversation-1", "Психолог", "psychologist",
         )
 
+    def test_psychologist_session_invitation_post_route_is_reachable(self):
+        class FakeHandler:
+            path = (
+                "/api/manager/conversations/conversation-1/"
+                "psychology-session-invitation"
+            )
+            response = None
+
+            def _manager_authorized(self):
+                return {"id": 7, "display_name": "Психолог", "role": "psychologist"}
+
+            def _read_json(self, **_kwargs):
+                return {
+                    "meeting_url": "https://meet.example.ru/15507",
+                    "meeting_date": "2026-12-20",
+                    "meeting_time": "15:30",
+                }
+
+            def _json(self, status, payload):
+                self.response = (status, payload)
+                return self.response
+
+        handler = FakeHandler()
+        with (
+            patch(
+                "backend.main.db.manager_send_psychology_session_invitation",
+                return_value={"id": 42, "content": "Приглашение"},
+            ) as send_invitation,
+            patch(
+                "backend.main.db.manager_conversation_detail",
+                return_value={
+                    "conversation": {"id": "conversation-1"},
+                    "messages": [{"id": 42, "content": "Приглашение"}],
+                },
+            ),
+        ):
+            ConsiliumHandler.do_POST(handler)
+
+        self.assertEqual(handler.response[0], 201)
+        self.assertEqual(handler.response[1]["message"]["id"], 42)
+        self.assertEqual(handler.response[1]["detail"]["messages"][0]["id"], 42)
+        send_invitation.assert_called_once_with(
+            "conversation-1", "Психолог", "psychologist",
+            "https://meet.example.ru/15507", "2026-12-20", "15:30",
+        )
+
+    def test_local_startup_prints_a_reusable_masterclass_test_link(self):
+        original_app_env = settings.app_env
+        try:
+            object.__setattr__(settings, "app_env", "development")
+            with (
+                patch(
+                    "backend.main.db.normalize_masterclass_identity",
+                    return_value=(
+                        "company:test:masterclass:masterclass_1", "", "Тест",
+                        "masterclass_1", "Мастер-класс 1",
+                    ),
+                ),
+                patch(
+                    "backend.main.db.provision_masterclass_access",
+                    return_value={"access_token": "t" * 43},
+                ) as provision,
+            ):
+                url = _local_masterclass_test_url("http://127.0.0.1:8123")
+            self.assertEqual(
+                url, f"http://127.0.0.1:8123/masterclass/{'t' * 43}",
+            )
+            provision.assert_called_once()
+
+            object.__setattr__(settings, "app_env", "production")
+            self.assertEqual(
+                _local_masterclass_test_url("https://consilium.example.ru"), "",
+            )
+        finally:
+            object.__setattr__(settings, "app_env", original_app_env)
+
+    def test_psychology_session_payment_uses_real_yookassa_redirect(self):
+        class FakeHandler:
+            path = "/api/payments/yookassa/create-psychology-session"
+            response = None
+            analytics = None
+
+            def _ensure_user_context(self):
+                return None
+
+            def _read_json(self, **_kwargs):
+                return {
+                    "conversation_id": "psychology-1",
+                    "session_count": 1,
+                    "receipt_email": "person@example.ru",
+                    "accept_offer": True,
+                    "accept_personal_data": True,
+                }
+
+            def _track_analytics(self, event, params):
+                self.analytics = (event, params)
+
+            def _json(self, status, payload):
+                self.response = (status, payload)
+                return self.response
+
+        handler = FakeHandler()
+        order = {"id": "order-real", "status": "creating"}
+        private_order = {
+            "id": "order-real", "provider_payment_id": "",
+            "amount_kopecks": 350000, "order_type": "psychology_session",
+            "idempotence_key": "idem-real", "items": [{
+                "name": "1 сессия с психологом · 60 минут", "price": 3500,
+            }],
+        }
+        provider_payment = {
+            "id": "2f3e4567-89ab-4cde-8012-3456789abcde",
+            "status": "pending", "paid": False,
+            "confirmation": {"confirmation_url": "https://yoomoney.ru/pay/real"},
+        }
+        public_order = {
+            "id": "order-real", "status": "pending", "amount": "3500.00",
+            "confirmation_url": "https://yoomoney.ru/pay/real",
+        }
+        original_payments_enabled = settings.online_payments_enabled
+        original_offer_url = settings.psychology_offer_url
+        original_policy_url = settings.personal_data_policy_url
+        try:
+            object.__setattr__(settings, "online_payments_enabled", True)
+            object.__setattr__(
+                settings, "psychology_offer_url", "https://example.ru/offer",
+            )
+            object.__setattr__(
+                settings, "personal_data_policy_url", "https://example.ru/privacy",
+            )
+            with (
+                patch("backend.main.yookassa.configured", return_value=True),
+                patch(
+                    "backend.main.db.create_psychology_session_payment_order",
+                    return_value=order,
+                ) as create_order,
+                patch(
+                    "backend.main.db.payment_order_private",
+                    return_value=private_order,
+                ),
+                patch(
+                    "backend.main.yookassa.create_payment",
+                    return_value=provider_payment,
+                ) as create_payment,
+                patch(
+                    "backend.main.db.attach_yookassa_payment",
+                    return_value=public_order,
+                ) as attach_payment,
+            ):
+                ConsiliumHandler.do_POST(handler)
+        finally:
+            object.__setattr__(
+                settings, "online_payments_enabled", original_payments_enabled,
+            )
+            object.__setattr__(settings, "psychology_offer_url", original_offer_url)
+            object.__setattr__(
+                settings, "personal_data_policy_url", original_policy_url,
+            )
+
+        self.assertEqual(handler.response, (201, {"order": public_order}))
+        create_order.assert_called_once_with("psychology-1", 1)
+        create_payment.assert_called_once()
+        self.assertEqual(create_payment.call_args.args[0], private_order)
+        self.assertIn("payment_source=psychology_session", create_payment.call_args.args[1])
+        self.assertEqual(create_payment.call_args.args[2], "person@example.ru")
+        attach_payment.assert_called_once_with("order-real", provider_payment)
+        self.assertEqual(handler.analytics[0], "psychology_session_payment_created")
+
+        project_root = Path(__file__).resolve().parents[1]
+        app = (project_root / "static" / "app.js").read_text(encoding="utf-8")
+        main = (project_root / "backend" / "main.py").read_text(encoding="utf-8")
+        self.assertNotIn("/api/payments/local-test/psychology-session", app + main)
+        self.assertNotIn("psychology_payment_simulation_enabled", app + main)
+        self.assertNotIn("Имитировать оплату", app)
+        self.assertIn('id="psychologyAcceptOffer"', app)
+        self.assertIn('id="psychologyAcceptPersonalData"', app)
+        self.assertIn("accept_offer:true", app)
+        self.assertIn("accept_personal_data:true", app)
+
+    def test_psychology_payment_requires_both_legal_consents_server_side(self):
+        class FakeHandler:
+            path = "/api/payments/yookassa/create-psychology-session"
+            response = None
+
+            def _ensure_user_context(self):
+                return None
+
+            def _read_json(self, **_kwargs):
+                return {
+                    "conversation_id": "psychology-1", "session_count": 1,
+                    "accept_offer": True, "accept_personal_data": False,
+                }
+
+            def _track_analytics(self, *_args, **_kwargs):
+                return None
+
+            def _json(self, status, payload):
+                self.response = (status, payload)
+                return self.response
+
+        originals = (
+            settings.online_payments_enabled,
+            settings.psychology_offer_url,
+            settings.personal_data_policy_url,
+        )
+        try:
+            object.__setattr__(settings, "online_payments_enabled", True)
+            object.__setattr__(
+                settings, "psychology_offer_url", "https://example.ru/offer",
+            )
+            object.__setattr__(
+                settings, "personal_data_policy_url", "https://example.ru/privacy",
+            )
+            handler = FakeHandler()
+            with (
+                patch("backend.main.yookassa.configured", return_value=True),
+                patch(
+                    "backend.main.db.create_psychology_session_payment_order",
+                ) as create_order,
+            ):
+                ConsiliumHandler.do_POST(handler)
+        finally:
+            object.__setattr__(settings, "online_payments_enabled", originals[0])
+            object.__setattr__(settings, "psychology_offer_url", originals[1])
+            object.__setattr__(settings, "personal_data_policy_url", originals[2])
+
+        self.assertEqual(handler.response[0], 422)
+        self.assertIn("персональных данных", handler.response[1]["detail"])
+        create_order.assert_not_called()
+
+    def test_paid_psychology_session_connects_psychologist_to_main_chat(self):
+        class FakeHandler:
+            path = "/api/psychology-sessions/manager-help"
+            response = None
+
+            def _ensure_user_context(self):
+                return None
+
+            def _read_json(self, **_kwargs):
+                return {"conversation_id": "psychology-conversation-1"}
+
+            def _track_analytics(self, *_args, **_kwargs):
+                return None
+
+            def _json(self, status, payload):
+                self.response = (status, payload)
+                return self.response
+
+        handler = FakeHandler()
+        with (
+            patch("backend.main.db.get_conversation", return_value={
+                "id": "psychology-conversation-1",
+                "dialog_type": "masterclass_psychology",
+            }),
+            patch("backend.main.db.psychology_session_summary", return_value={
+                "free_available": False, "remaining_paid": 1,
+            }),
+            patch("backend.main.db.create_conversation") as create_chat,
+            patch("backend.main.db.add_message", side_effect=[
+                {"id": 51, "content": "Нужна помощь менеджера"},
+                {"id": 52, "content": "Менеджер приглашён"},
+            ]),
+            patch("backend.main.db.confirm_human_chat", return_value=({
+                "id": "psychology-conversation-1", "human_ticket_id": "H-123456",
+            }, True)) as confirm_human,
+            patch("backend.main.db.enqueue_manager_notifications") as enqueue,
+        ):
+            ConsiliumHandler.do_POST(handler)
+
+        self.assertEqual(handler.response[0], 201)
+        self.assertEqual(
+            handler.response[1]["conversation_id"], "psychology-conversation-1",
+        )
+        create_chat.assert_not_called()
+        enqueue.assert_called_once()
+        self.assertEqual(confirm_human.call_args.args[0], "psychology-conversation-1")
+        self.assertEqual(confirm_human.call_args.kwargs["recipient_role"], "psychologist")
+        self.assertEqual(enqueue.call_args.kwargs["recipient_role"], "psychologist")
+        app_script = (Path(__file__).resolve().parents[1] / "static" / "app.js").read_text(
+            encoding="utf-8",
+        )
+        self.assertIn("button.textContent = 'Подключаем психолога…'", app_script)
+        self.assertNotIn(
+            "if (!state.conversationId || state.processing) return;\n"
+            "  const button = $('#psychologySessionRequestManager');",
+            app_script,
+        )
+
+    def test_psychology_crisis_detector_catches_direct_intent_only(self):
+        for message in (
+            "Я хочу причинить себе вред",
+            "Я планирую покончить с собой",
+            "Боюсь, что сегодня убью его",
+            "У меня есть план самоубийства",
+            "Я не хочу жить",
+        ):
+            with self.subTest(message=message):
+                self.assertTrue(_psychology_crisis_detected(message))
+
+        for message in (
+            "Я не хочу причинить себе вред",
+            "Мы обсуждали тему суицида на лекции",
+            "Иногда мне тревожно и одиноко",
+            "Как записаться на консультацию?",
+        ):
+            with self.subTest(message=message):
+                self.assertFalse(_psychology_crisis_detected(message))
+
+    def test_psychology_crisis_stops_ai_and_notifies_psychologists(self):
+        class FakeHandler:
+            path = "/api/chat"
+            response = None
+            analytics = []
+
+            def _ensure_user_context(self):
+                return None
+
+            def _read_json(self, **_kwargs):
+                return {
+                    "conversation_id": "psychology-conversation-1",
+                    "message": "Я хочу причинить себе вред",
+                    "attachments": [],
+                }
+
+            def _validate_attachments(self, attachments):
+                return attachments
+
+            def _track_analytics(self, event, *_args, **_kwargs):
+                self.analytics.append(event)
+
+            def _json(self, status, payload):
+                self.response = (status, payload)
+                return self.response
+
+        handler = FakeHandler()
+        psychology_chat = {
+            "id": "psychology-conversation-1",
+            "dialog_type": "masterclass_psychology",
+            "ai_enabled": True,
+            "human_status": "none",
+            "context_summary": "{}",
+        }
+        confirmed = {
+            **psychology_chat,
+            "ai_enabled": False,
+            "human_status": "pending",
+            "human_ticket_id": "URG-ABC123",
+        }
+        with (
+            patch("backend.main._chat_access_allowed", return_value=False),
+            patch("backend.main.db.get_conversation", return_value=psychology_chat),
+            patch("backend.main.db.list_messages", return_value=[{"id": 1}]),
+            patch("backend.main.db.add_message", return_value={
+                "id": 71, "role": "user", "content": "Я хочу причинить себе вред",
+            }) as add_message,
+            patch(
+                "backend.main.db.confirm_human_chat",
+                return_value=(confirmed, True),
+            ) as confirm_human,
+            patch("backend.main.db.enqueue_manager_notifications") as notify,
+            patch("backend.main.orchestrator.process") as process,
+        ):
+            ConsiliumHandler.do_POST(handler)
+
+        self.assertEqual(handler.response[0], 202)
+        self.assertTrue(handler.response[1]["crisis_escalation"])
+        self.assertFalse(handler.response[1]["ai_enabled"])
+        self.assertIsNone(handler.response[1]["assistant_message"])
+        self.assertEqual(handler.response[1]["agent"], "psychologist")
+        self.assertIn("psychology_crisis_escalated", handler.analytics)
+        self.assertEqual(
+            add_message.call_args.args[:4],
+            (
+                "psychology-conversation-1", "user",
+                "Я хочу причинить себе вред", "psychologist",
+            ),
+        )
+        confirm_human.assert_called_once()
+        self.assertEqual(confirm_human.call_args.kwargs["recipient_role"], "psychologist")
+        notify.assert_called_once_with(
+            "psychology_crisis", "psychology-conversation-1",
+            message_id=71, recipient_role="psychologist",
+        )
+        process.assert_not_called()
+
+    def test_main_psychology_chat_accepts_messages_while_psychologist_is_connected(self):
+        class FakeHandler:
+            path = "/api/chat"
+            response = None
+
+            def _ensure_user_context(self):
+                return None
+
+            def _read_json(self, **_kwargs):
+                return {
+                    "conversation_id": "psychology-conversation-1",
+                    "message": "Мне удобно созвониться вечером.",
+                    "attachments": [],
+                }
+
+            def _validate_attachments(self, attachments):
+                return attachments
+
+            def _track_analytics(self, *_args, **_kwargs):
+                return None
+
+            def _json(self, status, payload):
+                self.response = (status, payload)
+                return self.response
+
+        handler = FakeHandler()
+        psychology_chat = {
+            "id": "psychology-conversation-1",
+            "dialog_type": "masterclass_psychology",
+            "ai_enabled": False,
+            "human_status": "pending",
+            "human_ticket_id": "H-123456",
+            "context_summary": "{}",
+        }
+        with (
+            patch("backend.main._chat_access_allowed", return_value=False),
+            patch("backend.main.db.get_conversation", return_value=psychology_chat),
+            patch("backend.main.db.list_messages", return_value=[{"id": 1}]),
+            patch(
+                "backend.main.db.add_user_message_waiting_for_manager",
+                return_value=({
+                    "id": 53, "content": "Мне удобно созвониться вечером.",
+                }, psychology_chat),
+            ) as add_waiting,
+            patch("backend.main.db.enqueue_manager_notifications") as notify,
+        ):
+            ConsiliumHandler.do_POST(handler)
+
+        self.assertEqual(handler.response[0], 202)
+        self.assertTrue(handler.response[1]["queued_for_human"])
+        self.assertEqual(handler.response[1]["human_status"], "pending")
+        add_waiting.assert_called_once_with(
+            "psychology-conversation-1", "Мне удобно созвониться вечером.", [],
+        )
+        notify.assert_called_once_with(
+            "new_message", "psychology-conversation-1",
+            message_id=53, message_text="Мне удобно созвониться вечером.",
+        )
+
     def test_psychology_session_request_notifies_psychologists_with_request_number(self):
         class FakeHandler:
             path = "/api/psychology-sessions/request"
@@ -5087,11 +5541,24 @@ class OrchestratorTests(unittest.TestCase):
                 "backend.main.db.psychology_session_summary",
                 return_value={"pending_session": session},
             ),
+            patch(
+                "backend.main.db.add_message",
+                return_value={
+                    "id": 501,
+                    "role": "assistant",
+                    "content": (
+                        "Заявка №43817 отправлена. Ожидайте ответа специалиста — "
+                        "психолог свяжется с вами для согласования времени онлайн-встречи."
+                    ),
+                },
+            ) as add_message,
             patch("backend.main.db.enqueue_manager_notifications") as notify,
         ):
             ConsiliumHandler.do_POST(handler)
 
         self.assertEqual(handler.response[0], 200)
+        self.assertEqual(handler.response[1]["message"]["id"], 501)
+        add_message.assert_called_once()
         notify.assert_called_once_with(
             "psychology_session_requested", "psychology-conversation-1",
             message_id=43817,

@@ -512,8 +512,8 @@
             </section>
             <aside class="personality-preview">
               <span class="personality-preview-label">Предпросмотр подачи</span>
-              <div class="personality-preview-message"><b>Ольга</b><p id="personalityPreviewText">Спасибо, что рассказали. Давайте спокойно разберёмся, что может помочь уже сейчас.</p></div>
-              <p>Это пример интонации, а не готовый медицинский ответ. Ольга по-прежнему подстраивается под контекст и стиль пользователя.</p>
+              <div class="personality-preview-message"><b id="personalityPreviewName">Ольга</b><p id="personalityPreviewText">Спасибо, что рассказали. Давайте спокойно разберёмся, что может помочь уже сейчас.</p></div>
+              <p id="personalityPreviewNote">Это пример интонации, а не готовый медицинский ответ. Ольга по-прежнему подстраивается под контекст и стиль пользователя.</p>
             </aside>
           </div>
           <div class="personality-actions"><button type="submit">Сохранить сейчас</button><button class="secondary" id="personalityReset" type="button">Вернуть сбалансированный</button><span class="form-status hidden" id="personalityStatus" role="status"></span></div>
@@ -633,6 +633,7 @@
               <strong>Уведомлять сотрудника</strong>
               <label><input id="staffNotifyRequests" type="checkbox" checked> <span id="staffNotifyRequestsLabel">О новых обращениях</span></label>
               <label><input id="staffNotifyMessages" type="checkbox" checked> <span id="staffNotifyMessagesLabel">О сообщениях, когда ИИ выключен</span></label>
+              <label class="hidden" id="staffNotifyPaymentsOption"><input id="staffNotifyPayments" type="checkbox" checked> <span>Об успешных оплатах сессий</span></label>
             </div>
             <button type="submit">Создать сотрудника</button>
           </form>
@@ -856,6 +857,6 @@
       </div>
     </section>
   </div>
-  <script src="/static/dashboard.js?v=20261015-metric-progress-v10" defer></script>
+  <script src="/static/dashboard.js?v=20261018-psychology-release-v13" defer></script>
 </body>
 </html>

@@ -12,6 +12,8 @@ const state = {
   lastMarkedReadId: 0,
   collapsedPeople: new Set(),
   busy: false,
+  detailRequestVersion: 0,
+  detailLoading: false,
 };
 let managerAudioContext = null;
 let deferredManagerInstallPrompt = null;
@@ -345,6 +347,8 @@ async function loadQueue() {
 }
 
 async function selectConversation(id) {
+  state.detailRequestVersion += 1;
+  state.detailLoading = false;
   state.selectedId = id;
   state.detail = null;
   state.lastMarkedReadId = 0;
@@ -358,10 +362,18 @@ async function selectConversation(id) {
 }
 
 async function loadDetail(force = false) {
-  if (!state.selectedId || state.busy) return;
+  if (!state.selectedId || state.busy || state.detailLoading) return;
+  const selectedId = state.selectedId;
+  const requestVersion = ++state.detailRequestVersion;
+  state.detailLoading = true;
   try {
-    const detail = await api(`/api/manager/conversations/${encodeURIComponent(state.selectedId)}`);
-    if (state.selectedId !== detail.conversation.id) return;
+    const detail = await api(`/api/manager/conversations/${encodeURIComponent(selectedId)}`);
+    if (
+      requestVersion !== state.detailRequestVersion
+      || state.selectedId !== selectedId
+      || state.busy
+      || selectedId !== detail.conversation.id
+    ) return;
     const previousLast = state.detail?.messages?.at(-1)?.id || 0;
     const nextLast = detail.messages.at(-1)?.id || 0;
     const modeChanged = state.detail?.conversation?.ai_enabled !== detail.conversation.ai_enabled;
@@ -378,8 +390,11 @@ async function loadDetail(force = false) {
       await loadQueue();
     }
   } catch (error) {
+    if (requestVersion !== state.detailRequestVersion) return;
     if (error.status === 401) return showManagerLogin('Сеанс завершён. Войдите снова.');
     toast(error.message, true);
+  } finally {
+    if (requestVersion === state.detailRequestVersion) state.detailLoading = false;
   }
 }
 
@@ -409,7 +424,8 @@ function renderHeader() {
       : `ИИ автоматически приостановлен после обращения. Новые сообщения ждут ответа ${humanLabel === 'врач' ? 'врача' : humanLabel === 'психолог' ? 'психолога' : 'менеджера'}.`;
   const closeButton = $('#closeRequestButton');
   const psychologyRequest = conversation.dialog_type === 'masterclass_psychology';
-  const closable = !psychologyRequest && conversation.human_status !== 'closed'
+  const closable = (!psychologyRequest || !conversation.ai_enabled)
+    && conversation.human_status !== 'closed'
     && (Boolean(conversation.human_ticket_id) || !conversation.ai_enabled);
   closeButton.classList.toggle('hidden', !closable);
   closeButton.disabled = state.busy;
@@ -430,6 +446,9 @@ function renderHeader() {
     && conversation.dialog_type === 'masterclass_psychology';
   psychologyPayment.classList.toggle('hidden', !canOfferPsychologySessions);
   psychologyPayment.disabled = state.busy;
+  const psychologyInvite = $('#psychologySessionInviteButton');
+  psychologyInvite.classList.toggle('hidden', !canOfferPsychologySessions);
+  psychologyInvite.disabled = state.busy;
 }
 
 function messageDocuments(metadata) {
@@ -488,7 +507,9 @@ async function deleteMessage(messageId, owner) {
 }
 
 function agentName(id) {
-  return 'Ольга · Медицинский помощник';
+  return state.detail?.conversation?.dialog_type === 'masterclass_psychology'
+    ? 'Вита · Помощник-психолог'
+    : 'Ольга · Помощник';
 }
 
 function valueLabel(key, value) {
@@ -625,7 +646,7 @@ async function sendConsultationPaymentInstruction() {
 async function completePsychologySession() {
   if (!state.selectedId || state.busy || !state.detail?.psychology_session) return;
   if (!window.confirm(
-    'Отметить 30-минутную сессию с психологом как проведённую? Она появится в истории пользователя.'
+    'Отметить сессию с психологом как проведённую? Она появится в истории пользователя.'
   )) return;
   const button = $('#psychologySessionCompleteButton');
   state.busy = true;
@@ -673,6 +694,67 @@ async function sendPsychologySessionPaymentInstruction() {
   } finally {
     state.busy = false;
     button.disabled = false;
+  }
+}
+
+function localDateInputValue(date) {
+  const offsetDate = new Date(date.getTime() - date.getTimezoneOffset() * 60_000);
+  return offsetDate.toISOString().slice(0, 10);
+}
+
+function openPsychologySessionInvitation() {
+  if (!state.selectedId || state.busy) return;
+  const start = new Date(Date.now() + 60 * 60 * 1000);
+  start.setMinutes(Math.ceil(start.getMinutes() / 15) * 15, 0, 0);
+  $('#psychologySessionInviteDate').value = localDateInputValue(start);
+  $('#psychologySessionInviteDate').min = localDateInputValue(new Date());
+  $('#psychologySessionInviteTime').value = `${String(start.getHours()).padStart(2, '0')}:${String(start.getMinutes()).padStart(2, '0')}`;
+  $('#psychologySessionInviteUrl').value = '';
+  $('#psychologySessionInviteError').textContent = '';
+  $('#psychologySessionInviteError').classList.add('hidden');
+  $('#psychologySessionInviteModal').classList.remove('hidden');
+  requestAnimationFrame(() => $('#psychologySessionInviteUrl').focus());
+}
+
+function closePsychologySessionInvitation() {
+  if (state.busy) return;
+  $('#psychologySessionInviteModal').classList.add('hidden');
+}
+
+async function sendPsychologySessionInvitation(event) {
+  event.preventDefault();
+  if (!state.selectedId || state.busy) return;
+  const errorBox = $('#psychologySessionInviteError');
+  const submit = $('#psychologySessionInviteSubmit');
+  state.busy = true;
+  state.detailRequestVersion += 1;
+  state.detailLoading = false;
+  submit.disabled = true;
+  errorBox.classList.add('hidden');
+  try {
+    const result = await api(
+      `/api/manager/conversations/${encodeURIComponent(state.selectedId)}/psychology-session-invitation`,
+      {
+        method:'POST',
+        body:JSON.stringify({
+          meeting_url:$('#psychologySessionInviteUrl').value.trim(),
+          meeting_date:$('#psychologySessionInviteDate').value,
+          meeting_time:$('#psychologySessionInviteTime').value,
+        }),
+      },
+    );
+    state.detail = result.detail;
+    $('#psychologySessionInviteModal').classList.add('hidden');
+    renderHeader();
+    renderMessages();
+    await loadQueue();
+    toast('Приглашение на онлайн-сессию отправлено пользователю');
+  } catch (error) {
+    errorBox.textContent = error.message;
+    errorBox.classList.remove('hidden');
+  } finally {
+    state.busy = false;
+    submit.disabled = false;
   }
 }
 
@@ -747,6 +829,13 @@ $('#closeRequestButton').addEventListener('click', closeRequest);
 $('#consultationPaymentInstructionButton').addEventListener('click', sendConsultationPaymentInstruction);
 $('#psychologySessionCompleteButton').addEventListener('click', completePsychologySession);
 $('#psychologySessionPaymentInstructionButton').addEventListener('click', sendPsychologySessionPaymentInstruction);
+$('#psychologySessionInviteButton').addEventListener('click', openPsychologySessionInvitation);
+$('#psychologySessionInviteForm').addEventListener('submit', sendPsychologySessionInvitation);
+$('#psychologySessionInviteClose').addEventListener('click', closePsychologySessionInvitation);
+$('#psychologySessionInviteCancel').addEventListener('click', closePsychologySessionInvitation);
+$('#psychologySessionInviteModal').addEventListener('click', event => {
+  if (event.target === event.currentTarget) closePsychologySessionInvitation();
+});
 $('#managerReplyForm').addEventListener('submit', sendReply);
 $('#managerMessages').addEventListener('click', event => {
   const button = event.target.closest('[data-delete-message-id]');

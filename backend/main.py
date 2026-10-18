@@ -39,6 +39,31 @@ ALLOWED_STATIC = {
 }
 SERVER_ERROR_LOG = settings.log_path
 MANAGER_SESSION_COOKIE = "consilium_manager_session"
+PSYCHOLOGY_CRISIS_RISK = re.compile(
+    r"(?:\b(?:хочу|собираюсь|планирую|решил[аи]?|намерен[а]?|думаю)\b.{0,80}"
+    r"\b(?:покончить\s+с\s+собой|совершить\s+суицид|убить\s+себя|"
+    r"причинить\s+(?:себе|кому[- ]?то|другим)\s+вред|навредить\s+(?:себе|кому[- ]?то|другим)|"
+    r"убить\s+(?:его|е[её]|их|тебя|кого[- ]?то))\b|"
+    r"\b(?:я\s+)?(?:покончу\s+с\s+собой|убью\s+себя|повешусь|застрелюсь|"
+    r"отравлюсь|выпрыгну|порежу\s+себя|убью\s+(?:его|е[её]|их|тебя))\b|"
+    r"\b(?:есть|составил[аи]?|продумал[аи]?)\b.{0,35}\bплан\w*\b.{0,35}"
+    r"\b(?:суицид\w*|самоубийств\w*|убийств\w*)\b|"
+    r"\b(?:не\s+хочу\s+жить|лучше\s+бы\s+меня\s+не\s+было)\b)",
+    re.IGNORECASE,
+)
+PSYCHOLOGY_CRISIS_NEGATION = re.compile(
+    r"\bне\s+(?:хочу|собираюсь|планирую|намерен[а]?)\s+"
+    r"(?:причин\w*\s+(?:себе|другим)\s+вред|навредить\s+(?:себе|другим)|"
+    r"уби(?:ть|вать)\s+(?:себя|других))\b",
+    re.IGNORECASE,
+)
+
+
+def _psychology_crisis_detected(message: str) -> bool:
+    normalized = " ".join(str(message or "").split())
+    if not normalized or PSYCHOLOGY_CRISIS_NEGATION.search(normalized):
+        return False
+    return bool(PSYCHOLOGY_CRISIS_RISK.search(normalized))
 
 
 def _normalize_health_passport(
@@ -137,6 +162,33 @@ def _fulfill_consultation_payment(order: dict | None) -> dict | None:
     return fulfillment
 
 
+def _notify_psychology_payment(order: dict | None) -> int:
+    """Queue one deduplicated payment notification for linked psychologists."""
+    if not order or order.get("order_type") != "psychology_session":
+        return 0
+    if order.get("status") != "succeeded" or not order.get("paid"):
+        return 0
+    private_order = db.payment_order_private(order["id"], require_owner=False)
+    if not private_order:
+        return 0
+    conversation_id = str(private_order.get("target_conversation_id") or "").strip()
+    if not conversation_id:
+        return 0
+    dedupe_id = int(hashlib.sha256(order["id"].encode("utf-8")).hexdigest()[:12], 16)
+    return db.enqueue_manager_notifications(
+        "psychology_payment_succeeded", conversation_id,
+        message_id=dedupe_id, recipient_role="psychologist",
+        amount_kopecks=int(private_order.get("amount_kopecks") or 0),
+    )
+
+
+def _public_https_url(value: str) -> str:
+    """Return only an absolute HTTPS URL suitable for a public legal link."""
+    candidate = str(value or "").strip()
+    parsed = urlparse(candidate)
+    return candidate if parsed.scheme == "https" and bool(parsed.netloc) else ""
+
+
 def _lab_result_analytics_event(status: str) -> str:
     return {
         "found": "lab_results_found",
@@ -232,6 +284,20 @@ def _masterclass_access_token(source_key: str) -> str:
     return base64.urlsafe_b64encode(token_digest).decode("ascii").rstrip("=")
 
 
+def _local_masterclass_test_url(browser_url: str) -> str:
+    """Create/reuse the deterministic local master-class link shown on startup."""
+    if settings.app_env == "production":
+        return ""
+    test_company = "Локальный тест мастер-класса"
+    source_key, inn, company, code, _ = db.normalize_masterclass_identity(
+        "", test_company, "masterclass_1",
+    )
+    link = db.provision_masterclass_access(
+        inn, company, code, _masterclass_access_token(source_key),
+    )
+    return f"{browser_url.rstrip('/')}/masterclass/{link['access_token']}"
+
+
 def _record_startup_event(message: str) -> None:
     line = f"[{db.utc_now()}] {message}\n"
     try:
@@ -324,6 +390,10 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                 and settings.yandex_metrika_marketer_counter_id.isdigit()
                 and counter_id == settings.yandex_metrika_marketer_counter_id
             )
+            psychology_offer_url = _public_https_url(settings.psychology_offer_url)
+            personal_data_policy_url = _public_https_url(
+                settings.personal_data_policy_url
+            )
             return self._json(200, {
                 "yandex_metrika_counter_id": counter_id if counter_id.isdigit() else "",
                 "yandex_metrika_marketer_counter_active": dedicated_marketer_counter,
@@ -333,6 +403,14 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                 "online_payments_enabled": bool(
                     settings.online_payments_enabled and yookassa.configured()
                 ),
+                "psychology_session_payments_enabled": bool(
+                    settings.online_payments_enabled
+                    and yookassa.configured()
+                    and psychology_offer_url
+                    and personal_data_policy_url
+                ),
+                "psychology_offer_url": psychology_offer_url,
+                "personal_data_policy_url": personal_data_policy_url,
                 "payment_receipt_email_required": bool(settings.yookassa_receipts_enabled),
                 "company_suggestions_enabled": company_suggestions.configured(),
             })
@@ -797,15 +875,17 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                     order = db.apply_yookassa_status(order_id, verified)
                     if order.get("status") == "succeeded" and order.get("paid"):
                         _fulfill_consultation_payment(order)
+                        _notify_psychology_payment(order)
                 else:
                     order = db.public_payment_order(order_id)
+                _notify_psychology_payment(order)
                 return self._json(200, {"order": order})
             except (ValueError, yookassa.YooKassaUnavailable) as exc:
                 return self._json(502, {"detail": str(exc)})
         if path.startswith("/api/handoff-preview/"):
             conversation_id = path.removeprefix("/api/handoff-preview/")
             item = db.get_conversation(conversation_id)
-            if not item:
+            if not item or item.get("dialog_type") == "psychology_support":
                 return self._json(404, {"detail": "Диалог не найден"})
             try:
                 context = json.loads(item.get("context_summary") or "{}")
@@ -862,7 +942,7 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
         if path.startswith("/api/conversations/") and path.endswith("/updates"):
             conversation_id = path.removeprefix("/api/conversations/").removesuffix("/updates").strip("/")
             item = db.get_conversation(conversation_id)
-            if not item:
+            if not item or item.get("dialog_type") == "psychology_support":
                 return self._json(404, {"detail": "Диалог не найден"})
             query = parse_qs(parsed.query)
             try:
@@ -882,7 +962,7 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
         if path.startswith("/api/conversations/"):
             conversation_id = path.removeprefix("/api/conversations/")
             item = db.get_conversation(conversation_id)
-            if not item:
+            if not item or item.get("dialog_type") == "psychology_support":
                 return self._json(404, {"detail": "Диалог не найден"})
             return self._json(200, {**item, "messages": db.list_messages(conversation_id), "handoffs": db.list_handoffs(conversation_id)})
         return self._json(404, {"detail": "Маршрут не найден"})
@@ -1048,6 +1128,7 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                 )
                 if updated["status"] == "succeeded" and updated.get("paid"):
                     _fulfill_consultation_payment(updated)
+                    _notify_psychology_payment(updated)
                     analytics.record_server_event(
                         order["chel_id"], "payment_completed",
                         {
@@ -1178,7 +1259,10 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                 return
             try:
                 payload = self._read_json()
-                for key in ("notify_new_requests", "notify_new_messages"):
+                for key in (
+                    "notify_new_requests", "notify_new_messages",
+                    "notify_successful_payments",
+                ):
                     if key in payload and not isinstance(payload[key], bool):
                         raise ValueError(f"{key} должен быть true или false")
                 return self._json(201, db.admin_create_staff(
@@ -1190,6 +1274,7 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                     role=payload.get("role", "manager"),
                     notify_new_requests=payload.get("notify_new_requests", True),
                     notify_new_messages=payload.get("notify_new_messages", True),
+                    notify_successful_payments=payload.get("notify_successful_payments", True),
                 ))
             except (ValueError, json.JSONDecodeError, UnicodeDecodeError) as exc:
                 return self._json(422, {"detail": str(exc)})
@@ -1294,7 +1379,10 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                 payload = self._read_json()
                 if "is_active" in payload and not isinstance(payload["is_active"], bool):
                     raise ValueError("is_active должен быть true или false")
-                for key in ("notify_new_requests", "notify_new_messages"):
+                for key in (
+                    "notify_new_requests", "notify_new_messages",
+                    "notify_successful_payments",
+                ):
                     if key in payload and not isinstance(payload[key], bool):
                         raise ValueError(f"{key} должен быть true или false")
                 item = db.admin_update_staff(
@@ -1307,6 +1395,7 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                     max_id=payload.get("max_id"),
                     notify_new_requests=payload.get("notify_new_requests"),
                     notify_new_messages=payload.get("notify_new_messages"),
+                    notify_successful_payments=payload.get("notify_successful_payments"),
                 )
                 if not item:
                     return self._json(404, {"detail": "Менеджер не найден"})
@@ -1372,8 +1461,33 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                     return self._json(201, {
                         "message": message,
                         "conversation": detail["conversation"],
+                        "detail": detail,
                     })
                 except (ValueError, TypeError) as exc:
+                    return self._json(422, {"detail": str(exc)})
+            if suffix.endswith("/psychology-session-invitation"):
+                conversation_id = suffix.removesuffix(
+                    "/psychology-session-invitation"
+                ).strip("/")
+                try:
+                    payload = self._read_json(max_bytes=8_000)
+                    message = db.manager_send_psychology_session_invitation(
+                        conversation_id,
+                        manager["display_name"],
+                        manager.get("role", "manager"),
+                        payload.get("meeting_url", ""),
+                        payload.get("meeting_date", ""),
+                        payload.get("meeting_time", ""),
+                    )
+                    detail = db.manager_conversation_detail(
+                        conversation_id, manager.get("role", "manager"),
+                    )
+                    return self._json(201, {
+                        "message": message,
+                        "conversation": detail["conversation"],
+                        "detail": detail,
+                    })
+                except (ValueError, TypeError, json.JSONDecodeError, UnicodeDecodeError) as exc:
                     return self._json(422, {"detail": str(exc)})
             if suffix.endswith("/close"):
                 conversation_id = suffix.removesuffix("/close").strip("/")
@@ -1482,6 +1596,7 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                     verified = yookassa.get_payment(private_order["provider_payment_id"])
                     refreshed = db.apply_yookassa_status(order["id"], verified)
                     if refreshed["status"] != "canceled":
+                        _notify_psychology_payment(refreshed)
                         return self._json(200, {"order": refreshed})
                     order = db.create_payment_order()
                     private_order = db.payment_order_private(order["id"])
@@ -1500,6 +1615,7 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                 result = db.attach_yookassa_payment(order["id"], payment)
                 if result["status"] in {"succeeded", "canceled", "waiting_for_capture"}:
                     result = db.apply_yookassa_status(order["id"], payment)
+                _notify_psychology_payment(result)
                 self._track_analytics("payment_created", {
                     "provider": "yookassa", "amount_kopecks": private_order["amount_kopecks"],
                     "selected_count": len(private_order["items"]),
@@ -1572,6 +1688,17 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                     raise yookassa.YooKassaUnavailable("Онлайн-оплата временно недоступна")
                 if not yookassa.configured():
                     raise yookassa.YooKassaUnavailable("Онлайн-оплата пока не настроена")
+                if not (
+                    _public_https_url(settings.psychology_offer_url)
+                    and _public_https_url(settings.personal_data_policy_url)
+                ):
+                    raise yookassa.YooKassaUnavailable(
+                        "Документы для оплаты сессии пока не настроены"
+                    )
+                if payload.get("accept_offer") is not True:
+                    raise ValueError("Подтвердите согласие с условиями оферты")
+                if payload.get("accept_personal_data") is not True:
+                    raise ValueError("Подтвердите согласие на обработку персональных данных")
                 conversation_id = str(payload.get("conversation_id") or "").strip()
                 session_count = payload.get("session_count", 1)
                 order = db.create_psychology_session_payment_order(
@@ -1609,6 +1736,67 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                 return self._json(422, {"detail": str(exc)})
             except yookassa.YooKassaUnavailable as exc:
                 return self._json(503, {"detail": str(exc)})
+        if path == "/api/psychology-sessions/manager-help":
+            try:
+                payload = self._read_json(max_bytes=4_000)
+                source_id = str(payload.get("conversation_id") or "").strip()
+                source = db.get_conversation(source_id)
+                if not source or source.get("dialog_type") != "masterclass_psychology":
+                    return self._json(404, {"detail": "Психологический диалог не найден"})
+                summary = db.psychology_session_summary(source_id)
+                if summary.get("free_available") or int(summary.get("remaining_paid") or 0) < 1:
+                    raise ValueError("Помощь менеджера доступна при заявке на оплаченную сессию")
+                if (
+                    source.get("human_ticket_id")
+                    and source.get("human_status") in {"pending", "connected"}
+                    and source.get("human_recipient_role") == "psychologist"
+                ):
+                    return self._json(200, {
+                        "conversation_id": source_id,
+                        "ticket_id": source["human_ticket_id"],
+                        "already_requested": True,
+                    })
+                request_message = db.add_message(
+                    source_id, "user",
+                    "Мне нужна помощь специалиста: хочу обсудить проведение платной "
+                    "сессии без привязки Telegram или MAX.",
+                    "psychologist",
+                    {
+                        "action": "psychology_session_manager_help_request",
+                    },
+                )
+                confirmed, _ = db.confirm_human_chat(
+                    source_id, f"H-{secrets.token_hex(3).upper()}",
+                    recipient_role="psychologist",
+                )
+                if not confirmed:
+                    raise ValueError("Не удалось подключить психолога к диалогу")
+                assistant_message = db.add_message(
+                    source_id, "assistant",
+                    "Психолог приглашён в основной чат. Напишите, как с вами лучше "
+                    "связаться и какие вопросы по сессии вы хотите обсудить. "
+                    "ИИ временно приостановлен — здесь ответит человек.",
+                    "psychologist",
+                    {
+                        "action": "psychology_session_manager_help_created",
+                        "human_ticket_id": confirmed["human_ticket_id"],
+                    },
+                )
+                db.enqueue_manager_notifications(
+                    "new_request", source_id,
+                    message_id=request_message["id"], recipient_role="psychologist",
+                    request_kind="psychology_session_messenger_help",
+                    message_text=request_message["content"],
+                )
+                self._track_analytics("psychology_session_manager_help_requested")
+                return self._json(201, {
+                    "conversation_id": source_id,
+                    "ticket_id": confirmed["human_ticket_id"],
+                    "assistant_message": assistant_message,
+                    "already_requested": False,
+                })
+            except (ValueError, TypeError, json.JSONDecodeError, UnicodeDecodeError) as exc:
+                return self._json(422, {"detail": str(exc)})
         if path == "/api/psychology-sessions/request":
             try:
                 payload = self._read_json(max_bytes=4_000)
@@ -1616,7 +1804,22 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                     str(payload.get("conversation_id") or "").strip(),
                 )
                 conversation_id = str(payload.get("conversation_id") or "").strip()
+                confirmation_message = None
                 if session.get("created"):
+                    confirmation_message = db.add_message(
+                        conversation_id, "assistant",
+                        (
+                            f"Заявка №{session.get('request_number', '—')} отправлена. "
+                            "Ожидайте ответа специалиста — психолог свяжется с вами "
+                            "для согласования времени онлайн-встречи."
+                        ),
+                        "manager",
+                        {
+                            "action": "psychology_session_request_confirmation",
+                            "specialized_dialog": True,
+                            "request_number": session.get("request_number", ""),
+                        },
+                    )
                     db.enqueue_manager_notifications(
                         "psychology_session_requested", conversation_id,
                         message_id=int(session.get("request_number") or 0),
@@ -1629,6 +1832,7 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                     })
                 return self._json(200, {
                     "session": session,
+                    "message": confirmation_message,
                     "summary": db.psychology_session_summary(conversation_id),
                 })
             except (ValueError, TypeError, json.JSONDecodeError, UnicodeDecodeError) as exc:
@@ -2490,6 +2694,52 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
             self._track_analytics("message_sent")
             if is_first_message:
                 self._track_analytics("first_message_sent")
+            if (
+                conversation
+                and conversation.get("dialog_type") == "masterclass_psychology"
+                and _psychology_crisis_detected(message)
+            ):
+                attachment_meta = []
+                for item in attachments:
+                    metadata = {"name": item.get("name"), "type": item.get("type")}
+                    if item.get("thumbnail_url"):
+                        metadata["thumbnail_url"] = item["thumbnail_url"]
+                    attachment_meta.append(metadata)
+                user_message = db.add_message(
+                    conversation_id, "user", message, "psychologist", {
+                        "action": "psychology_crisis_escalation",
+                        "attachments": attachment_meta,
+                        "awaiting_manager": True,
+                        "emergency": True,
+                    },
+                )
+                confirmed, _ = db.confirm_human_chat(
+                    conversation_id, f"URG-{secrets.token_hex(3).upper()}",
+                    recipient_role="psychologist",
+                )
+                if not confirmed:
+                    raise ValueError("Не удалось передать сообщение психологу")
+                db.enqueue_manager_notifications(
+                    "psychology_crisis", conversation_id,
+                    message_id=user_message["id"], recipient_role="psychologist",
+                )
+                self._track_analytics("psychology_crisis_escalated")
+                return self._json(202, {
+                    "conversation_id": conversation_id,
+                    "user_message": user_message,
+                    "assistant_message": None,
+                    "agent": "psychologist",
+                    "action": "waiting_human",
+                    "queued_for_human": True,
+                    "crisis_escalation": True,
+                    "emergency": True,
+                    "urgency": "emergency",
+                    "ai_enabled": False,
+                    "human_status": confirmed.get("human_status", "pending"),
+                    "human_ticket_id": confirmed.get("human_ticket_id"),
+                    "context": json.loads(confirmed.get("context_summary") or "{}"),
+                    "attachments": attachment_meta,
+                })
             if conversation and not bool(conversation.get("ai_enabled", 1)):
                 user_message, updated = db.add_user_message_waiting_for_manager(
                     conversation_id, message, attachments,
@@ -3273,6 +3523,16 @@ def serve() -> None:
     browser_host = "127.0.0.1" if settings.host in {"0.0.0.0", "::", ""} else settings.host
     browser_url = f"http://{browser_host}:{settings.port}"
     print(f"Консилиум запущен: {browser_url}")
+    try:
+        masterclass_test_url = _local_masterclass_test_url(browser_url)
+    except (OSError, ValueError) as exc:
+        masterclass_test_url = ""
+        _record_startup_event(
+            f"Не удалось подготовить локальную ссылку мастер-класса: {exc}",
+        )
+    if masterclass_test_url:
+        print("ТЕСТОВЫЙ РЕЖИМ МАСТЕР-КЛАССА:")
+        print(masterclass_test_url)
     if settings.host in {"0.0.0.0", "::", ""}:
         print("Для телефона используйте IP-адрес этого компьютера в той же Wi-Fi сети.")
     if settings.auto_open_browser:

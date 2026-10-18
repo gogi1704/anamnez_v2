@@ -115,6 +115,9 @@ button { cursor:pointer; }
 .manager-composer .psychology-session-payment-button { padding:7px 10px; border:1px solid #bda8dc; background:#704aa1; color:#fff; font-size:9px; }
 .manager-composer .psychology-session-payment-button:hover { border-color:#684294; background:#684294; }
 .manager-composer .psychology-session-payment-button:disabled { opacity:.55; cursor:wait; }
+.manager-composer .psychology-session-invite-button { padding:7px 10px; border:1px solid #bda8dc; background:#f6f0fc; color:#684294; font-size:9px; }
+.manager-composer .psychology-session-invite-button:hover { border-color:#7950aa; background:#eadff6; }
+.manager-composer .psychology-session-invite-button:disabled { opacity:.55; cursor:wait; }
 .manager-composer textarea { width:100%; max-height:130px; resize:none; padding:4px; border:0; outline:none; font-size:12px; }
 .manager-composer > div { display:flex; align-items:center; justify-content:space-between; gap:10px; }.manager-composer span { color:var(--muted); font-size:8px; }
 .manager-composer button { padding:9px 15px; border:0; border-radius:10px; background:var(--green); color:white; font-size:10px; font-weight:700; }
@@ -133,6 +136,18 @@ button { cursor:pointer; }
 .panel-backdrop { display:none; }
 .toast { position:fixed; right:20px; bottom:20px; z-index:20; max-width:350px; padding:12px 16px; border-radius:12px; background:#173f31; color:white; box-shadow:var(--shadow); font-size:11px; }
 .toast.error { background:#8e3f3f; }
+.manager-dialog-backdrop { position:fixed; inset:0; z-index:30; display:grid; place-items:center; padding:18px; background:#173f3170; backdrop-filter:blur(4px); }
+.manager-dialog-card { position:relative; width:min(520px,100%); padding:28px; border-radius:22px; background:#fff; box-shadow:0 24px 70px #173f3140; }
+.manager-dialog-card h2 { margin:7px 0 8px; color:var(--ink); font-size:22px; }
+.manager-dialog-card > p { margin:0 0 18px; color:var(--muted); font-size:11px; line-height:1.55; }
+.manager-dialog-card label { display:grid; gap:6px; color:var(--ink); font-size:10px; font-weight:700; }
+.manager-dialog-card input { width:100%; padding:12px; border:1px solid var(--line); border-radius:11px; outline:none; font:inherit; font-size:12px; }
+.manager-dialog-card input:focus { border-color:#7950aa; box-shadow:0 0 0 3px #7950aa18; }
+.manager-dialog-fields { display:grid; grid-template-columns:1fr 1fr; gap:12px; margin-bottom:13px; }
+.manager-dialog-close { position:absolute; top:15px; right:15px; width:32px; height:32px; border:0; border-radius:10px; background:#f4f7f5; color:var(--muted); font-size:20px; }
+.manager-dialog-actions { display:flex; justify-content:flex-end; gap:10px; margin-top:20px; }
+.manager-dialog-actions button { padding:11px 17px; border:0; border-radius:11px; background:#704aa1; color:#fff; font-size:10px; font-weight:700; }
+.manager-dialog-actions button.secondary { border:1px solid #d5c7e7; background:#fff; color:#684294; }
 @media (max-width:1150px) {
   .manager-app { grid-template-columns:300px minmax(0,1fr); }
   .user-panel { position:fixed; top:14px; right:14px; bottom:14px; z-index:8; width:min(380px,calc(100vw - 28px)); border-radius:22px; box-shadow:var(--shadow); transform:translateX(calc(100% + 28px)); transition:.2s; }
@@ -164,6 +179,10 @@ button { cursor:pointer; }
   .manager-composer { margin:8px; }
   .manager-composer span { display:none; }
   .user-panel { inset:8px; width:auto; }
+  .manager-dialog-card { padding:24px 18px 18px; }
+  .manager-dialog-fields { grid-template-columns:1fr; }
+  .manager-dialog-actions { display:grid; grid-template-columns:1fr; }
+  .manager-dialog-actions button { width:100%; }
 }
 
 /* Safe Markdown/rich-text layout */

@@ -13,7 +13,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/static/manager.css?v=20261014-psychology-payment-v5">
+  <link rel="stylesheet" href="/static/manager.css?v=20261018-psychology-invite-stable-v10">
   <link rel="stylesheet" href="/static/rich-text.css?v=20260816-rich-text">
 </head>
 <body>
@@ -89,6 +89,7 @@
             <button type="button" class="consultation-instruction-button hidden" id="consultationPaymentInstructionButton">₽ Отправить инструкцию по оплате</button>
             <button type="button" class="psychology-session-complete-button hidden" id="psychologySessionCompleteButton">✓ Сессия проведена</button>
             <button type="button" class="psychology-session-payment-button hidden" id="psychologySessionPaymentInstructionButton">₽ Как оплатить сессии</button>
+            <button type="button" class="psychology-session-invite-button hidden" id="psychologySessionInviteButton">▣ Пригласить на сессию</button>
           </div>
           <textarea id="managerReply" rows="1" maxlength="12000" placeholder="Напишите ответ пользователю..." required></textarea>
           <div><span>Enter — отправить · Shift+Enter — новая строка</span><button type="submit">Отправить</button></div>
@@ -128,8 +129,27 @@
     <button class="panel-backdrop" id="panelBackdrop" aria-label="Закрыть боковую панель"></button>
   </main>
 
+  <div class="manager-dialog-backdrop hidden" id="psychologySessionInviteModal" role="dialog" aria-modal="true" aria-labelledby="psychologySessionInviteTitle">
+    <form class="manager-dialog-card" id="psychologySessionInviteForm">
+      <button type="button" class="manager-dialog-close" id="psychologySessionInviteClose" aria-label="Закрыть">×</button>
+      <span class="eyebrow">ПСИХОЛОГИЧЕСКАЯ ПОДДЕРЖКА</span>
+      <h2 id="psychologySessionInviteTitle">Пригласить на онлайн-сессию</h2>
+      <p>Укажите дату, московское время и защищённую ссылку на видеовстречу. Пользователь сразу получит приглашение в чат.</p>
+      <div class="manager-dialog-fields">
+        <label>Дата<input id="psychologySessionInviteDate" type="date" required></label>
+        <label>Время (мск)<input id="psychologySessionInviteTime" type="time" required></label>
+      </div>
+      <label>Ссылка на видеовстречу<input id="psychologySessionInviteUrl" type="url" inputmode="url" placeholder="https://..." required></label>
+      <p class="form-error hidden" id="psychologySessionInviteError" role="alert"></p>
+      <div class="manager-dialog-actions">
+        <button type="button" class="secondary" id="psychologySessionInviteCancel">Отмена</button>
+        <button type="submit" id="psychologySessionInviteSubmit">Отправить приглашение</button>
+      </div>
+    </form>
+  </div>
+
   <div class="toast hidden" id="managerToast" role="status"></div>
   <script src="/static/rich-text.js?v=20260929-loose-lists-v1"></script>
-  <script src="/static/manager.js?v=20261014-psychology-payment-v5" defer></script>
+  <script src="/static/manager.js?v=20261018-psychology-crisis-v11" defer></script>
 </body>
 </html>

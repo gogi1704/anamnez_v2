@@ -1,6 +1,7 @@
 import tempfile
 import unittest
 import io
+from datetime import date, timedelta
 from pathlib import Path
 
 from backend import database as db
@@ -82,9 +83,9 @@ class IkpAccessTests(unittest.TestCase):
             self.assertEqual(psychology['pinned'], 1)
             greeting = db.list_messages(psychology['id'])[0]['content']
             self.assertEqual(greeting, db.MASTERCLASS_PSYCHOLOGY_WELCOME)
-            self.assertIn('Я Ольга, помощник-психолог', greeting)
+            self.assertIn('Я Вита, помощник-психолог', greeting)
             self.assertIn('без ограничений по времени', greeting)
-            self.assertIn('первые 30 минут бесплатно', greeting)
+            self.assertIn('Первая консультация бесплатна', greeting)
         finally:
             db.set_current_chel_id(previous_chel_id)
         report = db.admin_masterclass_report()
@@ -114,14 +115,16 @@ class IkpAccessTests(unittest.TestCase):
         finally:
             db.set_current_chel_id(previous_chel_id)
 
-    def test_psychology_session_package_interface_has_seven_options(self):
+    def test_psychology_session_purchase_interface_has_one_option(self):
         project_root = Path(__file__).resolve().parents[1]
         index = (project_root / 'index.html').read_text(encoding='utf-8')
         script = (project_root / 'static' / 'app.js').read_text(encoding='utf-8')
         self.assertIn('id="psychologySessionsBottomClose"', index)
         self.assertIn('id="psychologySessionBuyButton"', index)
         self.assertIn('id="psychologyPackagesModal"', index)
-        self.assertIn("Array.from({length:7}", script)
+        self.assertNotIn("Array.from({length:7}", script)
+        self.assertIn('Онлайн-встреча · 60 минут', script)
+        self.assertIn('const unitPrice = 3500', script)
         self.assertIn("session_count:psychologySessionPackage().sessions", script)
         self.assertIn("sessionCount:psychologySessionPackage().sessions", script)
         self.assertIn('Сессий проведено', script)
@@ -147,10 +150,85 @@ class IkpAccessTests(unittest.TestCase):
         self.assertIn('masterclass-custom-select', script)
         self.assertNotIn('<select name="smoking"', script)
         self.assertIn('.masterclass-select-options', styles)
+        self.assertIn('.masterclass-custom-select.open-up', styles)
+        self.assertIn('position:relative;top:auto;right:auto;bottom:auto;left:auto', styles)
+        self.assertIn("select.classList.toggle('open-up'", script)
+        self.assertIn('MASTERCLASS_BURNOUT_DETAILS', script)
+        self.assertIn('Сохранение ресурса', script)
+        self.assertIn('Потребность в специалисте', script)
+        self.assertIn("name:'Вита'", script)
         self.assertIn('.psychology-guide-spotlight', styles)
         self.assertIn('.masterclass-profile-form>.onboarding-next', styles)
         self.assertIn('font-variant-numeric:tabular-nums', styles)
         self.assertIn('data-psychology-sessions-open', script)
+        self.assertIn('id="psychologySessionRequestManager"', index)
+        self.assertIn('Позвать менеджера в чат', index)
+        self.assertIn("button.dataset.mode = 'link_messenger'", script)
+        self.assertIn("openMessengerLinkModal({source:'psychology_session_request'})", script)
+        self.assertIn("'/api/psychology-sessions/manager-help'", script)
+        self.assertNotIn('psychology_payment_required', script)
+        self.assertNotIn("'psychology_support'", script)
+        self.assertNotIn('Временный чат с психологом', script)
+        self.assertIn(
+            '#psychologySessionRequestConfirm { grid-column:1/-1; grid-row:1; }',
+            styles,
+        )
+
+    def test_psychologist_uses_and_closes_the_main_psychology_chat(self):
+        user_id = 'chel_psychology_main_help_0001'
+        db.ensure_user(user_id, pending=True)
+        previous_chel_id = db.current_chel_id()
+        try:
+            db.set_current_chel_id(user_id)
+            source = db.create_conversation(
+                'Психологическая поддержка',
+                dialog_type='masterclass_psychology',
+            )
+            request = db.add_message(
+                source['id'], 'user',
+                'Хочу согласовать проведение сессии без мессенджера.',
+                'psychologist',
+            )
+            confirmed, created = db.confirm_human_chat(
+                source['id'], 'H-123456', recipient_role='psychologist',
+            )
+            self.assertTrue(created)
+            self.assertEqual(confirmed['dialog_type'], 'masterclass_psychology')
+            self.assertFalse(bool(confirmed['ai_enabled']))
+            db.add_message(
+                source['id'], 'assistant',
+                'Ожидайте ответа психолога в этом чате.',
+                'psychologist',
+            )
+            waiting_message, _ = db.add_user_message_waiting_for_manager(
+                source['id'], 'Мне удобно вечером.',
+            )
+            self.assertGreater(waiting_message['id'], request['id'])
+            reply = db.manager_add_reply(
+                source['id'], 'Хорошо, согласуем время.',
+                'Тестовый психолог', 'psychologist',
+            )
+            self.assertEqual(reply['metadata']['staff_role'], 'psychologist')
+            self.assertTrue(any(
+                item['id'] == source['id']
+                and item['dialog_type'] == 'masterclass_psychology'
+                for item in db.list_conversations()
+            ))
+            self.assertIsNotNone(
+                db.manager_conversation_detail(source['id'], 'psychologist'),
+            )
+
+            closed = db.manager_close_conversation(
+                source['id'], 'Тестовый психолог', 'psychologist',
+            )
+            self.assertEqual(closed['human_status'], 'closed')
+            self.assertTrue(bool(closed['ai_enabled']))
+            self.assertIsNotNone(db.get_conversation(source['id']))
+            contents = [item['content'] for item in db.list_messages(source['id'])]
+            self.assertIn('Мне удобно вечером.', contents)
+            self.assertIn('Хорошо, согласуем время.', contents)
+        finally:
+            db.set_current_chel_id(previous_chel_id)
 
     def test_psychology_session_lifecycle_and_paid_balance(self):
         token = 's' * 43
@@ -226,6 +304,17 @@ class IkpAccessTests(unittest.TestCase):
                 free_session['request_number'],
             )
             self.assertEqual(max_notification['payload'], notification['payload'])
+            self.assertEqual(db.enqueue_manager_notifications(
+                'psychology_crisis', conversation['id'],
+                message_id=9915506, recipient_role='psychologist',
+            ), 2)
+            crisis_notification = db.claim_manager_notifications('telegram')[0]
+            self.assertEqual(crisis_notification['event_type'], 'psychology_crisis')
+            self.assertEqual(crisis_notification['recipient_id'], psychologist['telegram_id'])
+            self.assertEqual(
+                crisis_notification['payload']['recipient_role'], 'psychologist',
+            )
+            self.assertIn('ИИ остановлен', crisis_notification['payload']['body'])
             with self.assertRaisesRegex(ValueError, 'только психолог'):
                 db.manager_send_psychology_session_payment_instruction(
                     conversation['id'], 'Тестовый менеджер', 'manager',
@@ -238,13 +327,46 @@ class IkpAccessTests(unittest.TestCase):
                 'psychology_session_payment_instruction',
             )
             self.assertEqual(payment_instruction['metadata']['staff_role'], 'psychologist')
-            self.assertIn('пакет от 1 до 7 сессий', payment_instruction['content'])
+            self.assertIn('одну 60-минутную сессию за 3 500 ₽', payment_instruction['content'])
             self.assertIn('«Открыть меню сессий»', payment_instruction['content'])
+            meeting_day = date.today() + timedelta(days=30)
+            meeting_day_value = meeting_day.isoformat()
+            invitation = db.manager_send_psychology_session_invitation(
+                conversation['id'], 'Тестовый психолог', 'psychologist',
+                'https://meet.example.ru/session-15507', meeting_day_value, '15:30',
+            )
+            self.assertEqual(
+                invitation['metadata']['action'], 'psychology_session_invitation',
+            )
+            self.assertEqual(
+                invitation['metadata']['meeting_url'],
+                'https://meet.example.ru/session-15507',
+            )
+            self.assertEqual(
+                invitation['metadata']['scheduled_at'][:10], meeting_day_value,
+            )
+            self.assertIn('15:30 (мск)', invitation['content'])
+            with self.assertRaisesRegex(ValueError, 'https://'):
+                db.manager_send_psychology_session_invitation(
+                    conversation['id'], 'Тестовый психолог', 'psychologist',
+                    'javascript:alert(1)', meeting_day_value, '15:30',
+                )
             completed_session = db.manager_complete_psychology_session(
                 conversation['id'], 'Тестовый психолог', 'psychologist',
             )
             self.assertEqual(completed_session['status'], 'completed')
             self.assertIsNotNone(completed_session['completed_at'])
+            completion_messages = [
+                item for item in db.list_messages(conversation['id'])
+                if item['metadata'].get('action') == 'psychology_session_completed'
+            ]
+            self.assertEqual(len(completion_messages), 1)
+            self.assertIn('Сессия с психологом проведена', completion_messages[0]['content'])
+            self.assertEqual(
+                completion_messages[0]['metadata']['request_number'],
+                completed_session['request_number'],
+            )
+            self.assertTrue(bool(db.get_conversation(conversation['id'])['ai_enabled']))
             self.assertIsNone(
                 db.manager_conversation_detail(
                     conversation['id'], 'psychologist',
@@ -269,38 +391,55 @@ class IkpAccessTests(unittest.TestCase):
             completed = db.psychology_session_summary(conversation['id'])
             self.assertEqual(completed['completed_count'], 1)
             self.assertFalse(completed['free_available'])
-            with self.assertRaisesRegex(ValueError, 'Купите следующую сессию'):
+            with self.assertRaisesRegex(ValueError, 'Купите сессию'):
                 db.request_psychology_session(conversation['id'])
 
-            expected_packages = [
-                (1, 2500, 2500), (2, 2350, 4700), (3, 2150, 6450),
-                (4, 2000, 8000), (5, 1850, 9250), (6, 1650, 9900),
-                (7, 1500, 10500),
-            ]
-            self.assertEqual([
-                (
-                    count,
-                    db.psychology_session_package(count)['unit_price'],
-                    db.psychology_session_package(count)['total_price'],
-                )
-                for count in range(1, 8)
-            ], expected_packages)
-            order = db.create_psychology_session_payment_order(conversation['id'], 7)
+            package = db.psychology_session_package(1)
+            self.assertEqual((package['unit_price'], package['total_price']), (3500, 3500))
+            order = db.create_psychology_session_payment_order(conversation['id'], 1)
             self.assertEqual(order['order_type'], 'psychology_session')
-            self.assertEqual(order['amount'], '10500.00')
-            self.assertEqual(order['items'][0]['sessions'], 7)
-            with db.connection() as connection:
-                connection.execute(
-                    """UPDATE payment_orders
-                       SET status='succeeded',paid=1,paid_at=?,updated_at=?
-                       WHERE id=?""",
-                    ('2026-10-13T10:00:00+00:00', '2026-10-13T10:00:00+00:00', order['id']),
-                )
-                connection.commit()
+            self.assertEqual(order['amount'], '3500.00')
+            self.assertEqual(order['items'][0]['sessions'], 1)
+            self.assertIn('60 минут', order['items'][0]['name'])
+            provider_payment = {
+                'id': '2f3e4567-89ab-4cde-8012-3456789abcde',
+                'status': 'pending', 'paid': False, 'test': False,
+                'amount': {'value': '3500.00', 'currency': 'RUB'},
+                'metadata': {'order_id': order['id']},
+                'confirmation': {
+                    'confirmation_url': 'https://yoomoney.ru/pay/psychology-test',
+                },
+            }
+            db.attach_yookassa_payment(order['id'], provider_payment)
+            paid_order = db.apply_yookassa_status(order['id'], {
+                **provider_payment, 'status': 'succeeded', 'paid': True,
+            })
+            self.assertTrue(paid_order['paid'])
+            self.assertEqual(paid_order['status'], 'succeeded')
+            self.assertFalse(paid_order['test'])
 
             paid_balance = db.psychology_session_summary(conversation['id'])
-            self.assertEqual(paid_balance['purchased_count'], 7)
-            self.assertEqual(paid_balance['remaining_paid'], 7)
+            self.assertEqual(paid_balance['purchased_count'], 1)
+            self.assertEqual(paid_balance['remaining_paid'], 1)
+            self.assertEqual(db.enqueue_manager_notifications(
+                'psychology_payment_succeeded', conversation['id'],
+                message_id=9915507, recipient_role='psychologist',
+                amount_kopecks=350000,
+            ), 2)
+            payment_notification = db.claim_manager_notifications('telegram')[0]
+            self.assertEqual(
+                payment_notification['event_type'], 'psychology_payment_succeeded',
+            )
+            self.assertIn('3 500 ₽', payment_notification['payload']['body'])
+            updated_psychologist = db.admin_update_staff(
+                psychologist['id'], notify_successful_payments=False,
+            )
+            self.assertFalse(updated_psychologist['notify_successful_payments'])
+            self.assertEqual(db.enqueue_manager_notifications(
+                'psychology_payment_succeeded', conversation['id'],
+                message_id=9915508, recipient_role='psychologist',
+                amount_kopecks=350000,
+            ), 0)
             paid_session = db.request_psychology_session(conversation['id'])
             self.assertEqual(paid_session['access_type'], 'paid')
             self.assertEqual(paid_session['session_number'], 2)
@@ -312,7 +451,7 @@ class IkpAccessTests(unittest.TestCase):
             ), 2)
             self.assertEqual(
                 db.psychology_session_summary(conversation['id'])['remaining_paid'],
-                7,
+                1,
             )
             with db.connection() as connection:
                 credit_use = connection.execute(
@@ -326,30 +465,19 @@ class IkpAccessTests(unittest.TestCase):
                 conversation['id'], 'Тестовый психолог', 'psychologist',
             )
             self.assertEqual(
-                db.psychology_session_summary(conversation['id'])['remaining_paid'], 6,
+                db.psychology_session_summary(conversation['id'])['remaining_paid'], 0,
             )
-            for expected_remaining in range(5, -1, -1):
-                next_session = db.request_psychology_session(conversation['id'])
-                self.assertEqual(next_session['access_type'], 'paid')
-                self.assertRegex(next_session['request_number'], r'^\d{5}$')
-                db.manager_complete_psychology_session(
-                    conversation['id'], 'Тестовый психолог', 'psychologist',
-                )
-                self.assertEqual(
-                    db.psychology_session_summary(conversation['id'])['remaining_paid'],
-                    expected_remaining,
-                )
             with db.connection() as connection:
                 self.assertEqual(connection.execute(
                     "SELECT COUNT(*) FROM psychology_session_credit_uses WHERE payment_order_id=?",
                     (order['id'],),
-                ).fetchone()[0], 7)
+                ).fetchone()[0], 1)
                 self.assertIsNotNone(connection.execute(
                     "SELECT fulfillment_at FROM payment_orders WHERE id=?",
                     (order['id'],),
                 ).fetchone()['fulfillment_at'])
-            with self.assertRaisesRegex(ValueError, 'от 1 до 7'):
-                db.create_psychology_session_payment_order(conversation['id'], 8)
+            with self.assertRaisesRegex(ValueError, 'одну сессию'):
+                db.create_psychology_session_payment_order(conversation['id'], 2)
         finally:
             db.set_current_chel_id(previous_chel_id)
 

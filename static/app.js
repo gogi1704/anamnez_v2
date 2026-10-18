@@ -759,7 +759,7 @@ function renderMasterclassLanding(entry) {
     <div class="masterclass-topics">
       <article><i>01</i><strong>Понять состояние</strong><span>10 вопросов о последних двух неделях</span></article>
       <article><i>02</i><strong>Помочь себе</strong><span>Пять простых практик без сложных терминов</span></article>
-      <article><i>03</i><strong>Обсудить</strong><span>Отдельный чат психологической поддержки с Ольгой</span></article>
+      <article><i>03</i><strong>Обсудить</strong><span>Отдельный чат психологической поддержки</span></article>
     </div>
     <div class="masterclass-invitation"><b>Сохраните доступ</b><span>Войдите через мессенджер, чтобы продолжить на любом устройстве, или откройте материал анонимно.</span></div>
     ${knownUser ? `<div class="onboarding-actions"><button type="button" class="onboarding-next" data-masterclass-action="continue-account">Продолжить с текущим профилем →</button></div>` : `<div class="masterclass-auth-options">
@@ -825,6 +825,14 @@ function toggleMasterclassDropdown(select) {
   select.classList.toggle('open', opening);
   select.querySelector('.masterclass-select-trigger')?.setAttribute('aria-expanded', String(opening));
   select.querySelector('.masterclass-select-options')?.classList.toggle('hidden', !opening);
+  select.classList.remove('open-up');
+  if (opening) {
+    const trigger = select.querySelector('.masterclass-select-trigger');
+    const availableBelow = window.innerHeight - (trigger?.getBoundingClientRect().bottom || 0);
+    const desktop = window.matchMedia('(min-width: 721px)').matches;
+    select.classList.toggle('open-up', desktop && availableBelow < 230);
+    requestAnimationFrame(() => trigger?.scrollIntoView({block:'nearest', behavior:'smooth'}));
+  }
 }
 
 async function renderMasterclassQuestionnaire(entry) {
@@ -837,7 +845,7 @@ async function renderMasterclassQuestionnaire(entry) {
   $('#onboardingContent').innerHTML = `<div class="masterclass-questionnaire">
     <span class="onboarding-kicker">Перед материалом · 5 коротких пунктов</span>
     <h1>Расскажите немного о себе</h1>
-    <p class="onboarding-lead">Ответы сохранятся в вашем профиле и помогут Ольге учитывать ваш контекст в психологическом чате.</p>
+    <p class="onboarding-lead">Ответы сохранятся в вашем профиле и помогут учитывать ваш контекст в психологическом чате.</p>
     <form id="masterclassProfileForm" class="masterclass-profile-form">
       <label><b><i>1</i>Как к вам обращаться?</b><input name="preferred_name" maxlength="100" autocomplete="name" required value="${escapeAttr(profile.preferred_name || '')}" placeholder="Например, Алексей"></label>
       <label><b><i>2</i>Пол</b>${masterclassDropdown('sex','Выберите пол',[{value:'female',label:'Женский'},{value:'male',label:'Мужской'}],profile.sex)}</label>
@@ -863,7 +871,7 @@ function renderMasterclassBurnout(entry) {
   setOnboardingMeta('Материал мастер-класса', 100);
   $('#onboardingContent').innerHTML = `<article class="masterclass-burnout">
     <header class="masterclass-burnout-cover"><span>ГК «Человек» · Экосистема здоровья</span><h1>Это ещё стресс<br>или уже выгорание?</h1><p>Небольшой тест и 5 практик, которые помогают вернуть силы и ясность.</p><small>Материал для сотрудников ${escapeHtml(entry.company || 'вашей компании')}</small></header>
-    <section><p><strong>Здравствуйте.</strong></p><p>Стресс — это нормально. Ненормально, когда он не проходит месяцами. Этот материал поможет честно посмотреть на своё состояние и понять следующий шаг.</p><div class="masterclass-alert"><strong>Если вам плохо прямо сейчас</strong><span>Опишите своё состояние Ольге в <button type="button" class="masterclass-inline-chat" data-masterclass-action="open-psychology-chat">чате</button>. При непосредственной угрозе жизни или безопасности звоните 112.</span></div></section>
+    <section><p><strong>Здравствуйте.</strong></p><p>Стресс — это нормально. Ненормально, когда он не проходит месяцами. Этот материал поможет честно посмотреть на своё состояние и понять следующий шаг.</p><div class="masterclass-alert"><strong>Если вам плохо прямо сейчас</strong><span>Опишите своё состояние в <button type="button" class="masterclass-inline-chat" data-masterclass-action="open-psychology-chat">чате</button>, и мы вам поможем. При непосредственной угрозе жизни или безопасности звоните 112.</span></div></section>
     <section><h2>Часть 1. Самоанализ: где вы сейчас?</h2><p>Вспомните последние две недели и ответьте «Да» или «Нет» на каждый вопрос.</p><form id="masterclassBurnoutQuiz" class="masterclass-burnout-quiz">
       ${[
         'Утром вы просыпаетесь с мыслью «скорее бы этот день закончился»?',
@@ -885,7 +893,7 @@ function renderMasterclassBurnout(entry) {
       <article data-burnout-level="3"><b>6–8 «Да»: вы на пределе</b><p>Многое держится на силе воли. Снижайте нагрузку там, где это возможно, и не оставайтесь без поддержки.</p></article>
       <article data-burnout-level="4"><b>9–10 «Да»: истощение</b><p>Вы не ленивый и не слабый — ресурс закончился. Стоит обсудить состояние со специалистом.</p></article>
     </div></section>
-    <section><h2>Часть 2. Что происходит с вами</h2><div class="masterclass-stages"><article><i>1</i><b>Тревога</b><p>Сердце частит, мысли скачут, вы постоянно на взводе.</p></article><article><i>2</i><b>Сопротивление</b><p>Вы привыкли жить в напряжении. Силы ещё есть, но восстановление становится хуже.</p></article><article><i>3</i><b>Истощение</b><p>Появляются апатия, безразличие и ощущение, что сил больше нет.</p></article></div></section>
+    <section><h2>Часть 2. Что происходит с вами</h2><div class="masterclass-stages" id="masterclassBurnoutStages"><p class="masterclass-stages-placeholder">Ответьте на все вопросы — здесь появятся три пояснения именно к вашему результату.</p></div></section>
     <section class="masterclass-next-step"><h2>Часть 3. Что дальше?</h2><p class="masterclass-next-step-sub">Выберите, что вам сейчас важнее</p>
       <div class="masterclass-next-step-buttons">
         <button type="button" data-masterclass-panel="practices"><i>✓</i><b>Узнать, что поможет</b><span>5 практик, которые можно применить уже сегодня</span></button>
@@ -903,7 +911,7 @@ function renderMasterclassBurnout(entry) {
         <div class="masterclass-practices-save"><b>Сохранить эти практики</b><span>Готовый PDF сохранится на телефон или компьютер.</span><button type="button" data-masterclass-action="download-practices">Скачать 5 практик (PDF)</button></div>
       </div>
       <div class="masterclass-next-panel masterclass-specialist-panel" data-masterclass-panel-content="chat" hidden>
-        <div class="masterclass-specialist-head"><i>ОП</i><span><b>Ольга поможет разобрать вашу ситуацию</b><small>Задайте вопрос о стрессе, выгорании или самочувствии</small></span></div>
+        <div class="masterclass-specialist-head"><i>В</i><span><b>Поможем разобраться, что с вами происходит</b><small>Задайте вопрос о стрессе, выгорании или самочувствии</small></span></div>
         <p>Мы поможем понять, что с вами происходит и какой следующий шаг будет полезен.</p>
         <ul><li>«Как понять, что у меня выгорание, а не просто усталость?»</li><li>«Стоит ли идти к психологу или можно справиться самому?»</li><li>«Почему я постоянно чувствую усталость и раздражение?»</li></ul>
         <p><small>Ответ бесплатно, без записи и обязательств. Просто напишите свой вопрос.</small></p>${masterclassChatButton()}
@@ -911,13 +919,41 @@ function renderMasterclassBurnout(entry) {
     </section>
     <section><h2>Часть 4. Что рекомендуют психологи</h2><div class="masterclass-do-dont"><article><b>✓ Помогает</b><ul><li>Стабильный сон и час без телефона перед ним</li><li>Посильное движение каждый день</li><li>Честный разговор с человеком, которому доверяете</li><li>Ограничение новостей и соцсетей</li><li>Обращение за помощью, если легче не становится</li></ul></article><article><b>Не помогает</b><ul><li>Требовать от себя «просто собраться»</li><li>Использовать алкоголь для расслабления</li><li>Игнорировать постоянные телесные симптомы</li><li>Сравнивать себя с другими</li><li>Обесценивать собственную усталость</li></ul></article></div></section>
     <section><h2>Когда пора обратиться к специалисту</h2><ul class="masterclass-check-list"><li>Больше двух недель не становится легче</li><li>Нарушился сон</li><li>Появляются панические атаки</li><li>Пропадает интерес к привычным делам и людям</li><li>Состояние мешает работе, отношениям или повседневным делам</li></ul><p>Это забота о себе, а не слабость.</p></section>
-    <section class="masterclass-emergency"><h2>Если вам плохо прямо сейчас</h2><p>Не оставайтесь с этим один на один. Опишите Ольге, что чувствуете, своими словами. Мы поможем понять, что делать дальше.</p>${masterclassChatButton()}<em>Мы поможем. Просто напишите нам.</em></section>
+    <section class="masterclass-emergency"><h2>Если вам плохо прямо сейчас</h2><p>Не оставайтесь с этим один на один. Опишите, что чувствуете, своими словами. Мы поможем понять, что делать дальше.</p>${masterclassChatButton('Перейти в чат')}<em>Мы поможем. Просто напишите нам.</em></section>
     <section class="masterclass-next-meeting"><i>▣</i><span><b>Следующая встреча</b><small>Дату и время уточняйте у вашего руководства.</small></span></section>
     <footer><b>ГК «Человек» · Экосистема здоровья</b><span>13 лет заботимся о здоровье ваших сотрудников</span><span>Гайд подготовлен для сотрудников <strong>«${escapeHtml(entry.company || 'вашей компании')}»</strong></span></footer>
   </article>`;
   $('#onboarding').scrollTop = 0;
   trackMasterclassScreen('masterclass_burnout');
 }
+
+const MASTERCLASS_BURNOUT_DETAILS = [
+  [
+    ['Сохранение ресурса','Вы находитесь в стабильном состоянии, ваша нервная система не перегружена.'],
+    ['Качественное восстановление','Сон и отдых полностью возвращают вам силы.'],
+    ['Поддержание тонуса','Движение помогает сохранять ясность мыслей и хорошее настроение.'],
+  ],
+  [
+    ['Успешное совладание','Вы продолжаете справляться с задачами, контроль пока сохранен.'],
+    ['Накопление легкой усталости','Появляется фоновое напряжение, которое требует разрядки.'],
+    ['Потребность в паузах','Организму становятся необходимы регулярные перерывы и восстановление.'],
+  ],
+  [
+    ['Снижение энергетического запаса','Напряжение начинает напрямую отнимать у вас физические силы.'],
+    ['Колебания настроения','Эмоциональный фон становится нестабильным из-за накопленной усталости.'],
+    ['Готовность к изменениям','Пришло время пересмотреть режим и найти способы снять напряжение.'],
+  ],
+  [
+    ['Работа на силе воли','Внутренние ресурсы иссякли, и вы продолжаете действовать только за счет волевого усилия.'],
+    ['Критическая перегрузка','Вы находитесь на грани своих возможностей, что требует немедленного снижения нагрузки.'],
+    ['Потребность в поддержке','Оставаться один на один с задачами становится опасно, важно получить помощь и не изолироваться.'],
+  ],
+  [
+    ['Полное истощение','Ресурс закончился, это не лень и не слабость, а объективное состояние организма.'],
+    ['Утрата сил и мотивации','Дальнейшая деятельность требует внешнего вмешательства и восстановления.'],
+    ['Потребность в специалисте','Необходимо обсудить свое состояние с врачом или психологом для восстановления.'],
+  ],
+];
 
 function updateMasterclassBurnoutResult() {
   const form = $('#masterclassBurnoutQuiz');
@@ -933,6 +969,12 @@ function updateMasterclassBurnoutResult() {
   const labels = ['Стресса нет — вы в ресурсе','Небольшое напряжение','Усталость накопилась','Вы на пределе','Признаки истощения'];
   result.innerHTML = `<b>${yes} ответов «Да» · ${labels[level]}</b><span>Ниже подсвечена подходящая рекомендация. Это самопроверка, а не диагноз.</span>`;
   document.querySelectorAll('[data-burnout-level]').forEach(card => card.classList.toggle('active', Number(card.dataset.burnoutLevel) === level));
+  const stages = $('#masterclassBurnoutStages');
+  if (stages) {
+    stages.innerHTML = MASTERCLASS_BURNOUT_DETAILS[level].map((item, index) => `
+      <article><i>${index + 1}</i><b>${escapeHtml(item[0])}</b><p>${escapeHtml(item[1])}</p></article>
+    `).join('');
+  }
   trackEvent('masterclass_burnout_test_completed', {screen:'masterclass_burnout', context:'masterclass', yes_count:yes, level});
 }
 
@@ -1084,7 +1126,7 @@ function renderResultWelcome() {
     <div class="result-flow-icon" aria-hidden="true">▤</div>
     <span class="onboarding-kicker">Результаты обследований</span>
     <h1>Ваши анализы — в одном месте</h1>
-    <p class="onboarding-lead">Здесь можно получить документы по номеру пробирки, попросить помочь с расшифровкой и задать вопрос о результатах медицинскому помощнику.</p>
+    <p class="onboarding-lead">Здесь можно получить документы по номеру пробирки, попросить помочь с расшифровкой и задать вопрос о результатах помощнику.</p>
     <div class="result-flow-note"><strong>Что понадобится</strong><p>Индивидуальный номер пробирки, который сообщили во время медицинского осмотра.</p></div>
     <div class="onboarding-actions"><button type="button" class="onboarding-next" data-result-action="begin">Далее</button></div>`);
 }
@@ -1453,6 +1495,7 @@ function openMessengerLinkModal({ source = 'menu', justLinked = '' } = {}) {
   const specialist = source === 'lab_specialist';
   const resultFlow = source === 'result_flow';
   const weightControl = source === 'weight_control';
+  const psychologySessionRequest = source === 'psychology_session_request';
   $('#messengerLinkTitle').textContent = resultFlow
     ? 'Войти через мессенджер'
     : 'Привязать мессенджер';
@@ -1462,6 +1505,8 @@ function openMessengerLinkModal({ source = 'menu', justLinked = '' } = {}) {
       ? 'Войдите через Telegram или MAX, чтобы сохранить найденные результаты и открывать их с других устройств.'
     : weightControl
       ? 'Привяжите Telegram или MAX, чтобы получать напоминания о приёмах пищи и не терять дневник питания.'
+    : psychologySessionRequest
+      ? 'Для заявки на платную онлайн-сессию привяжите Telegram или MAX — психологу понадобится способ связаться с вами и согласовать время.'
     : linkedMessengerProviders().size
       ? 'Добавьте ещё один способ входа или проверьте уже подключённые мессенджеры.'
       : 'Сохраните доступ к анкете, выбранным обследованиям, результатам и расшифровкам на любом устройстве.';
@@ -1469,7 +1514,10 @@ function openMessengerLinkModal({ source = 'menu', justLinked = '' } = {}) {
     ? 'Продолжить без привязки'
     : resultFlow ? 'Продолжить без входа'
     : weightControl ? 'Настроить время питания'
+    : psychologySessionRequest ? 'Вернуться к сессиям'
     : justLinked ? 'Готово' : 'Не сейчас';
+  $('#messengerLinkClose').classList.remove('hidden');
+  $('#messengerLinkLater').classList.remove('hidden');
   $('#messengerLinkModal').dataset.source = source;
   $('#messengerLinkModal').classList.remove('hidden');
   trackEvent('messenger_link_modal_viewed', {source, linked_count:linkedMessengerProviders().size});
@@ -1626,6 +1674,15 @@ function seedOnboardingAnswers(profile = {}) {
 
 function escapeAttr(value) {
   return String(value ?? '').replaceAll('&','&amp;').replaceAll('"','&quot;').replaceAll('<','&lt;').replaceAll('>','&gt;');
+}
+
+function safeUrl(value) {
+  try {
+    const url = new URL(String(value || '').trim(), location.origin);
+    return ['http:', 'https:'].includes(url.protocol) ? url.href : '';
+  } catch {
+    return '';
+  }
 }
 
 function setOnboardingMeta(stage, progress) {
@@ -3039,12 +3096,9 @@ async function finishConsultationPayment(openList = false) {
 }
 
 function psychologySessionPackage(count = state.psychologySessionPackageSize) {
-  const sessions = Math.max(1, Math.min(7, Number(count || 1)));
-  const steps = 6;
-  const numerator = 2500 * steps - (sessions - 1) * 1000;
-  const unitPrice = Math.floor((numerator + 25 * steps) / (50 * steps)) * 50;
-  const totalPrice = sessions * unitPrice;
-  return {sessions,unitPrice,totalPrice,saving:sessions * 2500 - totalPrice};
+  const sessions = 1;
+  const unitPrice = 3500;
+  return {sessions,unitPrice,totalPrice:unitPrice,saving:0};
 }
 
 function psychologySessionCountLabel(count) {
@@ -3053,7 +3107,11 @@ function psychologySessionCountLabel(count) {
 
 function psychologyPackageFromOrder(order) {
   const product = (order?.items || []).find(item => ['psychology_session','psychology_session_package'].includes(item.id));
-  return psychologySessionPackage(product?.sessions || 1);
+  if (!product) return psychologySessionPackage(1);
+  const sessions = Math.max(1, Number(product.sessions || 1));
+  const totalPrice = Math.max(0, Number(product.price || 0));
+  const unitPrice = Math.max(0, Number(product.unit_price || totalPrice / sessions));
+  return {sessions,unitPrice,totalPrice,saving:0};
 }
 
 function renderPsychologySessionPayment() {
@@ -3062,6 +3120,8 @@ function renderPsychologySessionPayment() {
   const packageInfo = psychologySessionPackage();
   const countLabel = psychologySessionCountLabel(packageInfo.sessions);
   const totalLabel = packageInfo.totalPrice.toLocaleString('ru-RU');
+  const offerUrl = safeUrl(state.publicConfig.psychology_offer_url);
+  const personalDataUrl = safeUrl(state.publicConfig.personal_data_policy_url);
   $('#appShell').classList.add('hidden');
   $('#onboarding').classList.remove('hidden');
   setOnboardingMeta('Сессия с психологом', 92);
@@ -3069,10 +3129,14 @@ function renderPsychologySessionPayment() {
     ? `<label class="payment-email-label">Электронная почта для онлайн-чека <span>обязательное поле</span><input id="psychologySessionReceiptEmail" type="email" autocomplete="email" maxlength="254" placeholder="name@example.ru" required value="${escapeAttr(state.paymentReceiptEmail)}"></label>` : '';
   $('#onboardingContent').innerHTML = `
     <span class="onboarding-kicker">Психологическая поддержка</span>
-    <h1>Оплата сессий</h1>
-    <p class="onboarding-lead">После подтверждения оплаты ${countLabel} появятся в вашем балансе. Заявку на созвон можно будет оставить в меню психологического чата.</p>
-    <section class="consultation-payment-card"><header><strong>${countLabel} с психологом</strong><b>${totalLabel} ₽</b></header><p>${packageInfo.unitPrice.toLocaleString('ru-RU')} ₽ за сессию. История сессий и доступный баланс сохраняются в меню психологического чата.</p></section>
+    <h1>Оплата сессии</h1>
+    <p class="onboarding-lead">После подтверждения оплаты одна 60-минутная сессия появится в вашем балансе. Заявку на онлайн-встречу можно будет оставить в меню психологического чата.</p>
+    <section class="consultation-payment-card"><header><strong>${countLabel} с психологом · 60 минут</strong><b>${totalLabel} ₽</b></header><p>История сессий и доступный баланс сохраняются в меню психологического чата.</p></section>
     ${emailField}
+    <div class="psychology-payment-consents">
+      <label><input id="psychologyAcceptOffer" type="checkbox" required><span>Я принимаю условия <a href="${escapeAttr(offerUrl)}" target="_blank" rel="noopener noreferrer">публичной оферты</a></span></label>
+      <label><input id="psychologyAcceptPersonalData" type="checkbox" required><span>Я даю согласие на обработку персональных данных и ознакомлен(а) с <a href="${escapeAttr(personalDataUrl)}" target="_blank" rel="noopener noreferrer">политикой обработки данных</a></span></label>
+    </div>
     <div class="onboarding-actions"><button type="button" class="onboarding-back" data-onboarding-action="cancel-psychology-session-payment">Назад</button><button type="button" class="onboarding-next" data-onboarding-action="pay-psychology-session">Оплатить ${totalLabel} ₽</button></div>`;
   trackMasterclassScreen('psychology_session_payment');
 }
@@ -3081,6 +3145,12 @@ async function startPsychologySessionPayment() {
   const receiptInput = $('#psychologySessionReceiptEmail');
   if (receiptInput && !receiptInput.checkValidity()) {
     receiptInput.reportValidity();
+    return;
+  }
+  const offerConsent = $('#psychologyAcceptOffer');
+  const personalDataConsent = $('#psychologyAcceptPersonalData');
+  if (!offerConsent?.checked || !personalDataConsent?.checked) {
+    showOnboardingError('Подтвердите оба согласия перед переходом к оплате');
     return;
   }
   state.paymentReceiptEmail = receiptInput?.value?.trim() || '';
@@ -3095,6 +3165,8 @@ async function startPsychologySessionPayment() {
         conversation_id:state.paymentReviewConversationId || state.conversationId,
         session_count:psychologySessionPackage().sessions,
         receipt_email:state.paymentReceiptEmail,
+        accept_offer:true,
+        accept_personal_data:true,
       }),
     });
     const order = result.order || {};
@@ -3137,10 +3209,10 @@ function renderPsychologySessionPaymentSuccess(order) {
   $('#onboardingContent').innerHTML = `
     <div class="payment-success-result">
       <span class="payment-result-icon success" aria-hidden="true">✓</span>
-      <span class="onboarding-kicker">Сессии оплачены</span>
-      <h1>${countLabel} добавлены</h1>
-      <p class="onboarding-lead">Оплата ${packageInfo.totalPrice.toLocaleString('ru-RU')} ₽ подтверждена. Сессии доступны в балансе психологического чата.</p>
-      <section class="payment-find-guide"><strong>Как оставить заявку</strong><p>Откройте список сессий в психологическом чате и нажмите «Новая сессия». Психолог получит заявку и свяжется с вами для согласования времени созвона.</p></section>
+      <span class="onboarding-kicker">Сессия оплачена</span>
+      <h1>${countLabel} добавлена</h1>
+      <p class="onboarding-lead">Оплата ${packageInfo.totalPrice.toLocaleString('ru-RU')} ₽ подтверждена. 60-минутная сессия доступна в балансе психологического чата.</p>
+      <section class="payment-find-guide"><strong>Как оставить заявку</strong><p>Откройте список сессий в психологическом чате и нажмите «Новая сессия». После этого психолог свяжется с вами для согласования времени онлайн-встречи.</p></section>
       <div class="onboarding-actions"><button type="button" class="onboarding-next" data-onboarding-action="open-psychology-sessions-after-payment">Оставить заявку</button><button type="button" class="onboarding-back" data-onboarding-action="open-psychology-session-chat">Вернуться в чат</button></div>
     </div>`;
   trackMasterclassScreen('psychology_session_payment_success');
@@ -3284,7 +3356,7 @@ function renderExamSkipCompletion() {
         <p>Вы решили пока не выбирать дополнительные обследования. Если захотите, к ним можно будет вернуться позже через меню сервиса.</p>
         <p><strong>В Консилиуме вы сможете:</strong></p>
         <ul class="exam-chat-benefits">
-          <li>задавать медицинскому помощнику вопросы о здоровье, питании и медицинском осмотре;</li>
+          <li>задавать помощнику вопросы о здоровье, питании и медицинском осмотре;</li>
           <li>получать результаты анализов по номеру пробирки и просить помочь с расшифровкой;</li>
           <li>сохранять историю обращений и важные сведения о здоровье;</li>
           <li>при необходимости пригласить медицинского специалиста в чат.</li>
@@ -3695,14 +3767,18 @@ $('#onboardingContent').addEventListener('focusin', event => {
   }, 180);
 });
 
+function visibleAssistant(agent) {
+  return state.conversationType === 'masterclass_psychology'
+    ? {...agent, name:'Вита', role:'Помощник-психолог', initials:'В'}
+    : agent;
+}
+
 function setActiveAgent(id) {
   state.active = 'manager';
-  const agent = AGENTS.manager;
+  const agent = visibleAssistant(AGENTS.manager);
   $('#headerAvatar').textContent = agent.initials;
   $('#headerName').textContent = agent.name;
-  $('#headerRole').textContent = state.conversationType === 'masterclass_psychology'
-    ? 'Психологическая поддержка'
-    : agent.role;
+  $('#headerRole').textContent = agent.role;
 }
 
 const labInterpretationSections = [
@@ -3780,7 +3856,7 @@ function addMessage(sender, text, agentId = state.active, urgent = false, create
     const existing = messages.querySelector(`[data-message-id="${messageId}"]`);
     if (existing) return existing;
   }
-  const agent = AGENTS[agentId] || AGENTS.manager;
+  const agent = visibleAssistant(AGENTS[agentId] || AGENTS.manager);
   const humanManager = sender === 'agent' && metadata.sender_type === 'human_manager';
   const humanRole = metadata.staff_role === 'doctor'
     ? 'Врач-специалист' : metadata.staff_role === 'psychologist' ? 'Психолог' : 'Менеджер';
@@ -3841,6 +3917,11 @@ function addMessage(sender, text, agentId = state.active, urgent = false, create
       && metadata.action === 'psychology_session_payment_instruction'
     ? '<div class="message-messenger-actions message-psychology-session-actions"><button type="button" class="message-checkup-reoffer" data-psychology-sessions-open>Открыть меню сессий</button></div>'
     : '';
+  const psychologySessionInvitationAction = sender === 'agent'
+      && metadata.action === 'psychology_session_invitation'
+      && safeUrl(metadata.meeting_url)
+    ? `<div class="message-messenger-actions message-psychology-session-actions"><a class="message-checkup-reoffer" href="${escapeAttr(safeUrl(metadata.meeting_url))}" target="_blank" rel="noopener noreferrer">${escapeHtml(metadata.action_label || 'Подключиться к видеовстрече')}</a></div>`
+    : '';
   const contextCompactAction = sender === 'agent' && metadata.context_limit_warning
     ? metadata.context_compacted
       ? '<div class="message-context-compaction compacted"><small>✓ Предыдущая часть диалога сжата — новый отсчёт начат</small></div>'
@@ -3849,7 +3930,7 @@ function addMessage(sender, text, agentId = state.active, urgent = false, create
   const userTextMarkup = String(text || '').trim() ? `<p>${escapeHtml(text)}</p>` : '';
   wrapper.innerHTML = sender === 'user'
     ? `<div class="bubble user-bubble">${attachmentMarkup}${userTextMarkup}<span>${time}</span></div><div class="message-send-error hidden" role="status"><span>Ошибка отправки</span><button type="button" data-message-retry>Повторить</button></div>`
-    : `<div class="message-avatar">${humanManager ? (metadata.staff_role === 'doctor' ? 'В' : metadata.staff_role === 'psychologist' ? 'Ψ' : 'Ч') : agent.initials}</div><div><div class="message-author"><strong>${humanManager ? escapeHtml(metadata.manager_name || humanRole) : agent.name}</strong><span>${humanManager ? humanRole : agent.role}</span>${cached}</div><div class="bubble agent-bubble">${assistantContent}${labDocuments}${reofferAction}${reminderAction}${weightDiaryAction}${messengerLinkAction}${bodyParametersAction}${mealConfirmationAction}${checkupPurchaseCancelAction}${psychologySessionPaymentAction}${contextCompactAction}<span>${time}</span></div></div>`;
+    : `<div class="message-avatar">${humanManager ? (metadata.staff_role === 'doctor' ? 'В' : metadata.staff_role === 'psychologist' ? 'Ψ' : 'Ч') : agent.initials}</div><div><div class="message-author"><strong>${humanManager ? escapeHtml(metadata.manager_name || humanRole) : agent.name}</strong><span>${humanManager ? humanRole : agent.role}</span>${cached}</div><div class="bubble agent-bubble">${assistantContent}${labDocuments}${reofferAction}${reminderAction}${weightDiaryAction}${messengerLinkAction}${bodyParametersAction}${mealConfirmationAction}${checkupPurchaseCancelAction}${psychologySessionPaymentAction}${psychologySessionInvitationAction}${contextCompactAction}<span>${time}</span></div></div>`;
   messages.appendChild(wrapper);
   scrollChatToBottom();
   return wrapper;
@@ -3915,7 +3996,7 @@ function showTyping(agentId = 'manager') {
   const el = document.createElement('div');
   el.className = 'message-row agent typing-row';
   el.id = 'typing';
-  el.innerHTML = `<div class="message-avatar">${AGENTS[agentId].initials}</div><div class="typing"><i></i><i></i><i></i></div>`;
+  el.innerHTML = `<div class="message-avatar">${visibleAssistant(AGENTS[agentId] || AGENTS.manager).initials}</div><div class="typing"><i></i><i></i><i></i></div>`;
   messages.appendChild(el);
   scrollChatToBottom();
 }
@@ -3926,7 +4007,7 @@ function resetTimeline() {
 
 function addTimeline(agentId, title, detail, status = 'done') {
   if (timeline.querySelector('.empty-state')) timeline.innerHTML = '';
-  const agent = AGENTS[agentId] || AGENTS.manager;
+  const agent = visibleAssistant(AGENTS[agentId] || AGENTS.manager);
   const item = document.createElement('div');
   item.className = `timeline-item ${status}`;
   item.innerHTML = `<div class="timeline-marker">${status === 'active' ? '<i></i>' : '✓'}</div><div><strong>${escapeHtml(title)}</strong><p>${escapeHtml(detail)}</p><span>${agent.name} · ${agent.role}</span></div>`;
@@ -3954,7 +4035,8 @@ async function processMessage(text, options = {}) {
   if (state.processing) return;
   state.processing = true;
   beginUserProgress('Готовим ответ…');
-  $('#taskStatus').textContent = 'Ольга изучает вопрос';
+  $('#taskStatus').textContent = state.conversationType === 'masterclass_psychology'
+    ? 'Вита изучает вопрос' : 'Ольга изучает вопрос';
   $('#suggestions').classList.add('hidden');
   const outgoingAttachments = options.attachments
     ? [...options.attachments]
@@ -3993,7 +4075,12 @@ async function processMessage(text, options = {}) {
     if (result.assistant_message) {
       showHandoff(result.handoff_from, result.agent);
       setActiveAgent(result.agent);
-      addTimeline(result.agent, result.emergency ? 'Срочная оценка' : 'Ольга ответила', result.handoff_reason, 'active');
+      addTimeline(
+        result.agent,
+        result.emergency ? 'Срочная оценка' : state.conversationType === 'masterclass_psychology' ? 'Вита ответила' : 'Ольга ответила',
+        result.handoff_reason,
+        'active',
+      );
       addMessage(
         'agent', result.assistant_message.content, result.agent, result.emergency,
         result.assistant_message.created_at,
@@ -4006,10 +4093,22 @@ async function processMessage(text, options = {}) {
     renderInsights();
 
     if (result.action === 'waiting_human') {
-      $('#taskStatus').textContent = 'Сообщение ожидает ответа медицинского специалиста';
-      addTimeline('manager', 'Сообщение передано', 'Медицинский специалист увидит его в своей очереди', 'active');
+      const psychologyChat = state.conversationType === 'masterclass_psychology';
+      $('#taskStatus').textContent = psychologyChat
+        ? 'Сообщение ожидает ответа психолога'
+        : 'Сообщение ожидает ответа специалиста';
+      addTimeline(
+        psychologyChat ? 'psychologist' : 'manager',
+        'Сообщение передано',
+        psychologyChat
+          ? 'Психолог получил уведомление и увидит сообщение в своей очереди'
+          : 'Специалист увидит его в своей очереди',
+        'active',
+      );
     } else if (result.action === 'human_preference') {
-      $('#taskStatus').textContent = 'Сообщения ждут ответа медицинского специалиста';
+      $('#taskStatus').textContent = state.conversationType === 'masterclass_psychology'
+        ? 'Сообщения ждут ответа психолога'
+        : 'Сообщения ждут ответа специалиста';
     } else if (result.action === 'checkup_purchase') {
       $('#taskStatus').textContent = 'Заявка на чекап передана менеджеру';
       addTimeline('manager', 'Заявка на чекап передана', 'Менеджер поможет оформить покупку в этом диалоге', 'active');
@@ -4209,6 +4308,11 @@ async function syncConversationUpdates() {
     if (error.message === 'Диалог не найден') {
       state.conversationId = null;
       localStorage.removeItem('consilium_conversation_id');
+      state.conversationType = 'general';
+      const items = await api('/api/conversations').catch(() => []);
+      const fallback = items.find(item => item.dialog_type === 'masterclass_psychology') || items[0];
+      if (fallback) await openConversation(fallback.id);
+      else newConversation();
     }
   }
 }
@@ -4254,11 +4358,15 @@ async function openConversation(id) {
     document.body.classList.remove('show-team');
     maybeOpenPsychologyChatGuide();
   } catch (error) {
-    if (id === state.conversationId) {
+    if (error.code === 'http_404' && id === state.conversationId) {
       state.conversationId = null;
       localStorage.removeItem('consilium_conversation_id');
-      newConversation();
+      const items = await api('/api/conversations').catch(() => []);
+      const fallback = items.find(item => item.dialog_type === 'masterclass_psychology') || items[0];
+      if (fallback && fallback.id !== id) await openConversation(fallback.id);
+      else newConversation();
     } else {
+      console.error('Не удалось открыть диалог', error);
       addSystemError(error.message);
     }
   } finally {
@@ -4283,7 +4391,7 @@ function newConversation() {
   setActiveAgent('manager');
   $('#suggestions').classList.remove('hidden');
   $('#taskStatus').textContent = 'Ожидает задачу';
-  addMessage('agent', 'Здравствуйте! Я Ольга, ваш медицинский помощник. Задавайте вопросы о здоровье, питании, спорте или возможностях сервиса — я помогу разобраться и при необходимости предложу подключить человека.', 'manager');
+  addMessage('agent', 'Здравствуйте! Я Ольга, ваш помощник. Задавайте вопросы о здоровье, питании, спорте или возможностях сервиса — я помогу разобраться и при необходимости предложу подключить человека.', 'manager');
   loadConversationList();
 }
 
@@ -4341,12 +4449,12 @@ const PSYCHOLOGY_CHAT_GUIDE_SLIDES = [
   {
     target:'#psychologySessionsButton',
     title:'Сессии с психологом',
-    text:'Здесь находится история созвонов, остаток предоплаченных сессий и кнопка новой заявки. Первая 30-минутная сессия бесплатна.',
+    text:'Здесь находится история онлайн-встреч, остаток предоплаченных сессий и кнопка новой заявки. Первая консультация бесплатна.',
   },
   {
     target:'#messageInput',
-    title:'Напишите Ольге',
-    text:'Опишите ситуацию своими словами. Ольга поможет разобраться в состоянии, задаст уточняющие вопросы и предложит следующий шаг.',
+    title:'Напишите Вите',
+    text:'Опишите ситуацию своими словами. Вита поможет разобраться в состоянии, задаст уточняющие вопросы и предложит следующий шаг.',
   },
   {
     target:'#attachButton',
@@ -4426,7 +4534,7 @@ function renderPsychologyChatGuide() {
   if (finalStep) {
     $('#psychologyGuideProgress').textContent = 'ГОТОВО';
     $('#psychologyChatGuideTitle').textContent = 'Всё понятно?';
-    $('#psychologyChatGuideText').textContent = 'Обучение завершено. Его можно повторить сейчас или закрыть и начать общение с Ольгой.';
+    $('#psychologyChatGuideText').textContent = 'Обучение завершено. Его можно повторить сейчас или закрыть и начать общение с Витой.';
     $('#psychologyGuideCard').style.cssText = 'left:50%;top:50%;transform:translate(-50%,-50%);width:min(410px,calc(100vw - 28px))';
     return;
   }
@@ -4504,21 +4612,21 @@ function renderPsychologySessions(summary = {}) {
   const newSessionSubtitle = pending
     ? `Заявка № ${escapeHtml(pending.request_number || '—')} отправлена · психолог свяжется для согласования времени`
     : summary.free_available
-      ? 'Первая сессия · 30 минут абсолютно бесплатно'
+      ? 'Первая консультация бесплатна'
       : Number(summary.remaining_paid || 0) > 0
-        ? '30 минут · будет использована оплаченная сессия'
-        : '30 минут · для заявки потребуется купить сессию';
+        ? '60 минут · будет использована оплаченная сессия'
+        : 'Для заявки потребуется купить 60-минутную сессию';
   const newCard = `<button type="button" class="psychology-session-card psychology-session-new ${pending ? 'requested' : ''}" data-psychology-session-request>
     <i>＋</i><div><strong>Новая сессия</strong><span>${newSessionSubtitle}</span></div><b>Открыть</b>
   </button>`;
   const history = sessions.length ? sessions.map(item => {
     return `<article class="psychology-session-card">
-      <i>№ ${item.session_number}</i><div><strong>${item.access_type === 'free' ? 'Бесплатная сессия · 30 минут' : 'Сессия с психологом · 30 минут'}</strong><span>${psychologySessionDate(item.completed_at || item.started_at)}</span></div><b>Проведена</b>
+      <i>№ ${item.session_number}</i><div><strong>${item.access_type === 'free' ? 'Первая консультация · бесплатно' : 'Сессия с психологом · 60 минут'}</strong><span>${psychologySessionDate(item.completed_at || item.started_at)}</span></div><b>Проведена</b>
     </article>`;
   }).join('') : '<div class="psychology-sessions-empty">Проведённых сессий пока нет</div>';
   $('#psychologySessionsList').innerHTML = newCard + history;
   const buyButton = $('#psychologySessionBuyButton');
-  const paymentsEnabled = Boolean(state.publicConfig.online_payments_enabled);
+  const paymentsEnabled = Boolean(state.publicConfig.psychology_session_payments_enabled);
   buyButton.disabled = !paymentsEnabled;
   buyButton.textContent = paymentsEnabled
     ? 'Купить'
@@ -4553,15 +4661,13 @@ function closePsychologySessions() {
 
 function renderPsychologyPackages() {
   const selected = psychologySessionPackage();
-  $('#psychologyPackagesList').innerHTML = Array.from({length:7}, (_, index) => {
-    const item = psychologySessionPackage(index + 1);
-    const saving = item.saving > 0 ? `<em>Экономия ${item.saving.toLocaleString('ru-RU')} ₽</em>` : '<em>Без скидки</em>';
-    return `<button type="button" class="psychology-package-option ${item.sessions === selected.sessions ? 'selected' : ''}" data-psychology-package="${item.sessions}" role="radio" aria-checked="${item.sessions === selected.sessions}">
-      <i aria-hidden="true">✓</i><span><strong>${psychologySessionCountLabel(item.sessions)}</strong><small>${item.unitPrice.toLocaleString('ru-RU')} ₽ за сессию</small>${saving}</span><b>${item.totalPrice.toLocaleString('ru-RU')} ₽</b>
-    </button>`;
-  }).join('');
-  $('#psychologyPackageTotal').innerHTML = `<span>К оплате за ${psychologySessionCountLabel(selected.sessions)}</span><strong>${selected.totalPrice.toLocaleString('ru-RU')} ₽</strong>`;
+  $('#psychologyPackagesList').innerHTML = `<button type="button" class="psychology-package-option selected" data-psychology-package="1" role="radio" aria-checked="true">
+    <i aria-hidden="true">✓</i><span><strong>1 сессия с психологом</strong><small>Онлайн-встреча · 60 минут</small></span><b>${selected.totalPrice.toLocaleString('ru-RU')} ₽</b>
+  </button>`;
+  $('#psychologyPackageTotal').innerHTML = `<span>К оплате за 1 сессию</span><strong>${selected.totalPrice.toLocaleString('ru-RU')} ₽</strong>`;
   $('#psychologyPackagesContinue').textContent = `Купить · ${selected.totalPrice.toLocaleString('ru-RU')} ₽`;
+  const security = $('#psychologyPackagesModal .psychology-sessions-security');
+  if (security) security.innerHTML = '<span aria-hidden="true">✓</span> Оплата и статус подтверждаются напрямую через ЮKassa';
 }
 
 function openPsychologyPackages() {
@@ -4592,30 +4698,44 @@ function openPsychologySessionRequest() {
   const button = $('#psychologySessionRequestConfirm');
   const pending = summary.pending_session;
   const canRequest = Boolean(summary.free_available || Number(summary.remaining_paid || 0) > 0);
+  const paidRequestNeedsMessenger = !summary.free_available
+    && Number(summary.remaining_paid || 0) > 0
+    && !linkedMessengerProviders().size;
+  const managerButton = $('#psychologySessionRequestManager');
   trackMasterclassAction('request', 'psychology_sessions');
   trackMasterclassScreen('psychology_session_request');
   $('#psychologySessionRequestError').classList.add('hidden');
   if (pending) {
     $('#psychologySessionRequestTitle').textContent = 'Заявка уже отправлена';
-    $('#psychologySessionRequestText').textContent = `Заявка № ${pending.request_number || '—'} передана психологам. Психолог свяжется с вами, чтобы согласовать удобное время 30-минутного созвона.`;
+    $('#psychologySessionRequestText').textContent = `Заявка № ${pending.request_number || '—'} отправлена. Ожидайте ответа специалиста — психолог свяжется с вами, чтобы согласовать удобное время онлайн-встречи.`;
     button.dataset.mode = 'close';
     button.textContent = 'Понятно';
     $('#psychologySessionRequestCancel').classList.add('hidden');
+    managerButton.classList.add('hidden');
+  } else if (paidRequestNeedsMessenger) {
+    $('#psychologySessionRequestTitle').textContent = 'Для сессии нужен способ связи';
+    $('#psychologySessionRequestText').textContent = 'Чтобы психолог смог согласовать дату и время платной онлайн-сессии, привяжите Telegram или MAX. Если вы не хотите привязывать мессенджер, позовите менеджера в чат — он поможет обсудить другой способ связи.';
+    button.dataset.mode = 'link_messenger';
+    button.textContent = 'Привязать Telegram или MAX';
+    $('#psychologySessionRequestCancel').classList.remove('hidden');
+    managerButton.classList.remove('hidden');
   } else if (canRequest) {
     const free = Boolean(summary.free_available);
     $('#psychologySessionRequestTitle').textContent = 'Оставить заявку на сессию?';
     $('#psychologySessionRequestText').textContent = free
-      ? 'Первая 30-минутная сессия абсолютно бесплатна. Заявку получат психологи, после чего психолог свяжется с вами и согласует удобное время созвона.'
-      : 'Будет зарезервирована одна предоплаченная сессия. Заявку получат психологи, после чего психолог свяжется с вами и согласует удобное время 30-минутного созвона.';
+      ? 'Первая консультация бесплатна. После отправки заявки психолог свяжется с вами и согласует удобное время онлайн-встречи.'
+      : 'Будет зарезервирована одна предоплаченная 60-минутная сессия. После отправки заявки психолог свяжется с вами и согласует удобное время онлайн-встречи.';
     button.dataset.mode = 'request';
     button.textContent = 'Да, оставить заявку';
     $('#psychologySessionRequestCancel').classList.remove('hidden');
+    managerButton.classList.add('hidden');
   } else {
     $('#psychologySessionRequestTitle').textContent = 'Нужна оплаченная сессия';
-    $('#psychologySessionRequestText').textContent = 'Бесплатная 30-минутная сессия уже использована. Выберите пакет сессий, после чего сможете оставить заявку на созвон.';
+    $('#psychologySessionRequestText').textContent = 'Бесплатная консультация уже использована. Купите одну 60-минутную сессию, после чего сможете оставить заявку на онлайн-встречу.';
     button.dataset.mode = 'purchase';
-    button.textContent = 'Выбрать пакет';
+    button.textContent = 'Купить сессию';
     $('#psychologySessionRequestCancel').classList.remove('hidden');
+    managerButton.classList.add('hidden');
   }
   $('#psychologySessionRequestModal').classList.remove('hidden');
 }
@@ -4638,12 +4758,25 @@ async function confirmPsychologySessionRequest() {
     beginPsychologySessionPurchase();
     return;
   }
+  if (mode === 'link_messenger') {
+    closePsychologySessionRequest();
+    openMessengerLinkModal({source:'psychology_session_request'});
+    return;
+  }
   button.disabled = true;
   try {
     const result = await api('/api/psychology-sessions/request', {
       method:'POST', body:JSON.stringify({conversation_id:state.conversationId}),
     });
     renderPsychologySessions(result.summary || {});
+    if (result.message) {
+      addMessage(
+        'agent', result.message.content, result.message.agent_id || 'manager', false,
+        result.message.created_at,
+        {...(result.message.metadata || {}), _message_id:result.message.id},
+      );
+      state.lastMessageId = Math.max(state.lastMessageId || 0, Number(result.message.id || 0));
+    }
     trackMasterclassAction('submit', 'psychology_session_request');
     trackMasterclassScreen('psychology_sessions');
     closePsychologySessionRequest();
@@ -4655,6 +4788,33 @@ async function confirmPsychologySessionRequest() {
     $('#psychologySessionRequestError').classList.remove('hidden');
   } finally {
     button.disabled = false;
+  }
+}
+
+async function requestPsychologySessionManagerHelp() {
+  const button = $('#psychologySessionRequestManager');
+  if (!state.conversationId || button.disabled) return;
+  const originalText = button.textContent;
+  button.disabled = true;
+  button.textContent = 'Подключаем психолога…';
+  try {
+    const result = await api('/api/psychology-sessions/manager-help', {
+      method:'POST',
+      body:JSON.stringify({conversation_id:state.conversationId}),
+    });
+    closePsychologySessionRequest();
+    closePsychologySessions();
+    await openConversation(result.conversation_id);
+    $('#taskStatus').textContent = result.already_requested
+      ? 'Психолог уже приглашён'
+      : 'Психолог приглашён в чат';
+    trackEvent('psychology_session_manager_help_requested', {});
+  } catch (error) {
+    $('#psychologySessionRequestError').textContent = error.message;
+    $('#psychologySessionRequestError').classList.remove('hidden');
+  } finally {
+    button.disabled = false;
+    button.textContent = originalText;
   }
 }
 
@@ -6711,7 +6871,7 @@ async function deleteMemory(id) {
 
 const durationLabels = { minutes:'Несколько минут', hours:'Несколько часов', days:'Несколько дней', weeks:'Несколько недель', months:'Несколько месяцев' };
 const patternLabels = { constant:'Постоянно', episodes:'Приступами', movement:'При движении', touch:'При прикосновении', unknown:'Не уверен(а)' };
-const agentLabels = Object.fromEntries(Object.keys(AGENTS).map(id => [id, 'Ольга · Медицинский помощник']));
+const agentLabels = Object.fromEntries(Object.keys(AGENTS).map(id => [id, 'Ольга · Помощник']));
 
 function renderActiveBodySymptoms() {
   const active = state.bodySymptoms.filter(item => item.status === 'active');
@@ -6906,13 +7066,13 @@ function healthEventMarkup(item) {
     meta = `<span>Интенсивность: ${details.intensity}/10</span><span>${patternLabels[details.pattern] || details.pattern}</span>${details.duration ? `<span>${durationLabels[details.duration] || details.duration}</span>` : ''}${details.notes ? `<span>${escapeHtml(details.notes)}</span>` : ''}`;
     actions = `<button data-symptom-status="${details.id}" data-next-status="${details.status === 'active' ? 'resolved' : 'active'}">${details.status === 'active' ? 'Отметить улучшение' : 'Вернуть в активные'}</button><button class="danger" data-symptom-delete="${details.id}">Удалить</button>`;
   } else if (item.type === 'consultation') {
-    summary = agentLabels[details.agent_id] || 'Ольга · Медицинский помощник';
+    summary = agentLabels[details.agent_id] || 'Ольга · Помощник';
     actions = `<button data-history-conversation="${escapeHtml(details.conversation_id)}">Открыть диалог</button>`;
   } else if (item.type === 'document') {
     summary = item.summary || 'Добавлен медицинский документ';
     if (details.conversation_id) actions = `<button data-history-conversation="${escapeHtml(details.conversation_id)}">Открыть диалог</button>`;
   } else if (item.type === 'council') {
-    meta = '<span>Ольга · Медицинский помощник</span>';
+    meta = '<span>Ольга · Помощник</span>';
     if (details.conversation_id) actions = `<button data-history-conversation="${escapeHtml(details.conversation_id)}">Открыть заключение</button>`;
   }
   return `<article class="health-event" data-type="${item.type}">
@@ -7299,6 +7459,7 @@ function closePsychologySessionRequestToSessions() {
 $('#psychologySessionRequestClose').addEventListener('click', closePsychologySessionRequestToSessions);
 $('#psychologySessionRequestCancel').addEventListener('click', closePsychologySessionRequestToSessions);
 $('#psychologySessionRequestConfirm').addEventListener('click', confirmPsychologySessionRequest);
+$('#psychologySessionRequestManager').addEventListener('click', requestPsychologySessionManagerHelp);
 $('#psychologySessionRequestModal').addEventListener('click', event => {
   if (event.target.id === 'psychologySessionRequestModal') closePsychologySessionRequestToSessions();
 });
