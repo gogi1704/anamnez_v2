@@ -48,11 +48,25 @@ PSYCHOLOGY_CRISIS_RISK = re.compile(
     r"отравлюсь|выпрыгну|порежу\s+себя|убью\s+(?:его|е[её]|их|тебя))\b|"
     r"\b(?:есть|составил[аи]?|продумал[аи]?)\b.{0,35}\bплан\w*\b.{0,35}"
     r"\b(?:суицид\w*|самоубийств\w*|убийств\w*)\b|"
-    r"\b(?:не\s+хочу\s+жить|лучше\s+бы\s+меня\s+не\s+было)\b)",
+    r"\b(?:не\s+хочу\s+жить|лучше\s+бы\s+меня\s+не\s+было|"
+    r"всем\s+будет\s+лучше\s+без\s+меня|"
+    r"не\s+вижу\s+(?:больше\s+)?смысла\s+(?:жить|дальше|продолжать)|"
+    r"жизнь\s+(?:больше\s+)?не\s+имеет\s+смысла|"
+    r"(?:хочу|лучше\s+бы)\s+(?:уснуть|заснуть)\s+и\s+не\s+проснуться|"
+    r"(?:хочу|мечтаю|думаю|решил[аи]?|намерен[а]?)\b.{0,60}"
+    r"(?:исчезнуть\s+навсегда|уйти\s+из\s+жизни|не\s+проснуться|"
+    r"сделать\s+с\s+собой\s+что[- ]?нибудь)|"
+    r"(?:прощайте|прощаюсь\s+навсегда|это\s+мо[её]\s+последнее\s+сообщение)|"
+    r"(?:боюсь|чувствую|кажется),?\s+что\s+(?:могу\s+)?(?:сорваться|не\s+сдержаться)"
+    r".{0,55}(?:ударить|убить|напасть|навредить|причинить\s+вред)|"
+    r"(?:хочу|собираюсь|планирую|решил[аи]?|намерен[а]?)\b.{0,60}"
+    r"(?:зарезать|застрелить|избить|напасть\s+на|расправиться\s+с)|"
+    r"(?:я\s+)?(?:уже\s+)?(?:порезал[а]?\s+себя|"
+    r"(?:принял[а]?|выпил[а]?)\s+(?:слишком\s+)?много\s+таблеток))\b)",
     re.IGNORECASE,
 )
 PSYCHOLOGY_CRISIS_NEGATION = re.compile(
-    r"\bне\s+(?:хочу|собираюсь|планирую|намерен[а]?)\s+"
+    r"\bне\s+(?:хочу|собираюсь|планирую|намерен[а]?|буду)\s+"
     r"(?:причин\w*\s+(?:себе|другим)\s+вред|навредить\s+(?:себе|другим)|"
     r"уби(?:ть|вать)\s+(?:себя|других))\b",
     re.IGNORECASE,
@@ -61,9 +75,19 @@ PSYCHOLOGY_CRISIS_NEGATION = re.compile(
 
 def _psychology_crisis_detected(message: str) -> bool:
     normalized = " ".join(str(message or "").split())
-    if not normalized or PSYCHOLOGY_CRISIS_NEGATION.search(normalized):
+    if not normalized:
         return False
-    return bool(PSYCHOLOGY_CRISIS_RISK.search(normalized))
+    clauses = re.split(
+        r"(?:[.!?;\n]+|\b(?:но|однако|зато)\b)", normalized,
+        flags=re.IGNORECASE,
+    )
+    for clause in clauses:
+        if not PSYCHOLOGY_CRISIS_RISK.search(clause):
+            continue
+        without_negated_intent = PSYCHOLOGY_CRISIS_NEGATION.sub("", clause)
+        if PSYCHOLOGY_CRISIS_RISK.search(without_negated_intent):
+            return True
+    return False
 
 
 def _normalize_health_passport(

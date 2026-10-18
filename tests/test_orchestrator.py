@@ -5404,19 +5404,28 @@ class OrchestratorTests(unittest.TestCase):
             app_script,
         )
 
-    def test_psychology_crisis_detector_catches_direct_intent_only(self):
+    def test_psychology_crisis_detector_catches_direct_and_indirect_intent(self):
         for message in (
             "Я хочу причинить себе вред",
             "Я планирую покончить с собой",
             "Боюсь, что сегодня убью его",
             "У меня есть план самоубийства",
             "Я не хочу жить",
+            "Всем будет лучше без меня",
+            "Не вижу больше смысла жить",
+            "Хочу уснуть и не проснуться",
+            "Думаю исчезнуть навсегда",
+            "Это моё последнее сообщение. Прощайте",
+            "Боюсь, что могу сорваться и ударить кого-нибудь",
+            "Я уже порезала себя",
+            "Я не хочу навредить себе, но боюсь, что убью его",
         ):
             with self.subTest(message=message):
                 self.assertTrue(_psychology_crisis_detected(message))
 
         for message in (
             "Я не хочу причинить себе вред",
+            "Я не собираюсь навредить себе",
             "Мы обсуждали тему суицида на лекции",
             "Иногда мне тревожно и одиноко",
             "Как записаться на консультацию?",
