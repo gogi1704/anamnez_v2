@@ -168,6 +168,8 @@ def _notify_psychology_payment(order: dict | None) -> int:
         return 0
     if order.get("status") != "succeeded" or not order.get("paid"):
         return 0
+    if order.get("test"):
+        return 0
     private_order = db.payment_order_private(order["id"], require_owner=False)
     if not private_order:
         return 0
@@ -293,7 +295,7 @@ def _local_masterclass_test_url(browser_url: str) -> str:
         "", test_company, "masterclass_1",
     )
     link = db.provision_masterclass_access(
-        inn, company, code, _masterclass_access_token(source_key),
+        inn, company, code, _masterclass_access_token(source_key), is_test=True,
     )
     return f"{browser_url.rstrip('/')}/masterclass/{link['access_token']}"
 
@@ -394,6 +396,10 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
             personal_data_policy_url = _public_https_url(
                 settings.personal_data_policy_url
             )
+            masterclass_entry = db.current_masterclass_access()
+            psychology_test_payment = bool(
+                masterclass_entry and masterclass_entry.get("is_test")
+            )
             return self._json(200, {
                 "yandex_metrika_counter_id": counter_id if counter_id.isdigit() else "",
                 "yandex_metrika_marketer_counter_active": dedicated_marketer_counter,
@@ -404,9 +410,10 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                     settings.online_payments_enabled and yookassa.configured()
                 ),
                 "psychology_session_payments_enabled": bool(
-                    settings.online_payments_enabled
-                    and yookassa.configured()
+                    psychology_test_payment
+                    or (settings.online_payments_enabled and yookassa.configured())
                 ),
+                "psychology_session_payment_test_mode": psychology_test_payment,
                 "psychology_offer_url": psychology_offer_url,
                 "personal_data_policy_url": personal_data_policy_url,
                 "payment_receipt_email_required": bool(settings.yookassa_receipts_enabled),
@@ -663,6 +670,7 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                         )
                         test_link = db.provision_masterclass_access(
                             inn, company, code, _masterclass_access_token(source_key),
+                            is_test=True,
                         )
                         masterclasses["test_url"] = (
                             f"{settings.public_base_url}/masterclass/{test_link['access_token']}"
@@ -1682,6 +1690,23 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
             order = None
             try:
                 payload = self._read_json()
+                masterclass_entry = db.current_masterclass_access()
+                test_payment = bool(
+                    masterclass_entry and masterclass_entry.get("is_test")
+                )
+                conversation_id = str(payload.get("conversation_id") or "").strip()
+                session_count = payload.get("session_count", 1)
+                if test_payment:
+                    order = db.create_psychology_session_payment_order(
+                        conversation_id, session_count,
+                    )
+                    result = db.complete_test_psychology_session_payment(order["id"])
+                    self._track_analytics("psychology_session_payment_created", {
+                        "provider": "test", "test": True,
+                        "amount_kopecks": round(float(result.get("amount", "0")) * 100),
+                        "session_count": int(session_count),
+                    })
+                    return self._json(201, {"order": result})
                 if not settings.online_payments_enabled:
                     raise yookassa.YooKassaUnavailable("Онлайн-оплата временно недоступна")
                 if not yookassa.configured():
@@ -1694,8 +1719,6 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                     raise ValueError("Подтвердите согласие с условиями оферты")
                 if legal_links_configured and payload.get("accept_personal_data") is not True:
                     raise ValueError("Подтвердите согласие на обработку персональных данных")
-                conversation_id = str(payload.get("conversation_id") or "").strip()
-                session_count = payload.get("session_count", 1)
                 order = db.create_psychology_session_payment_order(
                     conversation_id, session_count,
                 )

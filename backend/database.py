@@ -1515,6 +1515,7 @@ def normalize_masterclass_identity(
 
 def provision_masterclass_access(
     inn: str, company: str, masterclass_code: str, access_token: str,
+    *, is_test: bool = False,
 ) -> dict:
     source_key, normalized_inn, normalized_company, code, label = (
         normalize_masterclass_identity(inn, company, masterclass_code)
@@ -1534,22 +1535,23 @@ def provision_masterclass_access(
         conn.execute(
             """INSERT INTO masterclass_access_links
                (id,source_key,inn,company,masterclass_code,masterclass_name,
-                access_token,token_hash,created_at,updated_at)
-               VALUES (?,?,?,?,?,?,?,?,?,?)
+                access_token,token_hash,created_at,updated_at,is_test)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?)
                ON CONFLICT(source_key) DO UPDATE SET
                  company=excluded.company,
                  masterclass_name=excluded.masterclass_name,
+                 is_test=excluded.is_test,
                  updated_at=excluded.updated_at""",
             (
                 link_id, source_key, normalized_inn, normalized_company, code,
-                label, stored_token, stored_hash, created_at, now,
+                label, stored_token, stored_hash, created_at, now, int(bool(is_test)),
             ),
         )
         conn.commit()
     return {
         "id": link_id, "inn": normalized_inn, "company": normalized_company,
         "masterclass_code": code, "masterclass_name": label,
-        "access_token": stored_token,
+        "access_token": stored_token, "is_test": bool(is_test),
     }
 
 
@@ -1582,7 +1584,7 @@ def record_masterclass_access(access_token: str, chel_id: str) -> dict:
 def current_masterclass_access() -> dict | None:
     with connection() as conn:
         row = conn.execute(
-            """SELECT l.id,l.inn,l.company,l.masterclass_code,l.masterclass_name,
+            """SELECT l.id,l.inn,l.company,l.masterclass_code,l.masterclass_name,l.is_test,
                       u.first_seen_at,u.last_seen_at,u.continued_at,
                       u.profile_completed_at
                FROM masterclass_access_users u
@@ -4163,6 +4165,43 @@ def create_psychology_session_payment_order(
     return _public_payment_order(row)
 
 
+def complete_test_psychology_session_payment(order_id: str) -> dict:
+    """Complete a payment locally only for the dedicated test master-class link."""
+    chel_id = current_chel_id()
+    now = utc_now()
+    with _write_lock, connection() as conn:
+        access = conn.execute(
+            """SELECT l.is_test FROM masterclass_access_users AS u
+               JOIN masterclass_access_links AS l ON l.id=u.link_id
+               WHERE u.chel_id=? ORDER BY u.last_seen_at DESC LIMIT 1""",
+            (chel_id,),
+        ).fetchone()
+        if not access or not bool(access["is_test"]):
+            raise ValueError("Тестовая оплата доступна только по тестовой ссылке")
+        order = conn.execute(
+            """SELECT * FROM payment_orders
+               WHERE id=? AND chel_id=? AND order_type='psychology_session'""",
+            (str(order_id or ""), chel_id),
+        ).fetchone()
+        if not order:
+            raise ValueError("Заказ тестовой сессии не найден")
+        if order["status"] == "succeeded" and bool(order["paid"]):
+            return _public_payment_order(order)
+        if order["status"] not in {"creating", "pending", "abandoned"}:
+            raise ValueError("Тестовый заказ уже завершён")
+        conn.execute(
+            """UPDATE payment_orders SET provider_payment_id=?,status='succeeded',
+               paid=1,test=1,confirmation_url='',paid_at=COALESCE(paid_at,?),
+               hidden_at=NULL,updated_at=? WHERE id=?""",
+            (f"test_{uuid.uuid4().hex}", now, now, order["id"]),
+        )
+        conn.commit()
+        updated = conn.execute(
+            "SELECT * FROM payment_orders WHERE id=?", (order["id"],),
+        ).fetchone()
+    return _public_payment_order(updated)
+
+
 def psychology_session_summary(conversation_id: str) -> dict:
     """Return call-session history and the free/paid balance for one psychology chat."""
     conversation = get_conversation(conversation_id)
@@ -5749,7 +5788,8 @@ def init_db() -> None:
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
                 last_accessed_at TEXT,
-                visit_count INTEGER NOT NULL DEFAULT 0
+                visit_count INTEGER NOT NULL DEFAULT 0,
+                is_test INTEGER NOT NULL DEFAULT 0
             );
 
             CREATE TABLE IF NOT EXISTS ikp_access_users (
@@ -7010,6 +7050,16 @@ def init_db() -> None:
             conn.execute("ALTER TABLE onboarding_state ADD COLUMN questionnaire_skipped INTEGER NOT NULL DEFAULT 0")
         if "marketer_result_seen" not in onboarding_columns:
             conn.execute("ALTER TABLE onboarding_state ADD COLUMN marketer_result_seen INTEGER NOT NULL DEFAULT 0")
+
+        masterclass_link_columns = {
+            row[1] for row in conn.execute(
+                "PRAGMA table_info(masterclass_access_links)"
+            ).fetchall()
+        }
+        if "is_test" not in masterclass_link_columns:
+            conn.execute(
+                "ALTER TABLE masterclass_access_links ADD COLUMN is_test INTEGER NOT NULL DEFAULT 0"
+            )
 
         masterclass_user_columns = {
             row[1] for row in conn.execute(

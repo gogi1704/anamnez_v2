@@ -3122,7 +3122,8 @@ function renderPsychologySessionPayment() {
   const totalLabel = packageInfo.totalPrice.toLocaleString('ru-RU');
   const offerUrl = safeUrl(state.publicConfig.psychology_offer_url);
   const personalDataUrl = safeUrl(state.publicConfig.personal_data_policy_url);
-  const legalConsents = offerUrl !== '#' && personalDataUrl !== '#'
+  const testPayment = Boolean(state.publicConfig.psychology_session_payment_test_mode);
+  const legalConsents = !testPayment && offerUrl !== '#' && personalDataUrl !== '#'
     ? `<div class="psychology-payment-consents">
       <label><input id="psychologyAcceptOffer" type="checkbox" required><span>Я принимаю условия <a href="${escapeAttr(offerUrl)}" target="_blank" rel="noopener noreferrer">публичной оферты</a></span></label>
       <label><input id="psychologyAcceptPersonalData" type="checkbox" required><span>Я даю согласие на обработку персональных данных и ознакомлен(а) с <a href="${escapeAttr(personalDataUrl)}" target="_blank" rel="noopener noreferrer">политикой обработки данных</a></span></label>
@@ -3130,16 +3131,16 @@ function renderPsychologySessionPayment() {
   $('#appShell').classList.add('hidden');
   $('#onboarding').classList.remove('hidden');
   setOnboardingMeta('Сессия с психологом', 92);
-  const emailField = state.publicConfig.online_payments_enabled && state.publicConfig.payment_receipt_email_required
+  const emailField = !testPayment && state.publicConfig.online_payments_enabled && state.publicConfig.payment_receipt_email_required
     ? `<label class="payment-email-label">Электронная почта для онлайн-чека <span>обязательное поле</span><input id="psychologySessionReceiptEmail" type="email" autocomplete="email" maxlength="254" placeholder="name@example.ru" required value="${escapeAttr(state.paymentReceiptEmail)}"></label>` : '';
   $('#onboardingContent').innerHTML = `
     <span class="onboarding-kicker">Психологическая поддержка</span>
-    <h1>Оплата сессии</h1>
-    <p class="onboarding-lead">После подтверждения оплаты одна 60-минутная сессия появится в вашем балансе. Заявку на онлайн-встречу можно будет оставить в меню психологического чата.</p>
+    <h1>${testPayment ? 'Тестовая оплата сессии' : 'Оплата сессии'}</h1>
+    <p class="onboarding-lead">${testPayment ? 'Это тестовый переход из Метрики 2.0. Деньги не списываются, ЮKassa не открывается.' : 'После подтверждения оплаты одна 60-минутная сессия появится в вашем балансе. Заявку на онлайн-встречу можно будет оставить в меню психологического чата.'}</p>
     <section class="consultation-payment-card"><header><strong>${countLabel} с психологом · 60 минут</strong><b>${totalLabel} ₽</b></header><p>История сессий и доступный баланс сохраняются в меню психологического чата.</p></section>
     ${emailField}
     ${legalConsents}
-    <div class="onboarding-actions"><button type="button" class="onboarding-back" data-onboarding-action="cancel-psychology-session-payment">Назад</button><button type="button" class="onboarding-next" data-onboarding-action="pay-psychology-session">Оплатить ${totalLabel} ₽</button></div>`;
+    <div class="onboarding-actions"><button type="button" class="onboarding-back" data-onboarding-action="cancel-psychology-session-payment">Назад</button><button type="button" class="onboarding-next" data-onboarding-action="pay-psychology-session">${testPayment ? 'Подтвердить тестовую оплату' : `Оплатить ${totalLabel} ₽`}</button></div>`;
   trackMasterclassScreen('psychology_session_payment');
 }
 
@@ -3159,7 +3160,7 @@ async function startPsychologySessionPayment() {
   trackMasterclassAction('pay', 'psychology_session_payment');
   const buttons = [...document.querySelectorAll('#onboardingContent button')];
   buttons.forEach(button => { button.disabled = true; });
-  beginUserProgress('Открываем безопасную оплату…');
+  beginUserProgress(state.publicConfig.psychology_session_payment_test_mode ? 'Подтверждаем тестовую оплату…' : 'Открываем безопасную оплату…');
   try {
     const result = await api('/api/payments/yookassa/create-psychology-session', {
       method:'POST',
@@ -3182,7 +3183,7 @@ async function startPsychologySessionPayment() {
       sessionCount:psychologySessionPackage().sessions, savedAt:Date.now(),
     }));
     trackEvent('psychology_session_payment_created', {
-      provider:'yookassa', amount_kopecks:psychologySessionPackage().totalPrice * 100,
+      provider:order.test ? 'test' : 'yookassa', amount_kopecks:psychologySessionPackage().totalPrice * 100,
       session_count:psychologySessionPackage().sessions,
     });
     if (order.confirmation_url?.startsWith('https://')) {

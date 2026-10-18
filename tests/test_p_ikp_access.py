@@ -72,6 +72,7 @@ class IkpAccessTests(unittest.TestCase):
             db.set_current_chel_id('chel_masterclass_0001')
             entry = db.current_masterclass_access()
             self.assertEqual(entry['masterclass_name'], 'Мастер-класс 1')
+            self.assertFalse(entry['is_test'])
             db.mark_current_masterclass_continued()
             completed = db.mark_current_masterclass_profile_completed()
             self.assertTrue(completed['profile_completed_at'])
@@ -92,6 +93,34 @@ class IkpAccessTests(unittest.TestCase):
         first_row = next(item for item in report['enterprises'] if item['masterclass_code'] == 'masterclass_1')
         self.assertEqual(first_row['company'], 'ООО Ромашка новое имя')
         self.assertEqual((first_row['visit_count'], first_row['users'], first_row['continued_users']), (2, 1, 1))
+
+    def test_metric2_masterclass_link_completes_only_test_payment_locally(self):
+        token = 't' * 43
+        link = db.provision_masterclass_access(
+            '', 'Тестовая ветка Метрики 2.0', 'masterclass_1', token,
+            is_test=True,
+        )
+        self.assertTrue(link['is_test'])
+        chel_id = 'chel_metric2_masterclass_test'
+        db.ensure_user(chel_id, pending=True)
+        db.record_masterclass_access(token, chel_id)
+        previous_chel_id = db.current_chel_id()
+        try:
+            db.set_current_chel_id(chel_id)
+            self.assertTrue(db.current_masterclass_access()['is_test'])
+            db.mark_current_masterclass_profile_completed()
+            conversation = db.create_or_get_masterclass_psychology_conversation()
+            order = db.create_psychology_session_payment_order(conversation['id'], 1)
+            completed = db.complete_test_psychology_session_payment(order['id'])
+            self.assertEqual(completed['status'], 'succeeded')
+            self.assertTrue(completed['paid'])
+            self.assertTrue(completed['test'])
+            self.assertFalse(completed['confirmation_url'])
+            summary = db.psychology_session_summary(conversation['id'])
+            self.assertEqual(summary['purchased_count'], 1)
+            self.assertEqual(summary['remaining_paid'], 1)
+        finally:
+            db.set_current_chel_id(previous_chel_id)
 
     def test_psychology_chat_cannot_be_created_outside_completed_masterclass(self):
         previous_chel_id = db.current_chel_id()

@@ -4352,14 +4352,14 @@ class OrchestratorTests(unittest.TestCase):
         self.assertIn("controllerchange", script)
         self.assertIn("url.pathname.startsWith('/api/')", worker)
         self.assertIn("url.pathname.startsWith('/auth/')", worker)
-        self.assertIn("consilium-shell-v183", worker)
+        self.assertIn("consilium-shell-v184", worker)
         self.assertIn("fetch(request)", worker)
-        self.assertIn("/static/styles.css?v=20261018-psychology-payment-v23", index)
+        self.assertIn("/static/styles.css?v=20261018-masterclass-test-payment-v24", index)
         self.assertIn("/static/rich-text.2bf1f5fab764.css", index)
         self.assertTrue((project_root / "static" / "styles.07ffaefb4795.css").is_file())
         self.assertTrue((project_root / "static" / "rich-text.2bf1f5fab764.css").is_file())
-        self.assertIn("/static/app.js?v=20261018-psychology-payment-v23", index)
-        self.assertIn("/static/metrika.js?v=20261018-psychology-payment-v23", index)
+        self.assertIn("/static/app.js?v=20261018-masterclass-test-payment-v24", index)
+        self.assertIn("/static/metrika.js?v=20261018-masterclass-test-payment-v24", index)
         self.assertIn("function safeUrl(value)", script)
         self.assertIn("error.code === 'http_404'", script)
         self.assertIn("fallback && fallback.id !== id", script)
@@ -4448,7 +4448,7 @@ class OrchestratorTests(unittest.TestCase):
         main = (project_root / "backend" / "main.py").read_text(encoding="utf-8")
         config = (project_root / "backend" / "config.py").read_text(encoding="utf-8")
 
-        self.assertIn('src="/static/metrika.js?v=20261018-psychology-payment-v23"', index)
+        self.assertIn('src="/static/metrika.js?v=20261018-masterclass-test-payment-v24"', index)
         self.assertIn('YANDEX_METRIKA_COUNTER_ID', config)
         self.assertIn('path == "/api/public-config"', main)
         self.assertIn('"metrika.js"', main)
@@ -5237,6 +5237,63 @@ class OrchestratorTests(unittest.TestCase):
         self.assertIn(
             "accept_personal_data:personalDataConsent?.checked === true", app,
         )
+
+    def test_metric2_masterclass_payment_never_calls_yookassa(self):
+        class FakeHandler:
+            path = "/api/payments/yookassa/create-psychology-session"
+            response = None
+            analytics = None
+
+            def _ensure_user_context(self):
+                return None
+
+            def _read_json(self, **_kwargs):
+                return {
+                    "conversation_id": "psychology-test",
+                    "session_count": 1,
+                }
+
+            def _track_analytics(self, event, params):
+                self.analytics = (event, params)
+
+            def _json(self, status, payload):
+                self.response = (status, payload)
+                return self.response
+
+        completed = {
+            "id": "test-order", "status": "succeeded", "paid": True,
+            "test": True, "amount": "3500.00", "confirmation_url": "",
+        }
+        handler = FakeHandler()
+        with (
+            patch(
+                "backend.main.db.current_masterclass_access",
+                return_value={"is_test": 1},
+            ),
+            patch(
+                "backend.main.db.create_psychology_session_payment_order",
+                return_value={"id": "test-order"},
+            ) as create_order,
+            patch(
+                "backend.main.db.complete_test_psychology_session_payment",
+                return_value=completed,
+            ) as complete_payment,
+            patch("backend.main.yookassa.create_payment") as create_yookassa,
+        ):
+            ConsiliumHandler.do_POST(handler)
+
+        self.assertEqual(handler.response, (201, {"order": completed}))
+        create_order.assert_called_once_with("psychology-test", 1)
+        complete_payment.assert_called_once_with("test-order")
+        create_yookassa.assert_not_called()
+        self.assertEqual(handler.analytics[1]["provider"], "test")
+        self.assertTrue(handler.analytics[1]["test"])
+
+        project_root = Path(__file__).resolve().parents[1]
+        app = (project_root / "static" / "app.js").read_text(encoding="utf-8")
+        self.assertIn("psychology_session_payment_test_mode", app)
+        self.assertIn("Подтвердить тестовую оплату", app)
+        self.assertIn("Деньги не списываются, ЮKassa не открывается", app)
 
     def test_psychology_payment_requires_both_legal_consents_server_side(self):
         class FakeHandler:
