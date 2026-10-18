@@ -122,6 +122,20 @@ class IkpAccessTests(unittest.TestCase):
         finally:
             db.set_current_chel_id(previous_chel_id)
 
+    def test_existing_metric2_masterclass_link_is_migrated_to_test_mode(self):
+        token = 'q' * 43
+        legacy = db.provision_masterclass_access(
+            '', 'Тестовая ветка Метрики 2.0', 'masterclass_1', token,
+        )
+        self.assertFalse(legacy['is_test'])
+        db.init_db()
+        with db.connection() as conn:
+            row = conn.execute(
+                "SELECT is_test FROM masterclass_access_links WHERE id=?",
+                (legacy['id'],),
+            ).fetchone()
+        self.assertTrue(row['is_test'])
+
     def test_psychology_chat_cannot_be_created_outside_completed_masterclass(self):
         previous_chel_id = db.current_chel_id()
         try:

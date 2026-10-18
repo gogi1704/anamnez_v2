@@ -7060,6 +7060,11 @@ def init_db() -> None:
             conn.execute(
                 "ALTER TABLE masterclass_access_links ADD COLUMN is_test INTEGER NOT NULL DEFAULT 0"
             )
+        conn.execute(
+            """UPDATE masterclass_access_links SET is_test=1
+               WHERE company IN (?, ?)""",
+            ("Тестовая ветка Метрики 2.0", "Локальный тест мастер-класса"),
+        )
 
         masterclass_user_columns = {
             row[1] for row in conn.execute(
