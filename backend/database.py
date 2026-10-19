@@ -1060,6 +1060,10 @@ def admin_experiment_report(period: str = "30") -> dict:
         if not assignment or payment_at < assignment["assigned_at"]:
             continue
         online_paid_amounts[assignment["variant"]] += max(0, int(row["amount_kopecks"] or 0))
+        # The paid order is the authoritative source. Browser analytics can be
+        # blocked or lost after the external payment redirect, so deriving the
+        # counter only from payment_succeeded made it disagree with the amount.
+        reached[assignment["variant"]]["payment_success"].add(chel_id)
     labels = {
         "assigned": "Получили вариант", "questionnaire": "Завершили анкету",
         "application": "Выбрали обследования", "online_payment": "Начали онлайн-оплату",
@@ -1586,13 +1590,64 @@ def current_masterclass_access() -> dict | None:
         row = conn.execute(
             """SELECT l.id,l.inn,l.company,l.masterclass_code,l.masterclass_name,l.is_test,
                       u.first_seen_at,u.last_seen_at,u.continued_at,
-                      u.profile_completed_at
+                      u.profile_completed_at,
+                      EXISTS(
+                        SELECT 1 FROM conversations c
+                        WHERE c.chel_id=u.chel_id
+                          AND c.dialog_type='masterclass_psychology'
+                      ) AS psychology_chat_started
                FROM masterclass_access_users u
                JOIN masterclass_access_links l ON l.id=u.link_id
                WHERE u.chel_id=? ORDER BY u.last_seen_at DESC LIMIT 1""",
             (current_chel_id(),),
         ).fetchone()
     return dict(row) if row else None
+
+
+def current_masterclass_psychology_conversation_id() -> str:
+    with connection() as conn:
+        row = conn.execute(
+            """SELECT id FROM conversations
+               WHERE chel_id=? AND dialog_type='masterclass_psychology'
+               ORDER BY updated_at DESC LIMIT 1""",
+            (current_chel_id(),),
+        ).fetchone()
+    return str(row["id"]) if row else ""
+
+
+def masterclass_test_payment_token(entry: dict | None = None) -> str:
+    entry = entry or current_masterclass_access()
+    if not entry or not entry.get("is_test"):
+        return ""
+    issued_at = int(datetime.now(timezone.utc).timestamp())
+    payload = f"{current_chel_id()}:{entry['id']}:{issued_at}"
+    signature = hmac.new(
+        settings.ikp_integration_secret.encode("utf-8"),
+        f"masterclass-test-payment:{payload}".encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()
+    return f"{issued_at}.{signature}"
+
+
+def verify_masterclass_test_payment_token(raw_token: str) -> bool:
+    try:
+        issued_raw, supplied = str(raw_token or "").split(".", 1)
+        issued_at = int(issued_raw)
+    except (TypeError, ValueError):
+        return False
+    now = int(datetime.now(timezone.utc).timestamp())
+    if issued_at > now + 60 or now - issued_at > 2 * 60 * 60:
+        return False
+    entry = current_masterclass_access()
+    if not entry or not entry.get("is_test"):
+        return False
+    payload = f"{current_chel_id()}:{entry['id']}:{issued_at}"
+    expected = hmac.new(
+        settings.ikp_integration_secret.encode("utf-8"),
+        f"masterclass-test-payment:{payload}".encode("utf-8"),
+        hashlib.sha256,
+    ).hexdigest()
+    return hmac.compare_digest(supplied, expected)
 
 
 def mark_current_masterclass_continued() -> dict:
@@ -2112,26 +2167,157 @@ def _external_identity_recipient(identity) -> str:
     return str(identity["provider_user_id"] or "").strip()
 
 
-def _masterclass_auth_return_path(
+def _service_auth_return_path(
     conn: sqlite3.Connection, chel_id: str, return_path: str,
 ) -> str:
-    """Allow redirects only to a master-class link already opened by this user."""
+    """Allow redirects only to a service link already opened by this user."""
     return_path = str(return_path or "").strip()
     if not return_path:
         return ""
-    match = re.fullmatch(r"/masterclass/([A-Za-z0-9_-]{20,200})", return_path)
+    match = re.fullmatch(r"/(masterclass|ikp)/([A-Za-z0-9_-]{20,200})", return_path)
     if not match:
         raise ValueError("Некорректный адрес возврата после входа")
-    token_hash = hashlib.sha256(match.group(1).encode("utf-8")).hexdigest()
+    flow, raw_token = match.groups()
+    token_hash = hashlib.sha256(raw_token.encode("utf-8")).hexdigest()
+    links_table = "masterclass_access_links" if flow == "masterclass" else "ikp_access_links"
+    users_table = "masterclass_access_users" if flow == "masterclass" else "ikp_access_users"
     allowed = conn.execute(
-        """SELECT 1 FROM masterclass_access_links AS links
-           JOIN masterclass_access_users AS users ON users.link_id=links.id
+        f"""SELECT 1 FROM {links_table} AS links
+           JOIN {users_table} AS users ON users.link_id=links.id
            WHERE links.token_hash=? AND users.chel_id=?""",
         (token_hash, chel_id),
     ).fetchone()
     if not allowed:
-        raise ValueError("Ссылка мастер-класса не принадлежит текущему входу")
+        raise ValueError("Сервисная ссылка не принадлежит текущему входу")
     return return_path
+
+
+def _move_link_attribution(
+    conn: sqlite3.Connection, source_chel_id: str, target_chel_id: str,
+) -> None:
+    """Move QR-link attribution from a temporary browser user to its account."""
+    conn.execute(
+        """INSERT INTO ikp_access_users
+           (link_id,chel_id,first_seen_at,last_seen_at,visit_count)
+           SELECT link_id,?,first_seen_at,last_seen_at,visit_count
+           FROM ikp_access_users WHERE chel_id=?
+           ON CONFLICT(link_id,chel_id) DO UPDATE SET
+             first_seen_at=MIN(ikp_access_users.first_seen_at,excluded.first_seen_at),
+             last_seen_at=MAX(ikp_access_users.last_seen_at,excluded.last_seen_at),
+             visit_count=ikp_access_users.visit_count+excluded.visit_count""",
+        (target_chel_id, source_chel_id),
+    )
+    conn.execute("DELETE FROM ikp_access_users WHERE chel_id=?", (source_chel_id,))
+    conn.execute(
+        """INSERT INTO masterclass_access_users
+           (link_id,chel_id,first_seen_at,last_seen_at,continued_at,
+            profile_completed_at,visit_count)
+           SELECT link_id,?,first_seen_at,last_seen_at,continued_at,
+                  profile_completed_at,visit_count
+           FROM masterclass_access_users WHERE chel_id=?
+           ON CONFLICT(link_id,chel_id) DO UPDATE SET
+             first_seen_at=MIN(masterclass_access_users.first_seen_at,excluded.first_seen_at),
+             last_seen_at=MAX(masterclass_access_users.last_seen_at,excluded.last_seen_at),
+             continued_at=COALESCE(masterclass_access_users.continued_at,excluded.continued_at),
+             profile_completed_at=COALESCE(masterclass_access_users.profile_completed_at,excluded.profile_completed_at),
+             visit_count=masterclass_access_users.visit_count+excluded.visit_count""",
+        (target_chel_id, source_chel_id),
+    )
+    conn.execute("DELETE FROM masterclass_access_users WHERE chel_id=?", (source_chel_id,))
+
+
+def _move_masterclass_psychology_data(
+    conn: sqlite3.Connection, source_chel_id: str, target_chel_id: str,
+) -> None:
+    """Preserve anonymous account data when signing into an existing account."""
+    source_specialized = {
+        str(row["dialog_type"])
+        for row in conn.execute(
+            """SELECT DISTINCT dialog_type FROM conversations
+               WHERE chel_id=? AND dialog_type IN ('masterclass_psychology','weight_control')""",
+            (source_chel_id,),
+        ).fetchall()
+    }
+    target_specialized = {
+        str(row["dialog_type"])
+        for row in conn.execute(
+            """SELECT DISTINCT dialog_type FROM conversations
+               WHERE chel_id=? AND dialog_type IN ('masterclass_psychology','weight_control')""",
+            (target_chel_id,),
+        ).fetchall()
+    }
+    conflicting = source_specialized & target_specialized
+    if conflicting:
+        labels = {
+            "masterclass_psychology": "психологический чат",
+            "weight_control": "чат контроля питания",
+        }
+        conflict_label = ", ".join(labels[item] for item in sorted(conflicting))
+        raise ValueError(
+            f"В обоих аккаунтах уже есть {conflict_label}. "
+            "Данные сохранены; обратитесь в поддержку для безопасного объединения"
+        )
+    source_conversations = [
+        str(row["id"])
+        for row in conn.execute(
+            "SELECT id FROM conversations WHERE chel_id=?", (source_chel_id,),
+        ).fetchall()
+    ]
+    if source_conversations:
+        conn.execute(
+            "UPDATE conversations SET chel_id=? WHERE chel_id=?",
+            (target_chel_id, source_chel_id),
+        )
+    conn.execute(
+        "UPDATE psychology_sessions SET chel_id=? WHERE chel_id=?",
+        (target_chel_id, source_chel_id),
+    )
+    conn.execute(
+        "UPDATE payment_orders SET chel_id=? WHERE chel_id=?",
+        (target_chel_id, source_chel_id),
+    )
+    for table in (
+        "weight_control_states", "weight_control_body_measurements",
+        "weight_control_meals", "weight_control_reminders",
+        "weight_control_reminder_outbox", "memories", "body_symptoms",
+    ):
+        conn.execute(
+            f"UPDATE {table} SET chel_id=? WHERE chel_id=?",
+            (target_chel_id, source_chel_id),
+        )
+    source_profile = conn.execute(
+        "SELECT 1 FROM user_profile WHERE chel_id=?", (source_chel_id,),
+    ).fetchone()
+    target_profile = conn.execute(
+        "SELECT 1 FROM user_profile WHERE chel_id=?", (target_chel_id,),
+    ).fetchone()
+    if source_profile and not target_profile:
+        conn.execute(
+            "UPDATE user_profile SET chel_id=? WHERE chel_id=?",
+            (target_chel_id, source_chel_id),
+        )
+    source_onboarding = conn.execute(
+        "SELECT 1 FROM onboarding_state WHERE chel_id=?", (source_chel_id,),
+    ).fetchone()
+    target_onboarding = conn.execute(
+        "SELECT 1 FROM onboarding_state WHERE chel_id=?", (target_chel_id,),
+    ).fetchone()
+    if source_onboarding and not target_onboarding:
+        conn.execute(
+            "UPDATE onboarding_state SET chel_id=? WHERE chel_id=?",
+            (target_chel_id, source_chel_id),
+        )
+    conn.execute(
+        """UPDATE users SET
+             result_entry_at=COALESCE(result_entry_at,(
+               SELECT result_entry_at FROM users WHERE chel_id=?
+             )),
+             last_seen_at=MAX(last_seen_at,(
+               SELECT last_seen_at FROM users WHERE chel_id=?
+             ))
+           WHERE chel_id=?""",
+        (source_chel_id, source_chel_id, target_chel_id),
+    )
 
 
 def create_auth_intent(provider: str, return_path: str = "") -> dict:
@@ -2144,7 +2330,7 @@ def create_auth_intent(provider: str, return_path: str = "") -> dict:
     with _write_lock, connection() as conn:
         if not conn.execute("SELECT 1 FROM users WHERE chel_id = ?", (chel_id,)).fetchone():
             raise ValueError("Пользователь не найден")
-        return_path = _masterclass_auth_return_path(conn, chel_id, return_path)
+        return_path = _service_auth_return_path(conn, chel_id, return_path)
         conn.execute(
             """INSERT INTO auth_intents
             (token_hash, chel_id, provider, return_path, expires_at, created_at)
@@ -2223,28 +2409,9 @@ def create_messenger_login(
                 (now.isoformat(), recipient_chat_id, recipient_chat_id, identity["id"]),
             )
             if intent and intent["chel_id"] != chel_id:
-                # A returning messenger user may have opened the QR link in a new
-                # browser. Move that browser's master-class attribution to the
-                # durable account before issuing the login session.
-                conn.execute(
-                    """INSERT INTO masterclass_access_users
-                       (link_id,chel_id,first_seen_at,last_seen_at,continued_at,
-                        profile_completed_at,visit_count)
-                       SELECT link_id,?,first_seen_at,last_seen_at,continued_at,
-                              profile_completed_at,visit_count
-                       FROM masterclass_access_users WHERE chel_id=?
-                       ON CONFLICT(link_id,chel_id) DO UPDATE SET
-                         first_seen_at=MIN(masterclass_access_users.first_seen_at,excluded.first_seen_at),
-                         last_seen_at=MAX(masterclass_access_users.last_seen_at,excluded.last_seen_at),
-                         continued_at=COALESCE(masterclass_access_users.continued_at,excluded.continued_at),
-                         profile_completed_at=COALESCE(masterclass_access_users.profile_completed_at,excluded.profile_completed_at),
-                         visit_count=masterclass_access_users.visit_count+excluded.visit_count""",
-                    (chel_id, intent["chel_id"]),
-                )
-                conn.execute(
-                    "DELETE FROM masterclass_access_users WHERE chel_id=?",
-                    (intent["chel_id"],),
-                )
+                source_chel_id = str(intent["chel_id"])
+                _move_masterclass_psychology_data(conn, source_chel_id, chel_id)
+                _move_link_attribution(conn, source_chel_id, chel_id)
         else:
             if intent:
                 chel_id = intent["chel_id"]

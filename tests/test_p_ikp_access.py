@@ -87,6 +87,7 @@ class IkpAccessTests(unittest.TestCase):
             self.assertIn('Я Вита, помощник-психолог', greeting)
             self.assertIn('без ограничений по времени', greeting)
             self.assertIn('Первая консультация бесплатна', greeting)
+            self.assertTrue(db.current_masterclass_access()['psychology_chat_started'])
         finally:
             db.set_current_chel_id(previous_chel_id)
         report = db.admin_masterclass_report()
@@ -108,6 +109,10 @@ class IkpAccessTests(unittest.TestCase):
         try:
             db.set_current_chel_id(chel_id)
             self.assertTrue(db.current_masterclass_access()['is_test'])
+            payment_token = db.masterclass_test_payment_token()
+            self.assertTrue(payment_token)
+            self.assertTrue(db.verify_masterclass_test_payment_token(payment_token))
+            self.assertFalse(db.verify_masterclass_test_payment_token('invalid'))
             db.mark_current_masterclass_profile_completed()
             conversation = db.create_or_get_masterclass_psychology_conversation()
             order = db.create_psychology_session_payment_order(conversation['id'], 1)
@@ -192,6 +197,18 @@ class IkpAccessTests(unittest.TestCase):
         self.assertIn('maybeOpenPsychologyChatGuide();', script)
         self.assertIn('masterclass-custom-select', script)
         self.assertNotIn('<select name="smoking"', script)
+        self.assertIn('Перед материалом · 7 коротких пунктов', script)
+        for number, label in (
+            (1, 'Как к вам обращаться?'),
+            (2, 'Пол'),
+            (3, 'Возраст'),
+            (4, 'Рост, см'),
+            (5, 'Вес, кг'),
+            (6, 'Курение'),
+            (7, 'Алкоголь'),
+        ):
+            self.assertIn(f'<i>{number}</i>{label}', script)
+        self.assertNotIn('Перед материалом · 5 коротких пунктов', script)
         self.assertIn('.masterclass-select-options', styles)
         self.assertIn('.masterclass-custom-select.open-up', styles)
         self.assertIn('position:relative;top:auto;right:auto;bottom:auto;left:auto', styles)
@@ -204,6 +221,10 @@ class IkpAccessTests(unittest.TestCase):
         self.assertIn('.masterclass-profile-form>.onboarding-next', styles)
         self.assertIn('font-variant-numeric:tabular-nums', styles)
         self.assertIn('data-psychology-sessions-open', script)
+        self.assertIn("entry.psychology_chat_started", script)
+        self.assertIn("trackMasterclassScreen('masterclass_returning')", script)
+        self.assertIn("state.identity?.psychology_conversation_id", script)
+        self.assertIn("function isIkpEntryUrl()", script)
         self.assertIn('id="psychologySessionRequestManager"', index)
         self.assertIn('Позвать менеджера в чат', index)
         self.assertIn("button.dataset.mode = 'link_messenger'", script)

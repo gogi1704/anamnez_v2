@@ -485,6 +485,10 @@ class OrchestratorTests(unittest.TestCase):
             self.assertEqual(variants["control"]["online_paid_amount_kopecks"], 225000)
             self.assertEqual(variants["marketer"]["selected_amount_kopecks"], 420000)
             self.assertEqual(variants["marketer"]["online_paid_amount_kopecks"], 378000)
+            control_stages = {item["key"]: item for item in variants["control"]["stages"]}
+            marketer_stages = {item["key"]: item for item in variants["marketer"]["stages"]}
+            self.assertEqual(control_stages["payment_success"]["users"], 1)
+            self.assertEqual(marketer_stages["payment_success"]["users"], 1)
         finally:
             analytics.delete_user_data(control_id)
             analytics.delete_user_data(marketer_id)
@@ -4352,14 +4356,14 @@ class OrchestratorTests(unittest.TestCase):
         self.assertIn("controllerchange", script)
         self.assertIn("url.pathname.startsWith('/api/')", worker)
         self.assertIn("url.pathname.startsWith('/auth/')", worker)
-        self.assertIn("consilium-shell-v184", worker)
+        self.assertIn("consilium-shell-v187", worker)
         self.assertIn("fetch(request)", worker)
-        self.assertIn("/static/styles.css?v=20261018-masterclass-test-payment-v24", index)
+        self.assertIn("/static/styles.css?v=20261019-entry-routing-v27", index)
         self.assertIn("/static/rich-text.2bf1f5fab764.css", index)
         self.assertTrue((project_root / "static" / "styles.07ffaefb4795.css").is_file())
         self.assertTrue((project_root / "static" / "rich-text.2bf1f5fab764.css").is_file())
-        self.assertIn("/static/app.js?v=20261018-masterclass-test-payment-v24", index)
-        self.assertIn("/static/metrika.js?v=20261018-masterclass-test-payment-v24", index)
+        self.assertIn("/static/app.js?v=20261019-entry-routing-v27", index)
+        self.assertIn("/static/metrika.js?v=20261019-entry-routing-v27", index)
         self.assertIn("function safeUrl(value)", script)
         self.assertIn("error.code === 'http_404'", script)
         self.assertIn("fallback && fallback.id !== id", script)
@@ -4448,7 +4452,7 @@ class OrchestratorTests(unittest.TestCase):
         main = (project_root / "backend" / "main.py").read_text(encoding="utf-8")
         config = (project_root / "backend" / "config.py").read_text(encoding="utf-8")
 
-        self.assertIn('src="/static/metrika.js?v=20261018-masterclass-test-payment-v24"', index)
+        self.assertIn('src="/static/metrika.js?v=20261019-entry-routing-v27"', index)
         self.assertIn('YANDEX_METRIKA_COUNTER_ID', config)
         self.assertIn('path == "/api/public-config"', main)
         self.assertIn('"metrika.js"', main)
@@ -4719,6 +4723,110 @@ class OrchestratorTests(unittest.TestCase):
                     "SELECT COUNT(*) FROM masterclass_access_users WHERE chel_id=?",
                     (temporary_chel_id,),
                 ).fetchone()[0], 0)
+        finally:
+            db.ensure_user(previous_chel_id)
+            db.set_current_chel_id(previous_chel_id)
+
+    def test_existing_messenger_account_keeps_ikp_return_path(self):
+        owner = db.create_messenger_login("telegram", "tg-ikp-returning-user")
+        owner_chel_id = owner["chel_id"]
+        temporary_chel_id = "chel_ikp_new_device_0001"
+        previous_chel_id = db.current_chel_id()
+        try:
+            link = db.provision_ikp_access(
+                "7707083893", "ООО Медосмотр", "ikp-return-token-2026-000000000001",
+            )
+            return_path = f"/ikp/{link['access_token']}"
+            db.ensure_user(temporary_chel_id, pending=True)
+            db.record_ikp_access(link["access_token"], temporary_chel_id)
+            db.set_current_chel_id(temporary_chel_id)
+            intent = db.create_auth_intent("telegram", return_path=return_path)
+            restored = db.create_messenger_login(
+                "telegram", "tg-ikp-returning-user", intent_token=intent["token"],
+            )
+            self.assertEqual(restored["chel_id"], owner_chel_id)
+            self.assertEqual(restored["return_path"], return_path)
+            db.set_current_chel_id(owner_chel_id)
+            self.assertTrue(db.current_user_is_ikp())
+            with db.connection() as connection:
+                self.assertEqual(connection.execute(
+                    "SELECT COUNT(*) FROM ikp_access_users WHERE chel_id=?",
+                    (temporary_chel_id,),
+                ).fetchone()[0], 0)
+        finally:
+            db.ensure_user(previous_chel_id)
+            db.set_current_chel_id(previous_chel_id)
+
+    def test_existing_messenger_account_receives_anonymous_psychology_journey(self):
+        owner = db.create_messenger_login("telegram", "tg-psychology-merge-user")
+        owner_chel_id = owner["chel_id"]
+        temporary_chel_id = "chel_psychology_merge_temp"
+        previous_chel_id = db.current_chel_id()
+        try:
+            link = db.provision_masterclass_access(
+                "7707083893", "ООО Психология", "masterclass_1",
+                "psychology-merge-masterclass-token-2026",
+            )
+            db.ensure_user(temporary_chel_id, pending=True)
+            db.record_masterclass_access(link["access_token"], temporary_chel_id)
+            db.set_current_chel_id(temporary_chel_id)
+            db.mark_current_masterclass_profile_completed()
+            conversation = db.create_or_get_masterclass_psychology_conversation()
+            db.add_message(conversation["id"], "user", "Важная история", "psychologist")
+            payment_order = db.create_psychology_session_payment_order(
+                conversation["id"], 1,
+            )
+            intent = db.create_auth_intent("telegram")
+
+            restored = db.create_messenger_login(
+                "telegram", "tg-psychology-merge-user", intent_token=intent["token"],
+            )
+            self.assertEqual(restored["chel_id"], owner_chel_id)
+            db.set_current_chel_id(owner_chel_id)
+            self.assertEqual(
+                db.current_masterclass_psychology_conversation_id(), conversation["id"],
+            )
+            self.assertTrue(any(
+                item["content"] == "Важная история"
+                for item in db.list_messages(conversation["id"])
+            ))
+            with db.connection() as connection:
+                moved_order = connection.execute(
+                    "SELECT chel_id FROM payment_orders WHERE id=?",
+                    (payment_order["id"],),
+                ).fetchone()
+            self.assertEqual(moved_order["chel_id"], owner_chel_id)
+        finally:
+            db.ensure_user(previous_chel_id)
+            db.set_current_chel_id(previous_chel_id)
+
+    def test_account_merge_stops_when_both_accounts_have_psychology_chat(self):
+        owner = db.create_messenger_login("telegram", "tg-psychology-conflict-user")
+        owner_chel_id = owner["chel_id"]
+        temporary_chel_id = "chel_psychology_conflict_temp"
+        previous_chel_id = db.current_chel_id()
+        try:
+            link = db.provision_masterclass_access(
+                "7707083893", "ООО Конфликт", "masterclass_1",
+                "psychology-conflict-masterclass-token-2026",
+            )
+            for chel_id in (owner_chel_id, temporary_chel_id):
+                db.ensure_user(chel_id, pending=True)
+                db.record_masterclass_access(link["access_token"], chel_id)
+                db.set_current_chel_id(chel_id)
+                db.mark_current_masterclass_profile_completed()
+                db.create_or_get_masterclass_psychology_conversation()
+            db.set_current_chel_id(temporary_chel_id)
+            intent = db.create_auth_intent("telegram")
+            with self.assertRaisesRegex(ValueError, "Данные сохранены"):
+                db.create_messenger_login(
+                    "telegram", "tg-psychology-conflict-user",
+                    intent_token=intent["token"],
+                )
+            db.set_current_chel_id(temporary_chel_id)
+            self.assertTrue(db.current_masterclass_psychology_conversation_id())
+            db.set_current_chel_id(owner_chel_id)
+            self.assertTrue(db.current_masterclass_psychology_conversation_id())
         finally:
             db.ensure_user(previous_chel_id)
             db.set_current_chel_id(previous_chel_id)
@@ -5232,11 +5340,9 @@ class OrchestratorTests(unittest.TestCase):
         self.assertNotIn("psychology_payment_simulation_enabled", app + main)
         self.assertNotIn("Имитировать оплату", app)
         self.assertIn('id="psychologyAcceptOffer"', app)
-        self.assertIn('id="psychologyAcceptPersonalData"', app)
+        self.assertNotIn('id="psychologyAcceptPersonalData"', app)
         self.assertIn("accept_offer:offerConsent?.checked === true", app)
-        self.assertIn(
-            "accept_personal_data:personalDataConsent?.checked === true", app,
-        )
+        self.assertNotIn("accept_personal_data:", app)
 
     def test_metric2_masterclass_payment_never_calls_yookassa(self):
         class FakeHandler:
@@ -5251,6 +5357,7 @@ class OrchestratorTests(unittest.TestCase):
                 return {
                     "conversation_id": "psychology-test",
                     "session_count": 1,
+                    "test_payment_token": "signed-test-token",
                 }
 
             def _track_analytics(self, event, params):
@@ -5267,9 +5374,9 @@ class OrchestratorTests(unittest.TestCase):
         handler = FakeHandler()
         with (
             patch(
-                "backend.main.db.current_masterclass_access",
-                return_value={"is_test": 1},
-            ),
+                "backend.main.db.verify_masterclass_test_payment_token",
+                return_value=True,
+            ) as verify_test_token,
             patch(
                 "backend.main.db.create_psychology_session_payment_order",
                 return_value={"id": "test-order"},
@@ -5284,6 +5391,7 @@ class OrchestratorTests(unittest.TestCase):
 
         self.assertEqual(handler.response, (201, {"order": completed}))
         create_order.assert_called_once_with("psychology-test", 1)
+        verify_test_token.assert_called_once_with("signed-test-token")
         complete_payment.assert_called_once_with("test-order")
         create_yookassa.assert_not_called()
         self.assertEqual(handler.analytics[1]["provider"], "test")
@@ -5295,7 +5403,7 @@ class OrchestratorTests(unittest.TestCase):
         self.assertIn("Подтвердить тестовую оплату", app)
         self.assertIn("Деньги не списываются, ЮKassa не открывается", app)
 
-    def test_psychology_payment_requires_both_legal_consents_server_side(self):
+    def test_psychology_payment_requires_offer_consent_server_side(self):
         class FakeHandler:
             path = "/api/payments/yookassa/create-psychology-session"
             response = None
@@ -5306,7 +5414,7 @@ class OrchestratorTests(unittest.TestCase):
             def _read_json(self, **_kwargs):
                 return {
                     "conversation_id": "psychology-1", "session_count": 1,
-                    "accept_offer": True, "accept_personal_data": False,
+                    "accept_offer": False,
                 }
 
             def _track_analytics(self, *_args, **_kwargs):
@@ -5343,7 +5451,7 @@ class OrchestratorTests(unittest.TestCase):
             object.__setattr__(settings, "personal_data_policy_url", originals[2])
 
         self.assertEqual(handler.response[0], 422)
-        self.assertIn("персональных данных", handler.response[1]["detail"])
+        self.assertIn("оферты", handler.response[1]["detail"])
         create_order.assert_not_called()
 
     def test_paid_psychology_session_connects_psychologist_to_main_chat(self):

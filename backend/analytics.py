@@ -727,6 +727,23 @@ def _metric2_screen_definitions() -> list[dict]:
             {"id": "continue-account", "label": "Продолжить с текущим профилем", "target": "masterclass_questionnaire", "legacy": []},
         ],
     })
+    screens.append({
+        "id": "masterclass_returning",
+        "title": "Повторный вход в мастер-класс",
+        "stage": "Мастер-класс · повторный вход",
+        "kind": "masterclass_returning",
+        "description": (
+            "Пользователь уже открыл психологический чат ранее и при повторном "
+            "переходе по ссылке сразу возвращается в него без повторной анкеты."
+        ),
+        "root": True,
+        "flow": "masterclass",
+        "legacy_reach": [],
+        "actions": [{
+            "id": "open_chat", "label": "Сразу открыть чат",
+            "target": "psychology_chat", "legacy": [],
+        }],
+    })
     screens.extend([
         {
             "id": "masterclass_questionnaire",

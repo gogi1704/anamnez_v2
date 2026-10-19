@@ -722,6 +722,10 @@ function isMasterclassEntryUrl() {
   return window.location.pathname.replace(/\/+$/, '').startsWith('/masterclass/');
 }
 
+function isIkpEntryUrl() {
+  return window.location.pathname.replace(/\/+$/, '').startsWith('/ikp/');
+}
+
 function masterclassContinuationKey() {
   const token = window.location.pathname.replace(/\/+$/, '').split('/').pop() || '';
   return `consilium_masterclass_continued_${token.slice(0,80)}`;
@@ -843,15 +847,15 @@ async function renderMasterclassQuestionnaire(entry) {
   $('#onboarding').classList.remove('hidden');
   setOnboardingMeta('Мини-анкета', 48);
   $('#onboardingContent').innerHTML = `<div class="masterclass-questionnaire">
-    <span class="onboarding-kicker">Перед материалом · 5 коротких пунктов</span>
+    <span class="onboarding-kicker">Перед материалом · 7 коротких пунктов</span>
     <h1>Расскажите немного о себе</h1>
     <p class="onboarding-lead">Ответы сохранятся в вашем профиле и помогут учитывать ваш контекст в психологическом чате.</p>
     <form id="masterclassProfileForm" class="masterclass-profile-form">
       <label><b><i>1</i>Как к вам обращаться?</b><input name="preferred_name" maxlength="100" autocomplete="name" required value="${escapeAttr(profile.preferred_name || '')}" placeholder="Например, Алексей"></label>
       <label><b><i>2</i>Пол</b>${masterclassDropdown('sex','Выберите пол',[{value:'female',label:'Женский'},{value:'male',label:'Мужской'}],profile.sex)}</label>
       <label><b><i>3</i>Возраст</b><input name="age" type="number" min="18" max="99" step="1" inputmode="numeric" required value="${escapeAttr(profile.age ?? '')}" placeholder="Полных лет"></label>
-      <div class="masterclass-profile-pair"><label><b><i>4</i>Рост, см</b><input name="height_cm" type="number" min="50" max="250" step="0.1" inputmode="decimal" required value="${escapeAttr(profile.height_cm ?? '')}" placeholder="Например, 175"></label><label><b>Вес, кг</b><input name="weight_kg" type="number" min="40" max="250" step="0.1" inputmode="decimal" required value="${escapeAttr(profile.weight_kg ?? '')}" placeholder="Например, 72"></label></div>
-      <div class="masterclass-profile-pair"><label><b><i>5</i>Курение</b>${masterclassDropdown('smoking','Выберите вариант',[{value:'never',label:'Не курю'},{value:'former',label:'Курил(а) раньше'},{value:'current',label:'Курю сейчас'}],profile.smoking)}</label><label><b>Алкоголь</b>${masterclassDropdown('alcohol','Выберите вариант',[{value:'never',label:'Не употребляю'},{value:'rarely',label:'Редко / по праздникам'},{value:'weekly',label:'Примерно раз в неделю'},{value:'often',label:'Чаще раза в неделю'}],profile.alcohol)}</label></div>
+      <div class="masterclass-profile-pair"><label><b><i>4</i>Рост, см</b><input name="height_cm" type="number" min="50" max="250" step="0.1" inputmode="decimal" required value="${escapeAttr(profile.height_cm ?? '')}" placeholder="Например, 175"></label><label><b><i>5</i>Вес, кг</b><input name="weight_kg" type="number" min="40" max="250" step="0.1" inputmode="decimal" required value="${escapeAttr(profile.weight_kg ?? '')}" placeholder="Например, 72"></label></div>
+      <div class="masterclass-profile-pair"><label><b><i>6</i>Курение</b>${masterclassDropdown('smoking','Выберите вариант',[{value:'never',label:'Не курю'},{value:'former',label:'Курил(а) раньше'},{value:'current',label:'Курю сейчас'}],profile.smoking)}</label><label><b><i>7</i>Алкоголь</b>${masterclassDropdown('alcohol','Выберите вариант',[{value:'never',label:'Не употребляю'},{value:'rarely',label:'Редко / по праздникам'},{value:'weekly',label:'Примерно раз в неделю'},{value:'often',label:'Чаще раза в неделю'}],profile.alcohol)}</label></div>
       <p class="reminder-error hidden" id="masterclassProfileError" role="alert"></p>
       <button type="submit" class="onboarding-next">Перейти к материалу →</button>
     </form>
@@ -1058,6 +1062,16 @@ async function openMasterclassPsychologyChat() {
 async function enterMasterclassFlow() {
   const entry = await api('/api/masterclass-entry');
   state.masterclassEntry = entry;
+  if (entry.test_payment_token) {
+    state.publicConfig.psychology_session_payment_test_mode = true;
+    state.publicConfig.psychology_session_payments_enabled = true;
+  }
+  if (entry.psychology_chat_started) {
+    trackMasterclassScreen('masterclass_returning');
+    trackMasterclassAction('open_chat', 'masterclass_returning');
+    await openMasterclassPsychologyChat();
+    return;
+  }
   if (!entry.continued_at && localStorage.getItem(masterclassContinuationKey()) !== '1') {
     renderMasterclassLanding(entry);
     return;
@@ -1357,6 +1371,19 @@ async function enterKnownUser() {
     return;
   }
   const onboarding = await api('/api/onboarding');
+  if (
+    state.identity?.psychology_conversation_id
+    && !hasCompletedQuestionnaire(onboarding)
+  ) {
+    localStorage.setItem(
+      REQUESTED_CONVERSATION_KEY,
+      state.identity.psychology_conversation_id,
+    );
+    state.onboarding = onboarding;
+    state.profile = onboarding.profile;
+    await openMainApp({skipIntro:true, allowIncompleteOnboarding:true});
+    return;
+  }
   if (hasCompletedQuestionnaire(onboarding)) {
     localStorage.setItem(WELCOME_SEEN_KEY, '1');
     await startApplication({ openCompletedMessengerAccount:true, initialOnboarding:onboarding });
@@ -1584,7 +1611,8 @@ async function startMessengerAuth(provider, {source = 'registration'} = {}) {
       method:'POST',
       body:JSON.stringify({
         provider,
-        return_path:source === 'masterclass' ? window.location.pathname : '',
+        return_path:(source === 'masterclass' || isIkpEntryUrl())
+          ? window.location.pathname : '',
       }),
     });
     window.location.assign(result.bot_url);
@@ -3121,12 +3149,10 @@ function renderPsychologySessionPayment() {
   const countLabel = psychologySessionCountLabel(packageInfo.sessions);
   const totalLabel = packageInfo.totalPrice.toLocaleString('ru-RU');
   const offerUrl = safeUrl(state.publicConfig.psychology_offer_url);
-  const personalDataUrl = safeUrl(state.publicConfig.personal_data_policy_url);
   const testPayment = Boolean(state.publicConfig.psychology_session_payment_test_mode);
-  const legalConsents = !testPayment && offerUrl !== '#' && personalDataUrl !== '#'
+  const legalConsents = !testPayment && offerUrl !== '#'
     ? `<div class="psychology-payment-consents">
       <label><input id="psychologyAcceptOffer" type="checkbox" required><span>Я принимаю условия <a href="${escapeAttr(offerUrl)}" target="_blank" rel="noopener noreferrer">публичной оферты</a></span></label>
-      <label><input id="psychologyAcceptPersonalData" type="checkbox" required><span>Я даю согласие на обработку персональных данных и ознакомлен(а) с <a href="${escapeAttr(personalDataUrl)}" target="_blank" rel="noopener noreferrer">политикой обработки данных</a></span></label>
     </div>` : '';
   $('#appShell').classList.add('hidden');
   $('#onboarding').classList.remove('hidden');
@@ -3151,9 +3177,8 @@ async function startPsychologySessionPayment() {
     return;
   }
   const offerConsent = $('#psychologyAcceptOffer');
-  const personalDataConsent = $('#psychologyAcceptPersonalData');
-  if ((offerConsent || personalDataConsent) && (!offerConsent?.checked || !personalDataConsent?.checked)) {
-    showOnboardingError('Подтвердите оба согласия перед переходом к оплате');
+  if (offerConsent && !offerConsent.checked) {
+    showOnboardingError('Подтвердите согласие с условиями оферты перед переходом к оплате');
     return;
   }
   state.paymentReceiptEmail = receiptInput?.value?.trim() || '';
@@ -3169,7 +3194,7 @@ async function startPsychologySessionPayment() {
         session_count:psychologySessionPackage().sessions,
         receipt_email:state.paymentReceiptEmail,
         accept_offer:offerConsent?.checked === true,
-        accept_personal_data:personalDataConsent?.checked === true,
+        test_payment_token:state.masterclassEntry?.test_payment_token || '',
       }),
     });
     const order = result.order || {};
@@ -7905,6 +7930,7 @@ async function init() {
     const forceWelcomePreview = entryParams.get('welcome') === '1';
     const resultEntryRequested = isResultEntryUrl();
     const masterclassEntryRequested = isMasterclassEntryUrl();
+    const ikpEntryRequested = isIkpEntryUrl();
     const pendingResultFlow = readResultFlow();
     if (messengerLoginCompleted) {
       entryParams.delete('auth');
@@ -7917,6 +7943,14 @@ async function init() {
     }
     if (masterclassEntryRequested && !messengerLoginRequired) {
       await enterMasterclassFlow();
+      return;
+    }
+    if (
+      ikpEntryRequested && !messengerLoginRequired
+      && (identity.authenticated
+        || localStorage.getItem(ANONYMOUS_ACCESS_KEY) === identity.chel_id)
+    ) {
+      await startApplication();
       return;
     }
     if (entryParams.get('checkup_reoffer') && !messengerLoginRequired) {

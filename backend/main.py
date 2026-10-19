@@ -420,10 +420,7 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
             personal_data_policy_url = _public_https_url(
                 settings.personal_data_policy_url
             )
-            masterclass_entry = db.current_masterclass_access()
-            psychology_test_payment = bool(
-                masterclass_entry and masterclass_entry.get("is_test")
-            )
+            psychology_test_payment = False
             return self._json(200, {
                 "yandex_metrika_counter_id": counter_id if counter_id.isdigit() else "",
                 "yandex_metrika_marketer_counter_active": dedicated_marketer_counter,
@@ -830,6 +827,10 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                 "provider": identities[0]["provider"] if identities else None,
                 "providers": [identity["provider"] for identity in identities],
                 "result_entry": db.current_user_has_result_entry(),
+                "ikp_access": db.current_user_is_ikp(),
+                "psychology_conversation_id": (
+                    db.current_masterclass_psychology_conversation_id()
+                ),
                 "messengers": {
                     "telegram": {"configured": bool(settings.telegram_bot_auth_url)},
                     "max": {"configured": bool(settings.max_bot_auth_url)},
@@ -843,7 +844,10 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
             entry = db.current_masterclass_access()
             if not entry:
                 return self._json(404, {"detail": "Ссылка мастер-класса не найдена"})
-            return self._json(200, entry)
+            return self._json(200, {
+                **entry,
+                "test_payment_token": db.masterclass_test_payment_token(entry),
+            })
         if path == "/api/masterclass-practices/pdf":
             entry = db.current_masterclass_access()
             if not entry:
@@ -1714,9 +1718,8 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
             order = None
             try:
                 payload = self._read_json()
-                masterclass_entry = db.current_masterclass_access()
-                test_payment = bool(
-                    masterclass_entry and masterclass_entry.get("is_test")
+                test_payment = db.verify_masterclass_test_payment_token(
+                    str(payload.get("test_payment_token") or "")
                 )
                 conversation_id = str(payload.get("conversation_id") or "").strip()
                 session_count = payload.get("session_count", 1)
@@ -1735,14 +1738,11 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                     raise yookassa.YooKassaUnavailable("Онлайн-оплата временно недоступна")
                 if not yookassa.configured():
                     raise yookassa.YooKassaUnavailable("Онлайн-оплата пока не настроена")
-                legal_links_configured = bool(
+                offer_configured = bool(
                     _public_https_url(settings.psychology_offer_url)
-                    and _public_https_url(settings.personal_data_policy_url)
                 )
-                if legal_links_configured and payload.get("accept_offer") is not True:
+                if offer_configured and payload.get("accept_offer") is not True:
                     raise ValueError("Подтвердите согласие с условиями оферты")
-                if legal_links_configured and payload.get("accept_personal_data") is not True:
-                    raise ValueError("Подтвердите согласие на обработку персональных данных")
                 order = db.create_psychology_session_payment_order(
                     conversation_id, session_count,
                 )
