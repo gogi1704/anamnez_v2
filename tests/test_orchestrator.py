@@ -4356,7 +4356,7 @@ class OrchestratorTests(unittest.TestCase):
         self.assertIn("controllerchange", script)
         self.assertIn("url.pathname.startsWith('/api/')", worker)
         self.assertIn("url.pathname.startsWith('/auth/')", worker)
-        self.assertIn("consilium-shell-v191", worker)
+        self.assertIn("consilium-shell-v192", worker)
         self.assertIn("fetch(request)", worker)
         self.assertIn("/static/styles.css?v=20261020-entry-results-v31", index)
         self.assertIn("/static/rich-text.2bf1f5fab764.css", index)

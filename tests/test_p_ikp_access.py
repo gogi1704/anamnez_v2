@@ -81,6 +81,8 @@ class IkpAccessTests(unittest.TestCase):
         self.assertIn('data-entry-route="medical_exam"', index)
         self.assertIn('data-entry-route="results"', index)
         self.assertIn('data-entry-route="other"', index)
+        self.assertIn('Чем мы можем вам помочь?', index)
+        self.assertIn('Выберите нужный раздел — мы сразу направим вас дальше.', index)
         self.assertIn("identity.entry_route_choice_required", script)
         self.assertIn("await api('/api/entry-route'", script)
         self.assertIn("onboarding.entry_route === 'other'", script)

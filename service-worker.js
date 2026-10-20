@@ -1,4 +1,4 @@
-const CACHE_NAME = 'consilium-shell-v191';
+const CACHE_NAME = 'consilium-shell-v192';
 const ASSET_VERSION = '20261020-entry-results-v31';
 const APP_SHELL = [
   '/',
