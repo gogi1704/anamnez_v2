@@ -17,7 +17,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/static/styles.css?v=20261020-entry-results-v31">
+  <link rel="stylesheet" href="/static/styles.css?v=20261020-attachment-viewer-v32">
   <link rel="stylesheet" href="/static/rich-text.2bf1f5fab764.css">
 </head>
 <body>
@@ -897,9 +897,19 @@
     </div>
   </div>
 
-  <script src="/static/metrika.js?v=20261020-entry-results-v31"></script>
-  <script src="/static/agents.js?v=20261020-entry-results-v31"></script>
+  <div class="modal-backdrop attachment-viewer-backdrop hidden" id="attachmentViewer" role="dialog" aria-modal="true" aria-labelledby="attachmentViewerTitle">
+    <div class="modal attachment-viewer-modal">
+      <button class="modal-close" id="attachmentViewerClose" type="button" aria-label="Закрыть просмотр">×</button>
+      <h2 id="attachmentViewerTitle">Документ</h2>
+      <p class="attachment-viewer-status" id="attachmentViewerStatus" role="status">Загружаем файл…</p>
+      <div class="attachment-viewer-body" id="attachmentViewerBody"></div>
+      <a class="secondary-button attachment-viewer-download hidden" id="attachmentViewerDownload">Скачать файл</a>
+    </div>
+  </div>
+
+  <script src="/static/metrika.js?v=20261020-attachment-viewer-v32"></script>
+  <script src="/static/agents.js?v=20261020-attachment-viewer-v32"></script>
   <script src="/static/rich-text.js?v=20260929-loose-lists-v1"></script>
-  <script src="/static/app.js?v=20261020-entry-results-v31"></script>
+  <script src="/static/app.js?v=20261020-attachment-viewer-v32"></script>
 </body>
 </html>

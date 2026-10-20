@@ -890,13 +890,13 @@ article.capability-card strong { font-weight:650; }
 }
 /* Interactive chat attachments */
 .message-photo { width:min(260px,100%); }
-.message-photo-preview { display:block; cursor:zoom-in; }
+.message-photo-preview { display:block; width:100%; padding:0; border:0; background:transparent; cursor:zoom-in; }
 .message-photo img { max-height:260px; }
 .message-photo figcaption { display:flex; min-width:0; align-items:center; justify-content:space-between; gap:8px; padding:7px 8px; white-space:normal; }
 .message-photo figcaption>span { min-width:0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .message-attachment-actions { display:flex; flex:none; gap:5px; }
-.message-attachment-actions a { padding:4px 7px; border-radius:7px; background:rgba(255,255,255,.18); color:inherit; font-size:calc(7px + var(--text-bump)); font-weight:700; text-decoration:none; }
-.message-attachment-actions a:hover { background:rgba(255,255,255,.28); }
+.message-attachment-actions button { padding:4px 7px; border:0; border-radius:7px; background:rgba(255,255,255,.18); color:inherit; font-size:calc(7px + var(--text-bump)); font-weight:700; text-decoration:none; }
+.message-attachment-actions button:hover { background:rgba(255,255,255,.28); }
 .message-document { display:grid; grid-template-columns:42px minmax(0,1fr) auto; align-items:center; gap:9px; width:min(380px,100%); margin:0 0 8px; padding:9px; border-radius:11px; background:rgba(255,255,255,.14); }
 .message-document-icon { display:grid; place-items:center; width:42px; height:42px; border-radius:9px; background:rgba(255,255,255,.2); font-size:10px; font-weight:800; }
 .message-document-copy { min-width:0; }
@@ -905,7 +905,17 @@ article.capability-card strong { font-weight:650; }
 .message-document-copy small { margin-top:2px; opacity:.72; font-size:calc(7px + var(--text-bump)); }
 .message-document.unavailable { opacity:.72; }
 .agent-bubble .message-document,.agent-bubble .message-photo { background:#edf4f0; }
-.agent-bubble .message-attachment-actions a { background:#dcebe4; color:var(--green-dark); }
+.agent-bubble .message-attachment-actions button { background:#dcebe4; color:var(--green-dark); }
+.attachment-viewer-backdrop { z-index:40; }
+.attachment-viewer-modal { display:flex; flex-direction:column; width:min(1000px,100%); height:min(820px,calc(100dvh - 40px)); padding:24px; text-align:left; }
+.attachment-viewer-modal h2 { flex:none; padding:0 42px 0 0; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.attachment-viewer-status { margin:auto!important; text-align:center; }
+.attachment-viewer-body { display:grid; min-width:0; min-height:0; flex:1; place-items:center; margin-top:16px; overflow:auto; border:1px solid var(--line); border-radius:12px; background:#f4f7f5; }
+.attachment-viewer-body img { display:block; max-width:100%; max-height:100%; object-fit:contain; }
+.attachment-viewer-body iframe { width:100%; height:100%; min-height:420px; border:0; background:white; }
+.attachment-viewer-body pre { align-self:stretch; justify-self:stretch; margin:0; padding:18px; overflow:auto; color:var(--ink); font:13px/1.55 ui-monospace,SFMono-Regular,Consolas,monospace; white-space:pre-wrap; }
+.attachment-viewer-body p { padding:20px; text-align:center; }
+.attachment-viewer-download { align-self:flex-end; width:auto; margin-top:12px; padding:10px 16px; text-decoration:none; }
 @media(max-width:480px) {
   .message-document { grid-template-columns:38px minmax(0,1fr); }
   .message-document-icon { width:38px; height:38px; }
@@ -913,6 +923,9 @@ article.capability-card strong { font-weight:650; }
   .message-photo figcaption { align-items:flex-start; flex-direction:column; }
   .message-photo .message-attachment-actions { width:100%; }
   .message-photo .message-attachment-actions a { flex:1; text-align:center; }
+  .message-photo .message-attachment-actions button { flex:1; text-align:center; }
+  .attachment-viewer-modal { height:calc(100dvh - 16px); padding:18px 10px 10px; }
+  .attachment-viewer-body iframe { min-height:320px; }
 }
 
 /* Direction chooser for users who arrived without a campaign link. */

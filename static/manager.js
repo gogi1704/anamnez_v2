@@ -468,13 +468,13 @@ function messageDocuments(metadata) {
       : extension && extension.length <= 5 ? extension : 'ФАЙЛ';
     if (isImage && preview) {
       return `<figure class="manager-message-photo">
-        ${url ? `<a href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">` : ''}<img src="${escapeHtml(preview)}" alt="${escapeHtml(name)}" loading="lazy">${url ? '</a>' : ''}
-        <figcaption><strong>${escapeHtml(name)}</strong><span>${url ? `<a href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">Открыть</a>` : ''}${downloadUrl ? `<a href="${escapeHtml(downloadUrl)}" download="${escapeHtml(name)}">Скачать</a>` : ''}</span></figcaption>
+        ${url ? `<button type="button" class="manager-photo-preview" data-attachment-open="${escapeHtml(url)}" data-attachment-name="${escapeHtml(name)}" data-attachment-type="${escapeHtml(mime)}">` : ''}<img src="${escapeHtml(preview)}" alt="${escapeHtml(name)}" loading="lazy">${url ? '</button>' : ''}
+        <figcaption><strong>${escapeHtml(name)}</strong><span>${url ? `<button type="button" data-attachment-open="${escapeHtml(url)}" data-attachment-name="${escapeHtml(name)}" data-attachment-type="${escapeHtml(mime)}">Открыть</button>` : ''}${downloadUrl ? `<button type="button" data-attachment-download="${escapeHtml(downloadUrl)}" data-attachment-name="${escapeHtml(name)}">Скачать</button>` : ''}</span></figcaption>
       </figure>`;
     }
     return `<article class="manager-message-document${url ? '' : ' unavailable'}">
       <i>${escapeHtml(icon)}</i><div><strong>${escapeHtml(name)}</strong><small>${url ? 'Документ' : 'Оригинал недоступен'}</small></div>
-      <span>${url ? `<a href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">Открыть</a>` : ''}${downloadUrl ? `<a href="${escapeHtml(downloadUrl)}" download="${escapeHtml(name)}">Скачать</a>` : ''}</span>
+      <span>${url ? `<button type="button" data-attachment-open="${escapeHtml(url)}" data-attachment-name="${escapeHtml(name)}" data-attachment-type="${escapeHtml(mime)}">Открыть</button>` : ''}${downloadUrl ? `<button type="button" data-attachment-download="${escapeHtml(downloadUrl)}" data-attachment-name="${escapeHtml(name)}">Скачать</button>` : ''}</span>
     </article>`;
   });
   const documents = (metadata.lab_result_documents || []).map(item => {
@@ -482,6 +482,93 @@ function messageDocuments(metadata) {
     return url ? `<a href="${escapeHtml(url)}" target="_blank" rel="noopener">Открыть ${escapeHtml(item.title || 'результат')}</a>` : '';
   });
   return [...attachments, ...documents].filter(Boolean).join('');
+}
+
+let attachmentViewerObjectUrl = '';
+
+function closeAttachmentViewer() {
+  $('#attachmentViewer').classList.add('hidden');
+  $('#attachmentViewerBody').replaceChildren();
+  $('#attachmentViewerStatus').classList.remove('hidden');
+  $('#attachmentViewerStatus').textContent = 'Загружаем файл…';
+  $('#attachmentViewerDownload').classList.add('hidden');
+  $('#attachmentViewerDownload').removeAttribute('href');
+  if (attachmentViewerObjectUrl) URL.revokeObjectURL(attachmentViewerObjectUrl);
+  attachmentViewerObjectUrl = '';
+}
+
+async function attachmentBlob(url) {
+  const response = await fetch(url, {credentials:'same-origin', cache:'no-store'});
+  if (!response.ok) {
+    let message = 'Не удалось загрузить файл';
+    try { message = (await response.json()).detail || message; } catch {}
+    throw new Error(message);
+  }
+  return response.blob();
+}
+
+async function openAttachmentViewer(button) {
+  const url = button.dataset.attachmentOpen;
+  const name = button.dataset.attachmentName || 'Документ';
+  const declaredType = String(button.dataset.attachmentType || '').toLowerCase();
+  if (!url) return;
+  closeAttachmentViewer();
+  $('#attachmentViewerTitle').textContent = name;
+  $('#attachmentViewer').classList.remove('hidden');
+  try {
+    const blob = await attachmentBlob(url);
+    const mime = String(blob.type || declaredType).toLowerCase();
+    attachmentViewerObjectUrl = URL.createObjectURL(blob);
+    const body = $('#attachmentViewerBody');
+    if (mime.startsWith('image/')) {
+      const image = document.createElement('img');
+      image.src = attachmentViewerObjectUrl;
+      image.alt = name;
+      body.append(image);
+    } else if (mime === 'application/pdf') {
+      const frame = document.createElement('iframe');
+      frame.src = attachmentViewerObjectUrl;
+      frame.title = name;
+      body.append(frame);
+    } else if (mime.startsWith('text/')) {
+      const pre = document.createElement('pre');
+      pre.textContent = await blob.text();
+      body.append(pre);
+    } else {
+      const note = document.createElement('p');
+      note.textContent = 'Предпросмотр для этого формата недоступен. Файл можно скачать.';
+      body.append(note);
+    }
+    $('#attachmentViewerStatus').classList.add('hidden');
+    const download = $('#attachmentViewerDownload');
+    download.href = attachmentViewerObjectUrl;
+    download.download = name;
+    download.classList.remove('hidden');
+  } catch (error) {
+    $('#attachmentViewerStatus').textContent = error.message;
+  }
+}
+
+async function downloadAttachment(button) {
+  const original = button.textContent;
+  button.disabled = true;
+  button.textContent = 'Загружаем…';
+  try {
+    const blob = await attachmentBlob(button.dataset.attachmentDownload);
+    const objectUrl = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = objectUrl;
+    link.download = button.dataset.attachmentName || 'file';
+    document.body.append(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
+  } catch (error) {
+    toast(error.message, true);
+  } finally {
+    button.disabled = false;
+    button.textContent = original;
+  }
 }
 
 function renderMessages() {
@@ -861,9 +948,17 @@ $('#psychologySessionInviteModal').addEventListener('click', event => {
 });
 $('#managerReplyForm').addEventListener('submit', sendReply);
 $('#managerMessages').addEventListener('click', event => {
+  const openButton = event.target.closest('[data-attachment-open]');
+  const downloadButton = event.target.closest('[data-attachment-download]');
+  if (openButton) return openAttachmentViewer(openButton);
+  if (downloadButton) return downloadAttachment(downloadButton);
   const button = event.target.closest('[data-delete-message-id]');
   if (!button) return;
   deleteMessage(Number(button.dataset.deleteMessageId), button.dataset.messageOwner);
+});
+$('#attachmentViewerClose').addEventListener('click', closeAttachmentViewer);
+$('#attachmentViewer').addEventListener('click', event => {
+  if (event.target === event.currentTarget) closeAttachmentViewer();
 });
 $('#managerReply').addEventListener('keydown', event => {
   if (event.key === 'Enter' && !event.shiftKey) {

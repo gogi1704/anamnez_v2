@@ -3968,8 +3968,10 @@ function attachmentTypeLabel(item) {
 }
 
 function chatAttachmentMarkup(item) {
+  const mime = String(item.type || '').toLowerCase();
+  const isImage = mime.startsWith('image/');
   const rawPreview = item.thumbnail_url || '';
-  const preview = String(rawPreview).startsWith('data:image/')
+  const preview = isImage && String(rawPreview).startsWith('data:image/')
     ? String(rawPreview) : safeUrl(rawPreview);
   const originalUrl = safeUrl(item.url);
   const openUrl = originalUrl || preview;
@@ -3977,14 +3979,14 @@ function chatAttachmentMarkup(item) {
   const name = item.name || 'Файл';
   const actions = openUrl || downloadUrl
     ? `<div class="message-attachment-actions">
-        ${openUrl ? `<a href="${escapeAttr(openUrl)}" target="_blank" rel="noopener noreferrer">Открыть</a>` : ''}
-        ${downloadUrl ? `<a href="${escapeAttr(downloadUrl)}" download="${escapeAttr(name)}">Скачать</a>` : ''}
+        ${openUrl ? `<button type="button" data-attachment-open="${escapeAttr(openUrl)}" data-attachment-name="${escapeAttr(name)}" data-attachment-type="${escapeAttr(mime)}">Открыть</button>` : ''}
+        ${downloadUrl ? `<button type="button" data-attachment-download="${escapeAttr(downloadUrl)}" data-attachment-name="${escapeAttr(name)}">Скачать</button>` : ''}
       </div>` : '';
-  if (preview) {
+  if (isImage && preview) {
     return `<figure class="message-photo">
-      ${openUrl ? `<a class="message-photo-preview" href="${escapeAttr(openUrl)}" target="_blank" rel="noopener noreferrer" aria-label="Открыть ${escapeAttr(name)}">` : ''}
+      ${openUrl ? `<button type="button" class="message-photo-preview" data-attachment-open="${escapeAttr(openUrl)}" data-attachment-name="${escapeAttr(name)}" data-attachment-type="${escapeAttr(mime)}" aria-label="Открыть ${escapeAttr(name)}">` : ''}
       <img src="${escapeAttr(preview)}" alt="${escapeAttr(name)}" loading="lazy">
-      ${openUrl ? '</a>' : ''}
+      ${openUrl ? '</button>' : ''}
       <figcaption><span>${escapeHtml(name)}</span>${actions}</figcaption>
     </figure>`;
   }
@@ -3993,6 +3995,93 @@ function chatAttachmentMarkup(item) {
     <div class="message-document-copy"><strong>${escapeHtml(name)}</strong><small>${openUrl ? 'Документ' : 'Оригинал недоступен'}</small></div>
     ${actions}
   </article>`;
+}
+
+let attachmentViewerObjectUrl = '';
+
+function closeAttachmentViewer() {
+  $('#attachmentViewer').classList.add('hidden');
+  $('#attachmentViewerBody').replaceChildren();
+  $('#attachmentViewerStatus').classList.remove('hidden');
+  $('#attachmentViewerStatus').textContent = 'Загружаем файл…';
+  $('#attachmentViewerDownload').classList.add('hidden');
+  $('#attachmentViewerDownload').removeAttribute('href');
+  if (attachmentViewerObjectUrl) URL.revokeObjectURL(attachmentViewerObjectUrl);
+  attachmentViewerObjectUrl = '';
+}
+
+async function attachmentBlob(url) {
+  const response = await fetch(url, {credentials:'same-origin', cache:'no-store'});
+  if (!response.ok) {
+    let message = 'Не удалось загрузить файл';
+    try { message = (await response.json()).detail || message; } catch {}
+    throw new Error(message);
+  }
+  return response.blob();
+}
+
+async function openAttachmentViewer(button) {
+  const url = button.dataset.attachmentOpen;
+  const name = button.dataset.attachmentName || 'Документ';
+  const declaredType = String(button.dataset.attachmentType || '').toLowerCase();
+  if (!url) return;
+  closeAttachmentViewer();
+  $('#attachmentViewerTitle').textContent = name;
+  $('#attachmentViewer').classList.remove('hidden');
+  try {
+    const blob = await attachmentBlob(url);
+    const mime = String(blob.type || declaredType).toLowerCase();
+    attachmentViewerObjectUrl = URL.createObjectURL(blob);
+    const body = $('#attachmentViewerBody');
+    if (mime.startsWith('image/')) {
+      const image = document.createElement('img');
+      image.src = attachmentViewerObjectUrl;
+      image.alt = name;
+      body.append(image);
+    } else if (mime === 'application/pdf') {
+      const frame = document.createElement('iframe');
+      frame.src = attachmentViewerObjectUrl;
+      frame.title = name;
+      body.append(frame);
+    } else if (mime.startsWith('text/')) {
+      const pre = document.createElement('pre');
+      pre.textContent = await blob.text();
+      body.append(pre);
+    } else {
+      const note = document.createElement('p');
+      note.textContent = 'Предпросмотр для этого формата недоступен. Файл можно скачать.';
+      body.append(note);
+    }
+    $('#attachmentViewerStatus').classList.add('hidden');
+    const download = $('#attachmentViewerDownload');
+    download.href = attachmentViewerObjectUrl;
+    download.download = name;
+    download.classList.remove('hidden');
+  } catch (error) {
+    $('#attachmentViewerStatus').textContent = error.message;
+  }
+}
+
+async function downloadAttachment(button) {
+  const original = button.textContent;
+  button.disabled = true;
+  button.textContent = 'Загружаем…';
+  try {
+    const blob = await attachmentBlob(button.dataset.attachmentDownload);
+    const objectUrl = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = objectUrl;
+    link.download = button.dataset.attachmentName || 'file';
+    document.body.append(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
+  } catch (error) {
+    addSystemError(error.message);
+  } finally {
+    button.disabled = false;
+    button.textContent = original;
+  }
 }
 
 function addMessage(sender, text, agentId = state.active, urgent = false, createdAt = null, metadata = {}) {
@@ -7808,6 +7897,16 @@ function handleLabInterpretClick(event) {
 }
 $('#labResultDocuments').addEventListener('click', handleLabInterpretClick);
 messages.addEventListener('click', handleLabInterpretClick);
+messages.addEventListener('click', event => {
+  const openButton = event.target.closest('[data-attachment-open]');
+  const downloadButton = event.target.closest('[data-attachment-download]');
+  if (openButton) openAttachmentViewer(openButton);
+  else if (downloadButton) downloadAttachment(downloadButton);
+});
+$('#attachmentViewerClose').addEventListener('click', closeAttachmentViewer);
+$('#attachmentViewer').addEventListener('click', event => {
+  if (event.target === event.currentTarget) closeAttachmentViewer();
+});
 $('#labTubeInput').addEventListener('input', () => $('#labTubeError').classList.add('hidden'));
 $('#profileHeight').addEventListener('input', updateProfileBmi);
 $('#profileWeight').addEventListener('input', updateProfileBmi);

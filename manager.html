@@ -13,7 +13,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/static/manager.css?v=20261020-chat-files-v12">
+  <link rel="stylesheet" href="/static/manager.css?v=20261020-attachment-viewer-v13">
   <link rel="stylesheet" href="/static/rich-text.css?v=20260816-rich-text">
 </head>
 <body>
@@ -148,8 +148,18 @@
     </form>
   </div>
 
+  <div class="manager-dialog-backdrop attachment-viewer-backdrop hidden" id="attachmentViewer" role="dialog" aria-modal="true" aria-labelledby="attachmentViewerTitle">
+    <div class="attachment-viewer-modal">
+      <button type="button" class="manager-dialog-close" id="attachmentViewerClose" aria-label="Закрыть просмотр">×</button>
+      <h2 id="attachmentViewerTitle">Документ</h2>
+      <p class="attachment-viewer-status" id="attachmentViewerStatus" role="status">Загружаем файл…</p>
+      <div class="attachment-viewer-body" id="attachmentViewerBody"></div>
+      <a class="attachment-viewer-download hidden" id="attachmentViewerDownload">Скачать файл</a>
+    </div>
+  </div>
+
   <div class="toast hidden" id="managerToast" role="status"></div>
   <script src="/static/rich-text.js?v=20260929-loose-lists-v1"></script>
-  <script src="/static/manager.js?v=20261020-chat-files-v12" defer></script>
+  <script src="/static/manager.js?v=20261020-attachment-viewer-v13" defer></script>
 </body>
 </html>

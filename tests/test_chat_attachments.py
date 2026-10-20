@@ -58,12 +58,19 @@ class ChatAttachmentTests(unittest.TestCase):
 
         self.assertIn("function chatAttachmentMarkup", app)
         self.assertIn("item.download_url", app)
-        self.assertIn("Открыть", app)
+        self.assertIn("data-attachment-open", app)
+        self.assertIn("function openAttachmentViewer", app)
+        self.assertIn("mime.startsWith('image/')", app)
+        self.assertIn("attachmentViewerBody", app)
         self.assertIn("Скачать", app)
         self.assertIn("item.download_url", manager)
+        self.assertIn("data-attachment-open", manager)
+        self.assertIn("function openAttachmentViewer", manager)
         self.assertIn("manager-message-document", manager)
         self.assertIn(".message-document-icon", styles)
+        self.assertIn(".attachment-viewer-body iframe", styles)
         self.assertIn(".manager-message-photo", manager_styles)
+        self.assertIn(".attachment-viewer-body iframe", manager_styles)
 
 
 if __name__ == "__main__":

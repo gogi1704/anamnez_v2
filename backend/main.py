@@ -3593,11 +3593,9 @@ small{{display:block;color:#82918c;text-align:center;margin-top:18px}}
             if allow_metrika_frame and metrika_configured
             else "'none'"
         )
-        metrika_frames = (
-            " child-src 'self' blob: https://mc.yandex.ru https://mc.yandex.com "
-            "https://mc.webvisor.com https://mc.webvisor.org; "
-            "frame-src blob: https://mc.yandex.ru https://mc.yandex.com "
-            "https://mc.webvisor.com https://mc.webvisor.org;"
+        metrika_frame_sources = (
+            " https://mc.yandex.ru https://mc.yandex.com "
+            "https://mc.webvisor.com https://mc.webvisor.org"
             if metrika_configured else ""
         )
         self.send_header(
@@ -3605,8 +3603,10 @@ small{{display:block;color:#82918c;text-align:center;margin-top:18px}}
             f"default-src 'self'; script-src 'self'{metrika_sources}; "
             "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; "
             "font-src 'self' https://fonts.gstatic.com data:; "
-            f"img-src 'self' data: blob:{metrika_sources}; connect-src 'self'{metrika_sources};"
-            f"{metrika_frames} worker-src 'self' blob:; object-src 'none'; "
+            f"img-src 'self' data: blob:{metrika_sources}; connect-src 'self'{metrika_sources}; "
+            f"child-src 'self' blob:{metrika_frame_sources}; "
+            f"frame-src 'self' blob:{metrika_frame_sources}; "
+            "worker-src 'self' blob:; object-src 'none'; "
             "base-uri 'self'; form-action 'self'; "
             f"frame-ancestors {metrika_frame_ancestors}",
         )
