@@ -36,6 +36,59 @@ class IkpAccessTests(unittest.TestCase):
         self.assertEqual(report['links'][0]['company'], 'ООО Ромашка новое имя')
         self.assertEqual(report['users'][0]['visit_count'], 2)
 
+    def test_unattributed_new_user_selects_and_keeps_entry_route(self):
+        previous_chel_id = db.current_chel_id()
+        try:
+            chel_id = 'chel_unattributed_entry_0001'
+            db.ensure_user(chel_id, pending=True)
+            db.set_current_chel_id(chel_id)
+            self.assertTrue(db.entry_route_choice_required())
+            selected = db.set_entry_route('other')
+            self.assertEqual(selected['entry_route'], 'other')
+            self.assertFalse(db.entry_route_choice_required())
+            db.save_onboarding(status='appearance', font_size='large')
+            self.assertEqual(db.get_onboarding()['entry_route'], 'other')
+            selected = db.set_entry_route('results')
+            self.assertEqual(selected['entry_route'], 'results')
+            with self.assertRaisesRegex(ValueError, 'направление'):
+                db.set_entry_route('unknown')
+        finally:
+            db.set_current_chel_id(previous_chel_id)
+
+    def test_explicit_service_link_skips_entry_route_choice(self):
+        previous_chel_id = db.current_chel_id()
+        try:
+            chel_id = 'chel_explicit_entry_0001'
+            db.ensure_user(chel_id, pending=True)
+            db.set_current_chel_id(chel_id)
+            link = db.provision_ikp_access(
+                '7707083893', 'ООО Ромашка', 'i' * 43,
+            )
+            db.record_ikp_access(link['access_token'], chel_id)
+            self.assertFalse(db.entry_route_choice_required())
+        finally:
+            db.set_current_chel_id(previous_chel_id)
+
+    def test_unknown_entry_direction_screen_routes_all_four_choices(self):
+        project_root = Path(__file__).resolve().parents[1]
+        index = (project_root / 'index.html').read_text(encoding='utf-8')
+        script = (project_root / 'static' / 'app.js').read_text(encoding='utf-8')
+        styles = (project_root / 'static' / 'styles.css').read_text(encoding='utf-8')
+        main = (project_root / 'backend' / 'main.py').read_text(encoding='utf-8')
+
+        self.assertIn('id="entryDirectionScreen"', index)
+        self.assertIn('data-entry-route="masterclass"', index)
+        self.assertIn('data-entry-route="medical_exam"', index)
+        self.assertIn('data-entry-route="results"', index)
+        self.assertIn('data-entry-route="other"', index)
+        self.assertIn("identity.entry_route_choice_required", script)
+        self.assertIn("await api('/api/entry-route'", script)
+        self.assertIn("onboarding.entry_route === 'other'", script)
+        self.assertIn("onboarding.entry_route === 'results'", script)
+        self.assertIn("await enterResultFlow({explicit:true})", script)
+        self.assertIn('.entry-direction-options', styles)
+        self.assertIn('if path == "/api/entry-route":', main)
+
     def test_masterclass_practices_are_a_real_downloadable_pdf(self):
         from pypdf import PdfReader
 
@@ -86,7 +139,8 @@ class IkpAccessTests(unittest.TestCase):
             self.assertEqual(greeting, db.MASTERCLASS_PSYCHOLOGY_WELCOME)
             self.assertIn('Я Вита, помощник-психолог', greeting)
             self.assertIn('без ограничений по времени', greeting)
-            self.assertIn('Первая консультация бесплатна', greeting)
+            self.assertIn('30-минутная сессия бесплатна', greeting)
+            self.assertIn('входит в ваш пакет мастер-класса', greeting)
             self.assertTrue(db.current_masterclass_access()['psychology_chat_started'])
         finally:
             db.set_current_chel_id(previous_chel_id)

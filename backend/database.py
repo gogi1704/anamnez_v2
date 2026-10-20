@@ -31,7 +31,8 @@ MASTERCLASS_PSYCHOLOGY_WELCOME = (
     "разобраться — сколько понадобится, без ограничений по времени. Если "
     "захотите поговорить с психологом — в любой момент можно попросить "
     "меня позвать человека или нажать на фиолетовую кнопку в верхней части "
-    "экрана. Первая консультация бесплатна."
+    "экрана. Пообщайтесь с дипломированным психологом. 30-минутная сессия "
+    "бесплатна и входит в ваш пакет мастер-класса."
 )
 
 
@@ -1253,6 +1254,22 @@ def ensure_user(
     return dict(row)
 
 
+def touch_user_activity(chel_id: str | None = None) -> None:
+    """Record activity without turning frequent chat polling into constant writes."""
+    candidate = str(chel_id or current_chel_id()).strip()
+    if not candidate:
+        return
+    now_dt = datetime.now(timezone.utc)
+    stale_before = (now_dt - timedelta(minutes=5)).isoformat()
+    with _write_lock, connection() as conn:
+        conn.execute(
+            """UPDATE users SET last_seen_at=?
+               WHERE chel_id=? AND (last_seen_at IS NULL OR last_seen_at<?)""",
+            (now_dt.isoformat(), candidate, stale_before),
+        )
+        conn.commit()
+
+
 def mark_current_user_registered(method: str) -> dict:
     """Count a user only after an explicit access choice or consumed messenger login."""
     method = str(method or "").strip().lower()
@@ -1589,6 +1606,7 @@ def current_masterclass_access() -> dict | None:
     with connection() as conn:
         row = conn.execute(
             """SELECT l.id,l.inn,l.company,l.masterclass_code,l.masterclass_name,l.is_test,
+                      l.access_token,
                       u.first_seen_at,u.last_seen_at,u.continued_at,
                       u.profile_completed_at,
                       EXISTS(
@@ -2108,6 +2126,240 @@ def admin_delete_user_data(chel_id: str) -> dict:
         "deleted_by_table": deleted_by_table,
         "user_found": bool(deleted_by_table["users"]),
     }
+
+
+def data_retention_preview(cutoff_at: str) -> dict:
+    """Return inactive deletion candidates without changing user data."""
+    cutoff_at = str(cutoff_at or "").strip()
+    if not cutoff_at:
+        raise ValueError("Не задана дата неактивности")
+    with connection() as conn:
+        rows = conn.execute(
+            """WITH activity AS (
+                 SELECT chel_id,last_seen_at AS seen_at FROM users
+                 UNION ALL
+                 SELECT chel_id,last_seen_at FROM user_sessions
+                   WHERE revoked_at IS NULL
+                 UNION ALL
+                 SELECT chel_id,last_seen_at FROM user_device_stats
+                 UNION ALL
+                 SELECT chel_id,last_seen_at FROM ikp_access_users
+                 UNION ALL
+                 SELECT chel_id,last_seen_at FROM masterclass_access_users
+                 UNION ALL
+                 SELECT chel_id,last_login_at FROM external_identities
+                   WHERE access_status='active'
+               ), latest AS (
+                 SELECT chel_id,MAX(seen_at) AS last_activity_at
+                 FROM activity GROUP BY chel_id
+               )
+               SELECT u.chel_id,u.created_at,u.registered_at,
+                      COALESCE(l.last_activity_at,u.last_seen_at) AS last_activity_at,
+                      COALESCE(NULLIF(TRIM(p.preferred_name),''),'') AS preferred_name,
+                      COALESCE((SELECT GROUP_CONCAT(DISTINCT e.provider)
+                        FROM external_identities e
+                        WHERE e.chel_id=u.chel_id AND e.access_status='active'
+                          AND TRIM(e.chat_id)<>''),'') AS messenger_providers,
+                      EXISTS(SELECT 1 FROM payment_orders po
+                        WHERE po.chel_id=u.chel_id AND (po.paid=1 OR po.status='succeeded')) AS has_paid_orders,
+                      EXISTS(SELECT 1 FROM payment_orders po
+                        WHERE po.chel_id=u.chel_id AND po.status IN
+                          ('creating','pending','waiting_for_capture')) AS has_pending_payment,
+                      EXISTS(SELECT 1 FROM lab_result_subscriptions lr
+                        WHERE lr.chel_id=u.chel_id AND lr.status='pending') AS has_pending_results,
+                      EXISTS(SELECT 1 FROM psychology_sessions ps
+                        WHERE ps.chel_id=u.chel_id AND ps.status='active') AS has_active_psychology_session,
+                      EXISTS(SELECT 1 FROM conversations c
+                        WHERE c.chel_id=u.chel_id AND c.human_status IN
+                          ('pending','connected')) AS has_open_human_request
+               FROM users u
+               LEFT JOIN latest l ON l.chel_id=u.chel_id
+               LEFT JOIN user_profile p ON p.chel_id=u.chel_id
+               WHERE u.chel_id NOT IN ('chel_legacy','chel_test_default')
+                 AND COALESCE(l.last_activity_at,u.last_seen_at) < ?
+               ORDER BY COALESCE(l.last_activity_at,u.last_seen_at),u.chel_id""",
+            (cutoff_at,),
+        ).fetchall()
+    candidates: list[dict] = []
+    excluded: list[dict] = []
+    for row in rows:
+        item = dict(row)
+        reasons: list[str] = []
+        if item.pop("has_paid_orders"):
+            reasons.append("есть оплаченные заказы: нужен отдельный финансовый архив")
+        if item.pop("has_pending_payment"):
+            reasons.append("есть незавершённая оплата")
+        if item.pop("has_pending_results"):
+            reasons.append("ожидаются результаты анализов")
+        if item.pop("has_active_psychology_session"):
+            reasons.append("есть активная сессия с психологом")
+        if item.pop("has_open_human_request"):
+            reasons.append("есть открытое обращение к специалисту")
+        providers = [
+            value for value in str(item.pop("messenger_providers") or "").split(",")
+            if value
+        ]
+        item["messenger_providers"] = sorted(set(providers))
+        item["messenger_linked"] = bool(providers)
+        if reasons:
+            item["exclusion_reasons"] = reasons
+            excluded.append(item)
+        else:
+            item["planned_action"] = (
+                "would_warn_then_delete" if providers else "would_delete_after_grace"
+            )
+            candidates.append(item)
+    return {
+        "cutoff_at": cutoff_at,
+        "candidates": candidates,
+        "excluded": excluded,
+        "candidate_count": len(candidates),
+        "messenger_count": sum(1 for item in candidates if item["messenger_linked"]),
+        "no_messenger_count": sum(1 for item in candidates if not item["messenger_linked"]),
+        "excluded_count": len(excluded),
+    }
+
+
+def last_completed_data_retention_audit() -> dict | None:
+    with connection() as conn:
+        row = conn.execute(
+            """SELECT * FROM data_retention_audit_runs
+               WHERE status='completed' ORDER BY completed_at DESC LIMIT 1"""
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def start_data_retention_audit(run_id: str, cutoff_at: str) -> None:
+    now = utc_now()
+    with _write_lock, connection() as conn:
+        conn.execute(
+            """INSERT INTO data_retention_audit_runs
+               (id,mode,cutoff_at,started_at,status) VALUES (?,'dry-run',?,?,'running')""",
+            (run_id, cutoff_at, now),
+        )
+        conn.commit()
+
+
+def finish_data_retention_audit(run_id: str, preview: dict) -> None:
+    summary = {
+        key: int(preview.get(key, 0))
+        for key in (
+            "candidate_count", "messenger_count", "no_messenger_count", "excluded_count"
+        )
+    }
+    with _write_lock, connection() as conn:
+        conn.execute(
+            """UPDATE data_retention_audit_runs SET status='completed',completed_at=?,
+               candidate_count=?,messenger_count=?,no_messenger_count=?,excluded_count=?,
+               report_summary=?,error='' WHERE id=?""",
+            (
+                utc_now(), summary["candidate_count"], summary["messenger_count"],
+                summary["no_messenger_count"], summary["excluded_count"],
+                json.dumps(summary, ensure_ascii=False), run_id,
+            ),
+        )
+        conn.commit()
+
+
+def fail_data_retention_audit(run_id: str, error: str) -> None:
+    with _write_lock, connection() as conn:
+        conn.execute(
+            """UPDATE data_retention_audit_runs SET status='failed',completed_at=?,error=?
+               WHERE id=?""",
+            (utc_now(), str(error or "")[:1000], run_id),
+        )
+        conn.commit()
+
+
+def queue_system_notification(
+    provider: str, recipient_id: str, event_type: str, payload: dict, dedupe_key: str,
+) -> bool:
+    provider = str(provider or "").strip().lower()
+    recipient_id = str(recipient_id or "").strip()
+    if provider not in {"telegram", "max"} or not recipient_id:
+        return False
+    with _write_lock, connection() as conn:
+        cursor = conn.execute(
+            """INSERT OR IGNORE INTO system_notification_outbox
+               (provider,recipient_id,event_type,dedupe_key,payload,status,created_at)
+               VALUES (?,?,?,?,?,'pending',?)""",
+            (
+                provider, recipient_id, str(event_type or "system"),
+                str(dedupe_key or "")[:160],
+                json.dumps(payload or {}, ensure_ascii=False), utc_now(),
+            ),
+        )
+        conn.commit()
+    return bool(cursor.rowcount)
+
+
+SYSTEM_NOTIFICATION_ID_OFFSET = 3_000_000_000
+
+
+def claim_system_notifications(provider: str, limit: int = 20) -> list[dict]:
+    provider = str(provider or "").strip().lower()
+    if provider not in {"telegram", "max"}:
+        raise ValueError("Неизвестный мессенджер")
+    limit = max(1, min(50, int(limit)))
+    now = datetime.now(timezone.utc)
+    stale_before = (now - timedelta(minutes=2)).isoformat()
+    result: list[dict] = []
+    with _write_lock, connection() as conn:
+        rows = conn.execute(
+            """SELECT id,recipient_id,event_type,payload,attempts
+               FROM system_notification_outbox
+               WHERE provider=? AND attempts<100
+                 AND (next_attempt_at IS NULL OR next_attempt_at<=?)
+                 AND (status='pending' OR (status='delivering' AND leased_at<?))
+               ORDER BY id LIMIT ?""",
+            (provider, now.isoformat(), stale_before, limit),
+        ).fetchall()
+        for row in rows:
+            lease_token = secrets.token_urlsafe(18)
+            conn.execute(
+                """UPDATE system_notification_outbox SET status='delivering',lease_token=?,
+                   leased_at=?,attempts=attempts+1 WHERE id=?""",
+                (lease_token, now.isoformat(), row["id"]),
+            )
+            item = dict(row)
+            item["id"] = -(SYSTEM_NOTIFICATION_ID_OFFSET + int(row["id"]))
+            item["conversation_id"] = ""
+            item["lease_token"] = lease_token
+            item["payload"] = json.loads(item["payload"] or "{}")
+            result.append(item)
+        conn.commit()
+    return result
+
+
+def acknowledge_system_notification(
+    notification_id: int, lease_token: str, success: bool, error: str = "",
+) -> bool:
+    now_dt = datetime.now(timezone.utc)
+    now = now_dt.isoformat()
+    with _write_lock, connection() as conn:
+        row = conn.execute(
+            """SELECT attempts FROM system_notification_outbox
+               WHERE id=? AND lease_token=? AND status='delivering'""",
+            (int(notification_id), str(lease_token or "")),
+        ).fetchone()
+        if not row:
+            return False
+        retry_delay = min(3600, 5 * (2 ** min(int(row["attempts"]), 10)))
+        next_attempt_at = None if success else (
+            now_dt + timedelta(seconds=retry_delay)
+        ).isoformat()
+        cursor = conn.execute(
+            """UPDATE system_notification_outbox SET status=?,sent_at=?,last_error=?,
+               next_attempt_at=?,lease_token=NULL,leased_at=NULL
+               WHERE id=? AND lease_token=? AND status='delivering'""",
+            (
+                "sent" if success else "pending", now if success else None,
+                str(error or "")[:500], next_attempt_at,
+                int(notification_id), str(lease_token or ""),
+            ),
+        )
+        conn.commit()
+    return bool(cursor.rowcount)
 
 
 def _token_hash(value: str) -> str:
@@ -5883,12 +6135,10 @@ def add_user_message_waiting_for_manager(
         raise ValueError("Диалог не найден")
     if bool(conversation.get("ai_enabled", 1)):
         raise ValueError("ИИ включён для этого диалога")
-    attachment_meta = []
-    for item in attachments or []:
-        metadata = {"name": item.get("name"), "type": item.get("type")}
-        if item.get("thumbnail_url"):
-            metadata["thumbnail_url"] = item["thumbnail_url"]
-        attachment_meta.append(metadata)
+    from .chat_attachments import public_metadata as attachment_public_metadata
+    attachment_meta = [
+        attachment_public_metadata(item) for item in attachments or []
+    ]
     message = add_message(
         conversation_id, "user", content,
         metadata={"attachments": attachment_meta, "awaiting_manager": True},
@@ -6160,6 +6410,39 @@ def init_db() -> None:
                 FOREIGN KEY(conversation_id) REFERENCES conversations(id) ON DELETE CASCADE
             );
 
+            CREATE TABLE IF NOT EXISTS system_notification_outbox (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                provider TEXT NOT NULL,
+                recipient_id TEXT NOT NULL,
+                event_type TEXT NOT NULL,
+                dedupe_key TEXT NOT NULL,
+                payload TEXT NOT NULL DEFAULT '{}',
+                status TEXT NOT NULL DEFAULT 'pending',
+                attempts INTEGER NOT NULL DEFAULT 0,
+                next_attempt_at TEXT,
+                lease_token TEXT,
+                leased_at TEXT,
+                sent_at TEXT,
+                last_error TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL,
+                UNIQUE(provider, recipient_id, dedupe_key)
+            );
+
+            CREATE TABLE IF NOT EXISTS data_retention_audit_runs (
+                id TEXT PRIMARY KEY,
+                mode TEXT NOT NULL DEFAULT 'dry-run',
+                cutoff_at TEXT NOT NULL,
+                started_at TEXT NOT NULL,
+                completed_at TEXT,
+                status TEXT NOT NULL DEFAULT 'running',
+                candidate_count INTEGER NOT NULL DEFAULT 0,
+                messenger_count INTEGER NOT NULL DEFAULT 0,
+                no_messenger_count INTEGER NOT NULL DEFAULT 0,
+                excluded_count INTEGER NOT NULL DEFAULT 0,
+                report_summary TEXT NOT NULL DEFAULT '{}',
+                error TEXT NOT NULL DEFAULT ''
+            );
+
             CREATE TABLE IF NOT EXISTS memories (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 chel_id TEXT NOT NULL DEFAULT 'chel_legacy',
@@ -6200,6 +6483,7 @@ def init_db() -> None:
             CREATE TABLE IF NOT EXISTS onboarding_state (
                 chel_id TEXT PRIMARY KEY,
                 status TEXT NOT NULL DEFAULT 'questionnaire',
+                entry_route TEXT NOT NULL DEFAULT '',
                 selected_tests TEXT NOT NULL DEFAULT '[]',
                 payment_status TEXT NOT NULL DEFAULT 'none',
                 questionnaire_skipped INTEGER NOT NULL DEFAULT 0,
@@ -7217,6 +7501,8 @@ def init_db() -> None:
             conn.execute("ALTER TABLE onboarding_state ADD COLUMN questionnaire_skipped INTEGER NOT NULL DEFAULT 0")
         if "marketer_result_seen" not in onboarding_columns:
             conn.execute("ALTER TABLE onboarding_state ADD COLUMN marketer_result_seen INTEGER NOT NULL DEFAULT 0")
+        if "entry_route" not in onboarding_columns:
+            conn.execute("ALTER TABLE onboarding_state ADD COLUMN entry_route TEXT NOT NULL DEFAULT ''")
 
         masterclass_link_columns = {
             row[1] for row in conn.execute(
@@ -7318,6 +7604,8 @@ def init_db() -> None:
         conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_staff_max_id ON staff_users(max_id) WHERE max_id <> ''")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_staff_messenger_tokens ON staff_messenger_tokens(staff_user_id, provider, expires_at)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_manager_notification_delivery ON manager_notification_outbox(provider, status, id)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_system_notification_delivery ON system_notification_outbox(provider, status, id)")
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_retention_runs_completed ON data_retention_audit_runs(status, completed_at)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_memories_chel_id ON memories(chel_id, updated_at)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_body_symptoms_chel_id ON body_symptoms(chel_id, created_at)")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_external_identities_chel_id ON external_identities(chel_id)")
@@ -10792,7 +11080,7 @@ def get_onboarding() -> dict:
             (current_chel_id(),),
         ).fetchone()
     if not row:
-        return {"status": "appearance", "selected_tests": [], "payment_status": "none", "questionnaire_skipped": False, "marketer_result_seen": False, "intro_seen": False, "font_size": "extra", "updated_at": None}
+        return {"status": "appearance", "entry_route": "", "selected_tests": [], "payment_status": "none", "questionnaire_skipped": False, "marketer_result_seen": False, "intro_seen": False, "font_size": "extra", "updated_at": None}
     result = dict(row)
     try:
         result["selected_tests"] = json.loads(result["selected_tests"] or "[]")
@@ -10804,6 +11092,53 @@ def get_onboarding() -> dict:
     if result.get("font_size") not in {"standard", "large", "extra"}:
         result["font_size"] = "standard"
     return result
+
+
+def entry_route_choice_required() -> bool:
+    """Show the direction chooser only to a genuinely unattributed new user."""
+    chel_id = current_chel_id()
+    with connection() as conn:
+        onboarding = conn.execute(
+            "SELECT entry_route,updated_at FROM onboarding_state WHERE chel_id=?",
+            (chel_id,),
+        ).fetchone()
+        if onboarding and (
+            str(onboarding["entry_route"] or "").strip()
+            or str(onboarding["updated_at"] or "").strip()
+        ):
+            return False
+        established = conn.execute(
+            """SELECT
+                 EXISTS(SELECT 1 FROM masterclass_access_users WHERE chel_id=?)
+                 OR EXISTS(SELECT 1 FROM ikp_access_users WHERE chel_id=?)
+                 OR EXISTS(SELECT 1 FROM conversations WHERE chel_id=?)
+                 OR EXISTS(SELECT 1 FROM user_profile WHERE chel_id=? AND updated_at IS NOT NULL)
+                 OR EXISTS(SELECT 1 FROM users WHERE chel_id=? AND result_entry_at IS NOT NULL)
+               AS established""",
+            (chel_id, chel_id, chel_id, chel_id, chel_id),
+        ).fetchone()
+    return not bool(established and established["established"])
+
+
+def set_entry_route(route: str) -> dict:
+    """Persist the user's self-selected entry direction across devices."""
+    route = str(route or "").strip().lower()
+    if route not in {"masterclass", "medical_exam", "results", "other"}:
+        raise ValueError("Выберите направление входа")
+    now = utc_now()
+    with _write_lock, connection() as conn:
+        conn.execute(
+            """INSERT INTO onboarding_state
+               (chel_id,status,entry_route,selected_tests,payment_status,
+                questionnaire_skipped,marketer_result_seen,intro_seen,font_size,updated_at)
+               VALUES (?,'appearance',?,'[]','none',0,0,0,'extra',?)
+               ON CONFLICT(chel_id) DO UPDATE SET
+                 entry_route=excluded.entry_route,
+                 updated_at=excluded.updated_at""",
+            (current_chel_id(), route, now),
+        )
+        conn.commit()
+    return get_onboarding()
 
 
 def save_onboarding(

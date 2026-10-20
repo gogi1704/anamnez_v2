@@ -17,7 +17,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/static/styles.css?v=20261019-entry-routing-v27">
+  <link rel="stylesheet" href="/static/styles.css?v=20261020-entry-results-v31">
   <link rel="stylesheet" href="/static/rich-text.2bf1f5fab764.css">
 </head>
 <body>
@@ -54,6 +54,33 @@
         <span>Начать анкету</span><span aria-hidden="true">→</span>
       </button>
       <p class="welcome-time">Анкета займёт около 10 минут</p>
+    </section>
+  </main>
+
+  <main class="entry-direction-screen hidden" id="entryDirectionScreen" aria-live="polite">
+    <section class="entry-direction-card">
+      <div class="welcome-brand" aria-label="Консилиум">
+        <span aria-hidden="true">К</span>
+        <div><strong>Консилиум</strong><small>Персональный старт</small></div>
+      </div>
+      <span class="entry-direction-kicker">Выберите направление</span>
+      <h1>Подскажите, зачем вы пришли?</h1>
+      <p class="entry-direction-lead">Мы откроем нужный раздел. Выбор сохранится, и повторно отвечать не придётся.</p>
+      <div class="entry-direction-options">
+        <button type="button" data-entry-route="masterclass">
+          <i aria-hidden="true">◇</i><span><strong>На мастер-класс</strong><small>Психология, тест на выгорание и чат с Витой</small></span><b aria-hidden="true">→</b>
+        </button>
+        <button type="button" data-entry-route="medical_exam">
+          <i aria-hidden="true">＋</i><span><strong>На медосмотр</strong><small>Анкета, дополнительные обследования и результаты</small></span><b aria-hidden="true">→</b>
+        </button>
+        <button type="button" data-entry-route="results">
+          <i aria-hidden="true">▤</i><span><strong>Получить результаты анализов</strong><small>Найти результаты по номеру пробирки и открыть расшифровку</small></span><b aria-hidden="true">→</b>
+        </button>
+        <button type="button" data-entry-route="other">
+          <i aria-hidden="true">✦</i><span><strong>По другому вопросу</strong><small>Открыть общий чат с Ольгой</small></span><b aria-hidden="true">→</b>
+        </button>
+      </div>
+      <p class="entry-direction-error hidden" id="entryDirectionError" role="alert"></p>
     </section>
   </main>
 
@@ -310,7 +337,7 @@
         <div class="psychology-sessions-heading-icon" aria-hidden="true">Ψ</div>
         <div><span>Психологическая поддержка</span><h2 id="psychologySessionsTitle">Сессии с психологом</h2></div>
       </header>
-      <p class="psychology-sessions-lead">Сессия — это онлайн-встреча, созвон с психологом. Первая консультация бесплатна. Оплаченная сессия длится 60 минут.</p>
+      <p class="psychology-sessions-lead">Сессия — это онлайн-встреча, созвон с психологом. Первая бесплатная консультация длится 30 минут и входит в пакет мастер-класса. Оплаченная сессия длится 60 минут.</p>
       <div class="psychology-sessions-summary" id="psychologySessionsSummary"></div>
       <h3 class="psychology-sessions-list-title">Проведённые сессии</h3>
       <div class="psychology-sessions-list" id="psychologySessionsList" aria-live="polite"></div>
@@ -870,9 +897,9 @@
     </div>
   </div>
 
-  <script src="/static/metrika.js?v=20261019-entry-routing-v27"></script>
-  <script src="/static/agents.js?v=20261019-entry-routing-v27"></script>
+  <script src="/static/metrika.js?v=20261020-entry-results-v31"></script>
+  <script src="/static/agents.js?v=20261020-entry-results-v31"></script>
   <script src="/static/rich-text.js?v=20260929-loose-lists-v1"></script>
-  <script src="/static/app.js?v=20261019-entry-routing-v27"></script>
+  <script src="/static/app.js?v=20261020-entry-results-v31"></script>
 </body>
 </html>

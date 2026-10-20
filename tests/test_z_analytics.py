@@ -1324,8 +1324,9 @@ class AnalyticsTests(unittest.TestCase):
         self.assertEqual(report['screens'][0]['id'], 'masterclass_landing')
         landing_actions = {item['id']: item for item in report['screens'][0]['actions']}
         self.assertEqual(landing_actions['anonymous']['users'], 1)
-        self.assertEqual([item['id'] for item in report['screens'][:3]], [
-            'masterclass_landing', 'masterclass_questionnaire', 'masterclass_burnout',
+        self.assertEqual([item['id'] for item in report['screens'][:4]], [
+            'masterclass_landing', 'masterclass_returning',
+            'masterclass_questionnaire', 'masterclass_burnout',
         ])
         self.assertEqual(report['screens'][2]['actions'][0]['users'], 1)
         screens = {item['id']: item for item in report['screens']}

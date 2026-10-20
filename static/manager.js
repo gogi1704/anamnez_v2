@@ -112,7 +112,7 @@ function plainTextPreview(value) {
 
 function safeUrl(value) {
   try {
-    const url = new URL(String(value || ''));
+    const url = new URL(String(value || ''), location.origin);
     return ['http:', 'https:'].includes(url.protocol) ? url.href : '';
   } catch { return ''; }
 }
@@ -452,8 +452,31 @@ function renderHeader() {
 }
 
 function messageDocuments(metadata) {
-  const attachments = (metadata.attachments || []).map(item =>
-    `<span>▱ ${escapeHtml(item.name || 'Файл')}</span>`);
+  const attachments = (metadata.attachments || []).map(item => {
+    const mime = String(item.type || '').toLowerCase();
+    const isImage = mime.startsWith('image/');
+    const rawPreview = item.thumbnail_url || '';
+    const preview = String(rawPreview).startsWith('data:image/')
+      ? String(rawPreview) : safeUrl(rawPreview);
+    const url = safeUrl(item.url) || preview;
+    const downloadUrl = safeUrl(item.download_url) || safeUrl(item.url) || preview;
+    const name = item.name || 'Файл';
+    const extension = String(name).split('.').pop().toUpperCase();
+    const icon = mime === 'application/pdf' ? 'PDF'
+      : mime === 'text/csv' ? 'CSV'
+      : mime.startsWith('text/') ? 'TXT'
+      : extension && extension.length <= 5 ? extension : 'ФАЙЛ';
+    if (isImage && preview) {
+      return `<figure class="manager-message-photo">
+        ${url ? `<a href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">` : ''}<img src="${escapeHtml(preview)}" alt="${escapeHtml(name)}" loading="lazy">${url ? '</a>' : ''}
+        <figcaption><strong>${escapeHtml(name)}</strong><span>${url ? `<a href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">Открыть</a>` : ''}${downloadUrl ? `<a href="${escapeHtml(downloadUrl)}" download="${escapeHtml(name)}">Скачать</a>` : ''}</span></figcaption>
+      </figure>`;
+    }
+    return `<article class="manager-message-document${url ? '' : ' unavailable'}">
+      <i>${escapeHtml(icon)}</i><div><strong>${escapeHtml(name)}</strong><small>${url ? 'Документ' : 'Оригинал недоступен'}</small></div>
+      <span>${url ? `<a href="${escapeHtml(url)}" target="_blank" rel="noopener noreferrer">Открыть</a>` : ''}${downloadUrl ? `<a href="${escapeHtml(downloadUrl)}" download="${escapeHtml(name)}">Скачать</a>` : ''}</span>
+    </article>`;
+  });
   const documents = (metadata.lab_result_documents || []).map(item => {
     const url = safeUrl(item.url);
     return url ? `<a href="${escapeHtml(url)}" target="_blank" rel="noopener">Открыть ${escapeHtml(item.title || 'результат')}</a>` : '';

@@ -57,6 +57,17 @@ class Settings:
     ))
     analytics_enabled: bool = env_bool("ANALYTICS_ENABLED", True)
     analytics_retention_days: int = int(os.getenv("ANALYTICS_RETENTION_DAYS", "90"))
+    data_retention_enabled: bool = env_bool("DATA_RETENTION_ENABLED", False)
+    data_retention_dry_run: bool = env_bool("DATA_RETENTION_DRY_RUN", True)
+    data_retention_inactive_days: int = int(os.getenv("DATA_RETENTION_INACTIVE_DAYS", "30"))
+    data_retention_grace_days: int = int(os.getenv("DATA_RETENTION_GRACE_DAYS", "2"))
+    data_retention_interval_days: int = int(os.getenv("DATA_RETENTION_INTERVAL_DAYS", "14"))
+    data_retention_report_telegram_chat_id: str = os.getenv(
+        "DATA_RETENTION_REPORT_TELEGRAM_CHAT_ID", "",
+    ).strip()
+    data_retention_report_max_chat_id: str = os.getenv(
+        "DATA_RETENTION_REPORT_MAX_CHAT_ID", "",
+    ).strip()
     ikp_integration_secret: str = os.getenv("IKP_INTEGRATION_SECRET", "").strip()
     yandex_metrika_counter_id: str = os.getenv("YANDEX_METRIKA_COUNTER_ID", "").strip()
     # Dedicated counter for the marketer A/B variant. It intentionally never

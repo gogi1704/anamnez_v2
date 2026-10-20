@@ -675,10 +675,73 @@ function setAuthStatus(message = '', error = false) {
 
 function hideEntryScreens() {
   $('#welcomeScreen').classList.add('hidden');
+  $('#entryDirectionScreen').classList.add('hidden');
   $('#authGate').classList.add('hidden');
   $('#onboarding').classList.add('hidden');
   $('#appShell').classList.add('hidden');
 }
+
+function showEntryDirection() {
+  hideEntryScreens();
+  $('#entryDirectionError').classList.add('hidden');
+  $('#entryDirectionError').textContent = '';
+  $('#entryDirectionScreen').classList.remove('hidden');
+  $('#entryDirectionScreen').scrollTop = 0;
+  trackEvent('entry_route_viewed', {screen:'entry_route'});
+}
+
+async function selectEntryDirection(route, button) {
+  const buttons = document.querySelectorAll('[data-entry-route]');
+  buttons.forEach(item => { item.disabled = true; });
+  $('#entryDirectionError').classList.add('hidden');
+  try {
+    const result = await api('/api/entry-route', {
+      method:'POST', body:JSON.stringify({route}),
+    });
+    state.identity.entry_route = result.route;
+    state.identity.entry_route_choice_required = false;
+    trackEvent('entry_route_selected', {screen:'entry_route',route});
+    if (route === 'masterclass') {
+      history.replaceState({}, '', result.route_path || '/');
+      state.masterclassEntry = result.masterclass_entry || null;
+      await enterMasterclassFlow();
+      return;
+    }
+    if (route === 'medical_exam') {
+      if (
+        state.identity?.authenticated
+        || localStorage.getItem(ANONYMOUS_ACCESS_KEY) === state.identity?.chel_id
+      ) {
+        await startApplication();
+      } else {
+        showAuthGate();
+      }
+      return;
+    }
+    if (route === 'results') {
+      history.replaceState({}, '', '/result');
+      await enterResultFlow({explicit:true});
+      return;
+    }
+    localStorage.setItem(
+      ANONYMOUS_ACCESS_KEY, result.chel_id || state.identity?.chel_id || '',
+    );
+    state.onboarding = await api('/api/onboarding');
+    state.profile = state.onboarding.profile;
+    await openMainApp({skipIntro:true, allowIncompleteOnboarding:true});
+    newConversation();
+  } catch (error) {
+    $('#entryDirectionError').textContent = error.message;
+    $('#entryDirectionError').classList.remove('hidden');
+    buttons.forEach(item => { item.disabled = false; });
+    button?.focus();
+  }
+}
+
+$('#entryDirectionScreen').addEventListener('click', event => {
+  const button = event.target.closest('[data-entry-route]');
+  if (button) selectEntryDirection(button.dataset.entryRoute, button);
+});
 
 function showWelcome(nextAction) {
   welcomeNextAction = nextAction;
@@ -1379,6 +1442,24 @@ async function enterKnownUser() {
       REQUESTED_CONVERSATION_KEY,
       state.identity.psychology_conversation_id,
     );
+    state.onboarding = onboarding;
+    state.profile = onboarding.profile;
+    await openMainApp({skipIntro:true, allowIncompleteOnboarding:true});
+    return;
+  }
+  if (onboarding.entry_route === 'masterclass') {
+    if (state.identity?.masterclass_path && !isMasterclassEntryUrl()) {
+      history.replaceState({}, '', state.identity.masterclass_path);
+    }
+    await enterMasterclassFlow();
+    return;
+  }
+  if (onboarding.entry_route === 'results') {
+    if (!isResultEntryUrl()) history.replaceState({}, '', '/result');
+    await enterResultFlow();
+    return;
+  }
+  if (onboarding.entry_route === 'other') {
     state.onboarding = onboarding;
     state.profile = onboarding.profile;
     await openMainApp({skipIntro:true, allowIncompleteOnboarding:true});
@@ -3877,6 +3958,43 @@ function labInterpretationMarkup(text, metadata = {}) {
   </div>`;
 }
 
+function attachmentTypeLabel(item) {
+  const mime = String(item.type || '').toLowerCase();
+  const extension = String(item.name || '').split('.').pop().toUpperCase();
+  if (mime === 'application/pdf') return 'PDF';
+  if (mime === 'text/csv') return 'CSV';
+  if (mime.startsWith('text/')) return extension === 'CSV' ? 'CSV' : 'TXT';
+  return extension && extension.length <= 5 ? extension : 'ФАЙЛ';
+}
+
+function chatAttachmentMarkup(item) {
+  const rawPreview = item.thumbnail_url || '';
+  const preview = String(rawPreview).startsWith('data:image/')
+    ? String(rawPreview) : safeUrl(rawPreview);
+  const originalUrl = safeUrl(item.url);
+  const openUrl = originalUrl || preview;
+  const downloadUrl = safeUrl(item.download_url) || originalUrl || preview;
+  const name = item.name || 'Файл';
+  const actions = openUrl || downloadUrl
+    ? `<div class="message-attachment-actions">
+        ${openUrl ? `<a href="${escapeAttr(openUrl)}" target="_blank" rel="noopener noreferrer">Открыть</a>` : ''}
+        ${downloadUrl ? `<a href="${escapeAttr(downloadUrl)}" download="${escapeAttr(name)}">Скачать</a>` : ''}
+      </div>` : '';
+  if (preview) {
+    return `<figure class="message-photo">
+      ${openUrl ? `<a class="message-photo-preview" href="${escapeAttr(openUrl)}" target="_blank" rel="noopener noreferrer" aria-label="Открыть ${escapeAttr(name)}">` : ''}
+      <img src="${escapeAttr(preview)}" alt="${escapeAttr(name)}" loading="lazy">
+      ${openUrl ? '</a>' : ''}
+      <figcaption><span>${escapeHtml(name)}</span>${actions}</figcaption>
+    </figure>`;
+  }
+  return `<article class="message-document${openUrl ? '' : ' unavailable'}">
+    <span class="message-document-icon" aria-hidden="true">${escapeHtml(attachmentTypeLabel(item))}</span>
+    <div class="message-document-copy"><strong>${escapeHtml(name)}</strong><small>${openUrl ? 'Документ' : 'Оригинал недоступен'}</small></div>
+    ${actions}
+  </article>`;
+}
+
 function addMessage(sender, text, agentId = state.active, urgent = false, createdAt = null, metadata = {}) {
   const messageId = Number(metadata._message_id || 0);
   if (messageId) {
@@ -3895,13 +4013,7 @@ function addMessage(sender, text, agentId = state.active, urgent = false, create
   if (messageId) wrapper.dataset.messageId = String(messageId);
   const date = createdAt ? new Date(createdAt) : new Date();
   const time = new Intl.DateTimeFormat('ru', { hour: '2-digit', minute: '2-digit' }).format(date);
-  const attachmentMarkup = (metadata.attachments || []).map(item => {
-    const preview = item.thumbnail_url || (String(item.type || '').startsWith('image/') ? item.data_url : '');
-    if (preview) {
-      return `<figure class="message-photo"><img src="${escapeAttr(preview)}" alt="${escapeAttr(item.name || 'Фотография еды')}" loading="lazy"><figcaption>${escapeHtml(item.name || 'Фотография')}</figcaption></figure>`;
-    }
-    return `<em class="message-file">▱ ${escapeHtml(item.name)}</em>`;
-  }).join('');
+  const attachmentMarkup = (metadata.attachments || []).map(chatAttachmentMarkup).join('');
   const cached = metadata.action === 'lab_interpretation' && metadata.interpretation_cached
     ? '<b class="special-label">Сохранённая расшифровка</b>' : '';
   const labDocuments = sender === 'agent'
@@ -4477,7 +4589,7 @@ const PSYCHOLOGY_CHAT_GUIDE_SLIDES = [
   {
     target:'#psychologySessionsButton',
     title:'Сессии с психологом',
-    text:'Здесь находится история онлайн-встреч, остаток предоплаченных сессий и кнопка новой заявки. Первая консультация бесплатна.',
+    text:'Здесь находится история онлайн-встреч, остаток предоплаченных сессий и кнопка новой заявки. Первая 30-минутная консультация бесплатна и входит в пакет мастер-класса.',
   },
   {
     target:'#messageInput',
@@ -4640,7 +4752,7 @@ function renderPsychologySessions(summary = {}) {
   const newSessionSubtitle = pending
     ? `Заявка № ${escapeHtml(pending.request_number || '—')} отправлена · психолог свяжется для согласования времени`
     : summary.free_available
-      ? 'Первая консультация бесплатна'
+      ? '30 минут · бесплатно по пакету мастер-класса'
       : Number(summary.remaining_paid || 0) > 0
         ? '60 минут · будет использована оплаченная сессия'
         : 'Для заявки потребуется купить 60-минутную сессию';
@@ -4649,7 +4761,7 @@ function renderPsychologySessions(summary = {}) {
   </button>`;
   const history = sessions.length ? sessions.map(item => {
     return `<article class="psychology-session-card">
-      <i>№ ${item.session_number}</i><div><strong>${item.access_type === 'free' ? 'Первая консультация · бесплатно' : 'Сессия с психологом · 60 минут'}</strong><span>${psychologySessionDate(item.completed_at || item.started_at)}</span></div><b>Проведена</b>
+      <i>№ ${item.session_number}</i><div><strong>${item.access_type === 'free' ? 'Первая консультация · 30 минут бесплатно' : 'Сессия с психологом · 60 минут'}</strong><span>${psychologySessionDate(item.completed_at || item.started_at)}</span></div><b>Проведена</b>
     </article>`;
   }).join('') : '<div class="psychology-sessions-empty">Проведённых сессий пока нет</div>';
   $('#psychologySessionsList').innerHTML = newCard + history;
@@ -4751,7 +4863,7 @@ function openPsychologySessionRequest() {
     const free = Boolean(summary.free_available);
     $('#psychologySessionRequestTitle').textContent = 'Оставить заявку на сессию?';
     $('#psychologySessionRequestText').textContent = free
-      ? 'Первая консультация бесплатна. После отправки заявки психолог свяжется с вами и согласует удобное время онлайн-встречи.'
+      ? 'Пообщайтесь с дипломированным психологом. 30-минутная сессия бесплатна и входит в ваш пакет мастер-класса. После отправки заявки психолог свяжется с вами и согласует удобное время онлайн-встречи.'
       : 'Будет зарезервирована одна предоплаченная 60-минутная сессия. После отправки заявки психолог свяжется с вами и согласует удобное время онлайн-встречи.';
     button.dataset.mode = 'request';
     button.textContent = 'Да, оставить заявку';
@@ -7955,6 +8067,15 @@ async function init() {
     }
     if (entryParams.get('checkup_reoffer') && !messengerLoginRequired) {
       await enterKnownUser();
+      return;
+    }
+    if (
+      identity.entry_route_choice_required
+      && !messengerLoginRequired
+      && !entryParams.get('payment_return')
+      && !requestedConversation
+    ) {
+      showEntryDirection();
       return;
     }
     if (identity.authenticated) {

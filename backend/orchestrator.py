@@ -6,6 +6,7 @@ import secrets
 from . import database as db
 from .config import settings
 from .lab_results import LabResultsUnavailable, lab_result_documents, lookup_lab_results
+from .chat_attachments import public_metadata as attachment_public_metadata
 from .llm import LLMNotConfigured, LLMProviderError, LLMService, llm_service
 from .schemas import AgentResult, ChatResponse, RouteDecision, normalize_context
 
@@ -62,14 +63,8 @@ CHECKUP_PURCHASE_NEGATION = re.compile(
 
 
 def _attachment_metadata(attachments: list[dict] | None) -> list[dict]:
-    """Keep safe display metadata and a small persisted image preview."""
-    result = []
-    for item in attachments or []:
-        metadata = {"name": item.get("name"), "type": item.get("type")}
-        if item.get("thumbnail_url"):
-            metadata["thumbnail_url"] = item["thumbnail_url"]
-        result.append(metadata)
-    return result
+    """Keep safe display metadata, persisted file links and image previews."""
+    return [attachment_public_metadata(item) for item in attachments or []]
 OTHER_PERSON_SUBJECT = re.compile(
     r"\b(?:реб[её]н\w*|сын\w*|доч\w*|мам\w*|пап\w*|муж\w*|жен\w*|"
     r"бабуш\w*|дедуш\w*|друг\w*|подруг\w*|пациент\w*)\b",

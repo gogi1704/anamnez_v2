@@ -16,7 +16,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, quote, urlparse
 
-from . import analytics, checkup_reoffers, company_suggestions, database as db, examination_schedule, funnel_monitor, splitter_tracking, weight_reminders
+from . import analytics, checkup_reoffers, company_suggestions, data_retention, database as db, examination_schedule, funnel_monitor, splitter_tracking, weight_reminders
+from . import chat_attachments
 from .config import BASE_DIR, settings
 from .health_passport import build_health_passport_pdf
 from .masterclass_materials import build_masterclass_practices_pdf
@@ -396,6 +397,29 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
             )
         if path == "/api/health":
             return self._json(200, {"status": "ok"})
+        if path.startswith("/api/chat-attachments/"):
+            token = path.removeprefix("/api/chat-attachments/").strip("/")
+            stored = chat_attachments.load(token)
+            if not stored:
+                return self._json(404, {"detail": "Вложение не найдено"})
+            record, body = stored
+            manager = db.get_staff_session(self._manager_cookie())
+            if not manager:
+                self._ensure_user_context()
+                if record.get("owner_chel_id") != db.current_chel_id():
+                    return self._json(404, {"detail": "Вложение не найдено"})
+            query = parse_qs(parsed.query)
+            download = query.get("download", [""])[0] == "1"
+            disposition = "attachment" if download else "inline"
+            safe_ascii = re.sub(r"[^A-Za-z0-9._-]+", "_", str(record.get("name") or "file"))
+            encoded_name = quote(str(record.get("name") or "file"), safe="")
+            return self._bytes(
+                200, body, str(record.get("type") or "application/octet-stream"),
+                disposition=(
+                    f"{disposition}; filename=\"{safe_ascii or 'file'}\"; "
+                    f"filename*=UTF-8''{encoded_name}"
+                ),
+            )
         if path == "/api/public-config":
             self._ensure_user_context()
             public_query = parse_qs(parsed.query)
@@ -448,9 +472,14 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                 provider = query.get("provider", [""])[0]
                 limit = max(1, min(50, int(query.get("limit", ["20"])[0])))
                 _refresh_due_lab_result_notifications()
-                user_notifications = db.claim_weight_reminder_notifications(
+                user_notifications = db.claim_system_notifications(
                     provider, min(5, limit),
                 )
+                remaining = limit - len(user_notifications)
+                if remaining > 0:
+                    user_notifications += db.claim_weight_reminder_notifications(
+                        provider, min(5, remaining),
+                    )
                 remaining = limit - len(user_notifications)
                 if remaining > 0:
                     user_notifications += db.claim_user_notifications(
@@ -821,6 +850,8 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
             return self._json(200, public_agents())
         if path == "/api/me":
             identities = db.current_external_identities()
+            onboarding = db.get_onboarding()
+            masterclass_entry = db.current_masterclass_access()
             return self._json(200, {
                 "chel_id": db.current_chel_id(),
                 "authenticated": bool(identities),
@@ -830,6 +861,12 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                 "ikp_access": db.current_user_is_ikp(),
                 "psychology_conversation_id": (
                     db.current_masterclass_psychology_conversation_id()
+                ),
+                "entry_route": str(onboarding.get("entry_route") or ""),
+                "entry_route_choice_required": db.entry_route_choice_required(),
+                "masterclass_path": (
+                    f"/masterclass/{masterclass_entry['access_token']}"
+                    if masterclass_entry and masterclass_entry.get("access_token") else ""
                 ),
                 "messengers": {
                     "telegram": {"configured": bool(settings.telegram_bot_auth_url)},
@@ -1214,7 +1251,13 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                 payload = self._read_json()
                 if not isinstance(payload.get("success"), bool):
                     raise ValueError("success должен быть true или false")
-                if notification_id <= -db.WEIGHT_REMINDER_NOTIFICATION_ID_OFFSET:
+                if notification_id <= -db.SYSTEM_NOTIFICATION_ID_OFFSET:
+                    system_id = abs(notification_id) - db.SYSTEM_NOTIFICATION_ID_OFFSET
+                    acknowledged = db.acknowledge_system_notification(
+                        system_id, str(payload.get("lease_token", "")),
+                        payload["success"], str(payload.get("error", "")),
+                    )
+                elif notification_id <= -db.WEIGHT_REMINDER_NOTIFICATION_ID_OFFSET:
                     reminder_id = abs(notification_id) - db.WEIGHT_REMINDER_NOTIFICATION_ID_OFFSET
                     acknowledged = db.acknowledge_weight_reminder_notification(
                         reminder_id, str(payload.get("lease_token", "")),
@@ -2185,6 +2228,33 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                 })
             except ValueError as exc:
                 return self._json(422, {"detail": str(exc)})
+        if path == "/api/entry-route":
+            try:
+                payload = self._read_json(max_bytes=2_000)
+                route = str(payload.get("route", "")).strip().lower()
+                route_path = ""
+                entry = None
+                onboarding = db.set_entry_route(route)
+                if route == "masterclass":
+                    source_key, inn, company, code, _ = db.normalize_masterclass_identity(
+                        "", "Самостоятельный вход в мастер-класс", "masterclass_1",
+                    )
+                    link = db.provision_masterclass_access(
+                        inn, company, code, _masterclass_access_token(source_key),
+                    )
+                    db.record_masterclass_access(link["access_token"], db.current_chel_id())
+                    route_path = f"/masterclass/{link['access_token']}"
+                    entry = db.current_masterclass_access()
+                if route == "other" and not db.current_external_identities():
+                    db.mark_current_user_registered("anonymous")
+                self._track_analytics("entry_route_selected", {"route": route})
+                return self._json(200, {
+                    "status": "selected", "route": route, "route_path": route_path,
+                    "chel_id": db.current_chel_id(), "onboarding": onboarding,
+                    "masterclass_entry": entry,
+                })
+            except (ValueError, json.JSONDecodeError, UnicodeDecodeError) as exc:
+                return self._json(422, {"detail": str(exc)})
         if path == "/api/masterclass-entry/start":
             try:
                 entry = db.mark_current_masterclass_continued()
@@ -2741,12 +2811,9 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                 and conversation.get("dialog_type") == "masterclass_psychology"
                 and _psychology_crisis_detected(message)
             ):
-                attachment_meta = []
-                for item in attachments:
-                    metadata = {"name": item.get("name"), "type": item.get("type")}
-                    if item.get("thumbnail_url"):
-                        metadata["thumbnail_url"] = item["thumbnail_url"]
-                    attachment_meta.append(metadata)
+                attachment_meta = [
+                    chat_attachments.public_metadata(item) for item in attachments
+                ]
                 user_message = db.add_message(
                     conversation_id, "user", message, "psychologist", {
                         "action": "psychology_crisis_escalation",
@@ -2802,8 +2869,7 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                     "human_ticket_id": updated.get("human_ticket_id"),
                     "context": json.loads(updated.get("context_summary") or "{}"),
                     "attachments": [
-                        {"name": item.get("name"), "type": item.get("type")}
-                        for item in attachments
+                        chat_attachments.public_metadata(item) for item in attachments
                     ],
                 })
             result = orchestrator.process(
@@ -3092,6 +3158,7 @@ small{{display:block;color:#82918c;text-align:center;margin-top:18px}}
                 if len(thumbnail_url) > 350_000:
                     raise ValueError("Миниатюра изображения слишком большая")
                 validated["thumbnail_url"] = thumbnail_url
+            validated.update(chat_attachments.store(validated, db.current_chel_id()))
             result.append(validated)
         return result
 
@@ -3420,6 +3487,7 @@ small{{display:block;color:#82918c;text-align:center;margin-top:18px}}
             self._identity_cookie_required = False
             self._authenticated_session = True
             db.set_current_chel_id(session_chel_id)
+            db.touch_user_activity(session_chel_id)
             return
         self._authenticated_session = False
         candidate = cookie.get("chel_id").value if cookie.get("chel_id") else ""
@@ -3560,6 +3628,7 @@ def serve() -> None:
     reoffer_stop = checkup_reoffers.start_background_scheduler(_record_startup_event)
     weight_reminder_stop = weight_reminders.start_background_scheduler(_record_startup_event)
     funnel_monitor_stop = funnel_monitor.start_background_monitor(_record_startup_event)
+    retention_stop = data_retention.start_background_scheduler(_record_startup_event)
     server = ConsiliumHTTPServer((settings.host, settings.port), ConsiliumHandler)
     _record_startup_event(f"Порт {settings.port} открыт")
     browser_host = "127.0.0.1" if settings.host in {"0.0.0.0", "::", ""} else settings.host
@@ -3591,5 +3660,6 @@ def serve() -> None:
         reoffer_stop.set()
         weight_reminder_stop.set()
         funnel_monitor_stop.set()
+        retention_stop.set()
         _record_startup_event("Остановка сервера")
         server.server_close()
