@@ -1787,7 +1787,9 @@ function escapeAttr(value) {
 
 function safeUrl(value) {
   try {
-    const url = new URL(String(value || '').trim(), location.origin);
+    const raw = String(value || '').trim();
+    if (!raw) return '';
+    const url = new URL(raw, location.origin);
     return ['http:', 'https:'].includes(url.protocol) ? url.href : '';
   } catch {
     return '';
@@ -4031,6 +4033,9 @@ async function openAttachmentViewer(button) {
   try {
     const blob = await attachmentBlob(url);
     const mime = String(blob.type || declaredType).toLowerCase();
+    if (mime === 'text/html' && declaredType && declaredType !== 'text/html') {
+      throw new Error('Оригинал этого вложения не сохранился. Отправьте файл в чат ещё раз.');
+    }
     attachmentViewerObjectUrl = URL.createObjectURL(blob);
     const body = $('#attachmentViewerBody');
     if (mime.startsWith('image/')) {
