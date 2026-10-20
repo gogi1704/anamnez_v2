@@ -68,6 +68,9 @@ class Settings:
     data_retention_report_max_chat_id: str = os.getenv(
         "DATA_RETENTION_REPORT_MAX_CHAT_ID", "",
     ).strip()
+    data_retention_report_dir: Path = Path(os.getenv(
+        "DATA_RETENTION_REPORT_DIR", BASE_DIR / "backups",
+    ))
     ikp_integration_secret: str = os.getenv("IKP_INTEGRATION_SECRET", "").strip()
     yandex_metrika_counter_id: str = os.getenv("YANDEX_METRIKA_COUNTER_ID", "").strip()
     # Dedicated counter for the marketer A/B variant. It intentionally never

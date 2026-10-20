@@ -2247,6 +2247,8 @@ def finish_data_retention_audit(run_id: str, preview: dict) -> None:
             "candidate_count", "messenger_count", "no_messenger_count", "excluded_count"
         )
     }
+    summary["report_path"] = str(preview.get("report_path") or "")
+    summary["report_notifications"] = int(preview.get("report_notifications", 0))
     with _write_lock, connection() as conn:
         conn.execute(
             """UPDATE data_retention_audit_runs SET status='completed',completed_at=?,

@@ -6,15 +6,18 @@ user warnings and never deletes data while ``DATA_RETENTION_DRY_RUN`` is true.
 
 from __future__ import annotations
 
+import csv
 import threading
 import uuid
 from datetime import datetime, timedelta, timezone
+from pathlib import Path
 
 from . import database as db
 from .config import settings
 
 
 REPORT_BODY_LIMIT = 3200
+REPORT_PREVIEW_LIMIT = 5
 
 
 def _utc(value: datetime | None = None) -> datetime:
@@ -65,7 +68,7 @@ def _excluded_line(item: dict) -> str:
     return f"• {item.get('chel_id', '—')} · {reasons}"
 
 
-def _report_lines(preview: dict, grace_days: int) -> list[str]:
+def _report_lines(preview: dict, grace_days: int, report_path: str) -> list[str]:
     lines = [
         "Режим: DRY-RUN — сообщения пользователям не отправлялись, данные не удалялись.",
         f"Порог неактивности: {str(preview.get('cutoff_at') or '')[:10]}.",
@@ -74,19 +77,21 @@ def _report_lines(preview: dict, grace_days: int) -> list[str]:
         f"Без мессенджера: {preview.get('no_messenger_count', 0)}.",
         f"Исключено из очистки: {preview.get('excluded_count', 0)}.",
         f"В рабочем режиме удаление планировалось бы через {grace_days} дн. после предупреждения.",
+        f"Полный CSV-отчёт сохранён на сервере: {report_path}",
     ]
     candidates = preview.get("candidates") or []
     lines.append("")
-    lines.append("Кандидаты:")
-    lines.extend(_candidate_line(item, grace_days) for item in candidates)
+    lines.append(f"Первые {min(len(candidates), REPORT_PREVIEW_LIMIT)} кандидатов:")
+    lines.extend(
+        _candidate_line(item, grace_days)
+        for item in candidates[:REPORT_PREVIEW_LIMIT]
+    )
     if not candidates:
         lines.append("• Нет")
-    excluded = preview.get("excluded") or []
-    lines.append("")
-    lines.append("Исключения:")
-    lines.extend(_excluded_line(item) for item in excluded)
-    if not excluded:
-        lines.append("• Нет")
+    if len(candidates) > REPORT_PREVIEW_LIMIT:
+        lines.append(
+            f"• Ещё {len(candidates) - REPORT_PREVIEW_LIMIT} — в полном CSV-отчёте"
+        )
     return lines
 
 
@@ -106,7 +111,47 @@ def _chunk_lines(lines: list[str]) -> list[str]:
     return chunks
 
 
-def queue_report(run_id: str, preview: dict) -> int:
+def _csv_value(value: object) -> str:
+    text = str(value or "")
+    return f"'{text}" if text.startswith(("=", "+", "-", "@")) else text
+
+
+def write_full_report(run_id: str, preview: dict) -> Path:
+    """Persist every candidate and exclusion without flooding a messenger."""
+    report_dir = Path(settings.data_retention_report_dir)
+    report_dir.mkdir(parents=True, exist_ok=True)
+    destination = report_dir / f"{run_id}.csv"
+    temporary = report_dir / f".{run_id}.csv.tmp"
+    fields = (
+        "category", "chel_id", "preferred_name", "last_activity_at",
+        "messenger_providers", "planned_action", "exclusion_reasons",
+    )
+    with temporary.open("w", encoding="utf-8-sig", newline="") as output:
+        writer = csv.DictWriter(output, fieldnames=fields)
+        writer.writeheader()
+        for category, items in (
+            ("candidate", preview.get("candidates") or []),
+            ("excluded", preview.get("excluded") or []),
+        ):
+            for item in items:
+                writer.writerow({
+                    "category": category,
+                    "chel_id": _csv_value(item.get("chel_id")),
+                    "preferred_name": _csv_value(item.get("preferred_name")),
+                    "last_activity_at": item.get("last_activity_at") or "",
+                    "messenger_providers": ", ".join(
+                        item.get("messenger_providers") or []
+                    ),
+                    "planned_action": item.get("planned_action") or "",
+                    "exclusion_reasons": "; ".join(
+                        item.get("exclusion_reasons") or []
+                    ),
+                })
+    temporary.replace(destination)
+    return destination
+
+
+def queue_report(run_id: str, preview: dict, report_path: str) -> int:
     recipients = [
         ("telegram", settings.data_retention_report_telegram_chat_id),
         ("max", settings.data_retention_report_max_chat_id),
@@ -115,7 +160,7 @@ def queue_report(run_id: str, preview: dict) -> int:
     if not recipients:
         return 0
     chunks = _chunk_lines(_report_lines(
-        preview, max(1, int(settings.data_retention_grace_days)),
+        preview, max(1, int(settings.data_retention_grace_days)), report_path,
     ))
     queued = 0
     total = len(chunks)
@@ -161,7 +206,9 @@ def run_dry_run(*, now: datetime | None = None, force: bool = False) -> dict:
     db.start_data_retention_audit(run_id, cutoff_at)
     try:
         preview = db.data_retention_preview(cutoff_at)
-        report_notifications = queue_report(run_id, preview)
+        report_path = str(write_full_report(run_id, preview))
+        report_notifications = queue_report(run_id, preview, report_path)
+        preview["report_path"] = report_path
         preview["report_notifications"] = report_notifications
         preview["report_recipient_configured"] = bool(
             settings.data_retention_report_telegram_chat_id

@@ -21,6 +21,7 @@ class DataRetentionDryRunTests(unittest.TestCase):
                 "data_retention_interval_days",
                 "data_retention_report_telegram_chat_id",
                 "data_retention_report_max_chat_id",
+                "data_retention_report_dir",
             )
         }
         object.__setattr__(
@@ -35,6 +36,9 @@ class DataRetentionDryRunTests(unittest.TestCase):
             settings, "data_retention_report_telegram_chat_id", "report-chat-777",
         )
         object.__setattr__(settings, "data_retention_report_max_chat_id", "")
+        object.__setattr__(
+            settings, "data_retention_report_dir", Path(self.temp_dir.name) / "reports",
+        )
         db.init_db()
 
     def tearDown(self):
@@ -88,6 +92,12 @@ class DataRetentionDryRunTests(unittest.TestCase):
         self.assertEqual(result["no_messenger_count"], 1)
         self.assertEqual(result["excluded_count"], 1)
         self.assertEqual(result["report_notifications"], 1)
+        report_path = Path(result["report_path"])
+        self.assertTrue(report_path.is_file())
+        report_text = report_path.read_text(encoding="utf-8-sig")
+        self.assertIn("chel_retention_linked", report_text)
+        self.assertIn("chel_retention_unlinked", report_text)
+        self.assertIn("chel_retention_protected", report_text)
         with db.connection() as conn:
             remaining = conn.execute(
                 "SELECT COUNT(*) FROM users WHERE chel_id LIKE 'chel_retention_%'"
@@ -106,7 +116,7 @@ class DataRetentionDryRunTests(unittest.TestCase):
         self.assertIn("DRY-RUN", body)
         self.assertIn("chel_retention_linked", body)
         self.assertIn("chel_retention_unlinked", body)
-        self.assertIn("chel_retention_protected", body)
+        self.assertIn("Исключено из очистки: 1", body)
         notification_id = abs(reports[0]["id"]) - db.SYSTEM_NOTIFICATION_ID_OFFSET
         self.assertTrue(db.acknowledge_system_notification(
             notification_id, reports[0]["lease_token"], True,
@@ -160,6 +170,37 @@ class DataRetentionDryRunTests(unittest.TestCase):
                 "SELECT COUNT(*) FROM data_retention_audit_runs"
             ).fetchone()[0]
         self.assertEqual(runs, 0)
+
+    def test_large_audit_queues_one_summary_instead_of_message_flood(self):
+        preview = {
+            "cutoff_at": "2026-09-20T00:00:00+00:00",
+            "candidate_count": 13_271,
+            "messenger_count": 0,
+            "no_messenger_count": 13_271,
+            "excluded_count": 11,
+            "candidates": [
+                {
+                    "chel_id": f"chel_large_{index:05d}",
+                    "preferred_name": f"Пользователь {index}",
+                    "last_activity_at": "2026-01-01T00:00:00+00:00",
+                    "messenger_providers": [],
+                    "messenger_linked": False,
+                }
+                for index in range(13_271)
+            ],
+            "excluded": [],
+        }
+
+        queued = data_retention.queue_report(
+            "retention-large-test", preview, "/app/backups/retention-large-test.csv",
+        )
+
+        self.assertEqual(queued, 1)
+        reports = db.claim_system_notifications("telegram")
+        self.assertEqual(len(reports), 1)
+        body = reports[0]["payload"]["body"]
+        self.assertIn("Ещё 13266", body)
+        self.assertLessEqual(len(body), data_retention.REPORT_BODY_LIMIT)
 
     def test_activity_touch_is_throttled_but_refreshes_stale_user(self):
         chel_id = "chel_activity_touch"
