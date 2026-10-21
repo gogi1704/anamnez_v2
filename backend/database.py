@@ -3480,13 +3480,14 @@ def admin_manager_attribution(
 
 
 def admin_manager_first_arrivals(date_from: str = "", date_to: str = "") -> dict:
-    """Aggregate users first created on the landing page, including pending users.
+    """Aggregate new users who actually opened an application page.
 
-    A pending ``users`` row is created when a previously unknown browser first
-    requests the Consilium landing page.  Unlike ``registered_at``, ``created_at``
-    therefore includes visitors who reached that page but did not choose a login
-    method.  The immutable ``from_manager`` value keeps the original manager
-    attribution for this daily acquisition report.
+    ``users`` rows can also be created by API and integration requests, so
+    ``created_at`` alone overcounts arrivals.  ``user_device_stats`` is written
+    only when a non-bot browser receives an application page.  Requiring its
+    first visit in the same period keeps pending visitors (registration is not
+    required) while excluding technical identities.  The immutable
+    ``from_manager`` value preserves the original manager attribution.
     """
     date_from = str(date_from or "").strip()
     date_to = str(date_to or "").strip()
@@ -3500,6 +3501,8 @@ def admin_manager_first_arrivals(date_from: str = "", date_to: str = "") -> dict
 
     where = "IS_STATS_USER(u.chel_id) = 1"
     params: list[str] = []
+    device_where = ["d.chel_id = u.chel_id"]
+    device_params: list[str] = []
     report_timezone = timezone(timedelta(hours=3))
     if custom_from:
         from_boundary = datetime.combine(
@@ -3507,12 +3510,22 @@ def admin_manager_first_arrivals(date_from: str = "", date_to: str = "") -> dict
         ).astimezone(timezone.utc).isoformat()
         where += " AND u.created_at >= ?"
         params.append(from_boundary)
+        device_where.append("d.first_seen_at >= ?")
+        device_params.append(from_boundary)
     if custom_to:
         to_boundary = datetime.combine(
             custom_to + timedelta(days=1), datetime.min.time(), tzinfo=report_timezone,
         ).astimezone(timezone.utc).isoformat()
         where += " AND u.created_at < ?"
         params.append(to_boundary)
+        device_where.append("d.first_seen_at < ?")
+        device_params.append(to_boundary)
+    where += (
+        " AND EXISTS (SELECT 1 FROM user_device_stats d WHERE "
+        + " AND ".join(device_where)
+        + ")"
+    )
+    params.extend(device_params)
 
     with connection() as conn:
         total_users = int(conn.execute(

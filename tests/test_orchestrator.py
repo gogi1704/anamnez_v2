@@ -2890,24 +2890,53 @@ class OrchestratorTests(unittest.TestCase):
             db.ensure_user("chel_test_default")
             db.set_current_chel_id("chel_test_default")
 
-    def test_manager_first_arrivals_include_users_who_did_not_register(self):
+    def test_manager_first_arrivals_require_page_open_but_not_registration(self):
         pending_id = "chel_manager_arrival_pending"
         registered_id = "chel_manager_arrival_registered"
         outside_id = "chel_manager_arrival_outside"
+        technical_id = "chel_manager_arrival_technical"
         try:
             db.ensure_user(pending_id, pending=True, from_manager="manager_1")
             db.ensure_user(registered_id, pending=True, from_manager="manager_2")
             db.set_current_chel_id(registered_id)
             db.mark_current_user_registered("anonymous")
             db.ensure_user(outside_id, pending=True, from_manager="manager_1")
+            db.ensure_user(technical_id, pending=True, from_manager="manager_1")
+            for chel_id in (pending_id, registered_id, outside_id):
+                db.set_current_chel_id(chel_id)
+                db.record_device_access(
+                    "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0",
+                )
             with db.connection() as conn:
                 conn.execute(
-                    "UPDATE users SET created_at=? WHERE chel_id IN (?,?)",
-                    ("2035-07-14T12:00:00+00:00", pending_id, registered_id),
+                    "UPDATE users SET created_at=? WHERE chel_id IN (?,?,?)",
+                    (
+                        "2035-07-14T12:00:00+00:00",
+                        pending_id, registered_id, technical_id,
+                    ),
                 )
                 conn.execute(
                     "UPDATE users SET created_at=? WHERE chel_id=?",
                     ("2035-07-13T12:00:00+00:00", outside_id),
+                )
+                conn.execute(
+                    """UPDATE user_device_stats
+                    SET first_seen_at=?, last_seen_at=?
+                    WHERE chel_id IN (?,?)""",
+                    (
+                        "2035-07-14T12:00:00+00:00",
+                        "2035-07-14T12:00:00+00:00",
+                        pending_id, registered_id,
+                    ),
+                )
+                conn.execute(
+                    """UPDATE user_device_stats
+                    SET first_seen_at=?, last_seen_at=? WHERE chel_id=?""",
+                    (
+                        "2035-07-13T12:00:00+00:00",
+                        "2035-07-13T12:00:00+00:00",
+                        outside_id,
+                    ),
                 )
                 conn.commit()
 
@@ -2918,7 +2947,7 @@ class OrchestratorTests(unittest.TestCase):
             self.assertEqual(managers["manager_1"]["users"], 1)
             self.assertEqual(managers["manager_2"]["users"], 1)
         finally:
-            for chel_id in (pending_id, registered_id, outside_id):
+            for chel_id in (pending_id, registered_id, outside_id, technical_id):
                 db.set_current_chel_id(chel_id)
                 db.reset_current_user()
             db.ensure_user("chel_test_default")
