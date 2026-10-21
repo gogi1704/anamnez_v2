@@ -121,6 +121,24 @@ class DataRetentionDryRunTests(unittest.TestCase):
         self.assertTrue(db.acknowledge_system_notification(
             notification_id, reports[0]["lease_token"], True,
         ))
+        self.assertTrue(db.queue_system_notification(
+            "telegram", "report-chat-777", "delivery_diagnostic",
+            {"title": "Проверка", "body": "Проверка необратимой ошибки"},
+            "delivery-diagnostic-permanent-error",
+        ))
+        failed_report = db.claim_system_notifications("telegram")[0]
+        failed_report_id = abs(failed_report["id"]) - db.SYSTEM_NOTIFICATION_ID_OFFSET
+        self.assertTrue(db.acknowledge_system_notification(
+            failed_report_id, failed_report["lease_token"], False,
+            "Bad Request: chat not found",
+        ))
+        with db.connection() as conn:
+            failed_status = conn.execute(
+                "SELECT status FROM system_notification_outbox WHERE id=?",
+                (failed_report_id,),
+            ).fetchone()[0]
+        self.assertEqual(failed_status, "failed")
+        self.assertEqual(db.claim_system_notifications("telegram"), [])
 
     def test_recent_messenger_login_prevents_selection(self):
         now = datetime(2026, 10, 20, 9, 0, tzinfo=timezone.utc)

@@ -2346,16 +2346,19 @@ def acknowledge_system_notification(
         ).fetchone()
         if not row:
             return False
+        permanent_failure = not success and _permanent_messenger_delivery_error(error)
         retry_delay = min(3600, 5 * (2 ** min(int(row["attempts"]), 10)))
-        next_attempt_at = None if success else (
-            now_dt + timedelta(seconds=retry_delay)
-        ).isoformat()
+        next_attempt_at = (
+            (now_dt + timedelta(seconds=retry_delay)).isoformat()
+            if not success and not permanent_failure else None
+        )
         cursor = conn.execute(
             """UPDATE system_notification_outbox SET status=?,sent_at=?,last_error=?,
                next_attempt_at=?,lease_token=NULL,leased_at=NULL
                WHERE id=? AND lease_token=? AND status='delivering'""",
             (
-                "sent" if success else "pending", now if success else None,
+                "sent" if success else ("failed" if permanent_failure else "pending"),
+                now if success else None,
                 str(error or "")[:500], next_attempt_at,
                 int(notification_id), str(lease_token or ""),
             ),
@@ -3833,15 +3836,41 @@ def admin_update_staff(
             ).fetchone():
                 raise ValueError(f"Этот {label} уже привязан к другому сотруднику")
         if telegram_id is not None:
-            conn.execute(
-                "DELETE FROM manager_notification_outbox WHERE staff_user_id = ? AND provider = 'telegram' AND status <> 'sent'",
-                (int(staff_id),),
-            )
+            normalized = _staff_messenger_id(telegram_id, "Telegram ID")
+            if normalized:
+                conn.execute(
+                    """UPDATE manager_notification_outbox
+                    SET recipient_id=?,status='pending',attempts=0,next_attempt_at=NULL,
+                        lease_token=NULL,leased_at=NULL,last_error=''
+                    WHERE staff_user_id=? AND provider='telegram'
+                      AND status IN ('pending','delivering','failed')""",
+                    (normalized, int(staff_id)),
+                )
+            else:
+                conn.execute(
+                    """UPDATE manager_notification_outbox SET status='cancelled',
+                    lease_token=NULL,leased_at=NULL
+                    WHERE staff_user_id=? AND provider='telegram' AND status<>'sent'""",
+                    (int(staff_id),),
+                )
         if max_id is not None:
-            conn.execute(
-                "DELETE FROM manager_notification_outbox WHERE staff_user_id = ? AND provider = 'max' AND status <> 'sent'",
-                (int(staff_id),),
-            )
+            normalized = _staff_messenger_id(max_id, "MAX ID")
+            if normalized:
+                conn.execute(
+                    """UPDATE manager_notification_outbox
+                    SET recipient_id=?,status='pending',attempts=0,next_attempt_at=NULL,
+                        lease_token=NULL,leased_at=NULL,last_error=''
+                    WHERE staff_user_id=? AND provider='max'
+                      AND status IN ('pending','delivering','failed')""",
+                    (normalized, int(staff_id)),
+                )
+            else:
+                conn.execute(
+                    """UPDATE manager_notification_outbox SET status='cancelled',
+                    lease_token=NULL,leased_at=NULL
+                    WHERE staff_user_id=? AND provider='max' AND status<>'sent'""",
+                    (int(staff_id),),
+                )
         if role is not None:
             conn.execute(
                 "DELETE FROM manager_notification_outbox WHERE staff_user_id = ? AND status <> 'sent'",
@@ -3850,7 +3879,12 @@ def admin_update_staff(
         if notify_new_requests is False:
             conn.execute(
                 """UPDATE manager_notification_outbox SET status = 'cancelled'
-                WHERE staff_user_id = ? AND event_type = 'new_request' AND status <> 'sent'""",
+                WHERE staff_user_id = ?
+                  AND event_type IN (
+                    'new_request','request_cancelled','weight_program_completed',
+                    'psychology_session_requested'
+                  )
+                  AND status <> 'sent'""",
                 (int(staff_id),),
             )
         if notify_new_messages is False:
@@ -3960,8 +3994,13 @@ def bind_staff_messenger(
             (provider_user_id, chat_id, now.isoformat(), row["staff_user_id"]),
         )
         conn.execute(
-            "DELETE FROM manager_notification_outbox WHERE staff_user_id = ? AND provider = ? AND status <> 'sent'",
-            (row["staff_user_id"], provider),
+            """UPDATE manager_notification_outbox
+            SET recipient_id = ?, status = 'pending', attempts = 0,
+                next_attempt_at = NULL, lease_token = NULL, leased_at = NULL,
+                last_error = ''
+            WHERE staff_user_id = ? AND provider = ?
+              AND status IN ('pending', 'delivering', 'failed')""",
+            (chat_id, row["staff_user_id"], provider),
         )
         conn.execute(
             "UPDATE staff_messenger_tokens SET used_at = ? WHERE token_hash = ?",
@@ -4054,11 +4093,19 @@ def enqueue_manager_notifications(
                         f"Обращение {conversation['human_ticket_id'] or conversation_id[:8]}."
                     )
             elif recipient_role == "psychologist":
-                title = "Пользователь просит подключить психолога"
-                body = (
-                    f"{name} просит подключить психолога к переписке. "
-                    f"Обращение {conversation['human_ticket_id'] or conversation_id[:8]}."
-                )
+                if request_kind == "psychology_session_messenger_help":
+                    title = "Нужно согласовать сессию без мессенджера"
+                    body = (
+                        f"{name} хочет обсудить проведение платной сессии без "
+                        "привязки Telegram или MAX. Откройте психологический чат "
+                        "и помогите согласовать другой способ связи."
+                    )
+                else:
+                    title = "Пользователь просит подключить психолога"
+                    body = (
+                        f"{name} просит подключить психолога к переписке. "
+                        f"Обращение {conversation['human_ticket_id'] or conversation_id[:8]}."
+                    )
             else:
                 if request_kind == "checkup_purchase":
                     title = "Пользователь хочет купить чекап"
@@ -4210,14 +4257,19 @@ def acknowledge_manager_notification(
         ).fetchone()
         if not row:
             return False
+        permanent_failure = not success and _permanent_messenger_delivery_error(error)
         retry_delay = min(3600, 5 * (2 ** min(int(row["attempts"]), 10)))
-        next_attempt_at = None if success else (now_dt + timedelta(seconds=retry_delay)).isoformat()
+        next_attempt_at = (
+            (now_dt + timedelta(seconds=retry_delay)).isoformat()
+            if not success and not permanent_failure else None
+        )
         cursor = conn.execute(
             """UPDATE manager_notification_outbox SET status = ?, sent_at = ?,
                 last_error = ?, next_attempt_at = ?, lease_token = NULL, leased_at = NULL
             WHERE id = ? AND lease_token = ? AND status = 'delivering'""",
             (
-                "sent" if success else "pending", now if success else None,
+                "sent" if success else ("failed" if permanent_failure else "pending"),
+                now if success else None,
                 str(error or "")[:500], next_attempt_at,
                 int(notification_id), str(lease_token or ""),
             ),
@@ -10948,7 +11000,8 @@ def claim_user_result_notifications(provider: str, limit: int = 20) -> list[dict
 def _permanent_messenger_delivery_error(error: str) -> bool:
     normalized = str(error or "").lower()
     return any(code in normalized for code in (
-        "chat.not.found", "dialog.not.found",
+        "chat.not.found", "dialog.not.found", "chat not found", "dialog not found",
+        "bot was blocked", "user is deactivated",
     ))
 
 

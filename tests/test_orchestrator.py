@@ -1493,6 +1493,7 @@ class OrchestratorTests(unittest.TestCase):
                 "Психолог уведомлений", f"psychology.handoff.{suffix}", "123456",
                 role="psychologist",
                 telegram_id=str(int.from_bytes(secrets.token_bytes(6), "big")),
+                max_id=str(int.from_bytes(secrets.token_bytes(6), "big")),
                 notify_new_requests=True,
             )
             offered = ConversationOrchestrator(FakeLLM()).process(
@@ -1530,6 +1531,14 @@ class OrchestratorTests(unittest.TestCase):
             self.assertEqual(notification["event_type"], "new_request")
             self.assertEqual(notification["payload"]["recipient_role"], "psychologist")
             self.assertIn("просит подключить психолога", notification["payload"]["title"].lower())
+            max_notifications = db.claim_manager_notifications("max")
+            max_notification = next(
+                item for item in max_notifications
+                if item["conversation_id"] == conversation["id"]
+                and item["recipient_id"] == psychologist["max_id"]
+            )
+            self.assertEqual(max_notification["event_type"], "new_request")
+            self.assertEqual(max_notification["payload"], notification["payload"])
         finally:
             db.ensure_user(previous_chel_id)
             db.set_current_chel_id(previous_chel_id)
@@ -3477,9 +3486,13 @@ class OrchestratorTests(unittest.TestCase):
             self.assertEqual(
                 db.enqueue_manager_notifications("new_request", conversation["id"]), 0,
             )
+            rebinding_token = db.create_staff_messenger_token(manager["id"], "telegram")
+            db.bind_staff_messenger(
+                rebinding_token["token"], "telegram", "223344", "223344",
+            )
             notifications = db.claim_manager_notifications("telegram")
             notification = next(item for item in notifications if item["conversation_id"] == conversation["id"])
-            self.assertEqual(notification["recipient_id"], "112233")
+            self.assertEqual(notification["recipient_id"], "223344")
             self.assertIn("manager?conversation=", notification["payload"]["manager_url"])
             self.assertTrue(db.acknowledge_manager_notification(
                 notification["id"], notification["lease_token"], True,
@@ -3518,6 +3531,27 @@ class OrchestratorTests(unittest.TestCase):
             ))
             immediate = db.claim_manager_notifications("telegram")
             self.assertFalse(any(item["id"] == retry_item["id"] for item in immediate))
+            self.assertEqual(
+                db.enqueue_manager_notifications(
+                    "new_message", conversation["id"], message_id=78,
+                    message_text="Проверка необратимой ошибки доставки",
+                ),
+                1,
+            )
+            permanent_item = next(
+                item for item in db.claim_manager_notifications("telegram")
+                if item["conversation_id"] == conversation["id"]
+            )
+            self.assertTrue(db.acknowledge_manager_notification(
+                permanent_item["id"], permanent_item["lease_token"], False,
+                "Bad Request: chat not found",
+            ))
+            with db.connection() as connection:
+                permanent_status = connection.execute(
+                    "SELECT status FROM manager_notification_outbox WHERE id=?",
+                    (permanent_item["id"],),
+                ).fetchone()[0]
+            self.assertEqual(permanent_status, "failed")
             db.manager_close_conversation(conversation["id"], "Ирина Уведомления")
             self.assertEqual(
                 db.enqueue_manager_notifications(
@@ -3535,6 +3569,25 @@ class OrchestratorTests(unittest.TestCase):
             self.assertEqual(
                 cancelled_item["payload"]["request_kind"], "checkup_purchase_cancelled",
             )
+            self.assertEqual(db.enqueue_manager_notifications(
+                "weight_program_completed", conversation["id"], message_id=90,
+            ), 1)
+            self.assertEqual(db.enqueue_manager_notifications(
+                "psychology_session_requested", conversation["id"], message_id=91,
+            ), 1)
+            db.admin_update_staff(manager["id"], notify_new_requests=False)
+            with db.connection() as connection:
+                pending_request_events = connection.execute(
+                    """SELECT COUNT(*) FROM manager_notification_outbox
+                    WHERE staff_user_id=?
+                      AND event_type IN (
+                        'new_request','request_cancelled','weight_program_completed',
+                        'psychology_session_requested'
+                      )
+                      AND status NOT IN ('sent','cancelled')""",
+                    (manager["id"],),
+                ).fetchone()[0]
+            self.assertEqual(pending_request_events, 0)
         finally:
             db.set_current_chel_id("chel_test_default")
             db.admin_delete_staff(manager["id"])
@@ -5527,6 +5580,10 @@ class OrchestratorTests(unittest.TestCase):
         self.assertEqual(confirm_human.call_args.args[0], "psychology-conversation-1")
         self.assertEqual(confirm_human.call_args.kwargs["recipient_role"], "psychologist")
         self.assertEqual(enqueue.call_args.kwargs["recipient_role"], "psychologist")
+        self.assertEqual(
+            enqueue.call_args.kwargs["request_kind"],
+            "psychology_session_messenger_help",
+        )
         app_script = (Path(__file__).resolve().parents[1] / "static" / "app.js").read_text(
             encoding="utf-8",
         )
