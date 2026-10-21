@@ -11,7 +11,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/static/dashboard.css?v=20261015-metric-progress-v10">
+  <link rel="stylesheet" href="/static/dashboard.css?v=20261021-vita-algorithm-v16">
 </head>
 <body>
   <main class="dashboard-shell">
@@ -516,6 +516,14 @@
               <p id="personalityPreviewNote">Это пример интонации, а не готовый медицинский ответ. Ольга по-прежнему подстраивается под контекст и стиль пользователя.</p>
             </aside>
           </div>
+          <fieldset class="personality-psychology-thresholds hidden" id="personalityPsychologyThresholds">
+            <legend>Пороги сценария Виты</legend>
+            <label><span><b>Длительность проблемы, дней</b><small>После этого срока сессия становится уместной.</small></span><input id="personalityDurationTriggerDays" type="number" min="1" max="100" value="14"></label>
+            <label><span><b>Влияние на жизнь, из 10</b><small>Порог для предложения сессии.</small></span><input id="personalityImpactTriggerScore" type="number" min="1" max="10" value="6"></label>
+            <label><span><b>Минимальное улучшение</b><small>Если техника улучшила состояние меньше чем на это число баллов, предлагается сессия.</small></span><input id="personalityTechniqueShiftTrigger" type="number" min="1" max="10" value="2"></label>
+            <label><span><b>Сообщений до предложения</b><small>Верхняя граница сбора контекста без красных флагов.</small></span><input id="personalityMaxMessagesBeforeOffer" type="number" min="1" max="100" value="10"></label>
+            <label><span><b>Пауза между предложениями</b><small>Минимум сообщений после отказа.</small></span><input id="personalityOfferCooldownMessages" type="number" min="1" max="100" value="3"></label>
+          </fieldset>
           <div class="personality-actions"><button type="submit">Сохранить сейчас</button><button class="secondary" id="personalityReset" type="button">Вернуть сбалансированный</button><span class="form-status hidden" id="personalityStatus" role="status"></span></div>
         </form>
       </section>
@@ -857,6 +865,6 @@
       </div>
     </section>
   </div>
-  <script src="/static/dashboard.js?v=20261020-psychology-session-v15" defer></script>
+  <script src="/static/dashboard.js?v=20261021-vita-algorithm-v16" defer></script>
 </body>
 </html>

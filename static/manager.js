@@ -648,6 +648,9 @@ function renderUserDetails() {
     <div>ID: <code>${escapeHtml(conversation.chel_id)}</code></div>
     <div>Мессенджеры: ${escapeHtml(identities.map(item => item.provider.toUpperCase()).join(', ') || 'не привязаны')}</div>
     <div>Телефон для созвона: ${escapeHtml(conversation.human_phone || 'не указан')}</div>`;
+  const clientCard = String(state.detail.psychology_client_card || '').trim();
+  $('#psychologyClientCardSection').classList.toggle('hidden', !clientCard);
+  $('#psychologyClientCard').textContent = clientCard;
   const fields = [
     ['company_inn','ИНН предприятия'],
     ['age','Возраст'], ['sex','Пол'], ['height_cm','Рост'], ['weight_kg','Вес'],

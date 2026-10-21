@@ -91,6 +91,47 @@ def _psychology_crisis_detected(message: str) -> bool:
     return False
 
 
+PSYCHOLOGY_IMMEDIATE_DANGER = re.compile(
+    r"(?:\b(?:есть|составил[аи]?|продумал[аи]?|у\s+меня\s+есть)\b.{0,45}\bплан\w*\b.{0,80}"
+    r"(?:покончить\s+с\s+собой|суицид\w*|самоубийств\w*|навредить\s+(?:себе|другим)|"
+    r"причинить\s+(?:себе|другим)\s+вред|убить\s+(?:себя|его|е[её]|их|тебя))|"
+    r"\b(?:уже\s+)?(?:порезал[а]?\s+себя|(?:принял[а]?|выпил[а]?)\s+(?:слишком\s+)?много\s+таблеток)\b|"
+    r"\b(?:сейчас|сегодня|этой\s+ночью)\b.{0,65}\b(?:убью\s+себя|покончу\s+с\s+собой|"
+    r"повешусь|выпрыгну|застрелюсь|отравлюсь)\b|"
+    r"\b(?:хочу|собираюсь|планирую|решил[аи]?|намерен[а]?)\b.{0,60}"
+    r"(?:зарезать|застрелить|избить|напасть\s+на|расправиться\s+с|убить\s+(?:его|е[её]|их|тебя)))",
+    re.IGNORECASE,
+)
+PSYCHOLOGY_CONFIRMATION_YES = re.compile(
+    r"^(?:да|бывают|есть|иногда|часто|постоянно|скорее\s+да|думаю\s+об\s+этом)\b",
+    re.IGNORECASE,
+)
+
+
+def _psychology_immediate_crisis_detected(message: str) -> bool:
+    normalized = " ".join(str(message or "").split())
+    return bool(normalized and PSYCHOLOGY_IMMEDIATE_DANGER.search(normalized))
+
+
+def _psychology_pending_crisis_confirmation(
+    conversation_id: str, message: str,
+) -> bool:
+    if not PSYCHOLOGY_CONFIRMATION_YES.search(" ".join(str(message or "").split())):
+        return False
+    try:
+        state = db.get_psychology_dialog_state(conversation_id)
+    except ValueError:
+        return False
+    return any(
+        str(item.get("type") or "") in {
+            "suicide_or_self_harm", "suicide", "self_harm",
+        }
+        and not str(item.get("client_answer") or "").strip()
+        for item in state.get("risk_flags") or []
+        if isinstance(item, dict)
+    )
+
+
 def _normalize_health_passport(
     value: dict, examinations: list[dict] | None = None, profile: dict | None = None,
 ) -> dict:
@@ -2810,7 +2851,66 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
             if (
                 conversation
                 and conversation.get("dialog_type") == "masterclass_psychology"
+                and bool(conversation.get("ai_enabled", 1))
                 and _psychology_crisis_detected(message)
+                and not _psychology_immediate_crisis_detected(message)
+            ):
+                attachment_meta = [
+                    chat_attachments.public_metadata(item) for item in attachments
+                ]
+                user_message = db.add_message(
+                    conversation_id, "user", message, "psychologist", {
+                        "action": "psychology_risk_clarification",
+                        "attachments": attachment_meta,
+                    },
+                )
+                psychology_state = db.get_psychology_dialog_state(conversation_id)
+                flags = list(psychology_state.get("risk_flags") or [])
+                flags.append({
+                    "type": "suicide_or_self_harm",
+                    "evidence": message[:500],
+                    "client_answer": "",
+                })
+                psychology_state.update({
+                    "risk_flags": flags[-10:],
+                    "priority": "attention",
+                })
+                db.save_psychology_dialog_state(
+                    conversation_id, psychology_state, increment_message=True,
+                )
+                assistant_message = db.add_message(
+                    conversation_id, "assistant",
+                    "Спасибо, что сказали. Мне важно уточнить: бывают ли у вас мысли, что не хочется жить?",
+                    "psychologist", {
+                        "action": "psychology_risk_clarification",
+                        "urgency": "urgent",
+                    },
+                )
+                return self._json(200, {
+                    "conversation_id": conversation_id,
+                    "user_message": user_message,
+                    "assistant_message": assistant_message,
+                    "agent": "psychologist",
+                    "action": "ask",
+                    "queued_for_human": False,
+                    "crisis_escalation": False,
+                    "emergency": False,
+                    "urgency": "urgent",
+                    "ai_enabled": True,
+                    "human_status": conversation.get("human_status", "none"),
+                    "human_ticket_id": conversation.get("human_ticket_id"),
+                    "context": json.loads(conversation.get("context_summary") or "{}"),
+                    "attachments": attachment_meta,
+                })
+            if (
+                conversation
+                and conversation.get("dialog_type") == "masterclass_psychology"
+                and (
+                    _psychology_immediate_crisis_detected(message)
+                    or _psychology_pending_crisis_confirmation(
+                        conversation_id, message,
+                    )
+                )
             ):
                 attachment_meta = [
                     chat_attachments.public_metadata(item) for item in attachments
@@ -2820,6 +2920,45 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                         "action": "psychology_crisis_escalation",
                         "attachments": attachment_meta,
                         "awaiting_manager": True,
+                        "emergency": True,
+                    },
+                )
+                try:
+                    psychology_state = db.get_psychology_dialog_state(conversation_id)
+                    flags = list(psychology_state.get("risk_flags") or [])
+                    flags.append({
+                        "type": "suicide_or_self_harm",
+                        "evidence": "Подтверждённый или непосредственный риск в сообщении пользователя",
+                        "client_answer": message[:300],
+                    })
+                    psychology_state.update({
+                        "risk_flags": flags[-10:],
+                        "priority": "urgent",
+                        "stage": "done",
+                    })
+                    db.save_psychology_dialog_state(
+                        conversation_id, psychology_state, increment_message=False,
+                    )
+                except ValueError:
+                    pass
+                profile = db.get_profile()
+                child_help = (
+                    " Также можно позвонить на детский телефон доверия "
+                    "8-800-2000-122."
+                    if isinstance(profile.get("age"), int) and profile["age"] < 18
+                    else ""
+                )
+                safety_text = (
+                    "Спасибо, что сказали об этом. Сейчас важно не оставаться с этим "
+                    "в одиночку. Если есть риск, что вы причините вред себе или другому "
+                    "человеку прямо сейчас, позвоните 112 или попросите находящегося "
+                    "рядом человека вызвать экстренную помощь. Отойдите от всего, чем "
+                    f"можно причинить вред, и оставайтесь рядом с безопасным человеком.{child_help} "
+                    "Я остановила автоматические ответы и срочно передала чат психологу."
+                )
+                assistant_message = db.add_message(
+                    conversation_id, "assistant", safety_text, "psychologist", {
+                        "action": "psychology_crisis_safety_message",
                         "emergency": True,
                     },
                 )
@@ -2837,7 +2976,7 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                 return self._json(202, {
                     "conversation_id": conversation_id,
                     "user_message": user_message,
-                    "assistant_message": None,
+                    "assistant_message": assistant_message,
                     "agent": "psychologist",
                     "action": "waiting_human",
                     "queued_for_human": True,

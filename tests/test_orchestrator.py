@@ -2130,7 +2130,8 @@ class OrchestratorTests(unittest.TestCase):
             ordinary_payload = request.call_args.args[0]
 
         self.assertIn("Кнопка с фиолетовым символом «Ψ»", specialized_payload["instructions"])
-        self.assertIn("Не предлагай сессию механически", specialized_payload["instructions"])
+        self.assertIn("Спасибо, что сказали. Мне важно уточнить", specialized_payload["instructions"])
+        self.assertIn("максимум две", specialized_payload["instructions"])
         self.assertIn("не используй страх, вину", specialized_payload["instructions"].lower())
         runtime = json.loads(specialized_payload["input"])
         self.assertEqual(runtime["psychology_session_status"], session_status)
@@ -5623,7 +5624,7 @@ class OrchestratorTests(unittest.TestCase):
             with self.subTest(message=message):
                 self.assertFalse(_psychology_crisis_detected(message))
 
-    def test_psychology_crisis_stops_ai_and_notifies_psychologists(self):
+    def test_psychology_risk_is_clarified_before_emergency_escalation(self):
         class FakeHandler:
             path = "/api/chat"
             response = None
@@ -5657,47 +5658,36 @@ class OrchestratorTests(unittest.TestCase):
             "human_status": "none",
             "context_summary": "{}",
         }
-        confirmed = {
-            **psychology_chat,
-            "ai_enabled": False,
-            "human_status": "pending",
-            "human_ticket_id": "URG-ABC123",
-        }
         with (
             patch("backend.main._chat_access_allowed", return_value=False),
             patch("backend.main.db.get_conversation", return_value=psychology_chat),
             patch("backend.main.db.list_messages", return_value=[{"id": 1}]),
-            patch("backend.main.db.add_message", return_value={
-                "id": 71, "role": "user", "content": "Я хочу причинить себе вред",
-            }) as add_message,
-            patch(
-                "backend.main.db.confirm_human_chat",
-                return_value=(confirmed, True),
-            ) as confirm_human,
+            patch("backend.main.db.add_message", side_effect=[
+                {"id": 71, "role": "user", "content": "Я хочу причинить себе вред"},
+                {"id": 72, "role": "assistant", "content": "Спасибо, что сказали. Мне важно уточнить: бывают ли у вас мысли, что не хочется жить?"},
+            ]) as add_message,
+            patch("backend.main.db.get_psychology_dialog_state", return_value={
+                "risk_flags": [], "priority": "routine",
+            }),
+            patch("backend.main.db.save_psychology_dialog_state") as save_state,
+            patch("backend.main.db.confirm_human_chat") as confirm_human,
             patch("backend.main.db.enqueue_manager_notifications") as notify,
             patch("backend.main.orchestrator.process") as process,
         ):
             ConsiliumHandler.do_POST(handler)
 
-        self.assertEqual(handler.response[0], 202)
-        self.assertTrue(handler.response[1]["crisis_escalation"])
-        self.assertFalse(handler.response[1]["ai_enabled"])
-        self.assertIsNone(handler.response[1]["assistant_message"])
+        self.assertEqual(handler.response[0], 200)
+        self.assertFalse(handler.response[1]["crisis_escalation"])
+        self.assertTrue(handler.response[1]["ai_enabled"])
+        self.assertIn("не хочется жить", handler.response[1]["assistant_message"]["content"])
         self.assertEqual(handler.response[1]["agent"], "psychologist")
-        self.assertIn("psychology_crisis_escalated", handler.analytics)
         self.assertEqual(
-            add_message.call_args.args[:4],
-            (
-                "psychology-conversation-1", "user",
-                "Я хочу причинить себе вред", "psychologist",
-            ),
+            add_message.call_args.args[:2],
+            ("psychology-conversation-1", "assistant"),
         )
-        confirm_human.assert_called_once()
-        self.assertEqual(confirm_human.call_args.kwargs["recipient_role"], "psychologist")
-        notify.assert_called_once_with(
-            "psychology_crisis", "psychology-conversation-1",
-            message_id=71, recipient_role="psychologist",
-        )
+        save_state.assert_called_once()
+        confirm_human.assert_not_called()
+        notify.assert_not_called()
         process.assert_not_called()
 
     def test_main_psychology_chat_accepts_messages_while_psychologist_is_connected(self):

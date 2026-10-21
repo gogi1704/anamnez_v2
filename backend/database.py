@@ -13,6 +13,7 @@ from decimal import Decimal, InvalidOperation
 from urllib.parse import urlparse
 
 from .config import settings
+from .schemas import normalize_psychology_dialog_state
 
 
 _write_lock = threading.Lock()
@@ -23,16 +24,15 @@ WEIGHT_ANALYSIS_MIN_CONFIRMED_MEALS = 20
 WEIGHT_CONTROL_PERSONALITY_MODES = {"friendly", "balanced", "strict"}
 WEIGHT_CONTROL_ADDRESS_MODES = {"formal", "informal"}
 MASTERCLASS_PSYCHOLOGY_WELCOME = (
-    "Здравствуйте! Я Вита, помощник-психолог.\n\n"
-    "Если вы здесь — скорее всего, что-то беспокоит: усталость, тревога, "
-    "сон, отношения или просто ощущение, что сил больше нет. Это нормально "
-    "— с этим приходят, и с этим можно работать.\n\n"
-    "Напишите мне как есть, без правильных формулировок. Я рядом и помогу "
-    "разобраться — сколько понадобится, без ограничений по времени. Если "
-    "захотите поговорить с психологом — в любой момент можно попросить "
-    "меня позвать человека или нажать на фиолетовую кнопку в верхней части "
-    "экрана. Пообщайтесь с дипломированным психологом. 30-минутная сессия "
-    "бесплатна и входит в ваш пакет мастер-класса."
+    "Здравствуйте! Я Вита — ИИ-помощник команды психологов. Я не человек и "
+    "не ставлю диагнозов, но помогу разобраться, что происходит, и подберу "
+    "простую технику на сейчас.\n\n"
+    "Напишите как есть, без правильных формулировок: что сейчас беспокоит "
+    "больше всего?\n\n"
+    "Если захочется поговорить с живым психологом — первая встреча бесплатна: "
+    "30 минут по видео, можно из дома.\n\n"
+    "Если вам прямо сейчас очень плохо или появились мысли причинить себе вред "
+    "— напишите об этом, я сразу подскажу, куда обратиться."
 )
 
 
@@ -183,6 +183,13 @@ ASSISTANT_PERSONALITY_PROFILE_DEFAULTS = {
         "initiative": 25,
     },
 }
+PSYCHOLOGY_DIALOG_SETTING_DEFAULTS = {
+    "duration_trigger_days": 14,
+    "impact_trigger_score": 6,
+    "technique_shift_trigger": 2,
+    "max_messages_before_offer": 10,
+    "offer_cooldown_messages": 3,
+}
 ASSISTANT_PERSONALITY_PRESETS = {
     "professional": {
         "address_mode": "formal", "formality": 75, "warmth": 55,
@@ -253,6 +260,14 @@ def admin_assistant_personality_settings(profile_key: str = "general") -> dict:
                 "SELECT * FROM assistant_personality_profiles WHERE profile_key = ?",
                 (profile_key,),
             ).fetchone()
+        psychology_row = None
+        if profile_key == "masterclass_psychology":
+            try:
+                psychology_row = conn.execute(
+                    "SELECT * FROM psychology_dialog_settings WHERE id=1"
+                ).fetchone()
+            except sqlite3.OperationalError:
+                psychology_row = None
     global_item = dict(row) if row else {}
     profile_defaults = ASSISTANT_PERSONALITY_PROFILE_DEFAULTS.get(profile_key, {})
     style_item = global_item if profile_key == "general" else dict(profile_row or {})
@@ -272,6 +287,10 @@ def admin_assistant_personality_settings(profile_key: str = "general") -> dict:
         ),
         "profile_key": profile_key,
     }
+    if profile_key == "masterclass_psychology":
+        result.update(PSYCHOLOGY_DIALOG_SETTING_DEFAULTS)
+        if psychology_row:
+            result.update(dict(psychology_row))
     result["apply_to_all"] = bool(result.get("apply_to_all"))
     if result.get("provider") not in CHAT_PROVIDER_OPTIONS:
         result["provider"] = ASSISTANT_PERSONALITY_DEFAULTS["provider"]
@@ -282,6 +301,10 @@ def admin_assistant_personality_settings(profile_key: str = "general") -> dict:
         "humor", "emoji", "initiative",
     ):
         result[key] = max(0, min(100, int(result.get(key, ASSISTANT_PERSONALITY_DEFAULTS[key]))))
+    if profile_key == "masterclass_psychology":
+        for key, default in PSYCHOLOGY_DIALOG_SETTING_DEFAULTS.items():
+            maximum = 10 if key in {"impact_trigger_score", "technique_shift_trigger"} else 100
+            result[key] = max(1, min(maximum, int(result.get(key, default))))
     if result.get("address_mode") not in {"formal", "contextual", "informal"}:
         result["address_mode"] = ASSISTANT_PERSONALITY_DEFAULTS["address_mode"]
     if result.get("test_branch_model") not in TEST_BRANCH_MODEL_OPTIONS:
@@ -364,6 +387,19 @@ def admin_update_assistant_personality_settings(payload: dict) -> dict:
         if not 0 <= value <= 100:
             raise ValueError("Параметры характера должны быть от 0 до 100")
         values[key] = value
+    psychology_values = {}
+    if profile_key == "masterclass_psychology":
+        for key, default in PSYCHOLOGY_DIALOG_SETTING_DEFAULTS.items():
+            try:
+                value = int(payload.get(key, current.get(key, default)))
+            except (TypeError, ValueError):
+                raise ValueError("Пороги сценария Виты должны быть целыми числами") from None
+            maximum = 10 if key in {"impact_trigger_score", "technique_shift_trigger"} else 100
+            if not 1 <= value <= maximum:
+                raise ValueError(
+                    f"Параметр {key} должен быть от 1 до {maximum}"
+                )
+            psychology_values[key] = value
     now = utc_now()
     with _write_lock, connection() as conn:
         if profile_key == "general":
@@ -413,6 +449,28 @@ def admin_update_assistant_personality_settings(payload: dict) -> dict:
                     values["initiative"], provider, openai_model, now,
                 ),
             )
+            if profile_key == "masterclass_psychology":
+                conn.execute(
+                    """INSERT INTO psychology_dialog_settings
+                       (id,duration_trigger_days,impact_trigger_score,
+                        technique_shift_trigger,max_messages_before_offer,
+                        offer_cooldown_messages,updated_at)
+                       VALUES (1,?,?,?,?,?,?)
+                       ON CONFLICT(id) DO UPDATE SET
+                        duration_trigger_days=excluded.duration_trigger_days,
+                        impact_trigger_score=excluded.impact_trigger_score,
+                        technique_shift_trigger=excluded.technique_shift_trigger,
+                        max_messages_before_offer=excluded.max_messages_before_offer,
+                        offer_cooldown_messages=excluded.offer_cooldown_messages,
+                        updated_at=excluded.updated_at""",
+                    (
+                        psychology_values["duration_trigger_days"],
+                        psychology_values["impact_trigger_score"],
+                        psychology_values["technique_shift_trigger"],
+                        psychology_values["max_messages_before_offer"],
+                        psychology_values["offer_cooldown_messages"], now,
+                    ),
+                )
             conn.execute(
                 """UPDATE assistant_personality_settings
                    SET apply_to_all=?,test_branch_model=?,
@@ -2536,7 +2594,8 @@ def _move_masterclass_psychology_data(
     for table in (
         "weight_control_states", "weight_control_body_measurements",
         "weight_control_meals", "weight_control_reminders",
-        "weight_control_reminder_outbox", "memories", "body_symptoms",
+        "weight_control_reminder_outbox", "psychology_dialog_states",
+        "memories", "body_symptoms",
     ):
         conn.execute(
             f"UPDATE {table} SET chel_id=? WHERE chel_id=?",
@@ -4039,6 +4098,16 @@ def enqueue_manager_notifications(
         recipient_role = _staff_role(recipient_role or conversation["human_recipient_role"])
         manager_url = f"{settings.public_base_url}/manager?conversation={conversation_id}"
         name = conversation["preferred_name"] or f"Пользователь {conversation['chel_id'][-6:]}"
+        state_row = _psychology_state_row(conn, conversation_id)
+        try:
+            psychology_state = json.loads(state_row["state_json"]) if state_row else {}
+        except (TypeError, json.JSONDecodeError):
+            psychology_state = {}
+        client_card = _psychology_client_card_text(
+            psychology_state,
+            conversation_id=conversation_id,
+            request_number=str(request_number or conversation["human_ticket_id"] or ""),
+        ) if recipient_role == "psychologist" else ""
         if event_type == "psychology_crisis":
             title = "Срочно: психологическая безопасность"
             body = (
@@ -4046,6 +4115,7 @@ def enqueue_manager_notifications(
                 "причинения вреда себе или другим. ИИ остановлен. Срочно откройте "
                 "защищённый чат и оцените ситуацию."
             )
+            body += f"\n\n{client_card}"
             preference = None
         elif event_type == "psychology_payment_succeeded":
             amount = max(0, int(amount_kopecks or 0))
@@ -4066,6 +4136,7 @@ def enqueue_manager_notifications(
                 f"{name} оставил заявку на онлайн-встречу с психологом. "
                 "Откройте чат, чтобы связаться с пользователем и согласовать время."
             )
+            body += f"\n\n{client_card}"
             preference = "notify_new_requests"
         elif event_type == "weight_program_completed":
             title = "Завершён марафон контроля питания"
@@ -4167,6 +4238,7 @@ def enqueue_manager_notifications(
             "recipient_role": recipient_role,
             "request_kind": str(request_kind or ""),
             "amount_kopecks": max(0, int(amount_kopecks or 0)),
+            "client_card": client_card,
         }, ensure_ascii=False)
         for staff in recipients:
             for provider, recipient in (
@@ -4596,6 +4668,16 @@ def create_psychology_session_payment_order(
     if not conversation or conversation.get("dialog_type") != "masterclass_psychology":
         raise ValueError("Чат психологической поддержки не найден")
     chel_id = current_chel_id()
+    profile = get_profile()
+    try:
+        age = int(profile.get("age")) if profile.get("age") not in (None, "") else None
+    except (TypeError, ValueError):
+        age = None
+    if age is not None and age < 18:
+        raise ValueError(
+            "Платные психологические сессии недоступны несовершеннолетним. "
+            "Обратитесь к психологу через бесплатную поддержку"
+        )
     package = psychology_session_package(session_count)
     count = package["sessions"]
     noun = "сессия" if count == 1 else "сессии" if count < 5 else "сессий"
@@ -4719,6 +4801,162 @@ def psychology_session_summary(conversation_id: str) -> dict:
         "available_total": remaining_paid + int(not free_used),
         "packages": [psychology_session_package(1)],
     }
+
+
+def _psychology_state_row(conn: sqlite3.Connection, conversation_id: str):
+    return conn.execute(
+        "SELECT state_json,message_count FROM psychology_dialog_states WHERE conversation_id=?",
+        (str(conversation_id or ""),),
+    ).fetchone()
+
+
+def get_psychology_dialog_state(conversation_id: str) -> dict:
+    """Load Vita's structured state and reconcile server-owned session fields."""
+    chel_id = current_chel_id()
+    with connection() as conn:
+        conversation = conn.execute(
+            """SELECT id FROM conversations
+               WHERE id=? AND chel_id=? AND dialog_type='masterclass_psychology'""",
+            (str(conversation_id or ""), chel_id),
+        ).fetchone()
+        if not conversation:
+            raise ValueError("Чат психологической поддержки не найден")
+        row = _psychology_state_row(conn, conversation_id)
+    try:
+        raw = json.loads(row["state_json"]) if row else {}
+    except (TypeError, json.JSONDecodeError):
+        raw = {}
+    state = normalize_psychology_dialog_state(raw)
+    summary = psychology_session_summary(conversation_id)
+    pending = summary.get("pending_session") or None
+    state.update({
+        "free_session_available": bool(summary.get("free_available")),
+        "remaining_paid": int(summary.get("remaining_paid") or 0),
+        "pending_request": ({
+            "request_number": str(pending.get("request_number") or ""),
+            "status": str(pending.get("status") or ""),
+        } if pending else None),
+        "message_index": int(row["message_count"] or 0) if row else 0,
+    })
+    return state
+
+
+def save_psychology_dialog_state(
+    conversation_id: str, value: dict | None, *, increment_message: bool = True,
+) -> dict:
+    """Persist normalized Vita state while keeping session balance authoritative."""
+    chel_id = current_chel_id()
+    normalized = normalize_psychology_dialog_state(value)
+    summary = psychology_session_summary(conversation_id)
+    pending = summary.get("pending_session") or None
+    normalized.update({
+        "free_session_available": bool(summary.get("free_available")),
+        "remaining_paid": int(summary.get("remaining_paid") or 0),
+        "pending_request": ({
+            "request_number": str(pending.get("request_number") or ""),
+            "status": str(pending.get("status") or ""),
+        } if pending else None),
+    })
+    now = utc_now()
+    with _write_lock, connection() as conn:
+        conn.execute(
+            "INSERT OR IGNORE INTO users (chel_id,created_at,last_seen_at) VALUES (?,?,?)",
+            (chel_id, now, now),
+        )
+        conversation = conn.execute(
+            """SELECT id FROM conversations
+               WHERE id=? AND chel_id=? AND dialog_type='masterclass_psychology'""",
+            (str(conversation_id or ""), chel_id),
+        ).fetchone()
+        if not conversation:
+            raise ValueError("Чат психологической поддержки не найден")
+        current = _psychology_state_row(conn, conversation_id)
+        message_count = int(current["message_count"] or 0) if current else 0
+        if increment_message:
+            message_count += 1
+        conn.execute(
+            """INSERT INTO psychology_dialog_states
+               (conversation_id,chel_id,state_json,message_count,created_at,updated_at)
+               VALUES (?,?,?,?,?,?)
+               ON CONFLICT(conversation_id) DO UPDATE SET
+                 chel_id=excluded.chel_id,state_json=excluded.state_json,
+                 message_count=excluded.message_count,updated_at=excluded.updated_at""",
+            (
+                conversation_id, chel_id,
+                json.dumps(normalized, ensure_ascii=False), message_count, now, now,
+            ),
+        )
+        conn.commit()
+    return {**normalized, "message_index": message_count}
+
+
+def _psychology_client_card_text(
+    state: dict | None, *, conversation_id: str, request_number: str = "",
+) -> str:
+    """Build the fixed-order private psychologist card required by Vita 2.0."""
+    item = normalize_psychology_dialog_state(state)
+    unknown = "не обсуждали"
+    consent = item.get("consent_summary") is True
+    name = item.get("name") or unknown
+    age = str(item.get("age")) if item.get("age") is not None else unknown
+    timezone_name = item.get("timezone") or unknown
+    preferred = item.get("preferred_time") or unknown
+    if not consent:
+        lines = [
+            f"Имя: {name}",
+            f"Предпочтительное время: {preferred}",
+            "Согласие: согласия на выжимку нет",
+        ]
+    else:
+        manifestations = item.get("manifestations") or {}
+        techniques = item.get("techniques_used") or []
+        technique_label = "; ".join(
+            f"{entry.get('name') or unknown}: {entry.get('before')}→{entry.get('after')} ({entry.get('feedback') or unknown})"
+            for entry in techniques[-2:]
+        ) or unknown
+        risks = "; ".join(
+            f"{entry.get('type')}: {entry.get('evidence') or unknown}; ответ: {entry.get('client_answer') or unknown}"
+            for entry in (item.get("risk_flags") or [])[-3:]
+        ) or "не выявлены"
+        quote = " ".join(str(item.get("client_quote") or unknown).split())[:180]
+        lines = [
+            f"Приоритет: {item.get('priority') or 'routine'}",
+            f"Имя / возраст / часовой пояс / время: {name} / {age} / {timezone_name} / {preferred}",
+            f"Фраза клиента: «{quote}»",
+            f"Категория: {item.get('category_primary') or unknown}; вторичные: {', '.join(item.get('categories_secondary') or []) or unknown}",
+            f"Длительность / влияние: {item.get('duration') or unknown} / {item.get('impact_score') if item.get('impact_score') is not None else unknown}",
+            "Проявления: мысли — {}; тело — {}; поведение — {}".format(
+                manifestations.get("thoughts") or unknown,
+                manifestations.get("body") or unknown,
+                manifestations.get("behavior") or unknown,
+            ),
+            f"Контекст: {item.get('context') or unknown}",
+            f"Что пробовали: {item.get('tried_before') or unknown}",
+            f"Техника и результат: {technique_label}",
+            f"Ресурсы: {item.get('resources') or unknown}",
+            f"Ожидание: {item.get('expectation') or unknown}",
+            f"Риски: {risks}",
+            f"Стиль общения: {item.get('communication_style') or unknown}",
+            f"Гипотеза-вопрос: {item.get('hypothesis') or unknown}",
+            "Согласие: получено",
+        ]
+    if request_number:
+        lines.insert(0, f"Заявка №{request_number}")
+    if consent:
+        lines.append(f"Полный чат: {settings.public_base_url}/manager?conversation={conversation_id}")
+    return "\n".join(lines)[:1300]
+
+
+def psychology_client_card(conversation_id: str, request_number: str = "") -> str:
+    with connection() as conn:
+        row = _psychology_state_row(conn, conversation_id)
+    try:
+        state = json.loads(row["state_json"]) if row else {}
+    except (TypeError, json.JSONDecodeError):
+        state = {}
+    return _psychology_client_card_text(
+        state, conversation_id=conversation_id, request_number=request_number,
+    )
 
 
 def request_psychology_session(conversation_id: str) -> dict:
@@ -5799,6 +6037,7 @@ def manager_conversation_detail(
                 item["details"] = {}
             actions.append(item)
         psychology_session_row = None
+        psychology_client_card_value = ""
         if conversation.get("dialog_type") == "masterclass_psychology":
             psychology_session_row = conn.execute(
                 """SELECT id,session_number,request_number,access_type,status,started_at,completed_at
@@ -5807,6 +6046,19 @@ def manager_conversation_detail(
                    ORDER BY session_number DESC LIMIT 1""",
                 (conversation_id,),
             ).fetchone()
+            state_row = _psychology_state_row(conn, conversation_id)
+            try:
+                psychology_state = json.loads(state_row["state_json"]) if state_row else {}
+            except (TypeError, json.JSONDecodeError):
+                psychology_state = {}
+            psychology_client_card_value = _psychology_client_card_text(
+                psychology_state,
+                conversation_id=conversation_id,
+                request_number=str(
+                    psychology_session_row["request_number"]
+                    if psychology_session_row else conversation.get("human_ticket_id") or ""
+                ),
+            )
 
     lab_documents: list[dict] = []
     seen_urls: set[str] = set()
@@ -5835,6 +6087,7 @@ def manager_conversation_detail(
         "psychology_session": (
             dict(psychology_session_row) if psychology_session_row else None
         ),
+        "psychology_client_card": psychology_client_card_value,
     }
 
 
@@ -6671,6 +6924,21 @@ def init_db() -> None:
                 updated_at TEXT NOT NULL
             );
 
+            CREATE TABLE IF NOT EXISTS psychology_dialog_settings (
+                id INTEGER PRIMARY KEY CHECK(id=1),
+                duration_trigger_days INTEGER NOT NULL DEFAULT 14,
+                impact_trigger_score INTEGER NOT NULL DEFAULT 6,
+                technique_shift_trigger INTEGER NOT NULL DEFAULT 2,
+                max_messages_before_offer INTEGER NOT NULL DEFAULT 10,
+                offer_cooldown_messages INTEGER NOT NULL DEFAULT 3,
+                updated_at TEXT NOT NULL
+            );
+
+            INSERT OR IGNORE INTO psychology_dialog_settings
+            (id,duration_trigger_days,impact_trigger_score,technique_shift_trigger,
+             max_messages_before_offer,offer_cooldown_messages,updated_at)
+            VALUES (1,14,6,2,10,3,CURRENT_TIMESTAMP);
+
             CREATE INDEX IF NOT EXISTS idx_experiment_assignments_variant_time
             ON experiment_assignments(experiment_key,variant,assigned_at);
 
@@ -6884,6 +7152,17 @@ def init_db() -> None:
                 UNIQUE(payment_order_id,credit_number),
                 FOREIGN KEY(payment_order_id) REFERENCES payment_orders(id) ON DELETE CASCADE,
                 FOREIGN KEY(session_id) REFERENCES psychology_sessions(id) ON DELETE CASCADE
+            );
+
+            CREATE TABLE IF NOT EXISTS psychology_dialog_states (
+                conversation_id TEXT PRIMARY KEY,
+                chel_id TEXT NOT NULL,
+                state_json TEXT NOT NULL DEFAULT '{}',
+                message_count INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY(conversation_id) REFERENCES conversations(id) ON DELETE CASCADE,
+                FOREIGN KEY(chel_id) REFERENCES users(chel_id) ON DELETE CASCADE
             );
 
             CREATE TABLE IF NOT EXISTS enterprise_examination_schedule (
@@ -7742,6 +8021,10 @@ def init_db() -> None:
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_psychology_session_credit_uses_order "
             "ON psychology_session_credit_uses(payment_order_id, credit_number)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_psychology_dialog_states_user "
+            "ON psychology_dialog_states(chel_id, updated_at DESC)"
         )
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_enterprise_schedule_inn_date "

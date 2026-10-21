@@ -189,6 +189,7 @@ button { cursor:pointer; }
 .message-bubble > .rich-text { font-size:inherit; line-height:1.55; }
 .interpretation-item > .rich-text { margin-top:6px; font-size:10px; }
 .request-card p { overflow-wrap:anywhere; }
+.psychology-client-card { margin:0; padding:12px; overflow-wrap:anywhere; white-space:pre-wrap; border:1px solid #dbccef; border-radius:12px; background:#f7f1ff; color:#392b4a; font:10px/1.55 Manrope,sans-serif; }
 /* Interactive attachments in staff conversations */
 .message-files { display:grid; gap:7px; }
 .manager-message-document { display:grid; grid-template-columns:38px minmax(0,1fr) auto; align-items:center; gap:8px; min-width:0; padding:8px; border-radius:10px; background:#edf4f0; color:var(--green-dark); }

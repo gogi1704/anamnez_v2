@@ -2210,7 +2210,7 @@ const personalityFields = [
 ];
 
 function personalityValues() {
-  return {
+  const values = {
     profile_key:activePersonalityProfile,
     provider:$('#personalityProvider').value,
     openai_model:$('#personalityOpenAIModel').value,
@@ -2218,6 +2218,16 @@ function personalityValues() {
     ...Object.fromEntries(personalityFields.map(name => [
     name, Number($(`#personality${name[0].toUpperCase()}${name.slice(1)}`).value),
   ]))};
+  if (activePersonalityProfile === 'masterclass_psychology') {
+    Object.assign(values, {
+      duration_trigger_days:Number($('#personalityDurationTriggerDays').value),
+      impact_trigger_score:Number($('#personalityImpactTriggerScore').value),
+      technique_shift_trigger:Number($('#personalityTechniqueShiftTrigger').value),
+      max_messages_before_offer:Number($('#personalityMaxMessagesBeforeOffer').value),
+      offer_cooldown_messages:Number($('#personalityOfferCooldownMessages').value),
+    });
+  }
+  return values;
 }
 
 function ensureDifferentPersonalityModels() {
@@ -2233,6 +2243,9 @@ function renderPersonalitySettings() {
   const directOpenAI = values.provider === 'openai';
   $('#personalityOpenAIModelField').classList.toggle('hidden',!directOpenAI);
   $('#personalityOpenAIModel').disabled = !directOpenAI;
+  $('#personalityPsychologyThresholds').classList.toggle(
+    'hidden', activePersonalityProfile !== 'masterclass_psychology',
+  );
   $('#personalityProviderHint').textContent = directOpenAI
     ? 'Запросы этого диалога идут напрямую в OpenAI на выбранную ниже модель.'
     : `Запросы этого диалога идут через Yandex AI Studio: ${$('#personalityTestBranchModel').selectedOptions[0]?.textContent || 'основная модель'} → ${$('#personalityTestBranchFallbackModel').selectedOptions[0]?.textContent || 'резервная модель'}.`;
@@ -2294,6 +2307,11 @@ function fillActivePersonalityProfile() {
     const fallback = personalityPresets.balanced[field];
     $(`#personality${field[0].toUpperCase()}${field.slice(1)}`).value = Number(item[field] ?? fallback);
   }
+  $('#personalityDurationTriggerDays').value = Number(item.duration_trigger_days ?? 14);
+  $('#personalityImpactTriggerScore').value = Number(item.impact_trigger_score ?? 6);
+  $('#personalityTechniqueShiftTrigger').value = Number(item.technique_shift_trigger ?? 2);
+  $('#personalityMaxMessagesBeforeOffer').value = Number(item.max_messages_before_offer ?? 10);
+  $('#personalityOfferCooldownMessages').value = Number(item.offer_cooldown_messages ?? 3);
   const hints = {
     general:'Настройки ниже влияют только на обычные медицинские и общие диалоги.',
     weight_control:'Настройки ниже задают базовый характер чата «Контроль веса». Выбор самого пользователя в меню чата уточняет этот стиль.',
@@ -3076,6 +3094,9 @@ document.querySelectorAll('[data-personality-preset]').forEach(button => {
 });
 document.querySelectorAll('#personalityForm input[type="range"]').forEach(input => {
   input.addEventListener('input', () => { personalityPreset = 'custom'; renderPersonalitySettings(); });
+  input.addEventListener('change', schedulePersonalitySave);
+});
+document.querySelectorAll('#personalityPsychologyThresholds input').forEach(input => {
   input.addEventListener('change', schedulePersonalitySave);
 });
 $('#personalityAddressMode').addEventListener('change', () => { personalityPreset = 'custom'; renderPersonalitySettings(); schedulePersonalitySave(); });

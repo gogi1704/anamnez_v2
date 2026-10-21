@@ -757,6 +757,13 @@ tbody tr:hover { background:#f8fbf9; }
 .personality-controls small { color:var(--muted); font-size:10px; line-height:1.45; }
 .personality-controls input[type="range"] { width:100%; accent-color:#1f8667; cursor:pointer; }
 .personality-controls .personality-address select { width:100%; min-height:44px; padding:0 12px; border:1px solid #cadbd2; border-radius:11px; color:#263a31; background:#fff; font:inherit; }
+.personality-psychology-thresholds { display:grid; grid-template-columns:repeat(5,minmax(0,1fr)); gap:12px; margin:20px 0 0; padding:18px; border:1px solid #d9c9ec; border-radius:16px; background:#faf7ff; }
+.personality-psychology-thresholds legend { padding:0 8px; color:#684294; font-size:12px; font-weight:800; }
+.personality-psychology-thresholds label { display:grid; align-content:start; gap:7px; }
+.personality-psychology-thresholds label span { display:grid; gap:4px; }
+.personality-psychology-thresholds b { font-size:11px; }
+.personality-psychology-thresholds small { color:var(--muted); font-size:9px; line-height:1.4; }
+.personality-psychology-thresholds input { min-height:42px; padding:0 10px; border:1px solid #cdb9e6; border-radius:10px; background:#fff; font:inherit; }
 .personality-preview { display:grid; gap:12px; padding:18px; border:1px solid #d8e5df; border-radius:18px; background:#f5faf7; }
 .personality-preview-label { color:#126549; font-size:10px; font-weight:800; letter-spacing:.07em; text-transform:uppercase; }
 .personality-preview-message { padding:15px 16px; border:1px solid #d6e6de; border-radius:16px 16px 16px 5px; background:#fff; box-shadow:0 8px 24px rgba(32,78,60,.07); }
@@ -765,4 +772,4 @@ tbody tr:hover { background:#f8fbf9; }
 .personality-actions { display:flex; align-items:center; flex-wrap:wrap; gap:12px; }
 .personality-actions button { min-height:46px; }.personality-actions .form-status { flex:1 1 280px; }
 @media(max-width:1050px){.personality-presets{grid-template-columns:repeat(2,minmax(0,1fr))}}
-@media(max-width:850px){.personality-layout,.personality-model-priority,.personality-dialog-tabs,.personality-routing,.personality-routing-fields{grid-template-columns:1fr}.personality-presets{grid-template-columns:1fr}.personality-heading-panel .panel-heading{align-items:flex-start;flex-direction:column}.personality-actions button{width:100%}}
+@media(max-width:850px){.personality-layout,.personality-model-priority,.personality-dialog-tabs,.personality-routing,.personality-routing-fields,.personality-psychology-thresholds{grid-template-columns:1fr}.personality-presets{grid-template-columns:1fr}.personality-heading-panel .panel-heading{align-items:flex-start;flex-direction:column}.personality-actions button{width:100%}}

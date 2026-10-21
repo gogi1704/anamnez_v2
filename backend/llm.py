@@ -487,6 +487,12 @@ class LLMService:
             payload["psychology_session_status"] = conversation.get(
                 "_psychology_session_status", {}
             )
+            payload["psychology_dialog_state"] = conversation.get(
+                "_psychology_dialog_state", {}
+            )
+            payload["psychology_thresholds"] = conversation.get(
+                "_psychology_thresholds", {}
+            )
         if route_decision:
             payload["route_decision"] = route_decision
         return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))

@@ -228,6 +228,19 @@ class ConversationOrchestrator:
             conversation["_psychology_session_status"] = (
                 _psychology_session_status_for_ai(conversation_id)
             )
+            conversation["_psychology_dialog_state"] = (
+                db.get_psychology_dialog_state(conversation_id)
+            )
+            psychology_settings = db.admin_assistant_personality_settings(
+                "masterclass_psychology"
+            )
+            conversation["_psychology_thresholds"] = {
+                key: psychology_settings[key] for key in (
+                    "duration_trigger_days", "impact_trigger_score",
+                    "technique_shift_trigger", "max_messages_before_offer",
+                    "offer_cooldown_messages",
+                )
+            }
         if (
             conversation.get("dialog_type") == "weight_control"
             and not HUMAN_REQUEST.search(user_text)
@@ -319,6 +332,14 @@ class ConversationOrchestrator:
             target = self._human_agent(conversation)
         else:
             result = self.llm.answer(target, history, context, decision, conversation, attachments)
+            if (
+                conversation.get("dialog_type") == "masterclass_psychology"
+                and target == "psychologist"
+                and result.dialog_state is not None
+            ):
+                conversation["_psychology_dialog_state"] = (
+                    db.save_psychology_dialog_state(conversation_id, result.dialog_state)
+                )
             answer = result.message
             urgency = result.urgency
             if target in MEDICAL_AGENTS:

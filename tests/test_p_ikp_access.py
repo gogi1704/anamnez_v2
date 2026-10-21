@@ -139,10 +139,10 @@ class IkpAccessTests(unittest.TestCase):
             self.assertEqual(psychology['pinned'], 1)
             greeting = db.list_messages(psychology['id'])[0]['content']
             self.assertEqual(greeting, db.MASTERCLASS_PSYCHOLOGY_WELCOME)
-            self.assertIn('Я Вита, помощник-психолог', greeting)
-            self.assertIn('без ограничений по времени', greeting)
-            self.assertIn('30-минутная сессия бесплатна', greeting)
-            self.assertIn('входит в ваш пакет мастер-класса', greeting)
+            self.assertIn('Я Вита — ИИ-помощник команды психологов', greeting)
+            self.assertIn('Я не человек и не ставлю диагнозов', greeting)
+            self.assertIn('первая встреча бесплатна', greeting)
+            self.assertIn('мысли причинить себе вред', greeting)
             self.assertTrue(db.current_masterclass_access()['psychology_chat_started'])
         finally:
             db.set_current_chel_id(previous_chel_id)
