@@ -36,11 +36,11 @@ class ManagerDailyReportTests(unittest.TestCase):
                 "examination_conversion": 66.7,
             }],
         }
-        with patch.object(db, "admin_manager_attribution", return_value=source) as report:
+        with patch.object(db, "admin_manager_first_arrivals", return_value=source) as report:
             payload = manager_daily_report.build_report(
                 report_date=date(2026, 10, 20),
             )
-        report.assert_called_once_with("all", "2026-10-20", "2026-10-20")
+        report.assert_called_once_with("2026-10-20", "2026-10-20")
         self.assertEqual(payload["total_users"], 4)
         self.assertEqual(payload["unattributed_users"], 1)
         self.assertEqual(len(payload["managers"]), len(db.FROM_MANAGER_NAMES))
@@ -57,7 +57,7 @@ class ManagerDailyReportTests(unittest.TestCase):
         response.__enter__.return_value = response
         response.__exit__.return_value = False
         with (
-            patch.object(db, "admin_manager_attribution", return_value={
+            patch.object(db, "admin_manager_first_arrivals", return_value={
                 "total_users": 0, "attributed_users": 0, "managers": [],
             }),
             patch("backend.manager_daily_report.urlopen", return_value=response) as opened,

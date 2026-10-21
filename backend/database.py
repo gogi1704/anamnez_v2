@@ -3479,6 +3479,71 @@ def admin_manager_attribution(
     }
 
 
+def admin_manager_first_arrivals(date_from: str = "", date_to: str = "") -> dict:
+    """Aggregate users first created on the landing page, including pending users.
+
+    A pending ``users`` row is created when a previously unknown browser first
+    requests the Consilium landing page.  Unlike ``registered_at``, ``created_at``
+    therefore includes visitors who reached that page but did not choose a login
+    method.  The immutable ``from_manager`` value keeps the original manager
+    attribution for this daily acquisition report.
+    """
+    date_from = str(date_from or "").strip()
+    date_to = str(date_to or "").strip()
+    try:
+        custom_from = date.fromisoformat(date_from) if date_from else None
+        custom_to = date.fromisoformat(date_to) if date_to else None
+    except ValueError as exc:
+        raise ValueError("Дата должна быть указана в формате ГГГГ-ММ-ДД") from exc
+    if custom_from and custom_to and custom_from > custom_to:
+        raise ValueError("Дата начала периода не может быть позже даты окончания")
+
+    where = "IS_STATS_USER(u.chel_id) = 1"
+    params: list[str] = []
+    report_timezone = timezone(timedelta(hours=3))
+    if custom_from:
+        from_boundary = datetime.combine(
+            custom_from, datetime.min.time(), tzinfo=report_timezone,
+        ).astimezone(timezone.utc).isoformat()
+        where += " AND u.created_at >= ?"
+        params.append(from_boundary)
+    if custom_to:
+        to_boundary = datetime.combine(
+            custom_to + timedelta(days=1), datetime.min.time(), tzinfo=report_timezone,
+        ).astimezone(timezone.utc).isoformat()
+        where += " AND u.created_at < ?"
+        params.append(to_boundary)
+
+    with connection() as conn:
+        total_users = int(conn.execute(
+            f"SELECT COUNT(*) FROM users u WHERE {where}", tuple(params),
+        ).fetchone()[0] or 0)
+        attributed_users = int(conn.execute(
+            f"SELECT COUNT(*) FROM users u WHERE {where} AND TRIM(u.from_manager) <> ''",
+            tuple(params),
+        ).fetchone()[0] or 0)
+        rows = conn.execute(
+            f"""SELECT u.from_manager, COUNT(*) AS users
+            FROM users u
+            WHERE {where} AND TRIM(u.from_manager) <> ''
+            GROUP BY u.from_manager
+            ORDER BY users DESC, u.from_manager""",
+            tuple(params),
+        ).fetchall()
+
+    return {
+        "period_started_at": date_from or None,
+        "period_ended_at": date_to or None,
+        "total_users": total_users,
+        "attributed_users": attributed_users,
+        "managers": [{
+            "from_manager": row["from_manager"],
+            "manager_name": from_manager_name(row["from_manager"]),
+            "users": int(row["users"] or 0),
+        } for row in rows],
+    }
+
+
 def _admin_date(value: str, field_name: str) -> str:
     normalized = str(value or "").strip()
     if not normalized:

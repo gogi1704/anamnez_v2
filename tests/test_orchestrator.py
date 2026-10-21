@@ -2890,6 +2890,40 @@ class OrchestratorTests(unittest.TestCase):
             db.ensure_user("chel_test_default")
             db.set_current_chel_id("chel_test_default")
 
+    def test_manager_first_arrivals_include_users_who_did_not_register(self):
+        pending_id = "chel_manager_arrival_pending"
+        registered_id = "chel_manager_arrival_registered"
+        outside_id = "chel_manager_arrival_outside"
+        try:
+            db.ensure_user(pending_id, pending=True, from_manager="manager_1")
+            db.ensure_user(registered_id, pending=True, from_manager="manager_2")
+            db.set_current_chel_id(registered_id)
+            db.mark_current_user_registered("anonymous")
+            db.ensure_user(outside_id, pending=True, from_manager="manager_1")
+            with db.connection() as conn:
+                conn.execute(
+                    "UPDATE users SET created_at=? WHERE chel_id IN (?,?)",
+                    ("2035-07-14T12:00:00+00:00", pending_id, registered_id),
+                )
+                conn.execute(
+                    "UPDATE users SET created_at=? WHERE chel_id=?",
+                    ("2035-07-13T12:00:00+00:00", outside_id),
+                )
+                conn.commit()
+
+            report = db.admin_manager_first_arrivals("2035-07-14", "2035-07-14")
+            managers = {item["from_manager"]: item for item in report["managers"]}
+            self.assertEqual(report["total_users"], 2)
+            self.assertEqual(report["attributed_users"], 2)
+            self.assertEqual(managers["manager_1"]["users"], 1)
+            self.assertEqual(managers["manager_2"]["users"], 1)
+        finally:
+            for chel_id in (pending_id, registered_id, outside_id):
+                db.set_current_chel_id(chel_id)
+                db.reset_current_user()
+            db.ensure_user("chel_test_default")
+            db.set_current_chel_id("chel_test_default")
+
     def test_admin_table_searches_full_allowlisted_views(self):
         chel_id = "chel_dashboard_search_1234"
         db.ensure_user(chel_id)

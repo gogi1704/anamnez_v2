@@ -49,8 +49,8 @@ def build_report(*, report_date: date | None = None, test: bool = False) -> dict
     timezone_name = settings.manager_daily_report_timezone or "Europe/Moscow"
     local_now = datetime.now(_zone(timezone_name))
     target_date = report_date or (local_now.date() - timedelta(days=1))
-    source = db.admin_manager_attribution(
-        "all", target_date.isoformat(), target_date.isoformat(),
+    source = db.admin_manager_first_arrivals(
+        target_date.isoformat(), target_date.isoformat(),
     )
     by_marker = {
         str(item.get("from_manager") or ""): dict(item)
@@ -85,7 +85,10 @@ def build_report(*, report_date: date | None = None, test: bool = False) -> dict
         "attributed_users": attributed_users,
         "unattributed_users": max(0, total_users - attributed_users),
         "managers": managers,
-        "privacy": "Только агрегаты по менеджерам без данных пользователей.",
+        "privacy": (
+            "Только агрегаты новых посетителей первого посадочного экрана "
+            "по менеджерам, без данных пользователей."
+        ),
     }
 
 
