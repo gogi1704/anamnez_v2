@@ -108,6 +108,19 @@ class Settings:
         os.getenv("BITRIX_CONNECTOR_TIMEOUT_SECONDS", "5")
     )
     funnel_monitor_poll_seconds: int = int(os.getenv("FUNNEL_MONITOR_POLL_SECONDS", "30"))
+    manager_daily_report_enabled: bool = env_bool("MANAGER_DAILY_REPORT_ENABLED", False)
+    manager_daily_report_dialog_id: str = os.getenv(
+        "MANAGER_DAILY_REPORT_DIALOG_ID", "",
+    ).strip()
+    manager_daily_report_send_time: str = os.getenv(
+        "MANAGER_DAILY_REPORT_SEND_TIME", "09:00",
+    ).strip()
+    manager_daily_report_timezone: str = os.getenv(
+        "MANAGER_DAILY_REPORT_TIMEZONE", "Europe/Moscow",
+    ).strip()
+    manager_daily_report_poll_seconds: int = int(os.getenv(
+        "MANAGER_DAILY_REPORT_POLL_SECONDS", "30",
+    ))
     examination_schedule_enabled: bool = env_bool("EXAMINATION_SCHEDULE_ENABLED", False)
     examination_schedule_api_url: str = os.getenv(
         "EXAMINATION_SCHEDULE_API_URL", "https://api.chelovekgrafik.ru/api",
