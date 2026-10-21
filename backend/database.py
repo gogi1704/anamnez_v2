@@ -10160,13 +10160,20 @@ def confirm_human_chat(
         if not row:
             return None, False
         current = dict(row)
-        already_requested = bool(
+        same_role_request = bool(
             current.get("human_ticket_id")
             and current.get("human_status") in {"pending", "connected"}
             and current.get("human_recipient_role", "manager") == recipient_role
         )
+        # A call/session request and a request to join the text chat are two
+        # different user actions. Reuse the visible ticket when switching the
+        # same specialist from a call to chat, but report the chat handoff as
+        # newly created so its messenger notification is queued.
+        already_requested = bool(
+            same_role_request and current.get("human_channel") == "chat"
+        )
         ticket_id = (
-            current["human_ticket_id"] if already_requested else proposed_ticket_id
+            current["human_ticket_id"] if same_role_request else proposed_ticket_id
         )
         active_agent = "psychologist" if recipient_role == "psychologist" else "manager"
         conn.execute(

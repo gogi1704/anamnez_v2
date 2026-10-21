@@ -1469,7 +1469,7 @@ class ConversationOrchestrator:
     def _prepare_human_handoff(
         self, history: list[dict], context: dict, decision: RouteDecision,
         conversation: dict, status: str, ticket_id: str | None, channel: str | None,
-    ) -> tuple[None, str]:
+    ) -> tuple[str | None, str]:
         # The confirmation dialog is a fixed product action. Generating its preface
         # with another model call added cost and latency without adding medical value.
         psychology_chat = conversation.get("dialog_type") == "masterclass_psychology"
@@ -1484,7 +1484,9 @@ class ConversationOrchestrator:
             "Обращение будет создано только после подтверждения в появившемся окне. "
             "Если специалист сейчас не нужен, оставайтесь в этом диалоге — ИИ продолжит отвечать."
         )
-        return None, f"{draft}\n\n{choice}"
+        # Keep an existing session request number intact while the user decides
+        # whether to invite the psychologist into the text chat as well.
+        return ticket_id, f"{draft}\n\n{choice}"
 
     @staticmethod
     def _human_agent(conversation: dict) -> str:

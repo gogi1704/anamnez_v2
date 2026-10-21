@@ -1485,6 +1485,9 @@ class OrchestratorTests(unittest.TestCase):
             conversation = db.create_conversation(
                 "Психологическая поддержка", dialog_type="masterclass_psychology",
             )
+            session = db.request_psychology_session(conversation["id"])
+            self.assertTrue(session["created"])
+            self.assertEqual(db.get_conversation(conversation["id"])["human_channel"], "call")
             suffix = secrets.token_hex(4)
             psychologist = db.admin_create_staff(
                 "Психолог уведомлений", f"psychology.handoff.{suffix}", "123456",
@@ -1516,6 +1519,8 @@ class OrchestratorTests(unittest.TestCase):
             saved = db.get_conversation(conversation["id"])
             self.assertEqual(saved["human_recipient_role"], "psychologist")
             self.assertEqual(saved["active_agent"], "psychologist")
+            self.assertEqual(saved["human_channel"], "chat")
+            self.assertEqual(saved["human_ticket_id"], session["request_number"])
             notifications = db.claim_manager_notifications("telegram")
             notification = next(
                 item for item in notifications
@@ -5493,6 +5498,10 @@ class OrchestratorTests(unittest.TestCase):
             patch("backend.main.db.get_conversation", return_value={
                 "id": "psychology-conversation-1",
                 "dialog_type": "masterclass_psychology",
+                "human_ticket_id": "76245",
+                "human_status": "pending",
+                "human_recipient_role": "psychologist",
+                "human_channel": "call",
             }),
             patch("backend.main.db.psychology_session_summary", return_value={
                 "free_available": False, "remaining_paid": 1,

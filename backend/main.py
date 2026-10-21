@@ -1835,6 +1835,7 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                     source.get("human_ticket_id")
                     and source.get("human_status") in {"pending", "connected"}
                     and source.get("human_recipient_role") == "psychologist"
+                    and source.get("human_channel") == "chat"
                 ):
                     return self._json(200, {
                         "conversation_id": source_id,
