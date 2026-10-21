@@ -90,6 +90,8 @@ class IkpAccessTests(unittest.TestCase):
         self.assertIn("onboarding.entry_route === 'other'", script)
         self.assertIn("onboarding.entry_route === 'results'", script)
         self.assertIn("await enterResultFlow({explicit:true})", script)
+        self.assertIn("$('#entryDirectionScreen').classList.add('hidden');", script)
+        self.assertIn("showEntryDirection();\n    $('#entryDirectionError').textContent", script)
         self.assertIn('.entry-direction-options', styles)
         self.assertIn('if path == "/api/entry-route":', main)
 

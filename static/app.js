@@ -683,6 +683,7 @@ function hideEntryScreens() {
 
 function showEntryDirection() {
   hideEntryScreens();
+  document.querySelectorAll('[data-entry-route]').forEach(item => { item.disabled = false; });
   $('#entryDirectionError').classList.add('hidden');
   $('#entryDirectionError').textContent = '';
   $('#entryDirectionScreen').classList.remove('hidden');
@@ -701,6 +702,10 @@ async function selectEntryDirection(route, button) {
     state.identity.entry_route = result.route;
     state.identity.entry_route_choice_required = false;
     trackEvent('entry_route_selected', {screen:'entry_route',route});
+    // The chooser is a full-screen layer.  Leaving it visible here keeps the
+    // next screen underneath an opaque page with all route buttons disabled,
+    // which looks like the application has frozen.
+    $('#entryDirectionScreen').classList.add('hidden');
     if (route === 'masterclass') {
       history.replaceState({}, '', result.route_path || '/');
       state.masterclassEntry = result.masterclass_entry || null;
@@ -731,6 +736,7 @@ async function selectEntryDirection(route, button) {
     await openMainApp({skipIntro:true, allowIncompleteOnboarding:true});
     newConversation();
   } catch (error) {
+    showEntryDirection();
     $('#entryDirectionError').textContent = error.message;
     $('#entryDirectionError').classList.remove('hidden');
     buttons.forEach(item => { item.disabled = false; });
@@ -1525,6 +1531,7 @@ function clearCheckupReoffer() {
 
 function showAuthGate() {
   $('#welcomeScreen').classList.add('hidden');
+  $('#entryDirectionScreen').classList.add('hidden');
   $('#authGate').classList.remove('hidden');
   $('#onboarding').classList.add('hidden');
   $('#appShell').classList.add('hidden');
@@ -1673,6 +1680,7 @@ function returnFromAnonymousWarning(action = 'anonymous_close') {
 
 async function startApplication(options = {}) {
   $('#welcomeScreen').classList.add('hidden');
+  $('#entryDirectionScreen').classList.add('hidden');
   $('#authGate').classList.add('hidden');
   closeAnonymousWarning();
   await loadOnboarding(options);
@@ -3593,6 +3601,7 @@ async function openMainApp({ skipIntro = false, allowIncompleteOnboarding = fals
   state.returnToChatAfterExaminations = false;
   state.healthPassportCheckupMetric2 = false;
   $('#onboarding').classList.add('hidden');
+  $('#entryDirectionScreen').classList.add('hidden');
   $('#appShell').classList.remove('hidden');
   if (!state.mainInitialized) await initMainApp();
   trackEvent('chat_opened', { screen:'chat' });
