@@ -2813,6 +2813,15 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                 return self._json(502, {"detail": str(exc)})
             except (ValueError, TypeError, json.JSONDecodeError, UnicodeDecodeError) as exc:
                 return self._json(422, {"detail": str(exc)})
+        if path.startswith("/api/conversations/") and path.endswith("/reset"):
+            conversation_id = path.removeprefix("/api/conversations/").removesuffix(
+                "/reset"
+            ).strip("/")
+            result = db.reset_masterclass_psychology_conversation(conversation_id)
+            if not result:
+                return self._json(404, {"detail": "Психологический диалог не найден"})
+            self._track_analytics("psychology_conversation_reset")
+            return self._json(200, result)
         if path.startswith("/api/conversations/") and path.endswith("/read"):
             conversation_id = path.removeprefix("/api/conversations/").removesuffix("/read").strip("/")
             result = db.mark_conversation_read(conversation_id)

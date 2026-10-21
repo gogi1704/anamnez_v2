@@ -97,3 +97,36 @@ def load(token: str) -> tuple[dict, bytes] | None:
     except (OSError, ValueError, json.JSONDecodeError):
         return None
     return record, body
+
+
+def delete_public_attachments(items: list[dict], owner_chel_id: str) -> int:
+    """Delete files referenced by message metadata, but only for their owner."""
+    root = storage_dir()
+    deleted = 0
+    for item in items or []:
+        if not isinstance(item, dict):
+            continue
+        match = re.fullmatch(
+            r"/api/chat-attachments/([A-Za-z0-9_-]{32,80})",
+            str(item.get("url") or "").split("?", 1)[0],
+        )
+        if not match:
+            continue
+        token = match.group(1)
+        metadata_path = root / f"{token}.json"
+        try:
+            record = json.loads(metadata_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError, json.JSONDecodeError):
+            continue
+        if str(record.get("owner_chel_id") or "") != str(owner_chel_id or ""):
+            continue
+        file_name = str(record.get("file") or "")
+        if Path(file_name).name != file_name or not file_name.startswith(f"{token}."):
+            continue
+        try:
+            (root / file_name).unlink(missing_ok=True)
+            metadata_path.unlink(missing_ok=True)
+            deleted += 1
+        except OSError:
+            continue
+    return deleted

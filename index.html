@@ -17,7 +17,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/static/styles.css?v=20261021-attachment-viewer-v33">
+  <link rel="stylesheet" href="/static/styles.css?v=20261021-psychology-reset-v34">
   <link rel="stylesheet" href="/static/rich-text.2bf1f5fab764.css">
 </head>
 <body>
@@ -194,6 +194,9 @@
           <div class="function-menu-wrap hidden" id="psychologySessionsMenuWrap">
             <button class="header-action-button psychology-sessions-button" id="psychologySessionsButton" type="button" aria-label="Открыть список психологических сессий" title="Сессии с психологом"><span aria-hidden="true">Ψ</span></button>
           </div>
+          <div class="function-menu-wrap hidden" id="psychologyResetMenuWrap">
+            <button class="header-action-button psychology-reset-button" id="psychologyResetButton" type="button" aria-label="Очистить психологический диалог" title="Очистить диалог"><span aria-hidden="true">↺</span></button>
+          </div>
           <div class="function-menu-wrap">
             <button class="header-action-button" id="functionMenuButton" aria-label="Открыть меню функций" aria-expanded="false" title="Функции"><span>☰</span></button>
             <div class="function-menu hidden" id="functionMenu" role="menu">
@@ -345,6 +348,21 @@
       <div class="psychology-sessions-footer">
         <button id="psychologySessionsBottomClose" type="button">Закрыть</button>
         <button id="psychologySessionBuyButton" type="button">Купить</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="modal-backdrop hidden" id="psychologyResetModal" role="dialog" aria-modal="true" aria-labelledby="psychologyResetTitle">
+    <div class="modal psychology-reset-modal">
+      <button class="modal-close" id="psychologyResetClose" type="button" aria-label="Закрыть">×</button>
+      <div class="psychology-reset-icon" aria-hidden="true">↺</div>
+      <h2 id="psychologyResetTitle">Очистить этот диалог?</h2>
+      <p>Вся переписка, прикреплённые файлы и сохранённый контекст Виты будут удалены без возможности восстановления.</p>
+      <p class="psychology-reset-note">Оплаты и история сессий сохранятся. После очистки появится стартовое сообщение Виты.</p>
+      <p class="reminder-error hidden" id="psychologyResetError" role="alert"></p>
+      <div class="psychology-reset-actions">
+        <button type="button" id="psychologyResetCancel">Отмена</button>
+        <button type="button" id="psychologyResetConfirm">Удалить и начать заново</button>
       </div>
     </div>
   </div>
@@ -907,9 +925,9 @@
     </div>
   </div>
 
-  <script src="/static/metrika.js?v=20261021-attachment-viewer-v33"></script>
-  <script src="/static/agents.js?v=20261021-attachment-viewer-v33"></script>
+  <script src="/static/metrika.js?v=20261021-psychology-reset-v34"></script>
+  <script src="/static/agents.js?v=20261021-psychology-reset-v34"></script>
   <script src="/static/rich-text.js?v=20260929-loose-lists-v1"></script>
-  <script src="/static/app.js?v=20261021-attachment-viewer-v33"></script>
+  <script src="/static/app.js?v=20261021-psychology-reset-v34"></script>
 </body>
 </html>

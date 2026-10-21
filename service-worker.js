@@ -1,5 +1,5 @@
-const CACHE_NAME = 'consilium-shell-v194';
-const ASSET_VERSION = '20261021-attachment-viewer-v33';
+const CACHE_NAME = 'consilium-shell-v195';
+const ASSET_VERSION = '20261021-psychology-reset-v34';
 const APP_SHELL = [
   '/',
   '/manifest.webmanifest',

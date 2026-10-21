@@ -4676,7 +4676,50 @@ function updateWeightControlTools() {
   const psychologyVisible = state.conversationType === 'masterclass_psychology';
   $('#weightToolsMenuWrap')?.classList.toggle('hidden', !weightVisible);
   $('#psychologySessionsMenuWrap')?.classList.toggle('hidden', !psychologyVisible);
+  $('#psychologyResetMenuWrap')?.classList.toggle('hidden', !psychologyVisible);
   if (!weightVisible) closeWeightToolsMenu();
+}
+
+function openPsychologyResetConfirmation() {
+  if (!state.conversationId || state.conversationType !== 'masterclass_psychology') return;
+  $('#psychologyResetError').classList.add('hidden');
+  $('#psychologyResetModal').classList.remove('hidden');
+}
+
+function closePsychologyResetConfirmation() {
+  $('#psychologyResetModal').classList.add('hidden');
+}
+
+async function confirmPsychologyConversationReset() {
+  if (state.processing || !state.conversationId) return;
+  const conversationId = state.conversationId;
+  const button = $('#psychologyResetConfirm');
+  state.processing = true;
+  button.disabled = true;
+  $('#psychologyResetCancel').disabled = true;
+  $('#psychologyResetError').classList.add('hidden');
+  beginUserProgress('Очищаем диалог…');
+  try {
+    await api(`/api/conversations/${encodeURIComponent(conversationId)}/reset`, {
+      method:'POST', body:'{}',
+    });
+    closePsychologyResetConfirmation();
+    state.context = null;
+    state.urgency = 'routine';
+    state.psychologySessions = null;
+    clearAttachments();
+    state.processing = false;
+    await openConversation(conversationId);
+    $('#taskStatus').textContent = 'Диалог очищен';
+  } catch (error) {
+    $('#psychologyResetError').textContent = error.message;
+    $('#psychologyResetError').classList.remove('hidden');
+  } finally {
+    state.processing = false;
+    button.disabled = false;
+    $('#psychologyResetCancel').disabled = false;
+    endUserProgress();
+  }
 }
 
 const PSYCHOLOGY_CHAT_GUIDE_SLIDES = [
@@ -7493,6 +7536,7 @@ function closeVisibleModal() {
     case 'consultationsModal': closeConsultations(); break;
     case 'psychologySessionsModal': closePsychologySessions(); break;
     case 'psychologySessionRequestModal': closePsychologySessionRequest(); break;
+    case 'psychologyResetModal': closePsychologyResetConfirmation(); break;
     case 'bodyMapModal': closeBodyMap(); break;
     case 'healthHistoryModal': closeHealthHistory(); break;
     case 'healthPassportModal': closeHealthPassportModal(); break;
@@ -7654,6 +7698,13 @@ window.addEventListener('resize', () => {
   if (!$('#psychologyChatGuide').classList.contains('hidden')) renderPsychologyChatGuide();
 }, {passive:true});
 $('#psychologySessionsButton').addEventListener('click', openPsychologySessions);
+$('#psychologyResetButton').addEventListener('click', openPsychologyResetConfirmation);
+$('#psychologyResetClose').addEventListener('click', closePsychologyResetConfirmation);
+$('#psychologyResetCancel').addEventListener('click', closePsychologyResetConfirmation);
+$('#psychologyResetConfirm').addEventListener('click', confirmPsychologyConversationReset);
+$('#psychologyResetModal').addEventListener('click', event => {
+  if (event.target.id === 'psychologyResetModal') closePsychologyResetConfirmation();
+});
 function closePsychologySessionsToChat() {
   closePsychologySessions();
   trackMasterclassAction('close', 'psychology_sessions');

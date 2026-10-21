@@ -1,10 +1,12 @@
 import tempfile
 import unittest
 import io
+import base64
 from datetime import date, timedelta
 from pathlib import Path
 
 from backend import database as db
+from backend import chat_attachments
 from backend.config import settings
 from backend.masterclass_materials import build_masterclass_practices_pdf
 
@@ -235,6 +237,134 @@ class IkpAccessTests(unittest.TestCase):
         self.assertIn('Сессий предоплачено', script)
         dashboard = (project_root / 'dashboard.html').read_text(encoding='utf-8')
         self.assertIn('<option value="psychologist">Психолог</option>', dashboard)
+
+    def test_psychology_chat_reset_deletes_context_but_preserves_sessions(self):
+        previous_chel_id = db.current_chel_id()
+        try:
+            chel_id = 'chel_psychology_reset_0001'
+            db.ensure_user(chel_id, pending=True)
+            db.set_current_chel_id(chel_id)
+            conversation = db.create_conversation(
+                'Психологическая поддержка',
+                dialog_type='masterclass_psychology', pinned=True,
+            )
+            db.add_message(
+                conversation['id'], 'assistant', db.MASTERCLASS_PSYCHOLOGY_WELCOME,
+                'psychologist',
+            )
+            attachment = chat_attachments.store({
+                'name': 'note.txt', 'type': 'text/plain',
+                'data_url': 'data:text/plain;base64,' + base64.b64encode(
+                    b'private chat attachment',
+                ).decode('ascii'),
+            }, chel_id)
+            db.add_message(
+                conversation['id'], 'user', 'Старое сообщение', 'psychologist',
+                {'attachments': [chat_attachments.public_metadata(attachment)]},
+            )
+            db.save_psychology_dialog_state(
+                conversation['id'], {'stage': 'reflection', 'user_words': ['тревога']},
+            )
+            db.update_conversation(
+                conversation['id'], active_agent='psychologist',
+                context_summary='{"current_topic":"тревога"}',
+                status='waiting_human', human_status='pending',
+                human_ticket_id='TEST-RESET', human_channel='chat', ai_enabled=False,
+            )
+            now = db.utc_now()
+            with db.connection() as conn:
+                conn.execute(
+                    """INSERT INTO psychology_sessions
+                       (id,conversation_id,chel_id,session_number,request_number,
+                        access_type,status,started_at,created_at,updated_at)
+                       VALUES (?,?,?,?,?,?,'requested',?,?,?)""",
+                    (
+                        'session-reset-preserved', conversation['id'], chel_id, 1,
+                        '12345', 'free', now, now, now,
+                    ),
+                )
+                conn.commit()
+
+            reset = db.reset_masterclass_psychology_conversation(conversation['id'])
+
+            self.assertIsNotNone(reset)
+            self.assertEqual(reset['context_summary'], '{}')
+            self.assertTrue(reset['ai_enabled'])
+            self.assertEqual(reset['human_status'], 'none')
+            self.assertEqual(len(reset['messages']), 1)
+            self.assertEqual(reset['messages'][0]['content'], db.MASTERCLASS_PSYCHOLOGY_WELCOME)
+            self.assertTrue(reset['messages'][0]['metadata']['conversation_reset'])
+            self.assertEqual(len(db.list_message_deletions(conversation['id'])), 2)
+            state = db.get_psychology_dialog_state(conversation['id'])
+            self.assertEqual(state['message_index'], 0)
+            self.assertEqual(
+                db.psychology_session_summary(conversation['id'])['pending_session']['request_number'],
+                '12345',
+            )
+            token = attachment['url'].rsplit('/', 1)[-1]
+            self.assertFalse((chat_attachments.storage_dir() / f'{token}.json').exists())
+        finally:
+            db.set_current_chel_id(previous_chel_id)
+
+    def test_psychology_chat_reset_rejects_other_dialogs_and_users(self):
+        previous_chel_id = db.current_chel_id()
+        try:
+            owner = 'chel_psychology_reset_owner'
+            db.ensure_user(owner, pending=True)
+            db.set_current_chel_id(owner)
+            general = db.create_conversation('Обычный диалог', dialog_type='general')
+            psychology = db.create_conversation(
+                'Психологическая поддержка', dialog_type='masterclass_psychology',
+            )
+            db.add_message(psychology['id'], 'user', 'Секрет', 'psychologist')
+            self.assertIsNone(db.reset_masterclass_psychology_conversation(general['id']))
+
+            stranger = 'chel_psychology_reset_stranger'
+            db.ensure_user(stranger, pending=True)
+            db.set_current_chel_id(stranger)
+            self.assertIsNone(db.reset_masterclass_psychology_conversation(psychology['id']))
+
+            db.set_current_chel_id(owner)
+            self.assertEqual(db.list_messages(psychology['id'])[0]['content'], 'Секрет')
+        finally:
+            db.set_current_chel_id(previous_chel_id)
+
+    def test_psychology_chat_reset_does_not_bypass_crisis_lock(self):
+        previous_chel_id = db.current_chel_id()
+        try:
+            chel_id = 'chel_psychology_reset_crisis'
+            db.ensure_user(chel_id, pending=True)
+            db.set_current_chel_id(chel_id)
+            conversation = db.create_conversation(
+                'Психологическая поддержка', dialog_type='masterclass_psychology',
+            )
+            db.add_message(conversation['id'], 'user', 'Опасное сообщение', 'psychologist')
+            db.update_conversation(
+                conversation['id'], active_agent='psychologist', context_summary='{}',
+                status='waiting_human', human_status='pending',
+                human_ticket_id='URG-ABC123', human_channel='chat', ai_enabled=False,
+            )
+
+            reset = db.reset_masterclass_psychology_conversation(conversation['id'])
+
+            self.assertFalse(bool(reset['ai_enabled']))
+            self.assertEqual(reset['status'], 'waiting_human')
+            self.assertEqual(reset['human_status'], 'pending')
+            self.assertEqual(reset['human_ticket_id'], 'URG-ABC123')
+            self.assertEqual(len(reset['messages']), 1)
+        finally:
+            db.set_current_chel_id(previous_chel_id)
+
+    def test_psychology_chat_reset_controls_are_wired(self):
+        project_root = Path(__file__).resolve().parents[1]
+        index = (project_root / 'index.html').read_text(encoding='utf-8')
+        script = (project_root / 'static' / 'app.js').read_text(encoding='utf-8')
+        main = (project_root / 'backend' / 'main.py').read_text(encoding='utf-8')
+        self.assertIn('id="psychologyResetButton"', index)
+        self.assertIn('id="psychologyResetModal"', index)
+        self.assertIn('id="psychologyResetConfirm"', index)
+        self.assertIn('/reset`,', script)
+        self.assertIn('reset_masterclass_psychology_conversation', main)
 
     def test_masterclass_questionnaire_and_psychology_chat_guide_are_styled(self):
         project_root = Path(__file__).resolve().parents[1]

@@ -10168,6 +10168,103 @@ def get_conversation(conversation_id: str) -> dict | None:
     return dict(row) if row else None
 
 
+def reset_masterclass_psychology_conversation(conversation_id: str) -> dict | None:
+    """Irreversibly clear Vita's transcript and AI state, preserving sessions/payments."""
+    owner = current_chel_id()
+    now = utc_now()
+    attachment_items: list[dict] = []
+    with _write_lock, connection() as conn:
+        conversation = conn.execute(
+            """SELECT * FROM conversations
+               WHERE id=? AND chel_id=? AND dialog_type='masterclass_psychology'""",
+            (str(conversation_id or ""), owner),
+        ).fetchone()
+        if not conversation:
+            return None
+        crisis_locked = bool(
+            not conversation["ai_enabled"]
+            and str(conversation["human_ticket_id"] or "").startswith("URG-")
+        )
+        rows = conn.execute(
+            "SELECT id,metadata FROM messages WHERE conversation_id=?",
+            (conversation_id,),
+        ).fetchall()
+        for row in rows:
+            try:
+                metadata = json.loads(row["metadata"] or "{}")
+            except (TypeError, json.JSONDecodeError):
+                metadata = {}
+            attachment_items.extend(metadata.get("attachments") or [])
+
+        # Session and payment tables deliberately remain intact: they are
+        # account records rather than conversational context.
+        conn.execute(
+            """DELETE FROM manager_notification_outbox
+               WHERE conversation_id=?
+                 AND event_type IN ('new_message','new_request')""",
+            (conversation_id,),
+        )
+        for table in (
+            "conversation_context_compactions", "message_deletions",
+            "conversation_reads", "staff_conversation_reads", "handoffs",
+            "manager_actions", "psychology_dialog_states",
+        ):
+            conn.execute(f"DELETE FROM {table} WHERE conversation_id=?", (conversation_id,))
+        conn.executemany(
+            """INSERT INTO message_deletions
+               (message_id,conversation_id,deleted_at) VALUES (?,?,?)""",
+            [(int(row["id"]), conversation_id, now) for row in rows],
+        )
+        conn.execute("DELETE FROM messages WHERE conversation_id=?", (conversation_id,))
+        cursor = conn.execute(
+            """INSERT INTO messages
+               (conversation_id,role,agent_id,content,metadata,created_at)
+               VALUES (?,'assistant','psychologist',?,?,?)""",
+            (
+                conversation_id, MASTERCLASS_PSYCHOLOGY_WELCOME,
+                json.dumps({
+                    "specialized_dialog": "masterclass_psychology",
+                    "conversation_reset": True,
+                }, ensure_ascii=False),
+                now,
+            ),
+        )
+        welcome_message_id = int(cursor.lastrowid)
+        conn.execute(
+            """INSERT INTO conversation_reads
+               (conversation_id,last_read_message_id,read_at) VALUES (?,?,?)""",
+            (conversation_id, welcome_message_id, now),
+        )
+        if crisis_locked:
+            conn.execute(
+                """UPDATE conversations SET active_agent='psychologist',
+                   context_summary='{}',status='waiting_human',ai_enabled=0,
+                   human_status='pending',human_channel='chat',human_phone=NULL,
+                   human_recipient_role='psychologist',updated_at=?
+                   WHERE id=? AND chel_id=?""",
+                (now, conversation_id, owner),
+            )
+        else:
+            conn.execute(
+                """UPDATE conversations SET active_agent='psychologist',
+                   context_summary='{}',status='active',ai_enabled=1,
+                   human_status='none',human_ticket_id=NULL,human_channel=NULL,
+                   human_phone=NULL,human_recipient_role='psychologist',updated_at=?
+                   WHERE id=? AND chel_id=?""",
+                (now, conversation_id, owner),
+            )
+        conn.commit()
+
+    # Files live outside SQLite and are removed only after the DB reset commits.
+    if attachment_items:
+        from . import chat_attachments
+        chat_attachments.delete_public_attachments(attachment_items, owner)
+    result = get_conversation(conversation_id)
+    if result:
+        result["messages"] = list_messages(conversation_id)
+    return result
+
+
 def list_conversations(limit: int = 50) -> list[dict]:
     with connection() as conn:
         rows = conn.execute(
