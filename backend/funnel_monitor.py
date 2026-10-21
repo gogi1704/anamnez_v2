@@ -26,7 +26,6 @@ NON_ALERT_SCREEN_IDS = {"exam_catalog", "question_company_inn"}
 
 MANUAL_ANALYSES = {
     "all": ("Полный отчёт", True, True, True, True),
-    "new_users": ("Новые пользователи", False, False, False, False),
     "standard": ("Обычная воронка", True, False, False, False),
     "result": ("Путь /result", False, True, False, False),
     "payments": ("Оплаты", False, False, True, False),
@@ -35,7 +34,6 @@ MANUAL_ANALYSES = {
 
 ANALYSIS_INSTRUCTIONS = {
     "all": "Проанализируй воронки, оплаты и технические ошибки в совокупности. Найди главные отклонения и предложи приоритетные проверки и действия.",
-    "new_users": "Проанализируй динамику новых пользователей за предыдущий день: первый визит, завершение входа, выбранные направления, привязку мессенджера и начало общения.",
     "standard": "Проанализируй обычную воронку анкетирования: найди экраны с наибольшим падением конверсии и предложи проверяемые причины и действия.",
     "result": "Проанализируй путь /result: найди потери при поиске, получении и расшифровке результатов и предложи проверяемые улучшения.",
     "payments": "Проанализируй попытки и успешность оплат, конверсию, выручку и неуспешные статусы. Укажи, какие причины можно подтвердить данными и что следует проверить.",
@@ -88,26 +86,6 @@ def _windows(period_days: int, local_today: date) -> tuple[dict, dict]:
         {"date_from": current_start.isoformat(), "date_to": current_end.isoformat()},
         {"date_from": comparison_start.isoformat(), "date_to": comparison_end.isoformat()},
     )
-
-
-def _utc_day_window(day: date, timezone_name: str) -> tuple[str, str]:
-    local_zone = _zone(timezone_name)
-    start = datetime.combine(day, datetime.min.time(), tzinfo=local_zone)
-    end = start + timedelta(days=1)
-    return start.astimezone(timezone.utc).isoformat(), end.astimezone(timezone.utc).isoformat()
-
-
-def _daily_new_users(local_today: date, timezone_name: str) -> dict:
-    current_day = local_today - timedelta(days=1)
-    previous_day = current_day - timedelta(days=1)
-    current_start, current_end = _utc_day_window(current_day, timezone_name)
-    previous_start, previous_end = _utc_day_window(previous_day, timezone_name)
-    return {
-        "date": current_day.isoformat(),
-        "comparison_date": previous_day.isoformat(),
-        "current": db.daily_new_users_summary(current_start, current_end),
-        "comparison": db.daily_new_users_summary(previous_start, previous_end),
-    }
 
 
 def _distribution(items: list[dict], limit: int = 10) -> list[dict]:
@@ -287,9 +265,6 @@ def build_report(
         "alert_threshold_pp": float(config["alert_threshold_pp"]),
         "current": _compact_admin(current_admin, config),
         "comparison": _compact_admin(comparison_admin, config),
-        "new_users_daily": _daily_new_users(
-            local_now.date(), str(config["timezone"]),
-        ),
         "flows": flows,
         "ai_instruction": (
             f"{ANALYSIS_INSTRUCTIONS.get(str(config.get('analysis')), 'Проанализируй изменения воронки.')} "
