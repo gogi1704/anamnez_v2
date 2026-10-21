@@ -1478,14 +1478,22 @@ class OrchestratorTests(unittest.TestCase):
     def test_psychology_chat_human_request_is_confirmed_for_psychologist(self):
         previous_chel_id = db.current_chel_id()
         chel_id = f"chel_psychology_handoff_{secrets.token_hex(4)}"
+        psychologist = None
         try:
             db.ensure_user(chel_id)
             db.set_current_chel_id(chel_id)
             conversation = db.create_conversation(
                 "Психологическая поддержка", dialog_type="masterclass_psychology",
             )
+            suffix = secrets.token_hex(4)
+            psychologist = db.admin_create_staff(
+                "Психолог уведомлений", f"psychology.handoff.{suffix}", "123456",
+                role="psychologist",
+                telegram_id=str(int.from_bytes(secrets.token_bytes(6), "big")),
+                notify_new_requests=True,
+            )
             offered = ConversationOrchestrator(FakeLLM()).process(
-                conversation["id"], "Позови человека",
+                conversation["id"], "Позови психолога",
             )
             self.assertTrue(offered.human_escalation)
             self.assertEqual(offered.agent, "psychologist")
@@ -1496,8 +1504,7 @@ class OrchestratorTests(unittest.TestCase):
                 _track_analytics=lambda event, metadata=None: None,
             )
             complete_profile = {"sex": "female", "age": 40, "height_cm": 168, "weight_kg": 65}
-            with patch.object(db, "get_profile", return_value=complete_profile), \
-                    patch.object(db, "enqueue_manager_notifications") as notify:
+            with patch.object(db, "get_profile", return_value=complete_profile):
                 status, response = ConsiliumHandler._set_human_preference(
                     handler,
                     {"conversation_id": conversation["id"], "channel": "chat"},
@@ -1509,11 +1516,20 @@ class OrchestratorTests(unittest.TestCase):
             saved = db.get_conversation(conversation["id"])
             self.assertEqual(saved["human_recipient_role"], "psychologist")
             self.assertEqual(saved["active_agent"], "psychologist")
-            notify.assert_called_once()
-            self.assertEqual(notify.call_args.kwargs["recipient_role"], "psychologist")
+            notifications = db.claim_manager_notifications("telegram")
+            notification = next(
+                item for item in notifications
+                if item["conversation_id"] == conversation["id"]
+                and item["recipient_id"] == psychologist["telegram_id"]
+            )
+            self.assertEqual(notification["event_type"], "new_request")
+            self.assertEqual(notification["payload"]["recipient_role"], "psychologist")
+            self.assertIn("просит подключить психолога", notification["payload"]["title"].lower())
         finally:
             db.ensure_user(previous_chel_id)
             db.set_current_chel_id(previous_chel_id)
+            if psychologist:
+                db.admin_delete_staff(psychologist["id"])
 
     def test_old_human_request_cannot_trigger_again(self):
         service = ConversationOrchestrator(StickyHumanLLM())

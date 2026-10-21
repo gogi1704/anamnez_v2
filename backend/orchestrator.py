@@ -13,7 +13,7 @@ from .schemas import AgentResult, ChatResponse, RouteDecision, normalize_context
 
 HUMAN_REQUEST = re.compile(
     r"\b(?:позов\w*|подключ\w*|перевед\w*|соедин\w*|хочу поговорить с)\s+"
-    r"(?:жив\w*\s+)?(?:чел\w*|оператор\w*|врач\w*|специалист\w*)\b",
+    r"(?:жив\w*\s+)?(?:чел\w*|оператор\w*|врач\w*|специалист\w*|психолог\w*)\b",
     re.IGNORECASE,
 )
 CRITICAL_RISK = re.compile(
