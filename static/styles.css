@@ -36,6 +36,7 @@ button { color: inherit; }
 .user-top-progress-spinner { width:17px; height:17px; flex:none; border:2px solid #cfe3d9; border-top-color:var(--green); border-radius:50%; animation:userProgressSpin .75s linear infinite; }
 .user-top-progress-track { height:3px; margin-top:10px; overflow:hidden; border-radius:999px; background:#e3eee9; }
 .user-top-progress-track i { display:block; width:42%; height:100%; border-radius:inherit; background:linear-gradient(90deg,var(--green),#69b394); animation:userProgressMove 1.25s ease-in-out infinite; }
+.user-top-progress.determinate .user-top-progress-track i { animation:none; transition:width .16s linear; }
 @keyframes userProgressSpin { to { transform:rotate(360deg); } }
 @keyframes userProgressMove { 0% { transform:translateX(-110%); } 100% { transform:translateX(340%); } }
 @media (prefers-reduced-motion:reduce) { .user-top-progress-spinner,.user-top-progress-track i { animation-duration:2.4s; } }

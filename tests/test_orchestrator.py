@@ -2894,19 +2894,42 @@ class OrchestratorTests(unittest.TestCase):
         pending_id = "chel_manager_arrival_pending"
         registered_id = "chel_manager_arrival_registered"
         outside_id = "chel_manager_arrival_outside"
+        delayed_id = "chel_manager_arrival_delayed"
+        masterclass_id = "chel_manager_arrival_masterclass"
+        returning_id = "chel_manager_arrival_returning_device"
         technical_id = "chel_manager_arrival_technical"
+        masterclass_link_id = ""
         try:
             db.ensure_user(pending_id, pending=True, from_manager="manager_1")
             db.ensure_user(registered_id, pending=True, from_manager="manager_2")
             db.set_current_chel_id(registered_id)
             db.mark_current_user_registered("anonymous")
             db.ensure_user(outside_id, pending=True, from_manager="manager_1")
+            db.ensure_user(delayed_id, pending=True, from_manager="manager_2")
+            db.ensure_user(masterclass_id, pending=True, from_manager="manager_1")
+            db.ensure_user(returning_id, pending=True, from_manager="manager_1")
             db.ensure_user(technical_id, pending=True, from_manager="manager_1")
-            for chel_id in (pending_id, registered_id, outside_id):
+            for chel_id in (
+                pending_id, registered_id, outside_id, delayed_id, returning_id,
+            ):
                 db.set_current_chel_id(chel_id)
                 db.record_device_access(
                     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0",
                 )
+            db.set_current_chel_id(returning_id)
+            db.record_device_access(
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Firefox/120.0",
+            )
+            db.set_current_chel_id(masterclass_id)
+            link = db.provision_masterclass_access(
+                "7707083893", "ООО Исключаемый мастер-класс", "masterclass_1",
+                "manager-arrival-masterclass-token-2035-0001",
+            )
+            masterclass_link_id = link["id"]
+            db.record_masterclass_access(link["access_token"], masterclass_id)
+            db.record_device_access(
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) Chrome/120.0",
+            )
             with db.connection() as conn:
                 conn.execute(
                     "UPDATE users SET created_at=? WHERE chel_id IN (?,?,?)",
@@ -2920,13 +2943,17 @@ class OrchestratorTests(unittest.TestCase):
                     ("2035-07-13T12:00:00+00:00", outside_id),
                 )
                 conn.execute(
+                    "UPDATE users SET created_at=? WHERE chel_id=?",
+                    ("2035-07-13T12:00:00+00:00", delayed_id),
+                )
+                conn.execute(
                     """UPDATE user_device_stats
                     SET first_seen_at=?, last_seen_at=?
-                    WHERE chel_id IN (?,?)""",
+                    WHERE chel_id IN (?,?,?)""",
                     (
                         "2035-07-14T12:00:00+00:00",
                         "2035-07-14T12:00:00+00:00",
-                        pending_id, registered_id,
+                        pending_id, registered_id, delayed_id,
                     ),
                 )
                 conn.execute(
@@ -2938,18 +2965,72 @@ class OrchestratorTests(unittest.TestCase):
                         outside_id,
                     ),
                 )
+                conn.execute(
+                    """UPDATE user_device_stats
+                    SET first_seen_at=?, last_seen_at=?
+                    WHERE chel_id=? AND browser='Chrome'""",
+                    (
+                        "2035-07-13T12:00:00+00:00",
+                        "2035-07-13T12:00:00+00:00",
+                        returning_id,
+                    ),
+                )
+                conn.execute(
+                    """UPDATE user_device_stats
+                    SET first_seen_at=?, last_seen_at=?
+                    WHERE chel_id=? AND browser='Firefox'""",
+                    (
+                        "2035-07-14T12:00:00+00:00",
+                        "2035-07-14T12:00:00+00:00",
+                        returning_id,
+                    ),
+                )
+                conn.execute(
+                    """UPDATE user_device_stats
+                    SET first_seen_at=?, last_seen_at=? WHERE chel_id=?""",
+                    (
+                        "2035-07-14T12:00:00+00:00",
+                        "2035-07-14T12:00:00+00:00",
+                        masterclass_id,
+                    ),
+                )
+                conn.execute(
+                    """UPDATE masterclass_access_users
+                    SET first_seen_at=?, last_seen_at=? WHERE chel_id=?""",
+                    (
+                        "2035-07-14T11:59:59+00:00",
+                        "2035-07-14T11:59:59+00:00",
+                        masterclass_id,
+                    ),
+                )
                 conn.commit()
 
             report = db.admin_manager_first_arrivals("2035-07-14", "2035-07-14")
             managers = {item["from_manager"]: item for item in report["managers"]}
-            self.assertEqual(report["total_users"], 2)
-            self.assertEqual(report["attributed_users"], 2)
+            self.assertEqual(report["total_users"], 3)
+            self.assertEqual(report["attributed_users"], 3)
             self.assertEqual(managers["manager_1"]["users"], 1)
-            self.assertEqual(managers["manager_2"]["users"], 1)
+            self.assertEqual(managers["manager_2"]["users"], 2)
+            self.assertEqual(
+                db.admin_first_arrival_count(
+                    "30", "2035-07-14", "2035-07-14",
+                ),
+                3,
+            )
         finally:
-            for chel_id in (pending_id, registered_id, outside_id, technical_id):
+            for chel_id in (
+                pending_id, registered_id, outside_id, delayed_id,
+                masterclass_id, returning_id, technical_id,
+            ):
                 db.set_current_chel_id(chel_id)
                 db.reset_current_user()
+            if masterclass_link_id:
+                with db.connection() as conn:
+                    conn.execute(
+                        "DELETE FROM masterclass_access_links WHERE id=?",
+                        (masterclass_link_id,),
+                    )
+                    conn.commit()
             db.ensure_user("chel_test_default")
             db.set_current_chel_id("chel_test_default")
 
@@ -4494,14 +4575,14 @@ class OrchestratorTests(unittest.TestCase):
         self.assertIn("controllerchange", script)
         self.assertIn("url.pathname.startsWith('/api/')", worker)
         self.assertIn("url.pathname.startsWith('/auth/')", worker)
-        self.assertIn("consilium-shell-v196", worker)
+        self.assertIn("consilium-shell-v200", worker)
         self.assertIn("fetch(request)", worker)
-        self.assertIn("/static/styles.css?v=20261021-entry-route-fix-v35", index)
+        self.assertIn("/static/styles.css?v=20261022-download-progress-v39", index)
         self.assertIn("/static/rich-text.2bf1f5fab764.css", index)
         self.assertTrue((project_root / "static" / "styles.07ffaefb4795.css").is_file())
         self.assertTrue((project_root / "static" / "rich-text.2bf1f5fab764.css").is_file())
-        self.assertIn("/static/app.js?v=20261021-entry-route-fix-v35", index)
-        self.assertIn("/static/metrika.js?v=20261021-entry-route-fix-v35", index)
+        self.assertIn("/static/app.js?v=20261022-download-progress-v39", index)
+        self.assertIn("/static/metrika.js?v=20261022-download-progress-v39", index)
         self.assertIn("function safeUrl(value)", script)
         self.assertIn("error.code === 'http_404'", script)
         self.assertIn("fallback && fallback.id !== id", script)
@@ -4590,7 +4671,7 @@ class OrchestratorTests(unittest.TestCase):
         main = (project_root / "backend" / "main.py").read_text(encoding="utf-8")
         config = (project_root / "backend" / "config.py").read_text(encoding="utf-8")
 
-        self.assertIn('src="/static/metrika.js?v=20261021-entry-route-fix-v35"', index)
+        self.assertIn('src="/static/metrika.js?v=20261022-download-progress-v39"', index)
         self.assertIn('YANDEX_METRIKA_COUNTER_ID', config)
         self.assertIn('path == "/api/public-config"', main)
         self.assertIn('"metrika.js"', main)
@@ -5853,7 +5934,7 @@ class OrchestratorTests(unittest.TestCase):
                     "role": "assistant",
                     "content": (
                         "Заявка №43817 отправлена. Ожидайте ответа специалиста — "
-                        "психолог свяжется с вами для согласования времени онлайн-встречи."
+                        "психолог свяжется с вами для согласования времени и формата сессии."
                     ),
                 },
             ) as add_message,

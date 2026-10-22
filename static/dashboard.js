@@ -704,7 +704,7 @@ function renderStaff(items) {
     const userIds = Array.isArray(item.user_chel_ids) ? item.user_chel_ids : [];
     const roleLabel = item.role === 'doctor' ? 'Врач-специалист' : item.role === 'psychologist' ? 'Психолог' : 'Менеджер';
     const requestTitle = item.role === 'doctor' ? 'Расшифровки и консультации' : item.role === 'psychologist' ? 'Заявки на сессии' : 'Новые обращения';
-    const requestHint = item.role === 'doctor' ? 'Новые расшифровки анализов и оплаченные консультации' : item.role === 'psychologist' ? 'Новые заявки на онлайн-встречи с психологом' : 'Сигнал при каждом новом обращении';
+    const requestHint = item.role === 'doctor' ? 'Новые расшифровки анализов и оплаченные консультации' : item.role === 'psychologist' ? 'Новые заявки на сессии с психологом' : 'Сигнал при каждом новом обращении';
     const messageTitle = item.role === 'doctor' ? 'Сообщения в активных расшифровках' : item.role === 'psychologist' ? 'Сообщения в чатах психолога' : 'Сообщения без ИИ';
     const messageHint = item.role === 'doctor' ? 'Только из чатов, переданных этому врачу' : item.role === 'psychologist' ? 'Только из заявок, переданных психологам' : 'Сигнал, когда пользователь ждёт человека';
     const userIdBlock = userIds.length
@@ -1311,7 +1311,8 @@ function renderAnalytics(data) {
   const summary = $('#analyticsSummary');
   summary.replaceChildren();
   for (const [index,[label,value,note]] of [
-    ['Пользователи',data.summary.users,'завершили выбор регистрации'],
+    ['Новые пользователи',data.summary.new_users,'первый вход · без мастер-классов'],
+    ['Завершили регистрацию',data.summary.users,'выбрали способ входа'],
     ['Посетители',data.summary.visitors,'включая экран входа'],
     ['Сессии',data.summary.sessions,'визиты в сервис'],
     ['События',data.summary.events,'технические действия'],
@@ -1500,8 +1501,8 @@ function metric2PreviewMarkup(screen, large = false, suppliedData = null) {
   else if (kind === 'psychology_chat') content = `<small>● ПСИХОЛОГИЧЕСКАЯ ПОДДЕРЖКА</small><b>Чат с Витой</b><p>Отдельный диалог после мастер-класса. Здесь можно обсудить эмоциональное состояние и получить следующий небольшой шаг.</p><span class="metric2-mock-info"><b>Сессии с психологом</b><small>Первая 30-минутная консультация бесплатна.</small></span><span class="metric2-mock-input">Напишите сообщение…</span>`;
   else if (kind === 'psychology_chat_guide') content = `<small>ОБУЧЕНИЕ · 1 ИЗ 4</small><b>Сессии с психологом</b><p>По этой кнопке открываются проведённые и предоплаченные сессии, новая заявка и покупка сессии.</p>${action('Далее')}`;
   else if (kind === 'psychology_sessions') content = `<small>Ψ ПСИХОЛОГИЧЕСКАЯ ПОДДЕРЖКА</small><b>Сессии с психологом</b><p>Сессий проведено: <strong>0</strong> · Сессий предоплачено: <strong>0</strong></p><span class="metric2-mock-info"><b>＋ Новая сессия</b><small>30 минут бесплатно по пакету мастер-класса</small></span>${action('Закрыть',true)}${action('Купить')}`;
-  else if (kind === 'psychology_session_request') content = `<small>НОВАЯ СЕССИЯ</small><b>Оставить заявку?</b><p>После отправки заявки психолог свяжется с пользователем и согласует время онлайн-встречи.</p>${action('Да, оставить заявку')}${action('Отмена',true)}`;
-  else if (kind === 'psychology_session_packages') content = `<small>СЕССИЯ С ПСИХОЛОГОМ</small><b>Покупка сессии</b><p>Одна онлайн-встреча продолжительностью 60 минут.</p><span class="metric2-mock-info"><b>1 сессия · 3 500 ₽</b><small>60 минут</small></span>${action('Продолжить к оплате')}`;
+  else if (kind === 'psychology_session_request') content = `<small>НОВАЯ СЕССИЯ</small><b>Оставить заявку?</b><p>После отправки заявки психолог свяжется с пользователем и согласует время и формат.</p>${action('Да, оставить заявку')}${action('Отмена',true)}`;
+  else if (kind === 'psychology_session_packages') content = `<small>СЕССИЯ С ПСИХОЛОГОМ</small><b>Покупка сессии</b><p>Одна сессия продолжительностью 60 минут в согласованном формате.</p><span class="metric2-mock-info"><b>1 сессия · 3 500 ₽</b><small>60 минут</small></span>${action('Продолжить к оплате')}`;
   else if (kind === 'psychology_session_payment') content = `<small>ПСИХОЛОГИЧЕСКАЯ ПОДДЕРЖКА</small><b>Оплата сессии</b><p>Одна 60-минутная сессия будет добавлена в баланс после подтверждения оплаты.</p><span class="metric2-mock-input">Электронная почта для чека</span>${action('Оплатить')}${action('Назад',true)}`;
   else if (kind === 'psychology_session_payment_success') content = `<small>✓ СЕССИЯ ОПЛАЧЕНА</small><b>Сессия добавлена</b><p>60-минутная сессия доступна в балансе психологического чата.</p>${action('Оставить заявку')}${action('Вернуться в чат',true)}`;
   else if (kind === 'registration') content = `<div class="metric2-mock-brand"><span>К</span><div><strong>Консилиум</strong><small>Ваше личное пространство здоровья</small></div></div><small>БЕЗ ПАРОЛЯ</small><b>Войдите через удобный мессенджер</b><p>Так анкета, история диалогов и результаты останутся доступны на другом устройстве и после очистки браузера.</p>${messengerAction('➤','Продолжить с Telegram')}${messengerAction('М','Продолжить с MAX')}<span class="metric2-mock-link">Войти анонимно</span><p class="metric2-mock-note">Консилиум не получает пароль от мессенджера. Сохраняется только его технический ID для восстановления доступа.</p>`;

@@ -119,6 +119,16 @@ function safeUrl(value) {
   } catch { return ''; }
 }
 
+function attachmentUrl(value) {
+  try {
+    const raw = String(value || '').trim();
+    if (!raw) return '';
+    const url = new URL(raw, location.origin);
+    if (!url.pathname.startsWith('/api/chat-attachments/')) return '';
+    return `${url.pathname}${url.search}`;
+  } catch { return ''; }
+}
+
 function formatDate(value, includeDate = false) {
   if (!value) return '';
   const date = new Date(value);
@@ -459,9 +469,9 @@ function messageDocuments(metadata) {
     const isImage = mime.startsWith('image/');
     const rawPreview = item.thumbnail_url || '';
     const preview = String(rawPreview).startsWith('data:image/')
-      ? String(rawPreview) : safeUrl(rawPreview);
-    const url = safeUrl(item.url) || preview;
-    const downloadUrl = safeUrl(item.download_url) || safeUrl(item.url) || preview;
+      ? String(rawPreview) : attachmentUrl(rawPreview);
+    const url = attachmentUrl(item.url) || preview;
+    const downloadUrl = attachmentUrl(item.download_url) || attachmentUrl(item.url) || preview;
     const name = item.name || 'Файл';
     const extension = String(name).split('.').pop().toUpperCase();
     const icon = mime === 'application/pdf' ? 'PDF'
@@ -499,14 +509,50 @@ function closeAttachmentViewer() {
   attachmentViewerObjectUrl = '';
 }
 
-async function attachmentBlob(url) {
+function showManagerDownloadProgress(name, percent = null) {
+  const progress = $('#managerDownloadProgress');
+  const hasValue = percent !== null && percent !== undefined && Number.isFinite(Number(percent));
+  const numeric = hasValue ? Number(percent) : 0;
+  progress.classList.remove('hidden');
+  progress.classList.toggle('determinate', hasValue);
+  progress.setAttribute('aria-busy', 'true');
+  $('#managerDownloadProgressText').textContent = hasValue
+    ? `Скачиваем «${name}» — ${Math.round(numeric)}%`
+    : `Скачиваем «${name}»…`;
+  if (hasValue) {
+    progress.querySelector('i b').style.width = `${Math.max(0, Math.min(100, numeric))}%`;
+  }
+}
+
+function hideManagerDownloadProgress() {
+  const progress = $('#managerDownloadProgress');
+  progress.classList.add('hidden');
+  progress.classList.remove('determinate');
+  progress.setAttribute('aria-busy', 'false');
+  progress.querySelector('i b').style.removeProperty('width');
+}
+
+async function attachmentBlob(url, onProgress = null) {
   const response = await fetch(url, {credentials:'same-origin', cache:'no-store'});
   if (!response.ok) {
     let message = 'Не удалось загрузить файл';
     try { message = (await response.json()).detail || message; } catch {}
     throw new Error(message);
   }
-  return response.blob();
+  if (typeof onProgress !== 'function' || !response.body) return response.blob();
+  const total = Number(response.headers.get('Content-Length')) || 0;
+  const reader = response.body.getReader();
+  const chunks = [];
+  let received = 0;
+  onProgress(total ? 0 : null);
+  while (true) {
+    const {done, value} = await reader.read();
+    if (done) break;
+    chunks.push(value);
+    received += value.byteLength;
+    onProgress(total ? received / total * 100 : null);
+  }
+  return new Blob(chunks, {type:response.headers.get('Content-Type') || 'application/octet-stream'});
 }
 
 async function openAttachmentViewer(button) {
@@ -556,10 +602,15 @@ async function openAttachmentViewer(button) {
 
 async function downloadAttachment(button) {
   const original = button.textContent;
+  const name = button.dataset.attachmentName || 'файл';
   button.disabled = true;
-  button.textContent = 'Загружаем…';
+  button.textContent = 'Скачиваем…';
+  showManagerDownloadProgress(name);
   try {
-    const blob = await attachmentBlob(button.dataset.attachmentDownload);
+    const blob = await attachmentBlob(
+      button.dataset.attachmentDownload,
+      percent => showManagerDownloadProgress(name, percent),
+    );
     const objectUrl = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = objectUrl;
@@ -568,11 +619,14 @@ async function downloadAttachment(button) {
     link.click();
     link.remove();
     setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
+    button.textContent = 'Скачано ✓';
   } catch (error) {
+    button.textContent = 'Ошибка';
     toast(error.message, true);
   } finally {
+    hideManagerDownloadProgress();
     button.disabled = false;
-    button.textContent = original;
+    setTimeout(() => { if (button.isConnected) button.textContent = original; }, 1200);
   }
 }
 

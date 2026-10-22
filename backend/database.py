@@ -29,8 +29,8 @@ MASTERCLASS_PSYCHOLOGY_WELCOME = (
     "простую технику на сейчас.\n\n"
     "Напишите как есть, без правильных формулировок: что сейчас беспокоит "
     "больше всего?\n\n"
-    "Если захочется поговорить с живым психологом — первая встреча бесплатна: "
-    "30 минут по видео, можно из дома.\n\n"
+    "Если захочется поговорить с психологом — первая 30-минутная сессия "
+    "бесплатна.\n\n"
     "Если вам прямо сейчас очень плохо или появились мысли причинить себе вред "
     "— напишите об этом, я сразу подскажу, куда обратиться."
 )
@@ -2139,6 +2139,7 @@ def reset_current_user(preserve_identity: bool = False) -> None:
     """Remove user content; optionally preserve a verified external identity."""
     chel_id = current_chel_id()
     with _write_lock, connection() as conn:
+        attachment_items = _user_attachment_items(conn, chel_id)
         # Messages and handoffs are removed by the conversation foreign keys.
         conn.execute("DELETE FROM conversations WHERE chel_id = ?", (chel_id,))
         conn.execute("DELETE FROM memories WHERE chel_id = ?", (chel_id,))
@@ -2152,6 +2153,29 @@ def reset_current_user(preserve_identity: bool = False) -> None:
         if not preserve_identity:
             conn.execute("DELETE FROM users WHERE chel_id = ?", (chel_id,))
         conn.commit()
+    if attachment_items:
+        from . import chat_attachments
+        chat_attachments.delete_public_attachments(attachment_items, chel_id)
+
+
+def _user_attachment_items(conn: sqlite3.Connection, chel_id: str) -> list[dict]:
+    """Collect persisted attachment metadata before cascades remove messages."""
+    rows = conn.execute(
+        """SELECT m.metadata FROM messages m
+        JOIN conversations c ON c.id=m.conversation_id
+        WHERE c.chel_id=?""",
+        (chel_id,),
+    ).fetchall()
+    items: list[dict] = []
+    for row in rows:
+        try:
+            metadata = json.loads(row["metadata"] or "{}")
+        except (TypeError, ValueError, json.JSONDecodeError):
+            continue
+        attachments = metadata.get("attachments", []) if isinstance(metadata, dict) else []
+        if isinstance(attachments, list):
+            items.extend(item for item in attachments if isinstance(item, dict))
+    return items
 
 
 def admin_delete_user_data(chel_id: str) -> dict:
@@ -2174,10 +2198,14 @@ def admin_delete_user_data(chel_id: str) -> dict:
     )
     deleted_by_table: dict[str, int] = {}
     with _write_lock, connection() as conn:
+        attachment_items = _user_attachment_items(conn, chel_id)
         for table in owned_tables:
             cursor = conn.execute(f"DELETE FROM {table} WHERE chel_id = ?", (chel_id,))
             deleted_by_table[table] = max(0, int(cursor.rowcount or 0))
         conn.commit()
+    if attachment_items:
+        from . import chat_attachments
+        chat_attachments.delete_public_attachments(attachment_items, chel_id)
     return {
         "chel_id": chel_id,
         "deleted": sum(deleted_by_table.values()),
@@ -3483,11 +3511,12 @@ def admin_manager_first_arrivals(date_from: str = "", date_to: str = "") -> dict
     """Aggregate new users who actually opened an application page.
 
     ``users`` rows can also be created by API and integration requests, so
-    ``created_at`` alone overcounts arrivals.  ``user_device_stats`` is written
-    only when a non-bot browser receives an application page.  Requiring its
-    first visit in the same period keeps pending visitors (registration is not
-    required) while excluding technical identities.  The immutable
-    ``from_manager`` value preserves the original manager attribution.
+    ``created_at`` is not an arrival signal. ``user_device_stats`` is written
+    only when a non-bot browser receives an application page. Its first visit
+    determines the arrival period, including people whose identity was
+    provisioned earlier by a messenger. Registration is not required. The
+    immutable ``from_manager`` value preserves the original attribution.
+    Users whose initial route is a master class are excluded.
     """
     date_from = str(date_from or "").strip()
     date_to = str(date_to or "").strip()
@@ -3501,31 +3530,33 @@ def admin_manager_first_arrivals(date_from: str = "", date_to: str = "") -> dict
 
     where = "IS_STATS_USER(u.chel_id) = 1"
     params: list[str] = []
-    device_where = ["d.chel_id = u.chel_id"]
-    device_params: list[str] = []
+    first_open_sql = (
+        "(SELECT MIN(d.first_seen_at) FROM user_device_stats d "
+        "WHERE d.chel_id = u.chel_id)"
+    )
     report_timezone = timezone(timedelta(hours=3))
     if custom_from:
         from_boundary = datetime.combine(
             custom_from, datetime.min.time(), tzinfo=report_timezone,
         ).astimezone(timezone.utc).isoformat()
-        where += " AND u.created_at >= ?"
+        where += f" AND {first_open_sql} >= ?"
         params.append(from_boundary)
-        device_where.append("d.first_seen_at >= ?")
-        device_params.append(from_boundary)
     if custom_to:
         to_boundary = datetime.combine(
             custom_to + timedelta(days=1), datetime.min.time(), tzinfo=report_timezone,
         ).astimezone(timezone.utc).isoformat()
-        where += " AND u.created_at < ?"
+        where += f" AND {first_open_sql} < ?"
         params.append(to_boundary)
-        device_where.append("d.first_seen_at < ?")
-        device_params.append(to_boundary)
-    where += (
-        " AND EXISTS (SELECT 1 FROM user_device_stats d WHERE "
-        + " AND ".join(device_where)
-        + ")"
-    )
-    params.extend(device_params)
+    where += f" AND {first_open_sql} IS NOT NULL"
+    # A direct master-class URL is recorded immediately before the page open;
+    # choosing that route on the generic landing is recorded shortly after it.
+    # Keep a bounded window so a long-standing regular user who visits a master
+    # class much later does not disappear from historical newcomer statistics.
+    where += f""" AND NOT EXISTS (
+        SELECT 1 FROM masterclass_access_users m
+        WHERE m.chel_id = u.chel_id
+          AND julianday(m.first_seen_at) <= julianday({first_open_sql}) + 1
+    )"""
 
     with connection() as conn:
         total_users = int(conn.execute(
@@ -3555,6 +3586,33 @@ def admin_manager_first_arrivals(date_from: str = "", date_to: str = "") -> dict
             "users": int(row["users"] or 0),
         } for row in rows],
     }
+
+
+def admin_first_arrival_count(
+    period: str = "30", date_from: str = "", date_to: str = "",
+) -> int:
+    """Count verified first application opens in the selected Moscow period.
+
+    The result deliberately ignores device, source and registration filters:
+    this is the absolute number of entirely new people requested by the
+    dashboard card. Explicit dates replace the ready-made period.
+    """
+    period = str(period or "30").strip().lower()
+    date_from = str(date_from or "").strip()
+    date_to = str(date_to or "").strip()
+    if not date_from and not date_to:
+        if period != "all":
+            today = datetime.now(timezone(timedelta(hours=3))).date()
+            if period == "today":
+                days = 1
+            else:
+                try:
+                    days = max(1, min(3650, int(period)))
+                except ValueError as exc:
+                    raise ValueError("Неизвестный период статистики") from exc
+            date_from = (today - timedelta(days=days - 1)).isoformat()
+            date_to = today.isoformat()
+    return int(admin_manager_first_arrivals(date_from, date_to)["total_users"])
 
 
 def _admin_date(value: str, field_name: str) -> str:
@@ -4201,7 +4259,7 @@ def enqueue_manager_notifications(
             title = "Успешная оплата сессии"
             body = (
                 f"{name} успешно оплатил сессию с психологом на сумму {amount_label}. "
-                "Откройте чат пользователя, чтобы согласовать онлайн-встречу."
+                "Откройте чат пользователя, чтобы согласовать время и формат сессии."
             )
             preference = "notify_successful_payments"
         elif event_type == "psychology_session_requested":
@@ -4211,8 +4269,8 @@ def enqueue_manager_notifications(
             title = f"Заявка № {visible_request_number} — новая сессия"
             body = (
                 f"Номер заявки: {visible_request_number}. "
-                f"{name} оставил заявку на онлайн-встречу с психологом. "
-                "Откройте чат, чтобы связаться с пользователем и согласовать время."
+                f"{name} оставил заявку на сессию с психологом. "
+                "Откройте чат, чтобы согласовать время и формат."
             )
             body += f"\n\n{client_card}"
             preference = "notify_new_requests"
@@ -6251,7 +6309,7 @@ def manager_delete_message(
     now = utc_now()
     with _write_lock, connection() as conn:
         conversation = conn.execute(
-            """SELECT id FROM conversations WHERE id = ?
+            """SELECT id,chel_id FROM conversations WHERE id = ?
             AND COALESCE(human_recipient_role, 'manager') = ?""",
             (conversation_id, staff_role),
         ).fetchone()
@@ -6301,6 +6359,12 @@ def manager_delete_message(
             ),
         )
         conn.commit()
+    attachments = metadata.get("attachments", []) if isinstance(metadata, dict) else []
+    if isinstance(attachments, list) and attachments:
+        from . import chat_attachments
+        chat_attachments.delete_public_attachments(
+            attachments, str(conversation["chel_id"] or ""),
+        )
     return {
         "conversation_id": conversation_id,
         "message_id": message_id,

@@ -640,18 +640,36 @@ async function api(path, options = {}) {
 let userProgressOperations = 0;
 let userProgressTimer = null;
 
-function beginUserProgress(message = 'Загружаем данные…') {
+function beginUserProgress(message = 'Загружаем данные…', immediate = false) {
   userProgressOperations += 1;
   const text = $('#userTopProgressText');
   if (text) text.textContent = message;
+  const progress = $('#userTopProgress');
   if (userProgressTimer) clearTimeout(userProgressTimer);
+  if (immediate && progress) {
+    progress.classList.remove('hidden');
+    progress.setAttribute('aria-busy', 'true');
+    return;
+  }
   userProgressTimer = setTimeout(() => {
-    const progress = $('#userTopProgress');
     if (progress && userProgressOperations > 0) {
       progress.classList.remove('hidden');
       progress.setAttribute('aria-busy', 'true');
     }
   }, 450);
+}
+
+function updateUserProgress(value, message = '') {
+  const progress = $('#userTopProgress');
+  if (!progress) return;
+  const bar = progress.querySelector('.user-top-progress-track i');
+  const hasValue = value !== null && value !== undefined && Number.isFinite(Number(value));
+  const numeric = hasValue ? Number(value) : 0;
+  progress.classList.toggle('determinate', hasValue);
+  if (bar && hasValue) {
+    bar.style.width = `${Math.max(0, Math.min(100, numeric))}%`;
+  }
+  if (message) $('#userTopProgressText').textContent = message;
 }
 
 function endUserProgress() {
@@ -662,7 +680,10 @@ function endUserProgress() {
   const progress = $('#userTopProgress');
   if (progress) {
     progress.classList.add('hidden');
+    progress.classList.remove('determinate');
     progress.setAttribute('aria-busy', 'false');
+    const bar = progress.querySelector('.user-top-progress-track i');
+    if (bar) bar.style.removeProperty('width');
   }
 }
 
@@ -1621,7 +1642,7 @@ function openMessengerLinkModal({ source = 'menu', justLinked = '' } = {}) {
     : weightControl
       ? 'Привяжите Telegram или MAX, чтобы получать напоминания о приёмах пищи и не терять дневник питания.'
     : psychologySessionRequest
-      ? 'Для заявки на платную онлайн-сессию привяжите Telegram или MAX — психологу понадобится способ связаться с вами и согласовать время.'
+      ? 'Для заявки на платную сессию привяжите Telegram или MAX — психологу понадобится способ связаться с вами и согласовать детали.'
     : linkedMessengerProviders().size
       ? 'Добавьте ещё один способ входа или проверьте уже подключённые мессенджеры.'
       : 'Сохраните доступ к анкете, выбранным обследованиям, результатам и расшифровкам на любом устройстве.';
@@ -1799,6 +1820,18 @@ function safeUrl(value) {
     if (!raw) return '';
     const url = new URL(raw, location.origin);
     return ['http:', 'https:'].includes(url.protocol) ? url.href : '';
+  } catch {
+    return '';
+  }
+}
+
+function attachmentUrl(value) {
+  try {
+    const raw = String(value || '').trim();
+    if (!raw) return '';
+    const url = new URL(raw, location.origin);
+    if (!url.pathname.startsWith('/api/chat-attachments/')) return '';
+    return `${url.pathname}${url.search}`;
   } catch {
     return '';
   }
@@ -3253,7 +3286,7 @@ function renderPsychologySessionPayment() {
   $('#onboardingContent').innerHTML = `
     <span class="onboarding-kicker">Психологическая поддержка</span>
     <h1>${testPayment ? 'Тестовая оплата сессии' : 'Оплата сессии'}</h1>
-    <p class="onboarding-lead">${testPayment ? 'Это тестовый переход из Метрики 2.0. Деньги не списываются, ЮKassa не открывается.' : 'После подтверждения оплаты одна 60-минутная сессия появится в вашем балансе. Заявку на онлайн-встречу можно будет оставить в меню психологического чата.'}</p>
+    <p class="onboarding-lead">${testPayment ? 'Это тестовый переход из Метрики 2.0. Деньги не списываются, ЮKassa не открывается.' : 'После подтверждения оплаты одна 60-минутная сессия появится в вашем балансе. Заявку можно будет оставить в меню психологического чата, а формат согласовать с психологом.'}</p>
     <section class="consultation-payment-card"><header><strong>${countLabel} с психологом · 60 минут</strong><b>${totalLabel} ₽</b></header><p>История сессий и доступный баланс сохраняются в меню психологического чата.</p></section>
     ${emailField}
     ${legalConsents}
@@ -3331,7 +3364,7 @@ function renderPsychologySessionPaymentSuccess(order) {
       <span class="onboarding-kicker">Сессия оплачена</span>
       <h1>${countLabel} добавлена</h1>
       <p class="onboarding-lead">Оплата ${packageInfo.totalPrice.toLocaleString('ru-RU')} ₽ подтверждена. 60-минутная сессия доступна в балансе психологического чата.</p>
-      <section class="payment-find-guide"><strong>Как оставить заявку</strong><p>Откройте список сессий в психологическом чате и нажмите «Новая сессия». После этого психолог свяжется с вами для согласования времени онлайн-встречи.</p></section>
+      <section class="payment-find-guide"><strong>Как оставить заявку</strong><p>Откройте список сессий в психологическом чате и нажмите «Новая сессия». После этого психолог свяжется с вами для согласования времени и формата.</p></section>
       <div class="onboarding-actions"><button type="button" class="onboarding-next" data-onboarding-action="open-psychology-sessions-after-payment">Оставить заявку</button><button type="button" class="onboarding-back" data-onboarding-action="open-psychology-session-chat">Вернуться в чат</button></div>
     </div>`;
   trackMasterclassScreen('psychology_session_payment_success');
@@ -3983,10 +4016,10 @@ function chatAttachmentMarkup(item) {
   const isImage = mime.startsWith('image/');
   const rawPreview = item.thumbnail_url || '';
   const preview = isImage && String(rawPreview).startsWith('data:image/')
-    ? String(rawPreview) : safeUrl(rawPreview);
-  const originalUrl = safeUrl(item.url);
+    ? String(rawPreview) : attachmentUrl(rawPreview);
+  const originalUrl = attachmentUrl(item.url);
   const openUrl = originalUrl || preview;
-  const downloadUrl = safeUrl(item.download_url) || originalUrl || preview;
+  const downloadUrl = attachmentUrl(item.download_url) || originalUrl || preview;
   const name = item.name || 'Файл';
   const actions = openUrl || downloadUrl
     ? `<div class="message-attachment-actions">
@@ -4021,14 +4054,27 @@ function closeAttachmentViewer() {
   attachmentViewerObjectUrl = '';
 }
 
-async function attachmentBlob(url) {
+async function attachmentBlob(url, onProgress = null) {
   const response = await fetch(url, {credentials:'same-origin', cache:'no-store'});
   if (!response.ok) {
     let message = 'Не удалось загрузить файл';
     try { message = (await response.json()).detail || message; } catch {}
     throw new Error(message);
   }
-  return response.blob();
+  if (typeof onProgress !== 'function' || !response.body) return response.blob();
+  const total = Number(response.headers.get('Content-Length')) || 0;
+  const reader = response.body.getReader();
+  const chunks = [];
+  let received = 0;
+  onProgress(total ? 0 : null, received, total);
+  while (true) {
+    const {done, value} = await reader.read();
+    if (done) break;
+    chunks.push(value);
+    received += value.byteLength;
+    onProgress(total ? received / total * 100 : null, received, total);
+  }
+  return new Blob(chunks, {type:response.headers.get('Content-Type') || 'application/octet-stream'});
 }
 
 async function openAttachmentViewer(button) {
@@ -4078,10 +4124,16 @@ async function openAttachmentViewer(button) {
 
 async function downloadAttachment(button) {
   const original = button.textContent;
+  const name = button.dataset.attachmentName || 'файл';
   button.disabled = true;
-  button.textContent = 'Загружаем…';
+  button.textContent = 'Скачиваем…';
+  beginUserProgress(`Скачиваем «${name}»…`, true);
   try {
-    const blob = await attachmentBlob(button.dataset.attachmentDownload);
+    const blob = await attachmentBlob(button.dataset.attachmentDownload, percent => {
+      updateUserProgress(percent, Number.isFinite(percent)
+        ? `Скачиваем «${name}» — ${Math.round(percent)}%`
+        : `Скачиваем «${name}»…`);
+    });
     const objectUrl = URL.createObjectURL(blob);
     const link = document.createElement('a');
     link.href = objectUrl;
@@ -4090,11 +4142,14 @@ async function downloadAttachment(button) {
     link.click();
     link.remove();
     setTimeout(() => URL.revokeObjectURL(objectUrl), 1000);
+    button.textContent = 'Скачано ✓';
   } catch (error) {
+    button.textContent = 'Ошибка';
     addSystemError(error.message);
   } finally {
+    endUserProgress();
     button.disabled = false;
-    button.textContent = original;
+    setTimeout(() => { if (button.isConnected) button.textContent = original; }, 1200);
   }
 }
 
@@ -4735,7 +4790,7 @@ const PSYCHOLOGY_CHAT_GUIDE_SLIDES = [
   {
     target:'#psychologySessionsButton',
     title:'Сессии с психологом',
-    text:'Здесь находится история онлайн-встреч, остаток предоплаченных сессий и кнопка новой заявки. Первая 30-минутная консультация бесплатна и входит в пакет мастер-класса.',
+    text:'Здесь находится история сессий, остаток предоплаченных сессий и кнопка новой заявки. Первая 30-минутная сессия бесплатна и входит в пакет мастер-класса.',
   },
   {
     target:'#messageInput',
@@ -4948,7 +5003,7 @@ function closePsychologySessions() {
 function renderPsychologyPackages() {
   const selected = psychologySessionPackage();
   $('#psychologyPackagesList').innerHTML = `<button type="button" class="psychology-package-option selected" data-psychology-package="1" role="radio" aria-checked="true">
-    <i aria-hidden="true">✓</i><span><strong>1 сессия с психологом</strong><small>Онлайн-встреча · 60 минут</small></span><b>${selected.totalPrice.toLocaleString('ru-RU')} ₽</b>
+    <i aria-hidden="true">✓</i><span><strong>1 сессия с психологом</strong><small>Согласованный формат · 60 минут</small></span><b>${selected.totalPrice.toLocaleString('ru-RU')} ₽</b>
   </button>`;
   $('#psychologyPackageTotal').innerHTML = `<span>К оплате за 1 сессию</span><strong>${selected.totalPrice.toLocaleString('ru-RU')} ₽</strong>`;
   $('#psychologyPackagesContinue').textContent = `Купить · ${selected.totalPrice.toLocaleString('ru-RU')} ₽`;
@@ -4993,14 +5048,14 @@ function openPsychologySessionRequest() {
   $('#psychologySessionRequestError').classList.add('hidden');
   if (pending) {
     $('#psychologySessionRequestTitle').textContent = 'Заявка уже отправлена';
-    $('#psychologySessionRequestText').textContent = `Заявка № ${pending.request_number || '—'} отправлена. Ожидайте ответа специалиста — психолог свяжется с вами, чтобы согласовать удобное время онлайн-встречи.`;
+    $('#psychologySessionRequestText').textContent = `Заявка № ${pending.request_number || '—'} отправлена. Ожидайте ответа специалиста — психолог свяжется с вами, чтобы согласовать время и формат сессии.`;
     button.dataset.mode = 'close';
     button.textContent = 'Понятно';
     $('#psychologySessionRequestCancel').classList.add('hidden');
     managerButton.classList.add('hidden');
   } else if (paidRequestNeedsMessenger) {
     $('#psychologySessionRequestTitle').textContent = 'Для сессии нужен способ связи';
-    $('#psychologySessionRequestText').textContent = 'Чтобы психолог смог согласовать дату и время платной онлайн-сессии, привяжите Telegram или MAX. Если вы не хотите привязывать мессенджер, позовите менеджера в чат — он поможет обсудить другой способ связи.';
+    $('#psychologySessionRequestText').textContent = 'Чтобы психолог смог согласовать платную сессию, привяжите Telegram или MAX. Если вы не хотите привязывать мессенджер, позовите менеджера в чат — он поможет обсудить другой способ связи.';
     button.dataset.mode = 'link_messenger';
     button.textContent = 'Привязать Telegram или MAX';
     $('#psychologySessionRequestCancel').classList.remove('hidden');
@@ -5009,15 +5064,15 @@ function openPsychologySessionRequest() {
     const free = Boolean(summary.free_available);
     $('#psychologySessionRequestTitle').textContent = 'Оставить заявку на сессию?';
     $('#psychologySessionRequestText').textContent = free
-      ? 'Пообщайтесь с дипломированным психологом. 30-минутная сессия бесплатна и входит в ваш пакет мастер-класса. После отправки заявки психолог свяжется с вами и согласует удобное время онлайн-встречи.'
-      : 'Будет зарезервирована одна предоплаченная 60-минутная сессия. После отправки заявки психолог свяжется с вами и согласует удобное время онлайн-встречи.';
+      ? 'Пообщайтесь с дипломированным психологом. 30-минутная сессия бесплатна и входит в ваш пакет мастер-класса. После отправки заявки психолог свяжется с вами и согласует время и формат.'
+      : 'Будет зарезервирована одна предоплаченная 60-минутная сессия. После отправки заявки психолог свяжется с вами и согласует время и формат.';
     button.dataset.mode = 'request';
     button.textContent = 'Да, оставить заявку';
     $('#psychologySessionRequestCancel').classList.remove('hidden');
     managerButton.classList.add('hidden');
   } else {
     $('#psychologySessionRequestTitle').textContent = 'Нужна оплаченная сессия';
-    $('#psychologySessionRequestText').textContent = 'Бесплатная консультация уже использована. Купите одну 60-минутную сессию, после чего сможете оставить заявку на онлайн-встречу.';
+    $('#psychologySessionRequestText').textContent = 'Бесплатная сессия уже использована. Купите одну 60-минутную сессию, после чего сможете оставить заявку.';
     button.dataset.mode = 'purchase';
     button.textContent = 'Купить сессию';
     $('#psychologySessionRequestCancel').classList.remove('hidden');
@@ -7422,35 +7477,86 @@ async function deleteBodySymptom(id, sourceButton = null) {
   }
 }
 
-async function addAttachments(files) {
-  for (const file of [...files].slice(0, 3 - state.attachments.length)) {
-    if (file.size > 4 * 1024 * 1024) { addSystemError(`${file.name}: файл больше 4 МБ`); continue; }
-    const dataUrl = await new Promise((resolve, reject) => { const reader = new FileReader(); reader.onload = () => resolve(reader.result); reader.onerror = reject; reader.readAsDataURL(file); });
-    const text = file.type.startsWith('text/') ? await file.text() : '';
-    const thumbnailUrl = file.type.startsWith('image/') ? await createImageThumbnail(dataUrl) : '';
-    state.attachments.push({ name:file.name, type:file.type || 'text/plain', data_url:dataUrl, thumbnail_url:thumbnailUrl, text:text.slice(0,12000) });
-  }
-  renderAttachments();
+const ATTACHMENT_MAX_BYTES = 4 * 1024 * 1024;
+const PHOTO_SOURCE_MAX_BYTES = 30 * 1024 * 1024;
+
+function readFileAsDataUrl(file) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(reader.result);
+    reader.onerror = () => reject(new Error('Не удалось прочитать файл'));
+    reader.readAsDataURL(file);
+  });
 }
 
-function createImageThumbnail(dataUrl) {
-  return new Promise(resolve => {
+function canvasBlob(canvas, quality) {
+  return new Promise(resolve => canvas.toBlob(resolve, 'image/webp', quality));
+}
+
+async function compressPhotoForUpload(file) {
+  if (file.size > PHOTO_SOURCE_MAX_BYTES) {
+    throw new Error('фотография больше 30 МБ');
+  }
+  if (file.type === 'image/gif') {
+    throw new Error('GIF больше 4 МБ нельзя уменьшить без потери анимации');
+  }
+  const objectUrl = URL.createObjectURL(file);
+  try {
     const image = new Image();
-    image.onload = () => {
-      const maxSide = 360;
-      const scale = Math.min(1, maxSide / Math.max(image.naturalWidth || 1, image.naturalHeight || 1));
+    await new Promise((resolve, reject) => {
+      image.onload = resolve;
+      image.onerror = () => reject(new Error('не удалось прочитать фотографию'));
+      image.src = objectUrl;
+    });
+    const attempts = [
+      {side:1920, quality:.82}, {side:1600, quality:.74},
+      {side:1280, quality:.68}, {side:1080, quality:.62},
+    ];
+    let blob = null;
+    for (const attempt of attempts) {
+      const scale = Math.min(1, attempt.side / Math.max(image.naturalWidth || 1, image.naturalHeight || 1));
       const canvas = document.createElement('canvas');
       canvas.width = Math.max(1, Math.round(image.naturalWidth * scale));
       canvas.height = Math.max(1, Math.round(image.naturalHeight * scale));
       const context = canvas.getContext('2d');
-      context.fillStyle = '#ffffff';
-      context.fillRect(0, 0, canvas.width, canvas.height);
       context.drawImage(image, 0, 0, canvas.width, canvas.height);
-      resolve(canvas.toDataURL('image/jpeg', .72));
+      blob = await canvasBlob(canvas, attempt.quality);
+      if (blob && blob.size <= 3.5 * 1024 * 1024) break;
+    }
+    if (!blob || blob.size > ATTACHMENT_MAX_BYTES) {
+      throw new Error('не удалось уменьшить фотографию до 4 МБ');
+    }
+    return {
+      name: `${String(file.name || 'photo').replace(/\.[^.]+$/, '')}.webp`,
+      type: 'image/webp',
+      data_url: await readFileAsDataUrl(blob),
     };
-    image.onerror = () => resolve('');
-    image.src = dataUrl;
-  });
+  } finally {
+    URL.revokeObjectURL(objectUrl);
+  }
+}
+
+async function addAttachments(files) {
+  for (const file of [...files].slice(0, 3 - state.attachments.length)) {
+    try {
+      const isPhoto = file.type.startsWith('image/');
+      if (file.size > ATTACHMENT_MAX_BYTES && !isPhoto) {
+        throw new Error('файл больше 4 МБ');
+      }
+      const prepared = file.size > ATTACHMENT_MAX_BYTES
+        ? await compressPhotoForUpload(file)
+        : {
+            name:file.name,
+            type:file.type || 'text/plain',
+            data_url:await readFileAsDataUrl(file),
+          };
+      const text = file.type.startsWith('text/') ? await file.text() : '';
+      state.attachments.push({...prepared, text:text.slice(0,12000)});
+    } catch (error) {
+      addSystemError(`${file.name}: ${error.message}`);
+    }
+  }
+  renderAttachments();
 }
 
 function renderAttachments() {

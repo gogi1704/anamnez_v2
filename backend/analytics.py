@@ -823,7 +823,7 @@ def _metric2_screen_definitions() -> list[dict]:
             "title": "Заявка на сессию",
             "stage": "Психологическая поддержка · заявка",
             "kind": "psychology_session_request",
-            "description": "Подтверждение бесплатной 30-минутной консультации или предоплаченной 60-минутной сессии с психологом.",
+            "description": "Подтверждение бесплатной 30-минутной или предоплаченной 60-минутной сессии с психологом в согласованном формате.",
             "parent_id": "psychology_sessions", "flow": "masterclass",
             "legacy_reach": [],
             "actions": [

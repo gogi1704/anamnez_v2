@@ -45,8 +45,20 @@ class VitaAlgorithmTests(unittest.TestCase):
         greeting = db.MASTERCLASS_PSYCHOLOGY_WELCOME
         self.assertIn("Я Вита — ИИ-помощник команды психологов", greeting)
         self.assertIn("Я не человек и не ставлю диагнозов", greeting)
-        self.assertIn("первая встреча бесплатна", greeting)
+        self.assertIn("первая 30-минутная сессия бесплатна", greeting)
+        self.assertNotIn("по видео", greeting)
+        self.assertNotIn("живым психологом", greeting)
         self.assertIn("мысли причинить себе вред", greeting)
+
+    def test_vita_does_not_promise_a_session_format(self):
+        self.assertIn(
+            "Бесплатная и\n  платная сессии могут проходить в любом формате",
+            MASTERCLASS_PSYCHOLOGY_CHAT,
+        )
+        self.assertIn(
+            "Не обещай заранее видео, созвон, переписку\n  или очную встречу",
+            MASTERCLASS_PSYCHOLOGY_CHAT,
+        )
 
     def test_structured_state_is_normalized_and_persisted(self):
         chat = self.create_chat()

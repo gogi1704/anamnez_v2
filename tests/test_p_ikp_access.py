@@ -145,7 +145,8 @@ class IkpAccessTests(unittest.TestCase):
             self.assertEqual(greeting, db.MASTERCLASS_PSYCHOLOGY_WELCOME)
             self.assertIn('Я Вита — ИИ-помощник команды психологов', greeting)
             self.assertIn('Я не человек и не ставлю диагнозов', greeting)
-            self.assertIn('первая встреча бесплатна', greeting)
+            self.assertIn('первая 30-минутная сессия бесплатна', greeting)
+            self.assertNotIn('по видео', greeting)
             self.assertIn('мысли причинить себе вред', greeting)
             self.assertTrue(db.current_masterclass_access()['psychology_chat_started'])
         finally:
@@ -231,7 +232,7 @@ class IkpAccessTests(unittest.TestCase):
         self.assertIn('id="psychologySessionBuyButton"', index)
         self.assertIn('id="psychologyPackagesModal"', index)
         self.assertNotIn("Array.from({length:7}", script)
-        self.assertIn('Онлайн-встреча · 60 минут', script)
+        self.assertIn('Согласованный формат · 60 минут', script)
         self.assertIn('const unitPrice = 3500', script)
         self.assertIn("session_count:psychologySessionPackage().sessions", script)
         self.assertIn("sessionCount:psychologySessionPackage().sessions", script)

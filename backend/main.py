@@ -440,7 +440,9 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
             return self._json(200, {"status": "ok"})
         if path.startswith("/api/chat-attachments/"):
             token = path.removeprefix("/api/chat-attachments/").strip("/")
-            stored = chat_attachments.load(token)
+            query = parse_qs(parsed.query)
+            thumbnail = query.get("thumbnail", [""])[0] == "1"
+            stored = chat_attachments.load(token, thumbnail=thumbnail)
             if not stored:
                 return self._json(404, {"detail": "Вложение не найдено"})
             record, body = stored
@@ -449,7 +451,6 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                 self._ensure_user_context()
                 if record.get("owner_chel_id") != db.current_chel_id():
                     return self._json(404, {"detail": "Вложение не найдено"})
-            query = parse_qs(parsed.query)
             download = query.get("download", [""])[0] == "1"
             disposition = "attachment" if download else "inline"
             safe_ascii = re.sub(r"[^A-Za-z0-9._-]+", "_", str(record.get("name") or "file"))
@@ -794,6 +795,11 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                         background=True,
                     )
                     report["manager_attribution"] = db.admin_manager_attribution(
+                        period,
+                        query.get("date_from", [""])[0],
+                        query.get("date_to", [""])[0],
+                    )
+                    report["summary"]["new_users"] = db.admin_first_arrival_count(
                         period,
                         query.get("date_from", [""])[0],
                         query.get("date_to", [""])[0],
@@ -1938,7 +1944,7 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                         (
                             f"Заявка №{session.get('request_number', '—')} отправлена. "
                             "Ожидайте ответа специалиста — психолог свяжется с вами "
-                            "для согласования времени онлайн-встречи."
+                            "для согласования времени и формата сессии."
                         ),
                         "manager",
                         {
@@ -3300,13 +3306,6 @@ small{{display:block;color:#82918c;text-align:center;margin-top:18px}}
                 "name": str(item.get("name", "file"))[:160], "type": mime,
                 "data_url": data_url, "text": str(item.get("text", ""))[:12000],
             }
-            thumbnail_url = str(item.get("thumbnail_url", ""))
-            if mime.startswith("image/") and thumbnail_url:
-                if not re.match(r"^data:image/(?:jpeg|png|webp);base64,", thumbnail_url):
-                    raise ValueError("Некорректная миниатюра изображения")
-                if len(thumbnail_url) > 350_000:
-                    raise ValueError("Миниатюра изображения слишком большая")
-                validated["thumbnail_url"] = thumbnail_url
             validated.update(chat_attachments.store(validated, db.current_chel_id()))
             result.append(validated)
         return result

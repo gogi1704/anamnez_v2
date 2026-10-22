@@ -9,6 +9,14 @@ body { background:var(--bg); color:var(--ink); font-family:Manrope,Arial,sans-se
 button,input,textarea { font:inherit; }
 button { cursor:pointer; }
 .hidden { display:none!important; }
+.manager-download-progress { position:fixed; z-index:3000; top:max(12px,env(safe-area-inset-top)); left:50%; width:min(460px,calc(100% - 28px)); padding:12px 14px 10px; transform:translateX(-50%); border:1px solid rgba(31,128,98,.22); border-radius:14px; background:rgba(255,255,255,.98); box-shadow:0 14px 38px rgba(21,64,49,.22); }
+.manager-download-progress>div { display:flex; align-items:center; gap:10px; color:var(--green-dark); font-size:12px; }
+.manager-download-progress>div>span { width:17px; height:17px; flex:none; border:2px solid #cfe3d9; border-top-color:var(--green); border-radius:50%; animation:managerDownloadSpin .75s linear infinite; }
+.manager-download-progress>i { display:block; height:3px; margin-top:10px; overflow:hidden; border-radius:999px; background:#e3eee9; }
+.manager-download-progress>i>b { display:block; width:38%; height:100%; border-radius:inherit; background:linear-gradient(90deg,var(--green),#69b394); animation:managerDownloadMove 1.2s ease-in-out infinite; }
+.manager-download-progress.determinate>i>b { animation:none; transition:width .16s linear; }
+@keyframes managerDownloadSpin { to { transform:rotate(360deg); } }
+@keyframes managerDownloadMove { 0% { transform:translateX(-110%); } 100% { transform:translateX(290%); } }
 .eyebrow { color:var(--green); font-size:11px; font-weight:700; letter-spacing:.11em; }
 .login-shell { display:grid; place-items:center; width:100%; height:100dvh; padding:20px; }
 .login-card { width:min(430px,100%); padding:34px; border:1px solid var(--line); border-radius:24px; background:white; box-shadow:var(--shadow); }

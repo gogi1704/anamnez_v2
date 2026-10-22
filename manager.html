@@ -13,10 +13,14 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/static/manager.css?v=20261021-vita-algorithm-v15">
+  <link rel="stylesheet" href="/static/manager.css?v=20261022-download-progress-v17">
   <link rel="stylesheet" href="/static/rich-text.css?v=20260816-rich-text">
 </head>
 <body>
+  <div class="manager-download-progress hidden" id="managerDownloadProgress" role="status" aria-live="polite" aria-busy="false">
+    <div><span aria-hidden="true"></span><strong id="managerDownloadProgressText">Скачиваем файл…</strong></div>
+    <i aria-hidden="true"><b></b></i>
+  </div>
   <main class="login-shell" id="loginShell">
     <form class="login-card" id="loginForm">
       <div class="brand-mark">К</div>
@@ -164,6 +168,6 @@
 
   <div class="toast hidden" id="managerToast" role="status"></div>
   <script src="/static/rich-text.js?v=20260929-loose-lists-v1"></script>
-  <script src="/static/manager.js?v=20261021-vita-algorithm-v15" defer></script>
+  <script src="/static/manager.js?v=20261022-download-progress-v17" defer></script>
 </body>
 </html>
