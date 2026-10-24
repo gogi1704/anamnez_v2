@@ -385,6 +385,8 @@ class IkpAccessTests(unittest.TestCase):
         self.assertIn("target:'#functionMenuButton'", script)
         self.assertIn('maybeOpenPsychologyChatGuide();', script)
         self.assertIn('masterclass-custom-select', script)
+        self.assertIn("setOnboardingMeta('Мастер-класс ·\\nПсихология', 20)", script)
+        self.assertIn('white-space:pre-line', styles)
         self.assertNotIn('<select name="smoking"', script)
         self.assertIn('Перед материалом · 7 коротких пунктов', script)
         for number, label in (
@@ -547,7 +549,7 @@ class IkpAccessTests(unittest.TestCase):
                 notification['payload']['title'],
             )
             self.assertIn(
-                f"Номер заявки: {free_session['request_number']}",
+                f"ЗАЯВКА № {free_session['request_number']}",
                 notification['payload']['body'],
             )
             max_notification = db.claim_manager_notifications('max')[0]

@@ -839,7 +839,7 @@ function renderMasterclassLanding(entry) {
   state.masterclassEntry = entry;
   hideEntryScreens();
   $('#onboarding').classList.remove('hidden');
-  setOnboardingMeta('Мастер-класс · Психология', 20);
+  setOnboardingMeta('Мастер-класс ·\nПсихология', 20);
   const knownUser = Boolean(
     state.identity?.authenticated
     || localStorage.getItem(ANONYMOUS_ACCESS_KEY) === state.identity?.chel_id

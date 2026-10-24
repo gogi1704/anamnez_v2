@@ -109,14 +109,14 @@ class VitaAlgorithmTests(unittest.TestCase):
         }
         db.save_psychology_dialog_state(chat["id"], base)
         private = db.psychology_client_card(chat["id"], "12345")
-        self.assertIn("согласия на выжимку нет", private)
+        self.assertIn("Согласие на краткую выжимку: не получено", private)
         self.assertNotIn("нагрузка на работе", private)
         base["consent_summary"] = True
         db.save_psychology_dialog_state(chat["id"], base, increment_message=False)
         full = db.psychology_client_card(chat["id"], "12345")
         self.assertIn("нагрузка на работе", full)
-        self.assertIn("Гипотеза-вопрос", full)
-        self.assertLessEqual(len(full), 1300)
+        self.assertIn("Рабочая гипотеза", full)
+        self.assertLessEqual(len(full), 3000)
 
     def test_psychology_thresholds_are_admin_configurable(self):
         current = db.admin_assistant_personality_settings("masterclass_psychology")
@@ -190,9 +190,20 @@ class VitaAlgorithmTests(unittest.TestCase):
     def test_session_notification_contains_private_client_card(self):
         chat = self.create_chat()
         db.save_psychology_dialog_state(chat["id"], {
-            "name": "Анна", "category_primary": "anxiety",
+            "name": "Анна", "category_primary": "burnout_or_apathy",
+            "categories_secondary": ["work", "stress", "sleep"],
             "client_quote": "Мне тревожно", "duration": "три недели",
-            "impact_score": 7, "consent_summary": True,
+            "impact_score": 7, "priority": "attention",
+            "techniques_used": [{
+                "name": "Пятиминутный старт", "before": None,
+                "after": None, "feedback": "",
+            }],
+            "risk_flags": [{
+                "type": "suicide_or_self_harm",
+                "evidence": "Проведена проверка безопасности.",
+                "client_answer": "Таких мыслей нет.",
+            }],
+            "consent_summary": True,
         })
         session = db.request_psychology_session(chat["id"])
         now = db.utc_now()
@@ -218,8 +229,19 @@ class VitaAlgorithmTests(unittest.TestCase):
         self.assertIn("Карточка", "Карточка")
         self.assertIn("Фраза клиента", payload["client_card"])
         self.assertIn("Мне тревожно", payload["body"])
+        self.assertIn("Основная тема: выгорание или апатия", payload["body"])
+        self.assertIn("Дополнительные темы: работа, стресс, сон", payload["body"])
+        self.assertIn("Приоритет: требует внимания", payload["body"])
+        self.assertIn("• Пятиминутный старт", payload["body"])
+        self.assertIn("• Риск суицида или самоповреждения", payload["body"])
+        self.assertNotIn("category_primary", payload["body"])
+        self.assertNotIn("attention", payload["body"])
+        self.assertNotIn("burnout_or_apathy", payload["body"])
+        self.assertNotIn("suicide_or_self_harm", payload["body"])
+        self.assertNotIn("None", payload["body"])
+        self.assertNotIn("Полный чат:", payload["body"])
         detail = db.manager_conversation_detail(chat["id"])
-        self.assertIn("Гипотеза-вопрос", detail["psychology_client_card"])
+        self.assertIn("Рабочая гипотеза", detail["psychology_client_card"])
 
     def test_confirmed_or_immediate_danger_stops_ai_and_notifies_psychologist(self):
         class FakeHandler:

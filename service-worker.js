@@ -1,5 +1,5 @@
-const CACHE_NAME = 'consilium-shell-v200';
-const ASSET_VERSION = '20261022-download-progress-v39';
+const CACHE_NAME = 'consilium-shell-v201';
+const ASSET_VERSION = '20261023-masterclass-title-v40';
 const APP_SHELL = [
   '/',
   '/manifest.webmanifest',

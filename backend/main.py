@@ -36,7 +36,7 @@ ALLOWED_STATIC = {
     "rich-text.js", "rich-text.css", "rich-text.2bf1f5fab764.css", "dashboard.js", "dashboard.css",
     "manager.js", "manager.css", "icon-192.png", "icon-512.png",
     "icon-maskable-512.png", "apple-touch-icon.png", "favicon.svg",
-    "example-lab-result.pdf",
+    "example-lab-result.pdf", "psychology-offer.pdf",
 }
 SERVER_ERROR_LOG = settings.log_path
 MANAGER_SESSION_COOKIE = "consilium_manager_session"
@@ -255,6 +255,14 @@ def _public_https_url(value: str) -> str:
     candidate = str(value or "").strip()
     parsed = urlparse(candidate)
     return candidate if parsed.scheme == "https" and bool(parsed.netloc) else ""
+
+
+def _psychology_offer_url() -> str:
+    """Use an external legal page when configured, otherwise the bundled PDF."""
+    return (
+        _public_https_url(settings.psychology_offer_url)
+        or "/static/psychology-offer.pdf"
+    )
 
 
 def _lab_result_analytics_event(status: str) -> str:
@@ -482,7 +490,7 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                 and settings.yandex_metrika_marketer_counter_id.isdigit()
                 and counter_id == settings.yandex_metrika_marketer_counter_id
             )
-            psychology_offer_url = _public_https_url(settings.psychology_offer_url)
+            psychology_offer_url = _psychology_offer_url()
             personal_data_policy_url = _public_https_url(
                 settings.personal_data_policy_url
             )
@@ -1828,9 +1836,7 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                     raise yookassa.YooKassaUnavailable("Онлайн-оплата временно недоступна")
                 if not yookassa.configured():
                     raise yookassa.YooKassaUnavailable("Онлайн-оплата пока не настроена")
-                offer_configured = bool(
-                    _public_https_url(settings.psychology_offer_url)
-                )
+                offer_configured = bool(_psychology_offer_url())
                 if offer_configured and payload.get("accept_offer") is not True:
                     raise ValueError("Подтвердите согласие с условиями оферты")
                 order = db.create_psychology_session_payment_order(

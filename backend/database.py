@@ -4268,8 +4268,7 @@ def enqueue_manager_notifications(
             )
             title = f"Заявка № {visible_request_number} — новая сессия"
             body = (
-                f"Номер заявки: {visible_request_number}. "
-                f"{name} оставил заявку на сессию с психологом. "
+                "Поступила новая заявка на сессию с психологом.\n"
                 "Откройте чат, чтобы согласовать время и формат."
             )
             body += f"\n\n{client_card}"
@@ -5026,6 +5025,66 @@ def save_psychology_dialog_state(
     return {**normalized, "message_index": message_count}
 
 
+_PSYCHOLOGY_CATEGORY_LABELS = {
+    "suicide_or_self_harm": "риск суицида или самоповреждения",
+    "acute_panic": "острая паническая реакция",
+    "grief": "горе или утрата",
+    "trauma": "травматический опыт",
+    "depressive_signs": "признаки подавленного состояния",
+    "relationships": "отношения",
+    "work": "работа",
+    "anxiety": "тревога",
+    "stress": "стресс",
+    "sleep": "сон",
+    "burnout_or_apathy": "выгорание или апатия",
+    "unclear": "пока не определена",
+}
+
+_PSYCHOLOGY_PRIORITY_LABELS = {
+    "routine": "обычный",
+    "attention": "требует внимания",
+    "urgent": "срочный",
+}
+
+_PSYCHOLOGY_RISK_LABELS = {
+    "suicide_or_self_harm": "риск суицида или самоповреждения",
+    "suicide": "риск суицида",
+    "self_harm": "риск самоповреждения",
+    "harm_to_others": "риск причинения вреда другому человеку",
+    "violence": "риск насилия",
+    "current_violence": "текущая угроза насилия",
+    "acute_panic": "острая паническая реакция",
+    "chest_pain": "опасные телесные симптомы",
+    "psychosis": "признаки нарушения восприятия реальности",
+    "intoxication": "острое опьянение",
+    "eating_disorder": "признаки расстройства пищевого поведения",
+}
+
+
+def _psychology_ru_label(value: object, labels: dict[str, str], fallback: str) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return fallback
+    if raw in labels:
+        return labels[raw]
+    return raw if re.search(r"[А-Яа-яЁё]", raw) else fallback
+
+
+def _psychology_technique_label(entry: dict, unknown: str) -> str:
+    name = str(entry.get("name") or unknown).strip()
+    before = entry.get("before")
+    after = entry.get("after")
+    feedback = str(entry.get("feedback") or "").strip()
+    details = []
+    if before is not None or after is not None:
+        before_label = str(before) if before is not None else "не оценено"
+        after_label = str(after) if after is not None else "не оценено"
+        details.append(f"напряжение: {before_label} → {after_label}")
+    if feedback:
+        details.append(f"результат: {feedback}")
+    return f"{name} — {'; '.join(details)}" if details else name
+
+
 def _psychology_client_card_text(
     state: dict | None, *, conversation_id: str, request_number: str = "",
 ) -> str:
@@ -5035,52 +5094,92 @@ def _psychology_client_card_text(
     consent = item.get("consent_summary") is True
     name = item.get("name") or unknown
     age = str(item.get("age")) if item.get("age") is not None else unknown
+    age_label = f"{age} лет" if age != unknown else unknown
     timezone_name = item.get("timezone") or unknown
     preferred = item.get("preferred_time") or unknown
+    request_heading = f"ЗАЯВКА № {request_number}" if request_number else "ЗАЯВКА НА СЕССИЮ"
     if not consent:
         lines = [
+            request_heading,
+            "",
+            "👤 КЛИЕНТ",
             f"Имя: {name}",
             f"Предпочтительное время: {preferred}",
-            "Согласие: согласия на выжимку нет",
+            "Согласие на краткую выжимку: не получено",
         ]
     else:
         manifestations = item.get("manifestations") or {}
         techniques = item.get("techniques_used") or []
-        technique_label = "; ".join(
-            f"{entry.get('name') or unknown}: {entry.get('before')}→{entry.get('after')} ({entry.get('feedback') or unknown})"
+        technique_lines = [
+            f"• {_psychology_technique_label(entry, unknown)}"
             for entry in techniques[-2:]
-        ) or unknown
-        risks = "; ".join(
-            f"{entry.get('type')}: {entry.get('evidence') or unknown}; ответ: {entry.get('client_answer') or unknown}"
-            for entry in (item.get("risk_flags") or [])[-3:]
-        ) or "не выявлены"
+        ] or [f"• {unknown}"]
+        risk_lines = []
+        for entry in (item.get("risk_flags") or [])[-3:]:
+            risk_label = _psychology_ru_label(
+                entry.get("type"), _PSYCHOLOGY_RISK_LABELS,
+                "другой фактор риска",
+            )
+            risk_lines.extend([
+                "• " + risk_label[:1].upper() + risk_label[1:],
+                f"  Основание: {entry.get('evidence') or unknown}",
+                f"  Ответ клиента: {entry.get('client_answer') or unknown}",
+            ])
+        if not risk_lines:
+            risk_lines = ["Риски не выявлены"]
         quote = " ".join(str(item.get("client_quote") or unknown).split())[:180]
+        primary_category = _psychology_ru_label(
+            item.get("category_primary"), _PSYCHOLOGY_CATEGORY_LABELS,
+            "другая тема",
+        )
+        secondary_categories = [
+            _psychology_ru_label(value, _PSYCHOLOGY_CATEGORY_LABELS, "другая тема")
+            for value in (item.get("categories_secondary") or [])
+        ]
+        secondary_label = ", ".join(dict.fromkeys(secondary_categories)) or unknown
+        impact = item.get("impact_score")
+        impact_label = f"{impact} из 10" if impact is not None else unknown
         lines = [
-            f"Приоритет: {item.get('priority') or 'routine'}",
-            f"Имя / возраст / часовой пояс / время: {name} / {age} / {timezone_name} / {preferred}",
-            f"Фраза клиента: «{quote}»",
-            f"Категория: {item.get('category_primary') or unknown}; вторичные: {', '.join(item.get('categories_secondary') or []) or unknown}",
-            f"Длительность / влияние: {item.get('duration') or unknown} / {item.get('impact_score') if item.get('impact_score') is not None else unknown}",
-            "Проявления: мысли — {}; тело — {}; поведение — {}".format(
-                manifestations.get("thoughts") or unknown,
-                manifestations.get("body") or unknown,
-                manifestations.get("behavior") or unknown,
+            request_heading,
+            "",
+            "👤 КЛИЕНТ",
+            f"Имя: {name}",
+            f"Возраст: {age_label}",
+            f"Часовой пояс: {timezone_name}",
+            f"Предпочтительное время: {preferred}",
+            "Приоритет: " + _psychology_ru_label(
+                item.get("priority"), _PSYCHOLOGY_PRIORITY_LABELS, "обычный",
             ),
+            "",
+            "💬 ЗАПРОС",
+            f"Фраза клиента: «{quote}»",
+            f"Основная тема: {primary_category}",
+            f"Дополнительные темы: {secondary_label}",
+            "",
+            "📋 СОСТОЯНИЕ",
+            f"Длительность: {item.get('duration') or unknown}",
+            f"Влияние на жизнь: {impact_label}",
             f"Контекст: {item.get('context') or unknown}",
+            f"Мысли: {manifestations.get('thoughts') or unknown}",
+            f"Телесные проявления: {manifestations.get('body') or unknown}",
+            f"Поведение: {manifestations.get('behavior') or unknown}",
+            "",
+            "🧰 ОПЫТ И ПОДДЕРЖКА",
             f"Что пробовали: {item.get('tried_before') or unknown}",
-            f"Техника и результат: {technique_label}",
+            "Техники:",
+            *technique_lines,
             f"Ресурсы: {item.get('resources') or unknown}",
             f"Ожидание: {item.get('expectation') or unknown}",
-            f"Риски: {risks}",
+            "",
+            "⚠️ БЕЗОПАСНОСТЬ",
+            *risk_lines,
+            "",
+            "📝 ДЛЯ ПСИХОЛОГА",
             f"Стиль общения: {item.get('communication_style') or unknown}",
-            f"Гипотеза-вопрос: {item.get('hypothesis') or unknown}",
-            "Согласие: получено",
+            f"Рабочая гипотеза: {item.get('hypothesis') or unknown}",
+            "Согласие на краткую выжимку: получено",
         ]
-    if request_number:
-        lines.insert(0, f"Заявка №{request_number}")
-    if consent:
-        lines.append(f"Полный чат: {settings.public_base_url}/manager?conversation={conversation_id}")
-    return "\n".join(lines)[:1300]
+    return "\n".join(lines)[:3000]
 
 
 def psychology_client_card(conversation_id: str, request_number: str = "") -> str:

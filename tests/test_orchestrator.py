@@ -33,7 +33,7 @@ from backend.lab_result_valuation import (  # noqa: E402
 )
 from backend.llm import LLMProviderError, LLMService  # noqa: E402
 from backend.health_passport import build_health_passport_pdf  # noqa: E402
-from backend.main import ConsiliumHandler, _chat_access_allowed, _lab_result_analytics_event, _local_masterclass_test_url, _normalize_health_passport, _psychology_crisis_detected, _result_entry_can_start, admin_token_valid  # noqa: E402
+from backend.main import ConsiliumHandler, _chat_access_allowed, _lab_result_analytics_event, _local_masterclass_test_url, _normalize_health_passport, _psychology_crisis_detected, _psychology_offer_url, _result_entry_can_start, admin_token_valid  # noqa: E402
 from backend.orchestrator import ConversationOrchestrator  # noqa: E402
 from backend.onboarding import (  # noqa: E402
     EXAMINATION_UPGRADE_PAIRS, TEST_CATALOG, effective_examination_price, online_examination_price, examination_recommendation_copy,
@@ -4575,14 +4575,14 @@ class OrchestratorTests(unittest.TestCase):
         self.assertIn("controllerchange", script)
         self.assertIn("url.pathname.startsWith('/api/')", worker)
         self.assertIn("url.pathname.startsWith('/auth/')", worker)
-        self.assertIn("consilium-shell-v200", worker)
+        self.assertIn("consilium-shell-v201", worker)
         self.assertIn("fetch(request)", worker)
-        self.assertIn("/static/styles.css?v=20261022-download-progress-v39", index)
+        self.assertIn("/static/styles.css?v=20261023-masterclass-title-v40", index)
         self.assertIn("/static/rich-text.2bf1f5fab764.css", index)
         self.assertTrue((project_root / "static" / "styles.07ffaefb4795.css").is_file())
         self.assertTrue((project_root / "static" / "rich-text.2bf1f5fab764.css").is_file())
-        self.assertIn("/static/app.js?v=20261022-download-progress-v39", index)
-        self.assertIn("/static/metrika.js?v=20261022-download-progress-v39", index)
+        self.assertIn("/static/app.js?v=20261023-masterclass-title-v40", index)
+        self.assertIn("/static/metrika.js?v=20261023-masterclass-title-v40", index)
         self.assertIn("function safeUrl(value)", script)
         self.assertIn("error.code === 'http_404'", script)
         self.assertIn("fallback && fallback.id !== id", script)
@@ -4671,7 +4671,7 @@ class OrchestratorTests(unittest.TestCase):
         main = (project_root / "backend" / "main.py").read_text(encoding="utf-8")
         config = (project_root / "backend" / "config.py").read_text(encoding="utf-8")
 
-        self.assertIn('src="/static/metrika.js?v=20261022-download-progress-v39"', index)
+        self.assertIn('src="/static/metrika.js?v=20261023-masterclass-title-v40"', index)
         self.assertIn('YANDEX_METRIKA_COUNTER_ID', config)
         self.assertIn('path == "/api/public-config"', main)
         self.assertIn('"metrika.js"', main)
@@ -5480,6 +5480,7 @@ class OrchestratorTests(unittest.TestCase):
                     "conversation_id": "psychology-1",
                     "session_count": 1,
                     "receipt_email": "person@example.ru",
+                    "accept_offer": True,
                 }
 
             def _track_analytics(self, event, params):
@@ -5650,9 +5651,7 @@ class OrchestratorTests(unittest.TestCase):
         )
         try:
             object.__setattr__(settings, "online_payments_enabled", True)
-            object.__setattr__(
-                settings, "psychology_offer_url", "https://example.ru/offer",
-            )
+            object.__setattr__(settings, "psychology_offer_url", "")
             object.__setattr__(
                 settings, "personal_data_policy_url", "https://example.ru/privacy",
             )
@@ -5672,6 +5671,35 @@ class OrchestratorTests(unittest.TestCase):
         self.assertEqual(handler.response[0], 422)
         self.assertIn("оферты", handler.response[1]["detail"])
         create_order.assert_not_called()
+
+    def test_psychology_offer_uses_bundled_pdf_and_allows_https_override(self):
+        original_offer_url = settings.psychology_offer_url
+        try:
+            object.__setattr__(settings, "psychology_offer_url", "")
+            self.assertEqual(
+                _psychology_offer_url(), "/static/psychology-offer.pdf",
+            )
+            object.__setattr__(
+                settings, "psychology_offer_url", "https://example.ru/offer",
+            )
+            self.assertEqual(
+                _psychology_offer_url(), "https://example.ru/offer",
+            )
+            object.__setattr__(
+                settings, "psychology_offer_url", "http://example.ru/unsafe",
+            )
+            self.assertEqual(
+                _psychology_offer_url(), "/static/psychology-offer.pdf",
+            )
+        finally:
+            object.__setattr__(settings, "psychology_offer_url", original_offer_url)
+
+        offer = (
+            Path(__file__).resolve().parents[1]
+            / "static" / "psychology-offer.pdf"
+        )
+        self.assertTrue(offer.is_file())
+        self.assertTrue(offer.read_bytes().startswith(b"%PDF-"))
 
     def test_paid_psychology_session_connects_psychologist_to_main_chat(self):
         class FakeHandler:

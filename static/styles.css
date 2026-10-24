@@ -337,6 +337,7 @@ button { color: inherit; }
   .lab-document-card { grid-template-columns:minmax(0,1fr); }
   .lab-document-actions { min-height:38px; border-top:1px solid #cfe1d8; border-left:0; }
   .lab-all-actions { grid-template-columns:1fr; }
+  .onboarding-brand b { flex:none; max-width:46%; overflow:visible; line-height:1.25; text-align:right; text-overflow:clip; white-space:pre-line; }
 }
 @media (max-height: 520px) and (max-width: 720px) {
   .chat-header { min-height:58px; }
