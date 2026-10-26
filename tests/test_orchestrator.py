@@ -5269,7 +5269,7 @@ class OrchestratorTests(unittest.TestCase):
         self.assertIn("state.returnToChatAfterExaminations && state.onboarding.intro_seen", script)
         self.assertIn("['questionnaire','not_medical_exam','exams','payment'].includes(onboarding.status)", script)
         self.assertIn("allowIncompleteOnboarding:true", script)
-        self.assertIn("not _chat_access_allowed()", main_source)
+        self.assertIn("not _chat_access_allowed(conversation)", main_source)
         self.assertIn('conversation.get("dialog_type") == "masterclass_psychology"', main_source)
         self.assertIn('if path == "/api/result-entry/start":', main_source)
         self.assertIn("if not _result_entry_can_start(onboarding):", main_source)
@@ -5317,6 +5317,26 @@ class OrchestratorTests(unittest.TestCase):
             self.assertFalse(_chat_access_allowed())
             db.save_onboarding(status="complete", intro_seen=True)
             self.assertTrue(_chat_access_allowed())
+        finally:
+            db.ensure_user("chel_test_default")
+            db.set_current_chel_id("chel_test_default")
+
+    def test_non_medical_entry_routes_and_weight_chat_bypass_medical_funnel(self):
+        chel_id = "chel_independent_chat_routes"
+        db.ensure_user(chel_id)
+        try:
+            db.set_current_chel_id(chel_id)
+            db.set_entry_route("other")
+            self.assertTrue(_chat_access_allowed())
+
+            db.set_entry_route("masterclass")
+            self.assertTrue(_chat_access_allowed())
+
+            db.set_entry_route("medical_exam")
+            self.assertFalse(_chat_access_allowed())
+            self.assertTrue(_chat_access_allowed({"dialog_type": "weight_control"}))
+            self.assertTrue(_chat_access_allowed({"dialog_type": "masterclass_psychology"}))
+            self.assertFalse(_chat_access_allowed({"dialog_type": "general"}))
         finally:
             db.ensure_user("chel_test_default")
             db.set_current_chel_id("chel_test_default")
