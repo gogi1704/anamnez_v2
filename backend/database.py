@@ -18,6 +18,7 @@ from .schemas import normalize_psychology_dialog_state
 
 _write_lock = threading.Lock()
 _current_chel_id: ContextVar[str] = ContextVar("current_chel_id", default="chel_test_default")
+_ACTIVITY_TOUCH_INTERVAL = timedelta(minutes=5)
 MOSCOW_TZ = timezone(timedelta(hours=3), "Europe/Moscow")
 TEST_COMPANY_INN = "123123"
 WEIGHT_ANALYSIS_MIN_CONFIRMED_MEALS = 20
@@ -1318,14 +1319,25 @@ def touch_user_activity(chel_id: str | None = None) -> None:
     if not candidate:
         return
     now_dt = datetime.now(timezone.utc)
-    stale_before = (now_dt - timedelta(minutes=5)).isoformat()
-    with _write_lock, connection() as conn:
-        conn.execute(
-            """UPDATE users SET last_seen_at=?
-               WHERE chel_id=? AND (last_seen_at IS NULL OR last_seen_at<?)""",
-            (now_dt.isoformat(), candidate, stale_before),
-        )
-        conn.commit()
+    stale_before = (now_dt - _ACTIVITY_TOUCH_INTERVAL).isoformat()
+    try:
+        with _write_lock, connection() as conn:
+            current = conn.execute(
+                "SELECT last_seen_at FROM users WHERE chel_id=?", (candidate,),
+            ).fetchone()
+            if not current or (current["last_seen_at"] or "") >= stale_before:
+                return
+            conn.execute(
+                "UPDATE users SET last_seen_at=? WHERE chel_id=?",
+                (now_dt.isoformat(), candidate),
+            )
+            conn.commit()
+    except sqlite3.OperationalError as exc:
+        if "locked" not in str(exc).casefold():
+            raise
+        # Activity timestamps are best-effort metadata. A busy database must
+        # not make an otherwise valid chat request fail.
+        return
 
 
 def mark_current_user_registered(method: str) -> dict:
@@ -2910,15 +2922,28 @@ def get_session_chel_id(session_value: str) -> str | None:
         ).fetchone()
         if not session or datetime.fromisoformat(session["expires_at"]) <= now:
             return None
-        conn.execute(
-            "UPDATE user_sessions SET last_seen_at = ? WHERE session_hash = ?",
-            (now.isoformat(), session["session_hash"]),
-        )
-        conn.execute(
-            "UPDATE users SET last_seen_at = ? WHERE chel_id = ?",
-            (now.isoformat(), session["chel_id"]),
-        )
-        conn.commit()
+        stale_before = now - _ACTIVITY_TOUCH_INTERVAL
+        try:
+            last_seen_at = datetime.fromisoformat(session["last_seen_at"])
+        except (TypeError, ValueError):
+            last_seen_at = None
+        if last_seen_at is None or last_seen_at <= stale_before:
+            try:
+                conn.execute(
+                    "UPDATE user_sessions SET last_seen_at = ? WHERE session_hash = ?",
+                    (now.isoformat(), session["session_hash"]),
+                )
+                conn.execute(
+                    "UPDATE users SET last_seen_at = ? WHERE chel_id = ?",
+                    (now.isoformat(), session["chel_id"]),
+                )
+                conn.commit()
+            except sqlite3.OperationalError as exc:
+                if "locked" not in str(exc).casefold():
+                    raise
+                # Authentication has already succeeded. Losing a best-effort
+                # activity timestamp is safer than rejecting the chat request.
+                conn.rollback()
     return session["chel_id"]
 
 

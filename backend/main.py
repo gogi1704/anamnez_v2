@@ -3592,7 +3592,7 @@ small{{display:block;color:#82918c;text-align:center;margin-top:18px}}
         self._send_cleared_user_session_cookie()
         self._send_manager_cookie()
         self.end_headers()
-        self.wfile.write(body)
+        self._write_response_body(body)
 
     def _bytes(
         self, status: int, body: bytes, content_type: str, *, disposition: str = "",
@@ -3606,7 +3606,7 @@ small{{display:block;color:#82918c;text-align:center;margin-top:18px}}
             self.send_header("Content-Disposition", disposition)
         self._send_identity_cookie()
         self.end_headers()
-        self.wfile.write(body)
+        self._write_response_body(body)
 
     def _send_file(
         self, path: Path, content_type: str, *, allow_metrika_frame: bool = False,
@@ -3622,7 +3622,16 @@ small{{display:block;color:#82918c;text-align:center;margin-top:18px}}
         self.send_header("Cache-Control", cache_control)
         self._send_identity_cookie()
         self.end_headers()
-        self.wfile.write(body)
+        self._write_response_body(body)
+
+    def _write_response_body(self, body: bytes) -> None:
+        """Ignore a client disconnect after the response has already been built."""
+        try:
+            self.wfile.write(body)
+        except (BrokenPipeError, ConnectionResetError):
+            # Browsers can cancel an obsolete polling request while a newer one
+            # is already in flight. This is not a server-side chat failure.
+            return
 
     def _ensure_user_context(self) -> None:
         query = parse_qs(urlparse(self.path).query)
@@ -3641,7 +3650,6 @@ small{{display:block;color:#82918c;text-align:center;margin-top:18px}}
             self._identity_cookie_required = False
             self._authenticated_session = True
             db.set_current_chel_id(session_chel_id)
-            db.touch_user_activity(session_chel_id)
             return
         self._authenticated_session = False
         candidate = cookie.get("chel_id").value if cookie.get("chel_id") else ""

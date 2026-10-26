@@ -6,6 +6,7 @@ import re
 import secrets
 import tempfile
 import unittest
+from contextlib import contextmanager
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from types import SimpleNamespace
@@ -4838,6 +4839,71 @@ class OrchestratorTests(unittest.TestCase):
         finally:
             db.ensure_user("chel_test_default")
             db.set_current_chel_id("chel_test_default")
+
+    def test_session_check_does_not_write_for_recent_activity(self):
+        login = db.create_messenger_login("max", "recent-session-user")
+        session = db.consume_login_token(login["token"])
+        original_connection = db.connection
+
+        class NoCommitConnection:
+            def __init__(self, wrapped):
+                self.wrapped = wrapped
+
+            def __getattr__(self, name):
+                return getattr(self.wrapped, name)
+
+            def commit(self):
+                raise AssertionError("A recent session must not write to SQLite")
+
+        @contextmanager
+        def no_commit_connection():
+            with original_connection() as conn:
+                yield NoCommitConnection(conn)
+
+        with patch.object(db, "connection", no_commit_connection):
+            self.assertEqual(
+                db.get_session_chel_id(session["session"]), login["chel_id"],
+            )
+
+    def test_cancelled_poll_response_does_not_raise_broken_pipe(self):
+        class DisconnectedWriter:
+            def write(self, _body):
+                raise BrokenPipeError("client disconnected")
+
+        handler = SimpleNamespace(wfile=DisconnectedWriter())
+        ConsiliumHandler._write_response_body(handler, b"{}")
+
+    def test_locked_activity_touch_does_not_reject_valid_session(self):
+        login = db.create_messenger_login("max", "locked-session-user")
+        session = db.consume_login_token(login["token"])
+        stale_at = (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()
+        with db.connection() as conn:
+            conn.execute(
+                "UPDATE user_sessions SET last_seen_at=? WHERE session_hash=?",
+                (stale_at, db._token_hash(session["session"])),
+            )
+            conn.commit()
+        original_connection = db.connection
+
+        class LockedCommitConnection:
+            def __init__(self, wrapped):
+                self.wrapped = wrapped
+
+            def __getattr__(self, name):
+                return getattr(self.wrapped, name)
+
+            def commit(self):
+                raise db.sqlite3.OperationalError("database is locked")
+
+        @contextmanager
+        def locked_commit_connection():
+            with original_connection() as conn:
+                yield LockedCommitConnection(conn)
+
+        with patch.object(db, "connection", locked_commit_connection):
+            self.assertEqual(
+                db.get_session_chel_id(session["session"]), login["chel_id"],
+            )
 
     def test_logout_revokes_only_current_device_session(self):
         first_login = db.create_messenger_login(
