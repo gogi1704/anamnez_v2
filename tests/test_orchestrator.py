@@ -34,7 +34,7 @@ from backend.lab_result_valuation import (  # noqa: E402
 )
 from backend.llm import LLMProviderError, LLMService  # noqa: E402
 from backend.health_passport import build_health_passport_pdf  # noqa: E402
-from backend.main import ConsiliumHandler, _chat_access_allowed, _lab_result_analytics_event, _local_masterclass_test_url, _normalize_health_passport, _psychology_crisis_detected, _psychology_offer_url, _result_entry_can_start, admin_token_valid  # noqa: E402
+from backend.main import ConsiliumHandler, _lab_result_analytics_event, _local_masterclass_test_url, _normalize_health_passport, _psychology_crisis_detected, _psychology_offer_url, _result_entry_can_start, admin_token_valid  # noqa: E402
 from backend.orchestrator import ConversationOrchestrator  # noqa: E402
 from backend.onboarding import (  # noqa: E402
     EXAMINATION_UPGRADE_PAIRS, TEST_CATALOG, effective_examination_price, online_examination_price, examination_recommendation_copy,
@@ -5269,14 +5269,76 @@ class OrchestratorTests(unittest.TestCase):
         self.assertIn("state.returnToChatAfterExaminations && state.onboarding.intro_seen", script)
         self.assertIn("['questionnaire','not_medical_exam','exams','payment'].includes(onboarding.status)", script)
         self.assertIn("allowIncompleteOnboarding:true", script)
-        self.assertIn("not _chat_access_allowed(conversation)", main_source)
-        self.assertIn('conversation.get("dialog_type") == "masterclass_psychology"', main_source)
+        self.assertNotIn("_chat_access_allowed", main_source)
+        self.assertNotIn(
+            "Сначала завершите выбор обследований и финальный экран анкеты",
+            main_source,
+        )
         self.assertIn('if path == "/api/result-entry/start":', main_source)
         self.assertIn("if not _result_entry_can_start(onboarding):", main_source)
         self.assertIn(
             'self.send_header("Location", login.get("return_path") or "/?auth=messenger_login")',
             main_source,
         )
+
+    def test_open_chat_always_answers_regardless_of_onboarding_state(self):
+        class FakeHandler:
+            path = "/api/chat"
+            response = None
+
+            def _ensure_user_context(self):
+                return None
+
+            def _read_json(self, **_kwargs):
+                return {
+                    "conversation_id": "general-conversation-1",
+                    "message": "Здравствуйте",
+                    "attachments": [],
+                }
+
+            def _validate_attachments(self, attachments):
+                return attachments
+
+            def _track_analytics(self, *_args, **_kwargs):
+                return None
+
+            def _json(self, status, payload):
+                self.response = (status, payload)
+                return self.response
+
+        class FakeResult:
+            conversation_id = "general-conversation-1"
+
+            def to_dict(self):
+                return {
+                    "conversation_id": self.conversation_id,
+                    "assistant_message": {"content": "Здравствуйте!"},
+                    "agent": "manager",
+                    "action": "continue",
+                }
+
+        conversation = {
+            "id": "general-conversation-1",
+            "dialog_type": "general",
+            "ai_enabled": True,
+            "human_status": "none",
+        }
+        handler = FakeHandler()
+        with (
+            patch("backend.main.db.get_onboarding", side_effect=AssertionError(
+                "The chat endpoint must not inspect onboarding state",
+            )),
+            patch("backend.main.db.get_conversation", return_value=conversation),
+            patch("backend.main.db.list_messages", return_value=[{"id": 1}]),
+            patch("backend.main.orchestrator.process", return_value=FakeResult()) as process,
+        ):
+            ConsiliumHandler.do_POST(handler)
+
+        self.assertEqual(handler.response[0], 200)
+        self.assertEqual(
+            handler.response[1]["assistant_message"]["content"], "Здравствуйте!",
+        )
+        process.assert_called_once()
 
     def test_psychology_payment_back_restores_chat_instead_of_medical_funnel(self):
         project_root = Path(__file__).resolve().parents[1]
@@ -5296,64 +5358,6 @@ class OrchestratorTests(unittest.TestCase):
                 flow,
             )
         self.assertIn("openPsychologyPackages()", cancel_payment)
-
-    def test_chat_access_requires_final_standard_onboarding_screen(self):
-        chel_id = "chel_chat_funnel_guard"
-        db.ensure_user(chel_id)
-        try:
-            db.set_current_chel_id(chel_id)
-            db.save_onboarding(status="questionnaire", intro_seen=False)
-            self.assertFalse(_chat_access_allowed())
-            db.save_onboarding(status="not_medical_exam", intro_seen=False)
-            self.assertFalse(_chat_access_allowed())
-            db.save_onboarding(status="exams", intro_seen=False)
-            self.assertFalse(_chat_access_allowed())
-            db.save_onboarding(status="payment", selected_tests=["lipids"], intro_seen=False)
-            self.assertFalse(_chat_access_allowed())
-            db.save_onboarding(
-                status="complete", selected_tests=["lipids"],
-                payment_status="pay_at_exam", intro_seen=False,
-            )
-            self.assertFalse(_chat_access_allowed())
-            db.save_onboarding(status="complete", intro_seen=True)
-            self.assertTrue(_chat_access_allowed())
-        finally:
-            db.ensure_user("chel_test_default")
-            db.set_current_chel_id("chel_test_default")
-
-    def test_non_medical_entry_routes_and_weight_chat_bypass_medical_funnel(self):
-        chel_id = "chel_independent_chat_routes"
-        db.ensure_user(chel_id)
-        try:
-            db.set_current_chel_id(chel_id)
-            db.set_entry_route("other")
-            self.assertTrue(_chat_access_allowed())
-
-            db.set_entry_route("masterclass")
-            self.assertTrue(_chat_access_allowed())
-
-            db.set_entry_route("medical_exam")
-            self.assertFalse(_chat_access_allowed())
-            self.assertTrue(_chat_access_allowed({"dialog_type": "weight_control"}))
-            self.assertTrue(_chat_access_allowed({"dialog_type": "masterclass_psychology"}))
-            self.assertFalse(_chat_access_allowed({"dialog_type": "general"}))
-        finally:
-            db.ensure_user("chel_test_default")
-            db.set_current_chel_id("chel_test_default")
-
-        result_chel_id = "chel_result_chat_guard"
-        db.ensure_user(result_chel_id)
-        try:
-            db.set_current_chel_id(result_chel_id)
-            db.save_onboarding(status="appearance", intro_seen=False)
-            self.assertFalse(_chat_access_allowed())
-            db.mark_current_user_result_entry()
-            self.assertTrue(_chat_access_allowed())
-            db.save_onboarding(status="questionnaire", intro_seen=False)
-            self.assertFalse(_chat_access_allowed())
-        finally:
-            db.ensure_user("chel_test_default")
-            db.set_current_chel_id("chel_test_default")
 
     def test_result_link_cannot_replace_an_active_standard_funnel(self):
         self.assertTrue(_result_entry_can_start({"status": "appearance"}))
@@ -5917,7 +5921,6 @@ class OrchestratorTests(unittest.TestCase):
             "context_summary": "{}",
         }
         with (
-            patch("backend.main._chat_access_allowed", return_value=False),
             patch("backend.main.db.get_conversation", return_value=psychology_chat),
             patch("backend.main.db.list_messages", return_value=[{"id": 1}]),
             patch("backend.main.db.add_message", side_effect=[
@@ -5983,7 +5986,6 @@ class OrchestratorTests(unittest.TestCase):
             "context_summary": "{}",
         }
         with (
-            patch("backend.main._chat_access_allowed", return_value=False),
             patch("backend.main.db.get_conversation", return_value=psychology_chat),
             patch("backend.main.db.list_messages", return_value=[{"id": 1}]),
             patch(

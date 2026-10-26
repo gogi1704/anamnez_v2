@@ -273,35 +273,6 @@ def _lab_result_analytics_event(status: str) -> str:
     }.get(str(status or ""), "lab_results_error")
 
 
-def _chat_access_allowed(conversation: dict | None = None) -> bool:
-    """Keep only the medical funnel closed; independent chat routes stay usable."""
-    state = db.get_onboarding()
-    entry_route = str(state.get("entry_route") or "").strip().lower()
-    dialog_type = str((conversation or {}).get("dialog_type") or "").strip().lower()
-    if entry_route in {"other", "masterclass"}:
-        return True
-    if dialog_type in {"weight_control", "masterclass_psychology"}:
-        return True
-    # Older direct master-class links predate the persisted entry_route field.
-    if db.current_masterclass_access():
-        return True
-    status = str(state.get("status") or "appearance")
-    if status in {"not_medical_exam", "exams", "payment"}:
-        return False
-    if status == "questionnaire":
-        return False
-    if status == "appearance":
-        return db.current_user_has_result_entry()
-    if status == "complete" and not state.get("intro_seen"):
-        final_screen_required = (
-            state.get("payment_status") == "skipped"
-            or bool(state.get("selected_tests"))
-        )
-        if final_screen_required:
-            return False
-    return status == "complete" or db.current_user_has_result_entry()
-
-
 def _result_entry_can_start(onboarding: dict) -> bool:
     """Do not let /result replace an already active standard questionnaire."""
     status = str(onboarding.get("status") or "appearance")
@@ -2860,16 +2831,6 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                 return self._json(422, {"detail": "Сообщение должно содержать от 1 до 12000 символов"})
             conversation_id = str(payload.get("conversation_id") or "")
             conversation = db.get_conversation(conversation_id) if conversation_id else None
-            if (
-                not _chat_access_allowed(conversation)
-                and not (
-                    conversation
-                    and conversation.get("dialog_type") == "masterclass_psychology"
-                )
-            ):
-                return self._json(409, {
-                    "detail": "Сначала завершите выбор обследований и финальный экран анкеты",
-                })
             if not message and not (
                 conversation and conversation.get("dialog_type") == "weight_control"
             ):
