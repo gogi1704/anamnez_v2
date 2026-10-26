@@ -6008,6 +6008,34 @@ def revoke_staff_session(token: str) -> None:
         conn.commit()
 
 
+def _staff_conversation_access_sql(alias: str, staff_role: str) -> tuple[str, list[str]]:
+    """Return the queue/detail access rule for one staff role.
+
+    Psychologists temporarily observe every Vita chat, including a newly opened
+    chat that has not yet been handed over. Other staff keep the existing strict
+    recipient-role isolation.
+    """
+    role = _staff_role(staff_role)
+    assigned = f"COALESCE({alias}.human_recipient_role, 'manager') = ?"
+    if role == "psychologist":
+        return (
+            f"({assigned} OR {alias}.dialog_type = 'masterclass_psychology')",
+            [role],
+        )
+    return assigned, [role]
+
+
+def _staff_can_view_conversation(conversation: dict, staff_role: str) -> bool:
+    role = _staff_role(staff_role)
+    return (
+        str(conversation.get("human_recipient_role") or "manager") == role
+        or (
+            role == "psychologist"
+            and conversation.get("dialog_type") == "masterclass_psychology"
+        )
+    )
+
+
 def manager_list_conversations(
     query: str = "", queue: str = "open", limit: int = 100,
     include_related: bool = False, staff_role: str = "manager",
@@ -6027,14 +6055,24 @@ def manager_list_conversations(
     # A short-lived draft created a second psychology_support conversation.
     # It is obsolete now that the psychologist joins the main psychology chat.
     where.append(f"{conversation_alias}.dialog_type <> 'psychology_support'")
-    where.append(f"COALESCE({conversation_alias}.human_recipient_role, 'manager') = ?")
-    params: list = [staff_role]
+    access_sql, access_params = _staff_conversation_access_sql(
+        conversation_alias, staff_role,
+    )
+    where.append(access_sql)
+    params: list = list(access_params)
     if queue == "open":
-        where.append(
-            f"({conversation_alias}.human_ticket_id IS NOT NULL "
-            f"OR {conversation_alias}.ai_enabled = 0)"
+        regular_open = (
+            f"(({conversation_alias}.human_ticket_id IS NOT NULL "
+            f"OR {conversation_alias}.ai_enabled = 0) "
+            f"AND {conversation_alias}.human_status IN ('pending', 'connected'))"
         )
-        where.append(f"{conversation_alias}.human_status IN ('pending', 'connected')")
+        if staff_role == "psychologist":
+            where.append(
+                f"({conversation_alias}.dialog_type = 'masterclass_psychology' "
+                f"OR {regular_open})"
+            )
+        else:
+            where.append(regular_open)
     elif queue == "ai_off":
         where.append(f"{conversation_alias}.ai_enabled = 0")
     if query:
@@ -6078,7 +6116,7 @@ def manager_list_conversations(
                 FROM conversations c
                 JOIN matched_users matched ON matched.chel_id = c.chel_id
                 LEFT JOIN user_profile p ON p.chel_id = c.chel_id
-                WHERE COALESCE(c.human_recipient_role, 'manager') = ?
+                WHERE {_staff_conversation_access_sql('c', staff_role)[0]}
                   AND c.dialog_type <> 'psychology_support'
                 ORDER BY matched.matched_updated DESC,
                          CASE WHEN c.ai_enabled = 0 THEN 0 ELSE 1 END,
@@ -6158,9 +6196,11 @@ def manager_mark_conversation_read(
             FROM conversations c
             LEFT JOIN messages m ON m.conversation_id = c.id
             WHERE c.id = ?
-              AND COALESCE(c.human_recipient_role, 'manager') = ?
+              AND (COALESCE(c.human_recipient_role, 'manager') = ?
+                   OR (? = 'psychologist'
+                       AND c.dialog_type = 'masterclass_psychology'))
             GROUP BY c.id""",
-            (conversation_id, staff_role),
+            (conversation_id, staff_role, staff_role),
         ).fetchone()
         if not row:
             return None
@@ -6199,7 +6239,9 @@ def manager_conversation_detail(
         if not conversation_row:
             return None
         conversation = dict(conversation_row)
-        if staff_role is not None and conversation.get("human_recipient_role", "manager") != _staff_role(staff_role):
+        if staff_role is not None and not _staff_can_view_conversation(
+            conversation, staff_role,
+        ):
             return None
         conversation["ai_enabled"] = bool(conversation.get("ai_enabled", 1))
         chel_id = conversation["chel_id"]

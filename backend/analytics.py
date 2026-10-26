@@ -177,6 +177,7 @@ ALLOWED_EVENTS = {
     "registration_method_selected", "anonymous_warning_viewed", "anonymous_warning_cancelled",
     "registration_completed", "registration_failed", "messenger_auth_started", "funnel_action",
     "onboarding_screen_viewed", "onboarding_screen_action",
+    "masterclass_burnout_test_completed", "masterclass_burnout_practices_downloaded",
     "messenger_link_modal_viewed",
     "messenger_auth_completed", "messenger_auth_failed", "appearance_viewed",
     "appearance_completed", "questionnaire_started", "question_viewed",
@@ -757,16 +758,49 @@ def _metric2_screen_definitions() -> list[dict]:
         },
         {
             "id": "masterclass_burnout",
-            "title": "Материал о стрессе и выгорании",
+            "title": "Материал мастер-класса: самопроверка и практики",
             "stage": "Мастер-класс · материал",
             "kind": "masterclass_burnout",
-            "description": "Самопроверка, практики и переход в отдельный психологический чат.",
+            "description": (
+                "Реальный материал мастер-класса: самопроверка из 10 вопросов, "
+                "персональные пояснения, пять практик, скачивание PDF и переход "
+                "в отдельный психологический чат."
+            ),
             "parent_id": "masterclass_questionnaire", "flow": "masterclass",
             "legacy_reach": [],
-            "actions": [{
-                "id": "open_psychology_chat", "label": "Написать в чат",
-                "target": "masterclass_chat_confirmation", "legacy": [],
-            }],
+            "actions": [
+                {
+                    "id": "self_check_none",
+                    "label": "Не отвечали на самопроверку",
+                    "interaction": True,
+                    "derived": "reached_without_action",
+                    "derived_base_action": "material_tracking_ready",
+                    "derived_action": "self_check_started",
+                    "legacy": [],
+                },
+                {
+                    "id": "self_check_started",
+                    "label": "Ответили хотя бы на один вопрос",
+                    "interaction": True,
+                    "legacy": [_metric2_spec("masterclass_burnout_test_completed")],
+                },
+                {
+                    "id": "self_check_completed",
+                    "label": "Ответили на все 10 вопросов",
+                    "interaction": True,
+                    "legacy": [_metric2_spec("masterclass_burnout_test_completed")],
+                },
+                {
+                    "id": "download_guide",
+                    "label": "Скачали гайд с 5 практиками",
+                    "interaction": True,
+                    "legacy": [_metric2_spec("masterclass_burnout_practices_downloaded")],
+                },
+                {
+                    "id": "open_psychology_chat", "label": "Получить ответ специалиста",
+                    "target": "masterclass_chat_confirmation", "legacy": [],
+                },
+            ],
         },
         {
             "id": "masterclass_chat_confirmation",
@@ -2684,7 +2718,33 @@ def _metric2_report_uncached(
                     action_group = f"choice:{action['exclusive_group']}"
                 else:
                     action_group = ""
-                if action_group:
+                if action.get("derived") == "reached_without_action":
+                    base_action = str(action.get("derived_base_action") or "")
+                    reference_action = str(action.get("derived_action") or "")
+                    reference_definition = next(
+                        (
+                            candidate for candidate in definition.get("actions", [])
+                            if candidate.get("id") == reference_action
+                        ),
+                        {},
+                    )
+                    reference_generic = _metric2_spec(
+                        "onboarding_screen_action", screen=screen_id,
+                        action=reference_action,
+                        context=definition.get("flow", "onboarding"),
+                    )
+                    base_users = reached
+                    if base_action:
+                        base_users = reached & users_for([_metric2_spec(
+                            "onboarding_screen_action", screen=screen_id,
+                            action=base_action,
+                            context=definition.get("flow", "onboarding"),
+                        )])
+                    action_users = base_users - users_for([
+                        reference_generic,
+                        *reference_definition.get("legacy", []),
+                    ])
+                elif action_group:
                     action_users = {
                         chel_id
                         for (candidate_screen, group_id, chel_id), (_, action_id)

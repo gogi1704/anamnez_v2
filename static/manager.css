@@ -91,6 +91,7 @@ button { cursor:pointer; }
 .ai-switch i::after { content:""; position:absolute; top:3px; left:3px; width:16px; height:16px; border-radius:50%; background:white; box-shadow:0 2px 6px #0002; transition:.2s; }
 .ai-switch input:checked + i { background:var(--green); }.ai-switch input:checked + i::after { transform:translateX(16px); }
 .ai-switch.busy { opacity:.55; pointer-events:none; }
+.ai-switch.read-only { opacity:.65; cursor:default; }
 .profile-toggle,.mobile-back { padding:9px 11px; border:1px solid var(--line); border-radius:10px; background:white; color:var(--green-dark); font-size:10px; font-weight:700; }
 .close-request-button { flex:0 0 auto; padding:9px 11px; border:1px solid #eccccc; border-radius:10px; background:#fff4f3; color:var(--danger); font-size:10px; font-weight:700; }
 .close-request-button:hover { border-color:#d99d9d; background:#ffe9e7; }

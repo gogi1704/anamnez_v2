@@ -1336,6 +1336,134 @@ class AnalyticsTests(unittest.TestCase):
         self.assertEqual(screens['psychology_session_packages']['users'], 1)
         self.assertEqual(screens['psychology_session_payment']['users'], 1)
 
+    def test_metric2_masterclass_tracks_guide_and_self_check_states(self):
+        user_ids = [
+            'CHEL-MASTERCLASS-NONE',
+            'CHEL-MASTERCLASS-PARTIAL',
+            'CHEL-MASTERCLASS-COMPLETE',
+            'CHEL-MASTERCLASS-LEGACY',
+        ]
+        conn = sqlite3.connect(settings.database_path)
+        try:
+            conn.execute("""CREATE TABLE masterclass_access_users (
+                link_id TEXT NOT NULL, chel_id TEXT NOT NULL,
+                first_seen_at TEXT, last_seen_at TEXT, continued_at TEXT,
+                visit_count INTEGER NOT NULL DEFAULT 1
+            )""")
+            conn.executemany(
+                "INSERT INTO masterclass_access_users VALUES (?,?,?,?,?,?)",
+                [
+                    ('link-1', chel_id, '2026-10-20', '2026-10-20', '2026-10-20', 1)
+                    for chel_id in user_ids
+                ],
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        for index, chel_id in enumerate(user_ids):
+            events = [
+                {
+                    'event_id':f'mc-engagement-{index}-landing',
+                    'session_id':f'mc-engagement-session-{index}',
+                    'event_name':'onboarding_screen_viewed',
+                    'properties':{
+                        'screen':'masterclass_landing', 'context':'masterclass',
+                    },
+                },
+                {
+                    'event_id':f'mc-engagement-{index}-material',
+                    'session_id':f'mc-engagement-session-{index}',
+                    'event_name':'onboarding_screen_viewed',
+                    'properties':{
+                        'screen':'masterclass_burnout', 'context':'masterclass',
+                    },
+                },
+            ]
+            if chel_id != 'CHEL-MASTERCLASS-LEGACY':
+                events.append({
+                    'event_id':f'mc-engagement-{index}-tracking-ready',
+                    'session_id':f'mc-engagement-session-{index}',
+                    'event_name':'onboarding_screen_action',
+                    'properties':{
+                        'screen':'masterclass_burnout',
+                        'action':'material_tracking_ready',
+                        'context':'masterclass',
+                    },
+                })
+            if chel_id == 'CHEL-MASTERCLASS-PARTIAL':
+                events.append({
+                    'event_id':'mc-engagement-partial-start',
+                    'session_id':f'mc-engagement-session-{index}',
+                    'event_name':'onboarding_screen_action',
+                    'properties':{
+                        'screen':'masterclass_burnout',
+                        'action':'self_check_started', 'context':'masterclass',
+                    },
+                })
+            elif chel_id == 'CHEL-MASTERCLASS-COMPLETE':
+                events.extend([
+                    {
+                        'event_id':'mc-engagement-complete-start',
+                        'session_id':f'mc-engagement-session-{index}',
+                        'event_name':'onboarding_screen_action',
+                        'properties':{
+                            'screen':'masterclass_burnout',
+                            'action':'self_check_started', 'context':'masterclass',
+                        },
+                    },
+                    {
+                        'event_id':'mc-engagement-complete-finish',
+                        'session_id':f'mc-engagement-session-{index}',
+                        'event_name':'onboarding_screen_action',
+                        'properties':{
+                            'screen':'masterclass_burnout',
+                            'action':'self_check_completed', 'context':'masterclass',
+                        },
+                    },
+                    {
+                        'event_id':'mc-engagement-complete-guide',
+                        'session_id':f'mc-engagement-session-{index}',
+                        'event_name':'onboarding_screen_action',
+                        'properties':{
+                            'screen':'masterclass_burnout',
+                            'action':'download_guide', 'context':'masterclass',
+                        },
+                    },
+                ])
+            elif chel_id == 'CHEL-MASTERCLASS-LEGACY':
+                events.extend([
+                    {
+                        'event_id':'mc-engagement-legacy-finish',
+                        'session_id':f'mc-engagement-session-{index}',
+                        'event_name':'masterclass_burnout_test_completed',
+                        'properties':{
+                            'screen':'masterclass_burnout', 'context':'masterclass',
+                        },
+                    },
+                    {
+                        'event_id':'mc-engagement-legacy-guide',
+                        'session_id':f'mc-engagement-session-{index}',
+                        'event_name':'masterclass_burnout_practices_downloaded',
+                        'properties':{
+                            'screen':'masterclass_burnout', 'context':'masterclass',
+                        },
+                    },
+                ])
+            analytics.record_events(chel_id, events)
+
+        report = analytics.metric2_report('30', flow='masterclass')
+        material = next(
+            item for item in report['screens']
+            if item['id'] == 'masterclass_burnout'
+        )
+        actions = {item['id']: item for item in material['actions']}
+        self.assertEqual(material['users'], 4)
+        self.assertEqual(actions['self_check_none']['users'], 1)
+        self.assertEqual(actions['self_check_started']['users'], 3)
+        self.assertEqual(actions['self_check_completed']['users'], 2)
+        self.assertEqual(actions['download_guide']['users'], 2)
+
     def test_reports_support_inclusive_custom_date_range(self):
         for index in range(2):
             analytics.record_events(f"CHEL-DATE-{index}", [{

@@ -1496,8 +1496,8 @@ function metric2PreviewMarkup(screen, large = false, suppliedData = null) {
   else if (kind === 'masterclass_landing') content = `<small>● МАСТЕР-КЛАСС · ПСИХОЛОГИЯ</small><b>Это ещё стресс или уже выгорание?</b><p>Короткая персональная анкета, тест и практики для восстановления.</p>${messengerAction('➤','Войти через Telegram')}${messengerAction('М','Войти через MAX')}<span class="metric2-mock-link">Войти анонимно</span>`;
   else if (kind === 'masterclass_questionnaire') content = `<small>МИНИ-АНКЕТА · 7 ПУНКТОВ</small><b>Расскажите немного о себе</b><p>Имя, пол, возраст, рост, вес, курение и алкоголь.</p><span class="metric2-mock-input">Как к вам обращаться?</span><span class="metric2-mock-choice-grid"><span class="metric2-mock-choice">Женский</span><span class="metric2-mock-choice">Мужской</span></span>${action('Перейти к материалу →')}`;
   else if (kind === 'masterclass_returning') content = `<small>ПОВТОРНЫЙ ВХОД</small><b>Возвращаем в психологический чат</b><p>Анкета и материал уже пройдены. Чат с Витой открывается сразу.</p>${action('Сразу открыть чат →')}`;
-  else if (kind === 'masterclass_burnout') content = `<small>● ЭКОСИСТЕМА ЗДОРОВЬЯ</small><b>Это ещё стресс или уже выгорание?</b><p>Самопроверка из 10 вопросов, персональные пояснения и пять практик.</p><span class="metric2-mock-info"><b>Отдельный чат психологической поддержки</b><small>Вита учитывает ответы мини-анкеты.</small></span>${action('Написать в чат')}`;
-  else if (kind === 'masterclass_chat_confirmation') content = `<small>ПСИХОЛОГИЧЕСКАЯ ПОДДЕРЖКА</small><b>Перейти в отдельный чат?</b><p>Создадим специальный диалог с Витой для обсуждения стресса, усталости и выгорания.</p>${action('Перейти в чат')}${action('Остаться на материале',true)}`;
+  else if (kind === 'masterclass_burnout') content = `<small>● ЭКОСИСТЕМА ЗДОРОВЬЯ</small><b>Это ещё стресс или уже выгорание?</b><p>Часть 1. Самоанализ: 10 вопросов с вариантами «Да» и «Нет».</p><span class="metric2-mock-info"><b>Результат самопроверки</b><small>После всех ответов показываются уровень состояния и три персональных пояснения.</small></span><p>Часть 3. Что дальше?</p>${action('Узнать, что поможет')}<span class="metric2-mock-info"><b>5 практик для восстановления</b><small>Гайд можно скачать в формате PDF.</small></span>${action('Скачать 5 практик (PDF)',true)}${action('Получить ответ специалиста')}`;
+  else if (kind === 'masterclass_chat_confirmation') content = `<small>ПСИХОЛОГИЧЕСКАЯ ПОДДЕРЖКА</small><b>Перейти в чат с Витой?</b><p>Откроется отдельный диалог психологической поддержки. Ответы мини-анкеты и источник мастер-класса будут учтены в разговоре.</p><span class="metric2-mock-info"><b>Это не общий медицинский диалог</b><small>Он предназначен для вопросов о стрессе, выгорании и психологическом самочувствии.</small></span>${action('Остаться здесь',true)}${action('Перейти в чат')}`;
   else if (kind === 'psychology_chat') content = `<small>● ПСИХОЛОГИЧЕСКАЯ ПОДДЕРЖКА</small><b>Чат с Витой</b><p>Отдельный диалог после мастер-класса. Здесь можно обсудить эмоциональное состояние и получить следующий небольшой шаг.</p><span class="metric2-mock-info"><b>Сессии с психологом</b><small>Первая 30-минутная консультация бесплатна.</small></span><span class="metric2-mock-input">Напишите сообщение…</span>`;
   else if (kind === 'psychology_chat_guide') content = `<small>ОБУЧЕНИЕ · 1 ИЗ 4</small><b>Сессии с психологом</b><p>По этой кнопке открываются проведённые и предоплаченные сессии, новая заявка и покупка сессии.</p>${action('Далее')}`;
   else if (kind === 'psychology_sessions') content = `<small>Ψ ПСИХОЛОГИЧЕСКАЯ ПОДДЕРЖКА</small><b>Сессии с психологом</b><p>Сессий проведено: <strong>0</strong> · Сессий предоплачено: <strong>0</strong></p><span class="metric2-mock-info"><b>＋ Новая сессия</b><small>30 минут бесплатно по пакету мастер-класса</small></span>${action('Закрыть',true)}${action('Купить')}`;
@@ -1731,6 +1731,16 @@ function renderMetric2(data) {
     summary.innerHTML += (reoffer.duration_buckets || []).map(item => `<article class="analytics-metric"><span>${escapeHtml(item.label)}</span><strong>${Number(item.users || 0).toLocaleString('ru-RU')}</strong><small>активное время на экране предложения</small></article>`).join('');
   }
   if (masterclassFlow) {
+    const material = (data.screens || []).find(item => item.id === 'masterclass_burnout');
+    const materialActions = Object.fromEntries(
+      (material?.actions || []).map(item => [item.id, item]),
+    );
+    summary.innerHTML += [
+      ['Скачали гайд',materialActions.download_guide?.users || 0,'уникальных пользователей'],
+      ['Самопроверка: не отвечали',materialActions.self_check_none?.users || 0,'открыли новую версию материала, но не выбрали ответ'],
+      ['Самопроверка: начали',materialActions.self_check_started?.users || 0,'ответили хотя бы на один вопрос · учёт с новой версии'],
+      ['Самопроверка: завершили',materialActions.self_check_completed?.users || 0,'ответили на все 10 вопросов · учёт с новой версии'],
+    ].map(([label,value,note]) => `<article class="analytics-metric"><span>${label}</span><strong>${Number(value).toLocaleString('ru-RU')}</strong><small>${note}</small></article>`).join('');
     const testPath = String(data.masterclasses?.test_path || '');
     const testLink = testPath
       ? new URL(testPath, location.origin).href

@@ -255,7 +255,11 @@ async function logout() {
 function queueLabel(item) {
   if (item.human_status === 'closed') return '<b>Закрыто</b>';
   if (!item.ai_enabled) return '<b class="ai-off">ИИ выключен</b>';
-  if (item.dialog_type === 'masterclass_psychology') return '<b>Сессия с психологом</b>';
+  if (item.dialog_type === 'masterclass_psychology') {
+    return item.human_ticket_id
+      ? '<b>Заявка психологу</b>'
+      : '<b>Чат с Витой</b>';
+  }
   if (item.human_channel === 'call') return '<b>Созвон</b>';
   if (item.human_channel === 'paid_consultation') return '<b>Оплаченная консультация</b>';
   if (item.human_channel === 'chat') return '<b>Чат</b>';
@@ -412,6 +416,9 @@ async function loadDetail(force = false) {
 
 function renderHeader() {
   const { conversation, profile } = state.detail;
+  const observingVitaChat = state.manager?.role === 'psychologist'
+    && conversation.dialog_type === 'masterclass_psychology'
+    && conversation.human_recipient_role !== 'psychologist';
   const name = profile.preferred_name || `Пользователь ${conversation.chel_id.slice(-6)}`;
   $('#chatUserName').textContent = name;
   $('#profileName').textContent = name;
@@ -420,6 +427,8 @@ function renderHeader() {
     ? `${conversation.dialog_type === 'masterclass_psychology' ? 'Заявка № ' : ''}${conversation.human_ticket_id} · ${conversation.human_status === 'closed' ? 'закрыто' : conversation.human_channel === 'paid_consultation' ? 'оплаченная консультация' : conversation.human_channel === 'call' ? 'созвон' : conversation.human_channel === 'chat' ? 'чат' : 'формат не выбран'}`
     : `Диалог ${conversation.id.slice(0, 8)}`;
   $('#aiEnabled').checked = Boolean(conversation.ai_enabled);
+  $('#aiEnabled').disabled = observingVitaChat || state.busy;
+  $('#aiSwitchLabel').classList.toggle('read-only', observingVitaChat);
   $('#aiSwitchTitle').textContent = conversation.ai_enabled ? 'ИИ отвечает' : 'ИИ приостановлен';
   const humanLabel = state.manager?.role === 'doctor'
     ? 'врач' : state.manager?.role === 'psychologist' ? 'психолог' : 'менеджер';
@@ -429,7 +438,9 @@ function renderHeader() {
     : `Новые сообщения ожидает ${humanLabel}`;
   const notice = $('#managerModeNotice');
   notice.classList.toggle('ai-off', !conversation.ai_enabled);
-  $('#managerModeText').textContent = conversation.ai_enabled
+  $('#managerModeText').textContent = observingVitaChat
+    ? 'Режим просмотра: диалог ведёт Вита. Управление станет доступно после обращения пользователя к психологу или заявки на сессию.'
+    : conversation.ai_enabled
     ? `ИИ включён и отвечает с учётом истории этого диалога. ${humanLabelTitle} также может писать пользователю.`
     : conversation.human_status === 'connected'
       ? `ИИ приостановлен. Пользователь общается с ${humanLabel === 'врач' ? 'врачом' : humanLabel === 'психолог' ? 'психологом' : 'менеджером'}; на новые сообщения ИИ не отвечает.`
@@ -450,17 +461,20 @@ function renderHeader() {
   const psychologyComplete = $('#psychologySessionCompleteButton');
   const canCompletePsychologySession = state.manager?.role === 'psychologist'
     && conversation.dialog_type === 'masterclass_psychology'
+    && !observingVitaChat
     && state.detail.psychology_session?.status === 'requested';
   psychologyComplete.classList.toggle('hidden', !canCompletePsychologySession);
   psychologyComplete.disabled = state.busy;
   const psychologyPayment = $('#psychologySessionPaymentInstructionButton');
   const canOfferPsychologySessions = state.manager?.role === 'psychologist'
-    && conversation.dialog_type === 'masterclass_psychology';
+    && conversation.dialog_type === 'masterclass_psychology'
+    && !observingVitaChat;
   psychologyPayment.classList.toggle('hidden', !canOfferPsychologySessions);
   psychologyPayment.disabled = state.busy;
   const psychologyInvite = $('#psychologySessionInviteButton');
   psychologyInvite.classList.toggle('hidden', !canOfferPsychologySessions);
   psychologyInvite.disabled = state.busy;
+  $('#managerReplyForm').classList.toggle('hidden', observingVitaChat);
 }
 
 function messageDocuments(metadata) {

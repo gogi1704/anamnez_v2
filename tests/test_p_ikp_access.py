@@ -374,6 +374,7 @@ class IkpAccessTests(unittest.TestCase):
         index = (project_root / 'index.html').read_text(encoding='utf-8')
         script = (project_root / 'static' / 'app.js').read_text(encoding='utf-8')
         styles = (project_root / 'static' / 'styles.css').read_text(encoding='utf-8')
+        dashboard = (project_root / 'static' / 'dashboard.js').read_text(encoding='utf-8')
 
         self.assertIn('id="psychologyChatGuide"', index)
         self.assertIn('id="psychologyGuideRepeat"', index)
@@ -414,6 +415,14 @@ class IkpAccessTests(unittest.TestCase):
         self.assertIn('data-psychology-sessions-open', script)
         self.assertIn("entry.psychology_chat_started", script)
         self.assertIn("trackMasterclassScreen('masterclass_returning')", script)
+        self.assertIn("trackMasterclassAction('self_check_started'", script)
+        self.assertIn("trackMasterclassAction('self_check_completed'", script)
+        self.assertIn("trackMasterclassAction('material_tracking_ready'", script)
+        self.assertIn("trackMasterclassAction('download_guide'", script)
+        self.assertIn('Самопроверка: не отвечали', dashboard)
+        self.assertIn('Самопроверка: начали', dashboard)
+        self.assertIn('Самопроверка: завершили', dashboard)
+        self.assertIn('Скачали гайд', dashboard)
         self.assertIn("state.identity?.psychology_conversation_id", script)
         self.assertIn("function isIkpEntryUrl()", script)
         self.assertIn('id="psychologySessionRequestManager"', index)
@@ -482,6 +491,58 @@ class IkpAccessTests(unittest.TestCase):
             contents = [item['content'] for item in db.list_messages(source['id'])]
             self.assertIn('Мне удобно вечером.', contents)
             self.assertIn('Хорошо, согласуем время.', contents)
+        finally:
+            db.set_current_chel_id(previous_chel_id)
+
+    def test_psychologist_can_observe_every_vita_chat_before_handoff(self):
+        psychologist = db.admin_create_staff(
+            'Психолог-наблюдатель', 'psychologist.observer', '123456',
+            role='psychologist',
+        )
+        user_id = 'chel_psychology_observer_0001'
+        db.ensure_user(user_id, pending=True)
+        previous_chel_id = db.current_chel_id()
+        try:
+            db.set_current_chel_id(user_id)
+            vita_chat = db.create_conversation(
+                'Психологическая поддержка',
+                dialog_type='masterclass_psychology',
+            )
+            greeting = db.add_message(
+                vita_chat['id'], 'assistant', 'Здравствуйте! Я Вита.', 'psychologist',
+            )
+            ordinary_chat = db.create_conversation('Обычный диалог')
+
+            queue = db.manager_list_conversations(
+                '', 'open', include_related=True,
+                staff_role='psychologist', staff_id=psychologist['id'],
+            )
+            self.assertIn(vita_chat['id'], [item['id'] for item in queue])
+            self.assertNotIn(ordinary_chat['id'], [item['id'] for item in queue])
+            self.assertIsNotNone(
+                db.manager_conversation_detail(vita_chat['id'], 'psychologist'),
+            )
+            self.assertIsNone(
+                db.manager_conversation_detail(ordinary_chat['id'], 'psychologist'),
+            )
+            marked = db.manager_mark_conversation_read(
+                vita_chat['id'], psychologist['id'], 'psychologist', greeting['id'],
+            )
+            self.assertEqual(marked['last_read_message_id'], greeting['id'])
+            with self.assertRaisesRegex(ValueError, 'Диалог не найден'):
+                db.manager_add_reply(
+                    vita_chat['id'], 'Ответ до передачи',
+                    psychologist['display_name'], 'psychologist',
+                )
+
+            manager_script = (
+                Path(__file__).resolve().parents[1] / 'static' / 'manager.js'
+            ).read_text(encoding='utf-8')
+            self.assertIn("const observingVitaChat", manager_script)
+            self.assertIn(
+                "$('#managerReplyForm').classList.toggle('hidden', observingVitaChat)",
+                manager_script,
+            )
         finally:
             db.set_current_chel_id(previous_chel_id)
 

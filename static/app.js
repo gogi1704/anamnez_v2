@@ -1019,6 +1019,7 @@ function renderMasterclassBurnout(entry) {
   </article>`;
   $('#onboarding').scrollTop = 0;
   trackMasterclassScreen('masterclass_burnout');
+  trackMasterclassAction('material_tracking_ready', 'masterclass_burnout');
 }
 
 const MASTERCLASS_BURNOUT_DETAILS = [
@@ -1055,6 +1056,10 @@ function updateMasterclassBurnoutResult() {
   if (!form || !result) return;
   const answers = [...form.querySelectorAll('input:checked')];
   const yes = answers.filter(input => input.value === 'yes').length;
+  if (answers.length > 0 && form.dataset.analyticsStarted !== '1') {
+    form.dataset.analyticsStarted = '1';
+    trackMasterclassAction('self_check_started', 'masterclass_burnout');
+  }
   if (answers.length < 10) {
     result.innerHTML = `<b>Отвечено ${answers.length} из 10</b><span>Продолжайте — результат появится после последнего ответа.</span>`;
     return;
@@ -1068,6 +1073,10 @@ function updateMasterclassBurnoutResult() {
     stages.innerHTML = MASTERCLASS_BURNOUT_DETAILS[level].map((item, index) => `
       <article><i>${index + 1}</i><b>${escapeHtml(item[0])}</b><p>${escapeHtml(item[1])}</p></article>
     `).join('');
+  }
+  if (form.dataset.analyticsCompleted !== '1') {
+    form.dataset.analyticsCompleted = '1';
+    trackMasterclassAction('self_check_completed', 'masterclass_burnout');
   }
   trackEvent('masterclass_burnout_test_completed', {screen:'masterclass_burnout', context:'masterclass', yes_count:yes, level});
 }
@@ -1092,6 +1101,7 @@ function toggleMasterclassBurnoutPanel(panelName) {
 }
 
 function downloadMasterclassPractices() {
+  trackMasterclassAction('download_guide', 'masterclass_burnout');
   trackEvent('masterclass_burnout_practices_downloaded', {screen:'masterclass_burnout', context:'masterclass'});
   const link = document.createElement('a');
   link.href = '/api/masterclass-practices/pdf';
