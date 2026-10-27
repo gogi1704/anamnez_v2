@@ -610,7 +610,7 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
             )
         if path in {
             "/api/admin/dashboard", "/api/admin/table", "/api/admin/ai-costs",
-            "/api/admin/analytics", "/api/admin/metric2",
+            "/api/admin/analytics", "/api/admin/retention", "/api/admin/metric2",
             "/api/admin/service-results",
             "/api/admin/experiments",
             "/api/admin/content-texts",
@@ -797,6 +797,14 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                     return self._json(202, {"status": "building", "retry_after_ms": 1500})
                 except analytics.ReportBuildFailed as exc:
                     return self._json(503, {"detail": f"Не удалось рассчитать отчёт: {exc}"})
+                except (ValueError, TypeError) as exc:
+                    return self._json(422, {"detail": str(exc)})
+            if path == "/api/admin/retention":
+                try:
+                    return self._json(200, analytics.retention_report(
+                        query.get("period", ["30"])[0],
+                        query.get("branch", [""])[0],
+                    ))
                 except (ValueError, TypeError) as exc:
                     return self._json(422, {"detail": str(exc)})
             if path == "/api/admin/ai-costs":

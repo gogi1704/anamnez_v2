@@ -4,6 +4,7 @@ import tempfile
 import threading
 import time
 import unittest
+from unittest import mock
 from pathlib import Path
 
 from backend import analytics
@@ -60,6 +61,48 @@ class AnalyticsTests(unittest.TestCase):
         with analytics.connection() as conn:
             properties = json.loads(conn.execute("SELECT properties FROM analytics_events").fetchone()[0])
         self.assertEqual(properties, {"method": "anonymous"})
+
+    def test_retention_uses_small_incremental_index_and_branch_filter(self):
+        def record(at, chel_id, event_id, event_name, properties=None):
+            with mock.patch("backend.analytics._now", return_value=at):
+                analytics.record_events(chel_id, [{
+                    "event_id": event_id,
+                    "session_id": f"session-{chel_id}",
+                    "event_name": event_name,
+                    "properties": properties or {},
+                }])
+
+        record("2026-09-01T09:00:00+00:00", "RET-MED", "ret-med-landing", "landing_viewed")
+        record("2026-09-01T09:01:00+00:00", "RET-MED", "ret-med-route", "entry_route_selected", {"route":"medical_exam"})
+        record("2026-09-02T09:00:00+00:00", "RET-MED", "ret-med-day1", "message_sent")
+        record("2026-09-10T09:00:00+00:00", "RET-MED", "ret-med-return", "message_sent")
+        record("2026-09-01T10:00:00+00:00", "RET-MC", "ret-mc-landing", "landing_viewed")
+        record("2026-09-01T10:01:00+00:00", "RET-MC", "ret-mc-route", "entry_route_selected", {"route":"masterclass"})
+        record("2026-09-01T10:02:00+00:00", "RET-MC", "ret-mc-action", "onboarding_screen_action", {"context":"masterclass", "action":"self_check_started"})
+
+        medical = analytics.retention_report("all", "medical_exam")
+        self.assertEqual(medical["summary"]["new_users"], 1)
+        self.assertEqual(medical["summary"]["active_users"], 1)
+        self.assertEqual(medical["summary"]["repeat_users"], 1)
+        self.assertEqual(medical["summary"]["returned_users"], 1)
+        self.assertEqual(medical["lifecycle"], {
+            "new_users": 1,
+            "activated_users": 1,
+            "repeat_users": 1,
+            "returned_users": 1,
+        })
+        self.assertEqual(medical["retention"]["d1"]["percent"], 100.0)
+        masterclass = analytics.retention_report("all", "masterclass")
+        self.assertEqual(masterclass["summary"]["new_users"], 1)
+        self.assertEqual(masterclass["summary"]["active_users"], 1)
+
+        with analytics.connection() as conn:
+            conn.execute("DELETE FROM analytics_events")
+            conn.commit()
+        self.assertEqual(
+            analytics.retention_report("all", "medical_exam")["summary"],
+            medical["summary"],
+        )
 
     def test_report_cache_does_not_serialize_different_expensive_reports(self):
         first_started = threading.Event()

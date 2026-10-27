@@ -50,6 +50,7 @@ button:hover,.button:hover { background:var(--green-dark); }
 .favorites-count { display:grid; place-items:center; min-width:21px; height:21px; margin-left:7px; padding:0 5px; border-radius:11px; color:var(--green); background:var(--mint); font-size:10px; }
 .admin-tabs button.active .favorites-count { color:var(--green-dark); background:#fff; }
 .dashboard.show-favorites > :not(.dashboard-header):not(.admin-tabs):not(.favorites-admin):not(.dashboard-error) { display:none!important; }
+.dashboard.show-retention > :not(.dashboard-header):not(.admin-tabs):not(.retention-admin):not(.dashboard-error) { display:none!important; }
 .dashboard.show-managers > :not(.dashboard-header):not(.admin-tabs):not(.manager-admin):not(.dashboard-error) { display:none!important; }
 .dashboard.show-examinations > :not(.dashboard-header):not(.admin-tabs):not(.examination-admin):not(.dashboard-error) { display:none!important; }
 .dashboard.show-costs > :not(.dashboard-header):not(.admin-tabs):not(.costs-admin):not(.dashboard-error) { display:none!important; }
@@ -683,6 +684,32 @@ tbody tr:hover { background:#f8fbf9; }
 @media(max-width:700px){.schedule-revenue-controls,.schedule-revenue-summary,.schedule-revenue-group-cards{grid-template-columns:1fr}.schedule-revenue-controls button{width:100%}.schedule-revenue-summary article,.schedule-revenue-group-cards article{min-height:0}.sales-dynamics-heading{display:grid;gap:14px}.sales-dynamics-heading label{width:100%;flex:auto}.sales-dynamics-chart{height:250px}.sales-dynamics-bars{height:190px}}
 
 .content-texts-admin { display:grid; gap:18px; }
+.retention-admin { display:grid; gap:18px; }
+.retention-heading-panel .panel-heading p:last-child { max-width:860px; margin:7px 0 0; color:var(--muted); font-size:12px; line-height:1.55; }
+.retention-filters { display:grid; grid-template-columns:minmax(180px,240px) minmax(220px,300px) auto; align-items:end; gap:12px; margin-top:18px; }
+.retention-filters label { color:var(--muted); font-size:10px; font-weight:800; text-transform:uppercase; }
+.retention-filters select { display:block; width:100%; height:46px; margin-top:6px; padding:0 12px; border:1px solid var(--line); border-radius:11px; background:#fff; color:var(--ink); font:inherit; text-transform:none; }
+.retention-filters button { min-height:46px; padding:0 20px; border:0; border-radius:11px; background:var(--green); color:#fff; font:inherit; font-weight:800; cursor:pointer; }
+.retention-lifecycle-chart { display:grid; gap:13px; margin-top:20px; }
+.retention-lifecycle-stage { display:grid; grid-template-columns:minmax(180px,240px) minmax(0,1fr) 118px; align-items:center; gap:16px; }
+.retention-lifecycle-copy { display:grid; gap:3px; }
+.retention-lifecycle-copy strong { color:var(--ink); font-size:13px; }
+.retention-lifecycle-copy small { color:var(--muted); font-size:10px; line-height:1.4; }
+.retention-lifecycle-track { height:42px; overflow:hidden; border-radius:12px; background:#edf3f0; }
+.retention-lifecycle-track i { display:flex; align-items:center; min-width:4px; height:100%; padding:0 12px; border-radius:inherit; color:#fff; background:linear-gradient(90deg,#176f55,#67aa8e); font-style:normal; font-size:11px; font-weight:800; white-space:nowrap; transition:width .35s ease; }
+.retention-lifecycle-value { text-align:right; }
+.retention-lifecycle-value strong,.retention-lifecycle-value small { display:block; }
+.retention-lifecycle-value strong { color:var(--green-dark); font-size:25px; line-height:1.05; }
+.retention-lifecycle-value small { margin-top:4px; color:var(--muted); font-size:9px; }
+.retention-rates { display:grid; grid-template-columns:repeat(3,minmax(0,1fr)); gap:12px; }
+.retention-rates article { min-height:132px; padding:18px; border:1px solid var(--line); border-radius:17px; background:#fff; box-shadow:0 10px 28px rgba(34,72,56,.06); }
+.retention-rates span,.retention-rates strong,.retention-rates small { display:block; }
+.retention-rates span { color:var(--muted); font-size:11px; font-weight:700; }
+.retention-rates strong { margin-top:8px; color:var(--green-dark); font-size:29px; line-height:1.1; }
+.retention-rates small { margin-top:9px; color:var(--muted); font-size:10px; line-height:1.45; }
+.retention-rates { margin-top:18px; }
+.retention-note { margin:14px 0 0; padding:12px 14px; border-radius:12px; color:#587067; background:#f1f7f4; font-size:10px; line-height:1.55; }
+@media(max-width:760px){.retention-filters,.retention-rates{grid-template-columns:1fr}.retention-filters button{width:100%}.retention-rates article{min-height:0}.retention-lifecycle-stage{grid-template-columns:1fr auto;gap:8px}.retention-lifecycle-track{grid-column:1/-1;grid-row:2}.retention-lifecycle-value{grid-column:2;grid-row:1}}
 .content-text-tabs { display:flex; flex-wrap:wrap; gap:8px; margin-top:16px; }
 .content-text-tabs button { min-height:42px; padding:9px 14px; border:1px solid #bdd5c9; border-radius:11px; background:#f5faf7; color:#50665c; font:inherit; font-weight:700; }
 .content-text-tabs button.active { border-color:#1f8667; background:#e6f4ed; color:#126549; }

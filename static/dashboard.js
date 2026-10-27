@@ -1403,6 +1403,44 @@ function renderAnalytics(data) {
   if (activeAdminView === 'favorites') renderFavorites();
 }
 
+function renderRetention(data = {}) {
+  const lifecycle = data.lifecycle || {};
+  const base = Number(lifecycle.new_users || 0);
+  const stages = [
+    ['Впервые пришли',base,'открыли Консилиум в выбранный период'],
+    ['Начали пользоваться',lifecycle.activated_users,'совершили хотя бы одно полезное действие'],
+    ['Пользовались повторно',lifecycle.repeat_users,'были активны минимум в два разных дня'],
+    ['Вернулись после паузы',lifecycle.returned_users,'возобновили активность после перерыва 7+ дней'],
+  ];
+  $('#retentionLifecycleChart').innerHTML = stages.map(([label,rawValue,note],index) => {
+    const value = Number(rawValue || 0);
+    const percent = base ? Math.min(100,Math.round(value / base * 1000) / 10) : 0;
+    const previous = index ? Number(stages[index - 1][1] || 0) : base;
+    const stepPercent = previous ? Math.min(100,Math.round(value / previous * 1000) / 10) : 0;
+    return `<div class="retention-lifecycle-stage">
+      <div class="retention-lifecycle-copy"><strong>${escapeHtml(label)}</strong><small>${escapeHtml(note)}</small></div>
+      <div class="retention-lifecycle-track" aria-label="${escapeHtml(label)}: ${value.toLocaleString('ru-RU')}"><i style="width:${Math.max(percent,value ? 2 : 0)}%">${percent.toLocaleString('ru-RU')}%</i></div>
+      <div class="retention-lifecycle-value"><strong>${value.toLocaleString('ru-RU')}</strong><small>${index ? `${stepPercent.toLocaleString('ru-RU')}% от прошлого этапа` : 'база графика'}</small></div>
+    </div>`;
+  }).join('');
+  const rates = data.retention || {};
+  $('#retentionRates').innerHTML = [['D1',rates.d1],['D7',rates.d7],['D30',rates.d30]].map(([label,item = {}]) => (
+    `<article><span>${label}</span><strong>${Number(item.percent || 0).toLocaleString('ru-RU')}%</strong><small>${Number(item.users || 0).toLocaleString('ru-RU')} из ${Number(item.eligible_users || 0).toLocaleString('ru-RU')} пользователей</small></article>`
+  )).join('');
+  const unclassified = Number(data.diagnostics?.unclassified_users || 0);
+  $('#retentionNote').textContent = unclassified
+    ? `Сбор жизненного цикла ведётся инкрементально. Пока не определена ветка у ${unclassified.toLocaleString('ru-RU')} пользователей; они входят только в показатель «Все ветки».`
+    : 'Данные обновляются вместе с действиями пользователей без полного пересчёта таблицы событий.';
+}
+
+async function loadRetention() {
+  return withPanelLoading('#retentionAdminView', async () => {
+    const params = new URLSearchParams({period:$('#retentionPeriod').value});
+    if ($('#retentionBranch').value) params.set('branch',$('#retentionBranch').value);
+    renderRetention(await adminFetch(`/api/admin/retention?${params}`));
+  }, 'Считаем жизненный цикл…');
+}
+
 async function loadAnalytics() {
   return withPanelLoading('#analyticsAdminView', async () => {
     const params = new URLSearchParams({period:$('#analyticsPeriod').value,recent_page:String(analyticsRecentPage),recent_limit:'25'});
@@ -2591,8 +2629,9 @@ async function testFunnelMonitor(analysis = 'all', button = null) {
 }
 
 function showAdminView(view) {
-  activeAdminView = ['favorites','analytics','service_results','schedule_revenue','experiments','metric2','content_texts','personality','monitor','ikp','managers','examinations','costs'].includes(view) ? view : 'dashboard';
+  activeAdminView = ['favorites','retention','analytics','service_results','schedule_revenue','experiments','metric2','content_texts','personality','monitor','ikp','managers','examinations','costs'].includes(view) ? view : 'dashboard';
   const favoritesVisible = activeAdminView === 'favorites';
+  const retentionVisible = activeAdminView === 'retention';
   const analyticsVisible = activeAdminView === 'analytics';
   const serviceResultsVisible = activeAdminView === 'service_results';
   const scheduleRevenueVisible = activeAdminView === 'schedule_revenue';
@@ -2608,6 +2647,7 @@ function showAdminView(view) {
   $('#dashboard').classList.toggle('show-managers', managersVisible);
   $('#dashboard').classList.toggle('show-examinations', examinationsVisible);
   $('#dashboard').classList.toggle('show-costs', costsVisible);
+  $('#dashboard').classList.toggle('show-retention', retentionVisible);
   $('#dashboard').classList.toggle('show-analytics', analyticsVisible);
   $('#dashboard').classList.toggle('show-service-results', serviceResultsVisible);
   $('#dashboard').classList.toggle('show-schedule-revenue', scheduleRevenueVisible);
@@ -2619,6 +2659,7 @@ function showAdminView(view) {
   $('#dashboard').classList.toggle('show-ikp', ikpVisible);
   $('#dashboard').classList.toggle('show-favorites', favoritesVisible);
   $('#favoritesAdminView').classList.toggle('hidden', !favoritesVisible);
+  $('#retentionAdminView').classList.toggle('hidden', !retentionVisible);
   $('#analyticsAdminView').classList.toggle('hidden', !analyticsVisible);
   $('#serviceResultsAdminView').classList.toggle('hidden', !serviceResultsVisible);
   $('#scheduleRevenueAdminView').classList.toggle('hidden', !scheduleRevenueVisible);
@@ -2633,6 +2674,7 @@ function showAdminView(view) {
   $('#costsAdminView').classList.toggle('hidden', !costsVisible);
   $('#dashboardTab').classList.toggle('active', activeAdminView === 'dashboard');
   $('#favoritesTab').classList.toggle('active', favoritesVisible);
+  $('#retentionTab').classList.toggle('active', retentionVisible);
   $('#analyticsTab').classList.toggle('active', analyticsVisible);
   $('#serviceResultsTab').classList.toggle('active', serviceResultsVisible);
   $('#scheduleRevenueTab').classList.toggle('active', scheduleRevenueVisible);
@@ -2657,6 +2699,7 @@ async function loadAdminViewData(view = activeAdminView, {force = false} = {}) {
   let request;
   if (view === 'dashboard') request = loadAllTables();
   else if (view === 'favorites') request = loadFavoriteSources();
+  else if (view === 'retention') request = loadRetention();
   else if (view === 'managers') request = loadStaff();
   else if (view === 'examinations') request = loadExaminations();
   else if (view === 'costs') request = loadCosts();
@@ -3086,6 +3129,7 @@ $('#logoutButton').addEventListener('click', () => {
 });
 $('#dashboardTab').addEventListener('click', () => showAdminView('dashboard'));
 $('#favoritesTab').addEventListener('click', () => showAdminView('favorites'));
+$('#retentionTab').addEventListener('click', () => showAdminView('retention'));
 $('#analyticsTab').addEventListener('click', () => showAdminView('analytics'));
 $('#serviceResultsTab').addEventListener('click', () => showAdminView('service_results'));
 $('#scheduleRevenueTab').addEventListener('click', () => showAdminView('schedule_revenue'));
@@ -3225,6 +3269,9 @@ $('#cancelExaminationEdit').addEventListener('click', () => {
   showExaminationStatus('');
 });
 $('#costsPeriod').addEventListener('change', () => loadCosts().catch(showDashboardError));
+$('#retentionApply').addEventListener('click', () => {
+  loadRetention().catch(showDashboardError);
+});
 $('#analyticsApply').addEventListener('click', () => {
   analyticsRecentPage = 1;
   loadAnalytics().catch(showDashboardError);

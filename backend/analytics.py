@@ -174,6 +174,10 @@ def _marketer_variant_business_metrics(chel_ids: set[str]) -> dict:
 
 ALLOWED_EVENTS = {
     "landing_viewed", "experiment_assigned", "welcome_viewed", "welcome_continued", "auth_gate_viewed",
+    "entry_route_viewed", "entry_route_selected", "masterclass_psychology_chat_opened",
+    "masterclass_profile_completed", "psychology_session_requested",
+    "psychology_session_manager_help_requested", "psychology_session_payment_created",
+    "lab_specialist_analysis_requested", "weight_control_dialog_opened",
     "registration_method_selected", "anonymous_warning_viewed", "anonymous_warning_cancelled",
     "registration_completed", "registration_failed", "messenger_auth_started", "funnel_action",
     "onboarding_screen_viewed", "onboarding_screen_action",
@@ -227,6 +231,32 @@ ALLOWED_PROPERTIES = {
     "experiment_key", "experiment_variant", "funnel_version", "marketer_variant",
     "reoffer_id", "duration_bucket", "active_seconds", "examination_date", "provider_count",
     "question_count", "recommended_count",
+    "route", "first_entry",
+}
+
+RETENTION_BRANCHES = {"medical_exam", "masterclass", "results", "other"}
+RETENTION_BRANCH_LABELS = {
+    "medical_exam": "Медосмотр",
+    "masterclass": "Мастер-класс",
+    "results": "Результаты анализов",
+    "other": "Другой вопрос",
+}
+RETENTION_MEANINGFUL_EVENTS = {
+    "welcome_continued", "registration_completed", "question_answered",
+    "onboarding_screen_action",
+    "questionnaire_completed", "examination_selected",
+    "examinations_selection_completed", "payment_method_selected",
+    "payment_succeeded", "consultation_payment_succeeded",
+    "psychology_session_payment_created", "conversation_created",
+    "message_sent", "human_requested", "psychology_session_requested",
+    "psychology_session_manager_help_requested", "weight_control_dialog_opened",
+    "tube_linked", "lab_results_requested", "lab_results_found",
+    "lab_interpretation_started", "lab_interpretation_completed",
+    "lab_specialist_analysis_requested",
+    "health_passport_generated", "result_entry_started",
+    "masterclass_profile_completed", "masterclass_psychology_chat_opened",
+    "masterclass_burnout_test_completed", "masterclass_burnout_practices_downloaded",
+    "psychology_conversation_reset",
 }
 
 FUNNEL_BREAKDOWNS = {
@@ -1077,9 +1107,129 @@ def init_db() -> None:
             CREATE INDEX IF NOT EXISTS idx_analytics_events_session ON analytics_events(session_id, received_at);
             CREATE INDEX IF NOT EXISTS idx_analytics_events_step ON analytics_events(event_name, step_key, received_at);
             CREATE INDEX IF NOT EXISTS idx_analytics_sessions_time ON analytics_sessions(started_at, last_seen_at);
+            CREATE TABLE IF NOT EXISTS analytics_user_lifecycle (
+                chel_id TEXT PRIMARY KEY,
+                branch TEXT NOT NULL DEFAULT '',
+                first_seen_at TEXT NOT NULL,
+                first_seen_day TEXT NOT NULL,
+                last_seen_at TEXT NOT NULL,
+                first_activity_at TEXT,
+                last_activity_at TEXT,
+                last_activity_day TEXT NOT NULL DEFAULT '',
+                active_days INTEGER NOT NULL DEFAULT 0,
+                last_returned_at TEXT,
+                last_returned_day TEXT NOT NULL DEFAULT ''
+            );
+            CREATE INDEX IF NOT EXISTS idx_analytics_lifecycle_branch_first
+                ON analytics_user_lifecycle(branch, first_seen_day);
+            CREATE INDEX IF NOT EXISTS idx_analytics_lifecycle_branch_activity
+                ON analytics_user_lifecycle(branch, last_activity_day);
+            CREATE INDEX IF NOT EXISTS idx_analytics_lifecycle_returned
+                ON analytics_user_lifecycle(branch, last_returned_day);
+            CREATE TABLE IF NOT EXISTS analytics_user_activity_days (
+                chel_id TEXT NOT NULL,
+                activity_date TEXT NOT NULL,
+                branch TEXT NOT NULL DEFAULT '',
+                first_activity_at TEXT NOT NULL,
+                PRIMARY KEY (chel_id, activity_date)
+            );
+            CREATE INDEX IF NOT EXISTS idx_analytics_activity_branch_day
+                ON analytics_user_activity_days(branch, activity_date, chel_id);
             """
         )
         conn.commit()
+
+
+def _retention_branch(event: dict) -> str:
+    properties = json.loads(event.get("properties") or "{}")
+    route = str(properties.get("route") or "").strip().lower()
+    route_map = {
+        "medical_exam": "medical_exam", "masterclass": "masterclass",
+        "results": "results", "other": "other",
+    }
+    if route in route_map:
+        return route_map[route]
+    context = str(properties.get("context") or "").strip().lower()
+    screen = str(event.get("screen") or properties.get("screen") or "").strip().lower()
+    event_name = str(event.get("event_name") or "")
+    if context == "masterclass" or screen.startswith("masterclass_"):
+        return "masterclass"
+    if context == "result" or event_name.startswith("lab_") or event_name == "result_entry_started":
+        return "results"
+    if context == "onboarding" or event_name in {
+        "questionnaire_started", "question_answered", "questionnaire_completed",
+        "examinations_opened", "examination_selected", "examinations_selection_completed",
+    }:
+        return "medical_exam"
+    return ""
+
+
+def _retention_day(timestamp: str) -> str:
+    try:
+        value = datetime.fromisoformat(str(timestamp).replace("Z", "+00:00"))
+    except ValueError:
+        value = datetime.now(timezone.utc)
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    return value.astimezone(REPORT_TIMEZONE).date().isoformat()
+
+
+def _update_retention_index(conn: sqlite3.Connection, events: list[dict]) -> None:
+    """Update the small lifecycle index without scanning the events table."""
+    for event in events:
+        chel_id = str(event["chel_id"])
+        timestamp = str(event["received_at"])
+        branch = _retention_branch(event)
+        conn.execute(
+            """INSERT INTO analytics_user_lifecycle
+               (chel_id,branch,first_seen_at,first_seen_day,last_seen_at)
+               VALUES (?,?,?,?,?)
+               ON CONFLICT(chel_id) DO UPDATE SET
+                 last_seen_at=excluded.last_seen_at,
+                 branch=CASE
+                   WHEN analytics_user_lifecycle.branch='' AND excluded.branch<>''
+                   THEN excluded.branch ELSE analytics_user_lifecycle.branch END""",
+            (chel_id, branch, timestamp, _retention_day(timestamp), timestamp),
+        )
+        if branch:
+            conn.execute(
+                "UPDATE analytics_user_activity_days SET branch=? WHERE chel_id=? AND branch=''",
+                (branch, chel_id),
+            )
+        if event["event_name"] not in RETENTION_MEANINGFUL_EVENTS:
+            continue
+        lifecycle = conn.execute(
+            "SELECT branch,last_activity_day FROM analytics_user_lifecycle WHERE chel_id=?",
+            (chel_id,),
+        ).fetchone()
+        activity_day = _retention_day(timestamp)
+        effective_branch = str(lifecycle["branch"] or branch)
+        inserted = conn.execute(
+            """INSERT OR IGNORE INTO analytics_user_activity_days
+               (chel_id,activity_date,branch,first_activity_at) VALUES (?,?,?,?)""",
+            (chel_id, activity_day, effective_branch, timestamp),
+        ).rowcount
+        if not inserted:
+            continue
+        previous_day = str(lifecycle["last_activity_day"] or "")
+        returned = False
+        if previous_day:
+            returned = (
+                datetime.strptime(activity_day, "%Y-%m-%d").date()
+                - datetime.strptime(previous_day, "%Y-%m-%d").date()
+            ).days >= 8
+        conn.execute(
+            """UPDATE analytics_user_lifecycle SET
+                 first_activity_at=COALESCE(first_activity_at,?),
+                 last_activity_at=?, last_activity_day=?, active_days=active_days+1,
+                 last_returned_at=CASE WHEN ? THEN ? ELSE last_returned_at END,
+                 last_returned_day=CASE WHEN ? THEN ? ELSE last_returned_day END
+               WHERE chel_id=?""",
+            (
+                timestamp, timestamp, activity_day,
+                int(returned), timestamp, int(returned), activity_day, chel_id,
+            ),
+        )
 
 
 def _safe_scalar(value: Any) -> str | int | float | bool | None:
@@ -1180,6 +1330,7 @@ def record_events(chel_id: str, events: list[dict], *, user_agent: str = "", is_
     if not prepared:
         return {"accepted": 0, "duplicates": 0}
     accepted = 0
+    accepted_events = []
     with _write_lock, connection() as conn:
         for event in prepared:
             cursor = conn.execute(
@@ -1194,6 +1345,7 @@ def record_events(chel_id: str, events: list[dict], *, user_agent: str = "", is_
             )
             if cursor.rowcount:
                 accepted += 1
+                accepted_events.append(event)
                 conn.execute(
                     """INSERT INTO analytics_sessions
                     (session_id, chel_id, started_at, last_seen_at, entry_source, campaign,
@@ -1209,6 +1361,7 @@ def record_events(chel_id: str, events: list[dict], *, user_agent: str = "", is_
                      event["campaign"], event["registration_method"], event["device_type"],
                      event["operating_system"], event["browser"], event["app_mode"]),
                 )
+        _update_retention_index(conn, accepted_events)
         conn.commit()
     # Do not invalidate every aggregate on every live user event. Under normal
     # traffic that made the report cache effectively useless and repeatedly
@@ -1238,6 +1391,162 @@ def _period_start(period: str) -> str | None:
     now = datetime.now(timezone.utc)
     start = now.replace(hour=0, minute=0, second=0, microsecond=0) if period == "today" else now - timedelta(days=days)
     return start.isoformat()
+
+
+def _retention_period(period: str) -> tuple[str | None, str]:
+    today = datetime.now(REPORT_TIMEZONE).date()
+    if period == "all":
+        return None, today.isoformat()
+    if period == "today":
+        days = 1
+    else:
+        days = max(1, min(int(period or "30"), 3650))
+    return (today - timedelta(days=days - 1)).isoformat(), today.isoformat()
+
+
+def retention_report(period: str = "30", branch: str = "") -> dict:
+    """Return lifecycle metrics from compact per-user/per-day indexes only."""
+    branch = str(branch or "").strip().lower()
+    if branch and branch not in RETENTION_BRANCHES:
+        raise ValueError("Неизвестная ветка жизненного цикла")
+    start_day, end_day = _retention_period(period)
+    lifecycle_branch = " AND l.branch=?" if branch else ""
+    activity_branch = " AND a.branch=?" if branch else ""
+    lifecycle_params = [branch] if branch else []
+    activity_params = [branch] if branch else []
+    cohort_period = ""
+    cohort_params: list[str] = []
+    if start_day:
+        cohort_period += " AND l.first_seen_day>=?"
+        cohort_params.append(start_day)
+    cohort_period += " AND l.first_seen_day<=?"
+    cohort_params.append(end_day)
+    activity_period = ""
+    activity_period_params: list[str] = []
+    if start_day:
+        activity_period += " AND a.activity_date>=?"
+        activity_period_params.append(start_day)
+    activity_period += " AND a.activity_date<=?"
+    activity_period_params.append(end_day)
+
+    with connection() as conn:
+        new_users = int(conn.execute(
+            "SELECT COUNT(*) FROM analytics_user_lifecycle l WHERE 1=1"
+            + lifecycle_branch + cohort_period,
+            [*lifecycle_params, *cohort_params],
+        ).fetchone()[0] or 0)
+        cohort_activated = int(conn.execute(
+            """SELECT COUNT(*) FROM analytics_user_lifecycle l
+               WHERE l.first_activity_at IS NOT NULL"""
+            + lifecycle_branch + cohort_period,
+            [*lifecycle_params, *cohort_params],
+        ).fetchone()[0] or 0)
+        cohort_repeat = int(conn.execute(
+            """SELECT COUNT(*) FROM analytics_user_lifecycle l
+               WHERE l.active_days>=2"""
+            + lifecycle_branch + cohort_period,
+            [*lifecycle_params, *cohort_params],
+        ).fetchone()[0] or 0)
+        cohort_returned = int(conn.execute(
+            """SELECT COUNT(*) FROM analytics_user_lifecycle l
+               WHERE l.last_returned_at IS NOT NULL"""
+            + lifecycle_branch + cohort_period,
+            [*lifecycle_params, *cohort_params],
+        ).fetchone()[0] or 0)
+        active_users = int(conn.execute(
+            "SELECT COUNT(DISTINCT a.chel_id) FROM analytics_user_activity_days a WHERE 1=1"
+            + activity_branch + activity_period,
+            [*activity_params, *activity_period_params],
+        ).fetchone()[0] or 0)
+        repeat_users = int(conn.execute(
+            """SELECT COUNT(DISTINCT a.chel_id)
+               FROM analytics_user_activity_days a
+               JOIN analytics_user_lifecycle l ON l.chel_id=a.chel_id
+               WHERE l.active_days>=2"""
+            + activity_branch + activity_period,
+            [*activity_params, *activity_period_params],
+        ).fetchone()[0] or 0)
+        returned_period = ""
+        returned_params: list[str] = []
+        if start_day:
+            returned_period += " AND l.last_returned_day>=?"
+            returned_params.append(start_day)
+        returned_period += " AND l.last_returned_day<=?"
+        returned_params.append(end_day)
+        returned_users = int(conn.execute(
+            "SELECT COUNT(*) FROM analytics_user_lifecycle l WHERE l.last_returned_at IS NOT NULL"
+            + lifecycle_branch + returned_period,
+            [*lifecycle_params, *returned_params],
+        ).fetchone()[0] or 0)
+
+        def inactive(days: int) -> int:
+            cutoff = (
+                datetime.strptime(end_day, "%Y-%m-%d").date() - timedelta(days=days)
+            ).isoformat()
+            return int(conn.execute(
+                """SELECT COUNT(*) FROM analytics_user_lifecycle l
+                   WHERE COALESCE(NULLIF(l.last_activity_day,''),l.first_seen_day)<=?"""
+                + lifecycle_branch,
+                [cutoff, *lifecycle_params],
+            ).fetchone()[0] or 0)
+
+        def retained(day_offset: int) -> dict:
+            mature_until = (
+                datetime.strptime(end_day, "%Y-%m-%d").date()
+                - timedelta(days=day_offset)
+            ).isoformat()
+            maturity = " AND l.first_seen_day<=?"
+            params = [*lifecycle_params, *cohort_params, mature_until]
+            denominator = int(conn.execute(
+                "SELECT COUNT(*) FROM analytics_user_lifecycle l WHERE 1=1"
+                + lifecycle_branch + cohort_period + maturity,
+                params,
+            ).fetchone()[0] or 0)
+            numerator = int(conn.execute(
+                """SELECT COUNT(*) FROM analytics_user_lifecycle l
+                   WHERE EXISTS (
+                     SELECT 1 FROM analytics_user_activity_days a
+                     WHERE a.chel_id=l.chel_id
+                       AND a.activity_date=date(l.first_seen_day,?)
+                   )"""
+                + lifecycle_branch + cohort_period + maturity,
+                [f"+{day_offset} day", *params],
+            ).fetchone()[0] or 0)
+            return {
+                "users": numerator, "eligible_users": denominator,
+                "percent": round(numerator / denominator * 100, 1) if denominator else 0.0,
+            }
+
+        unknown_users = int(conn.execute(
+            "SELECT COUNT(*) FROM analytics_user_lifecycle WHERE branch=''"
+        ).fetchone()[0] or 0)
+        inactive_7 = inactive(7)
+        inactive_30 = inactive(30)
+        d1 = retained(1)
+        d7 = retained(7)
+        d30 = retained(30)
+
+    return {
+        "generated_at": _now(), "period": period, "branch": branch,
+        "branch_label": RETENTION_BRANCH_LABELS.get(branch, "Все ветки"),
+        "branches": [
+            {"key": key, "label": label}
+            for key, label in RETENTION_BRANCH_LABELS.items()
+        ],
+        "summary": {
+            "new_users": new_users, "active_users": active_users,
+            "repeat_users": repeat_users, "returned_users": returned_users,
+            "inactive_7": inactive_7, "inactive_30": inactive_30,
+        },
+        "lifecycle": {
+            "new_users": new_users,
+            "activated_users": cohort_activated,
+            "repeat_users": cohort_repeat,
+            "returned_users": cohort_returned,
+        },
+        "retention": {"d1": d1, "d7": d7, "d30": d30},
+        "diagnostics": {"unclassified_users": unknown_users},
+    }
 
 
 def _filters(

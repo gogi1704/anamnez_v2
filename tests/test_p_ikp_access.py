@@ -754,6 +754,16 @@ class IkpAccessTests(unittest.TestCase):
             self.assertEqual(paid_order['status'], 'succeeded')
             self.assertFalse(paid_order['test'])
 
+            purchases = db.list_payment_orders()
+            session_purchase = next(
+                item for item in purchases if item['id'] == order['id']
+            )
+            self.assertEqual(session_purchase['order_type'], 'psychology_session')
+            self.assertEqual(session_purchase['status'], 'succeeded')
+            self.assertTrue(session_purchase['paid'])
+            self.assertEqual(session_purchase['conversation_id'], conversation['id'])
+            self.assertEqual(session_purchase['items'][0]['id'], 'psychology_session')
+
             paid_balance = db.psychology_session_summary(conversation['id'])
             self.assertEqual(paid_balance['purchased_count'], 1)
             self.assertEqual(paid_balance['remaining_paid'], 1)

@@ -11,7 +11,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/static/dashboard.css?v=20261026-masterclass-metrics-v18">
+  <link rel="stylesheet" href="/static/dashboard.css?v=20261027-lifecycle-chart-v20">
 </head>
 <body>
   <main class="dashboard-shell">
@@ -53,6 +53,7 @@
       <nav class="admin-tabs" aria-label="Разделы админ-панели">
         <button id="favoritesTab" type="button">★ Избранное <span class="favorites-count" id="favoritesCount">0</span></button>
         <button class="active" id="dashboardTab" type="button">Дашборд</button>
+        <button id="retentionTab" type="button">Жизненный цикл</button>
         <button id="analyticsTab" type="button">Воронка и поведение</button>
         <button id="serviceResultsTab" type="button">Услуги и результаты</button>
         <button id="scheduleRevenueTab" type="button">График и выручка</button>
@@ -72,6 +73,26 @@
           <div class="panel-heading"><div><p class="eyebrow">Персональная подборка</p><h2>Избранная аналитика</h2><p>Нажимайте на звезду у показателей, графиков и таблиц в других разделах — они появятся здесь.</p></div></div>
         </article>
         <div class="favorites-grid" id="favoritesGrid"></div>
+      </section>
+
+      <section class="retention-admin hidden" id="retentionAdminView">
+        <article class="panel retention-heading-panel">
+          <div class="panel-heading"><div><p class="eyebrow">Ретеншн</p><h2>Жизненный цикл пользователей</h2><p>Учитываются только полезные действия. Технические обновления страницы и фоновые запросы не считаются активностью.</p></div></div>
+          <div class="retention-filters">
+            <label>Период<select id="retentionPeriod"><option value="today">Сегодня</option><option value="7">7 дней</option><option value="30" selected>30 дней</option><option value="90">90 дней</option><option value="all">Всё время</option></select></label>
+            <label>Ветка<select id="retentionBranch"><option value="">Все ветки</option><option value="medical_exam">Медосмотр</option><option value="masterclass">Мастер-класс</option><option value="results">Результаты анализов</option><option value="other">Другой вопрос</option></select></label>
+            <button type="button" id="retentionApply">Применить</button>
+          </div>
+        </article>
+        <article class="panel retention-lifecycle-panel">
+          <div class="panel-heading"><div><p class="eyebrow">Путь новой аудитории</p><h2>Этапы жизненного цикла</h2><p>График показывает, что происходило с пользователями, которые впервые пришли в выбранный период. Каждый следующий этап является частью предыдущего.</p></div></div>
+          <div class="retention-lifecycle-chart" id="retentionLifecycleChart"></div>
+        </article>
+        <article class="panel retention-cohort-panel">
+          <div class="panel-heading"><div><p class="eyebrow">Возврат пользователей</p><h2>Ретеншн по дням</h2><p>D1, D7 и D30 показывают долю новых пользователей, совершивших полезное действие в соответствующий день после первого визита.</p></div></div>
+          <section class="retention-rates" id="retentionRates"></section>
+          <p class="retention-note" id="retentionNote"></p>
+        </article>
       </section>
 
       <section class="analytics-admin hidden" id="analyticsAdminView">
@@ -865,6 +886,6 @@
       </div>
     </section>
   </div>
-  <script src="/static/dashboard.js?v=20261027-masterclass-reset-metrics-v19" defer></script>
+  <script src="/static/dashboard.js?v=20261027-lifecycle-chart-v21" defer></script>
 </body>
 </html>
