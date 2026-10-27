@@ -2060,6 +2060,9 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                 "conversation_id": conversation["id"],
             })
             return self._json(200, conversation)
+        if path == "/api/conversations/psychology":
+            conversation = db.create_or_get_masterclass_psychology_conversation()
+            return self._json(200, conversation)
         if path == "/api/weight-control/personality":
             try:
                 payload = self._read_json(max_bytes=2_000)

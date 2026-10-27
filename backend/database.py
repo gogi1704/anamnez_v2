@@ -9092,10 +9092,12 @@ def create_or_get_weight_control_conversation() -> dict:
 
 
 def create_or_get_masterclass_psychology_conversation() -> dict:
-    """Return one pinned psychology chat for the user's master-class journey."""
+    """Return the user's single pinned Vita psychology dialogue.
+
+    The dialogue is available to every user.  Master-class attribution is kept
+    when it exists, but it is not an access requirement.
+    """
     entry = current_masterclass_access()
-    if not entry or not entry.get("profile_completed_at"):
-        raise ValueError("Сначала завершите мини-анкету мастер-класса")
     with connection() as conn:
         existing = conn.execute(
             """SELECT * FROM conversations
@@ -9112,13 +9114,16 @@ def create_or_get_masterclass_psychology_conversation() -> dict:
     context = {
         "current_topic": "стресс, усталость и эмоциональное состояние",
         "topic_relation": "new",
-        "user_goal": "получить психологическую поддержку после мастер-класса",
-        "known_facts": [
-            f"Пользователь пришёл с мастер-класса «{entry['masterclass_name']}»",
-            f"Предприятие: {entry['company']}",
-        ],
+        "user_goal": "получить психологическую поддержку",
+        "known_facts": [],
         "open_questions": [],
     }
+    if entry:
+        context["user_goal"] = "получить психологическую поддержку после мастер-класса"
+        context["known_facts"] = [
+            f"Пользователь пришёл с мастер-класса «{entry['masterclass_name']}»",
+            f"Предприятие: {entry['company']}",
+        ]
     with _write_lock, connection() as conn:
         conn.execute(
             """UPDATE conversations
@@ -9136,8 +9141,10 @@ def create_or_get_masterclass_psychology_conversation() -> dict:
         "psychologist",
         {
             "specialized_dialog": "masterclass_psychology",
-            "masterclass_code": entry["masterclass_code"],
-            "company_inn": entry["inn"],
+            **({
+                "masterclass_code": entry["masterclass_code"],
+                "company_inn": entry["inn"],
+            } if entry else {}),
         },
     )
     return get_conversation(conversation["id"])

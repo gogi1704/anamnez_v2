@@ -277,7 +277,6 @@ class VitaAlgorithmTests(unittest.TestCase):
             "human_ticket_id": "URG-123",
         }
         with (
-            patch("backend.main._chat_access_allowed", return_value=False),
             patch("backend.main.db.get_conversation", return_value=conversation),
             patch("backend.main.db.list_messages", return_value=[{"id": 1}]),
             patch("backend.main.db.add_message", side_effect=[

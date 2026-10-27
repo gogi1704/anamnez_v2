@@ -4739,6 +4739,28 @@ async function startWeightControlConversation() {
   }
 }
 
+async function startPsychologyConversation() {
+  if (state.processing) return;
+  closeNewChatMenu();
+  state.processing = true;
+  beginUserProgress('Открываем чат с Витой…');
+  let conversation = null;
+  try {
+    conversation = await api('/api/conversations/psychology', {
+      method:'POST', body:'{}',
+    });
+  } catch (error) {
+    addSystemError(error.message);
+  } finally {
+    state.processing = false;
+    endUserProgress();
+  }
+  if (conversation) {
+    await openConversation(conversation.id);
+    document.body.classList.remove('show-team');
+  }
+}
+
 const WEIGHT_REMINDER_TEMPLATES = {
   breakfast: {type:'meal', title:'Завтрак', time:'09:00', message:'Время отметить завтрак. Пришлите в чат описание или фото — разберём состав и баланс.'},
   lunch: {type:'meal', title:'Обед', time:'13:00', message:'Время отметить обед. Пришлите в чат описание или фото того, что съели.'},
@@ -4800,7 +4822,7 @@ const PSYCHOLOGY_CHAT_GUIDE_SLIDES = [
   {
     target:'#psychologySessionsButton',
     title:'Сессии с психологом',
-    text:'Здесь находится история сессий, остаток предоплаченных сессий и кнопка новой заявки. Первая 30-минутная сессия бесплатна и входит в пакет мастер-класса.',
+    text:'Здесь находится история сессий, остаток предоплаченных сессий и кнопка новой заявки. Первая 30-минутная сессия бесплатна.',
   },
   {
     target:'#messageInput',
@@ -5073,8 +5095,9 @@ function openPsychologySessionRequest() {
   } else if (canRequest) {
     const free = Boolean(summary.free_available);
     $('#psychologySessionRequestTitle').textContent = 'Оставить заявку на сессию?';
+    const masterclassUser = Boolean(state.masterclassEntry || state.identity?.masterclass_path);
     $('#psychologySessionRequestText').textContent = free
-      ? 'Пообщайтесь с дипломированным психологом. 30-минутная сессия бесплатна и входит в ваш пакет мастер-класса. После отправки заявки психолог свяжется с вами и согласует время и формат.'
+      ? `Пообщайтесь с дипломированным психологом. 30-минутная сессия бесплатна${masterclassUser ? ' и входит в ваш пакет мастер-класса' : ''}. После отправки заявки психолог свяжется с вами и согласует время и формат.`
       : 'Будет зарезервирована одна предоплаченная 60-минутная сессия. После отправки заявки психолог свяжется с вами и согласует время и формат.';
     button.dataset.mode = 'request';
     button.textContent = 'Да, оставить заявку';
@@ -8197,6 +8220,7 @@ $('#newChatMenu').addEventListener('click', event => {
   const button = event.target.closest('[data-new-dialog]');
   if (!button) return;
   if (button.dataset.newDialog === 'weight_control') startWeightControlConversation();
+  else if (button.dataset.newDialog === 'psychology') startPsychologyConversation();
   else newConversation();
 });
 $('#chatModeNewDialog').addEventListener('click', newConversation);

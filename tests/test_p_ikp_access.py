@@ -2,6 +2,7 @@ import tempfile
 import unittest
 import io
 import base64
+import json
 from datetime import date, timedelta
 from pathlib import Path
 
@@ -202,25 +203,38 @@ class IkpAccessTests(unittest.TestCase):
             ).fetchone()
         self.assertTrue(row['is_test'])
 
-    def test_psychology_chat_cannot_be_created_outside_completed_masterclass(self):
+    def test_psychology_chat_is_available_without_masterclass(self):
         previous_chel_id = db.current_chel_id()
         try:
             db.ensure_user('chel_without_masterclass', pending=True)
             db.set_current_chel_id('chel_without_masterclass')
-            with self.assertRaisesRegex(ValueError, 'мини-анкету мастер-класса'):
-                db.create_or_get_masterclass_psychology_conversation()
+            conversation = db.create_or_get_masterclass_psychology_conversation()
+            repeated = db.create_or_get_masterclass_psychology_conversation()
+            self.assertEqual(conversation['id'], repeated['id'])
+            self.assertEqual(conversation['dialog_type'], 'masterclass_psychology')
+            self.assertEqual(conversation['active_agent'], 'psychologist')
+            context = json.loads(conversation['context_summary'])
+            self.assertEqual(context['user_goal'], 'получить психологическую поддержку')
+            self.assertEqual(context['known_facts'], [])
+            welcome = db.list_messages(conversation['id'])[0]
+            self.assertEqual(welcome['content'], db.MASTERCLASS_PSYCHOLOGY_WELCOME)
+            self.assertNotIn('masterclass_code', welcome['metadata'])
+
+            db.ensure_user('chel_incomplete_masterclass', pending=True)
+            db.set_current_chel_id('chel_incomplete_masterclass')
 
             token = 'r' * 43
             db.provision_masterclass_access(
                 '7707083893', 'ООО Ромашка', 'masterclass_1', token,
             )
-            db.record_masterclass_access(token, 'chel_without_masterclass')
-            with self.assertRaisesRegex(ValueError, 'мини-анкету мастер-класса'):
-                db.create_or_get_masterclass_psychology_conversation()
-
-            db.mark_current_masterclass_profile_completed()
-            conversation = db.create_or_get_masterclass_psychology_conversation()
-            self.assertEqual(conversation['dialog_type'], 'masterclass_psychology')
+            db.record_masterclass_access(token, 'chel_incomplete_masterclass')
+            attributed = db.create_or_get_masterclass_psychology_conversation()
+            attributed_context = json.loads(attributed['context_summary'])
+            self.assertIn('после мастер-класса', attributed_context['user_goal'])
+            attributed_welcome = db.list_messages(attributed['id'])[0]
+            self.assertEqual(
+                attributed_welcome['metadata']['masterclass_code'], 'masterclass_1',
+            )
         finally:
             db.set_current_chel_id(previous_chel_id)
 
@@ -425,6 +439,10 @@ class IkpAccessTests(unittest.TestCase):
         self.assertIn('Скачали гайд', dashboard)
         self.assertIn('Очистка диалога: всего', dashboard)
         self.assertIn('Очистка диалога: пользователи', dashboard)
+        self.assertIn('data-new-dialog="psychology"', index)
+        self.assertIn('function startPsychologyConversation()', script)
+        self.assertIn("button.dataset.newDialog === 'psychology'", script)
+        self.assertIn("/api/conversations/psychology", script)
         self.assertIn("state.identity?.psychology_conversation_id", script)
         self.assertIn("function isIkpEntryUrl()", script)
         self.assertIn('id="psychologySessionRequestManager"', index)
