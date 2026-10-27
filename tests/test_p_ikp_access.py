@@ -423,6 +423,8 @@ class IkpAccessTests(unittest.TestCase):
         self.assertIn('Самопроверка: начали', dashboard)
         self.assertIn('Самопроверка: завершили', dashboard)
         self.assertIn('Скачали гайд', dashboard)
+        self.assertIn('Очистка диалога: всего', dashboard)
+        self.assertIn('Очистка диалога: пользователи', dashboard)
         self.assertIn("state.identity?.psychology_conversation_id", script)
         self.assertIn("function isIkpEntryUrl()", script)
         self.assertIn('id="psychologySessionRequestManager"', index)

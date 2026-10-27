@@ -1464,6 +1464,68 @@ class AnalyticsTests(unittest.TestCase):
         self.assertEqual(actions['self_check_completed']['users'], 2)
         self.assertEqual(actions['download_guide']['users'], 2)
 
+    def test_metric2_masterclass_counts_all_dialog_resets_and_unique_users(self):
+        masterclass_users = ['CHEL-RESET-ONE', 'CHEL-RESET-TWO']
+        conn = sqlite3.connect(settings.database_path)
+        try:
+            conn.execute("""CREATE TABLE masterclass_access_users (
+                link_id TEXT NOT NULL, chel_id TEXT NOT NULL,
+                first_seen_at TEXT, last_seen_at TEXT, continued_at TEXT,
+                visit_count INTEGER NOT NULL DEFAULT 1
+            )""")
+            conn.executemany(
+                "INSERT INTO masterclass_access_users VALUES (?,?,?,?,?,?)",
+                [
+                    ('link-1', chel_id, '2026-10-27', '2026-10-27', '2026-10-27', 1)
+                    for chel_id in masterclass_users
+                ],
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+        for index, chel_id in enumerate(masterclass_users):
+            events = [{
+                'event_id':f'reset-{index}-landing',
+                'session_id':f'reset-session-{index}',
+                'event_name':'onboarding_screen_viewed',
+                'properties':{'screen':'masterclass_landing', 'context':'masterclass'},
+            }, {
+                'event_id':f'reset-{index}-first',
+                'session_id':f'reset-session-{index}',
+                'event_name':'psychology_conversation_reset',
+                'properties':{
+                    'screen':'psychology_chat', 'action':'reset_conversation',
+                    'context':'masterclass',
+                },
+            }]
+            if index == 0:
+                events.append({
+                    'event_id':'reset-0-second',
+                    'session_id':'reset-session-0',
+                    'event_name':'psychology_conversation_reset',
+                    'properties':{
+                        'screen':'psychology_chat', 'action':'reset_conversation',
+                        'context':'masterclass',
+                    },
+                })
+            analytics.record_events(chel_id, events)
+
+        analytics.record_events('CHEL-RESET-ORDINARY', [{
+            'event_id':'reset-ordinary', 'session_id':'reset-ordinary-session',
+            'event_name':'psychology_conversation_reset',
+            'properties':{
+                'screen':'psychology_chat', 'action':'reset_conversation',
+                'context':'masterclass',
+            },
+        }])
+
+        report = analytics.metric2_report('30', flow='masterclass')
+        self.assertEqual(report['summary']['psychology_dialog_resets'], {
+            'total_clicks': 3,
+            'unique_users': 2,
+        })
+
     def test_reports_support_inclusive_custom_date_range(self):
         for index in range(2):
             analytics.record_events(f"CHEL-DATE-{index}", [{

@@ -1732,6 +1732,7 @@ function renderMetric2(data) {
   }
   if (masterclassFlow) {
     const material = (data.screens || []).find(item => item.id === 'masterclass_burnout');
+    const dialogResets = data.summary?.psychology_dialog_resets || {};
     const materialActions = Object.fromEntries(
       (material?.actions || []).map(item => [item.id, item]),
     );
@@ -1740,6 +1741,8 @@ function renderMetric2(data) {
       ['Самопроверка: не отвечали',materialActions.self_check_none?.users || 0,'открыли новую версию материала, но не выбрали ответ'],
       ['Самопроверка: начали',materialActions.self_check_started?.users || 0,'ответили хотя бы на один вопрос · учёт с новой версии'],
       ['Самопроверка: завершили',materialActions.self_check_completed?.users || 0,'ответили на все 10 вопросов · учёт с новой версии'],
+      ['Очистка диалога: всего',dialogResets.total_clicks || 0,'все успешные нажатия на кнопку очистки'],
+      ['Очистка диалога: пользователи',dialogResets.unique_users || 0,'уникальных пользователей, очистивших диалог хотя бы один раз'],
     ].map(([label,value,note]) => `<article class="analytics-metric"><span>${label}</span><strong>${Number(value).toLocaleString('ru-RU')}</strong><small>${note}</small></article>`).join('');
     const testPath = String(data.masterclasses?.test_path || '');
     const testLink = testPath

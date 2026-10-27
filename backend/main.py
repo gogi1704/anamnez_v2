@@ -2812,7 +2812,11 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
             result = db.reset_masterclass_psychology_conversation(conversation_id)
             if not result:
                 return self._json(404, {"detail": "Психологический диалог не найден"})
-            self._track_analytics("psychology_conversation_reset")
+            self._track_analytics("psychology_conversation_reset", {
+                "screen": "psychology_chat",
+                "action": "reset_conversation",
+                "context": "masterclass",
+            })
             return self._json(200, result)
         if path.startswith("/api/conversations/") and path.endswith("/read"):
             conversation_id = path.removeprefix("/api/conversations/").removesuffix("/read").strip("/")

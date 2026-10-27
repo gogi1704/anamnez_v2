@@ -178,6 +178,7 @@ ALLOWED_EVENTS = {
     "registration_completed", "registration_failed", "messenger_auth_started", "funnel_action",
     "onboarding_screen_viewed", "onboarding_screen_action",
     "masterclass_burnout_test_completed", "masterclass_burnout_practices_downloaded",
+    "psychology_conversation_reset",
     "messenger_link_modal_viewed",
     "messenger_auth_completed", "messenger_auth_failed", "appearance_viewed",
     "appearance_completed", "questionnaire_started", "question_viewed",
@@ -2354,6 +2355,8 @@ def _metric2_report_uncached(
             relevant_events.update(spec["event"] for spec in action.get("legacy", []))
     if flow == "reoffer":
         relevant_events.add("checkup_reoffer_candidate")
+    if flow == "masterclass":
+        relevant_events.add("psychology_conversation_reset")
     relevant_events = sorted(relevant_events)
     event_filter = " AND e.event_name IN (" + ",".join("?" for _ in relevant_events) + ")"
     filter_options = _analytics_filter_options()
@@ -2924,6 +2927,16 @@ def _metric2_report_uncached(
             if screen_id == "masterclass_burnout"
             and group_id == "final_transition" and action_id == "open_psychology_chat"
         }
+    psychology_reset_rows = (
+        [row for row in parsed_rows if row["event"] == "psychology_conversation_reset"]
+        if flow == "masterclass" else []
+    )
+    psychology_resets = {
+        "total_clicks": len(psychology_reset_rows),
+        "unique_users": len({
+            row["chel_id"] for row in psychology_reset_rows if row["chel_id"]
+        }),
+    }
     marketer_business = (
         _marketer_variant_business_metrics(set(start_cohort))
         if flow in {"marketer_b", "marketer_c"} else None
@@ -2947,6 +2960,7 @@ def _metric2_report_uncached(
             "unique_transitions": sum(len(users) for users in edge_users.values()),
             "reoffer": reoffer_summary,
             "marketer_business": marketer_business,
+            "psychology_dialog_resets": psychology_resets,
         },
         "screens": result_screens,
         "filter_options": filter_options,
