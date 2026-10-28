@@ -164,6 +164,15 @@ button:hover,.button:hover { background:var(--green-dark); }
 .payment-analytics-panel { display:grid; gap:18px; }.payment-analytics-summary { display:grid; grid-template-columns:repeat(6,minmax(0,1fr)); gap:10px; }.payment-analytics-summary article { display:grid; gap:5px; min-width:0; padding:14px; border:1px solid var(--line); border-radius:15px; background:#f8fbf9; }.payment-analytics-summary span,.payment-analytics-summary small { color:var(--muted); font-size:10px; line-height:1.4; }.payment-analytics-summary strong { color:var(--green-dark); font-size:23px; overflow-wrap:anywhere; }.payment-analytics-grid { display:grid; grid-template-columns:1fr 1fr; gap:16px; }.payment-analytics-grid > section { min-width:0; padding:15px; border:1px solid var(--line); border-radius:16px; background:#fbfdfc; }.payment-analytics-grid h3 { margin:0 0 12px; font-size:14px; }.payment-test-note { margin:-8px 0 0; padding:10px 12px; border-radius:11px; color:#7b6539; background:#fff8e7; font-size:11px; }.payment-recent-table { max-height:420px; }
 .metric2-heading-panel .panel-heading p:last-child,.metric2-flow-panel .panel-heading p:last-child { max-width:900px; margin:8px 0 0; color:var(--muted); font-size:12px; line-height:1.55; }
 .metric2-summary { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; }
+.metric2-summary-group { grid-column:1/-1; display:grid; gap:11px; padding:18px; border:1px solid var(--line); border-radius:20px; background:rgba(255,255,255,.54); }
+.metric2-summary-group + .metric2-summary-group { margin-top:5px; }
+.metric2-summary-group-heading { display:flex; align-items:flex-start; justify-content:space-between; gap:18px; }
+.metric2-summary-group-heading h3 { margin:0; color:var(--ink); font-size:15px; }
+.metric2-summary-group-heading p { max-width:740px; margin:4px 0 0; color:var(--muted); font-size:10px; line-height:1.45; }
+.metric2-summary-group-grid { display:grid; grid-template-columns:repeat(2,minmax(0,1fr)); gap:12px; }
+.metric2-summary-group.self-check .metric2-summary-group-grid { grid-template-columns:repeat(3,minmax(0,1fr)); }
+.metric2-summary-group.material .metric2-summary-group-grid { grid-template-columns:minmax(0,1fr); }
+@media(max-width:760px){.metric2-summary,.metric2-summary-group-grid,.metric2-summary-group.self-check .metric2-summary-group-grid{grid-template-columns:1fr}.metric2-summary-group{padding:13px}.metric2-summary-group-heading{display:block}}
 .metric2-masterclass-stats { display:grid; gap:16px; }
 .metric2-masterclass-stats .panel-heading { margin:0; }
 .metric2-masterclass-stats td:nth-child(4),.metric2-masterclass-stats td:nth-child(5),.metric2-masterclass-stats td:nth-child(6) { color:var(--green-dark); font-weight:800; }

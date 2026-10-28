@@ -1751,18 +1751,26 @@ function renderMetric2(data) {
     ? 'Путь основного варианта: от сообщения за день до медосмотра до выбора обследований и финального решения. Вариант «маркетолог» сюда не входит.'
     : 'Основная воронка новых пользователей: приветствие, регистрация, анкета, обследования и завершение. Переходы по ссылке /result сюда не входят.';
   const summary = $('#metric2Summary');
-  summary.innerHTML = [
+  const primarySummary = [
     [resultFlow ? 'Пришли по пути result' : masterclassFlow ? 'Открыли страницу мастер-класса' : experimentFlow ? 'Попали в вариант «маркетолог»' : reofferFlow ? 'Получили повторное предложение' : 'На первом экране',data.summary?.start_users || 0,'100% — база этой ветки'],
     [resultFlow ? 'Получили результат пути' : masterclassFlow ? 'Открыли Консилиум' : 'Дошли до завершения',data.summary?.reached_completion || 0,'уникальных пользователей'],
-  ].map(([label,value,note]) => `<article class="analytics-metric"><span>${label}</span><strong>${Number(value).toLocaleString('ru-RU')}</strong><small>${note}</small></article>`).join('');
+  ];
+  const metricCards = items => items.map(([label,value,note]) => `<article class="analytics-metric"><span>${escapeHtml(label)}</span><strong>${typeof value === 'number' ? Number(value).toLocaleString('ru-RU') : escapeHtml(String(value))}</strong><small>${escapeHtml(note)}</small></article>`).join('');
+  const metricGroup = (title,description,items,className = '') => `<section class="metric2-summary-group ${className}">
+    <header class="metric2-summary-group-heading"><div><h3>${escapeHtml(title)}</h3><p>${escapeHtml(description)}</p></div></header>
+    <div class="metric2-summary-group-grid">${metricCards(items)}</div>
+  </section>`;
+  summary.innerHTML = masterclassFlow
+    ? metricGroup('Вход в мастер-класс','Переход от отдельной страницы мастер-класса к основному приложению.',primarySummary,'entry')
+    : metricCards(primarySummary);
   if (marketerBFlow || marketerCFlow) {
     const business = data.summary?.marketer_business || {};
-    summary.innerHTML += [
+    summary.innerHTML += metricCards([
       ['Выбрали анализы',business.selected_users || 0,'уникальных пользователей'],
       ['Сумма выбранного',`${Number(business.selected_amount || 0).toLocaleString('ru-RU')} ₽`,'по текущему прайсу'],
       ['Успешно оплатили',business.paid_users || 0,'онлайн-плательщиков'],
       ['Онлайн-выручка',`${Number(business.online_revenue || 0).toLocaleString('ru-RU')} ₽`,'успешные нетестовые оплаты'],
-    ].map(([label,value,note]) => `<article class="analytics-metric"><span>${label}</span><strong>${typeof value === 'number' ? Number(value).toLocaleString('ru-RU') : escapeHtml(value)}</strong><small>${note}</small></article>`).join('');
+    ]);
   }
   if (reofferFlow) {
     const reoffer = data.summary?.reoffer || {};
@@ -1774,14 +1782,31 @@ function renderMetric2(data) {
     const materialActions = Object.fromEntries(
       (material?.actions || []).map(item => [item.id, item]),
     );
-    summary.innerHTML += [
-      ['Скачали гайд',materialActions.download_guide?.users || 0,'уникальных пользователей'],
-      ['Самопроверка: не отвечали',materialActions.self_check_none?.users || 0,'открыли новую версию материала, но не выбрали ответ'],
-      ['Самопроверка: начали',materialActions.self_check_started?.users || 0,'ответили хотя бы на один вопрос · учёт с новой версии'],
-      ['Самопроверка: завершили',materialActions.self_check_completed?.users || 0,'ответили на все 10 вопросов · учёт с новой версии'],
-      ['Очистка диалога: всего',dialogResets.total_clicks || 0,'все успешные нажатия на кнопку очистки'],
-      ['Очистка диалога: пользователи',dialogResets.unique_users || 0,'уникальных пользователей, очистивших диалог хотя бы один раз'],
-    ].map(([label,value,note]) => `<article class="analytics-metric"><span>${label}</span><strong>${Number(value).toLocaleString('ru-RU')}</strong><small>${note}</small></article>`).join('');
+    summary.innerHTML += metricGroup(
+      'Материалы',
+      'Отдельные полезные действия с материалами мастер-класса.',
+      [['Скачали гайд',materialActions.download_guide?.users || 0,'уникальных пользователей']],
+      'material',
+    );
+    summary.innerHTML += metricGroup(
+      'Самопроверка',
+      'Насколько пользователи взаимодействовали с десятью вопросами самопроверки.',
+      [
+        ['Не отвечали',materialActions.self_check_none?.users || 0,'открыли новую версию материала, но не выбрали ответ'],
+        ['Начали',materialActions.self_check_started?.users || 0,'ответили хотя бы на один вопрос · учёт с новой версии'],
+        ['Завершили',materialActions.self_check_completed?.users || 0,'ответили на все 10 вопросов · учёт с новой версии'],
+      ],
+      'self-check',
+    );
+    summary.innerHTML += metricGroup(
+      'Чат с Витой',
+      'Использование функции безвозвратной очистки психологического диалога.',
+      [
+        ['Очисток диалога',dialogResets.total_clicks || 0,'общее количество успешных очисток'],
+        ['Пользователи',dialogResets.unique_users || 0,'уникальные пользователи, очищавшие диалог хотя бы один раз'],
+      ],
+      'vita-chat',
+    );
     const testPath = String(data.masterclasses?.test_path || '');
     const testLink = testPath
       ? new URL(testPath, location.origin).href
