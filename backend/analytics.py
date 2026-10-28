@@ -175,6 +175,7 @@ def _marketer_variant_business_metrics(chel_ids: set[str]) -> dict:
 ALLOWED_EVENTS = {
     "landing_viewed", "experiment_assigned", "welcome_viewed", "welcome_continued", "auth_gate_viewed",
     "entry_route_viewed", "entry_route_selected", "masterclass_psychology_chat_opened",
+    "chat_guide_started", "chat_guide_completed", "chat_guide_repeated",
     "masterclass_profile_completed", "psychology_session_requested",
     "psychology_session_manager_help_requested", "psychology_session_payment_created",
     "lab_specialist_analysis_requested", "weight_control_dialog_opened",
@@ -231,7 +232,7 @@ ALLOWED_PROPERTIES = {
     "experiment_key", "experiment_variant", "funnel_version", "marketer_variant",
     "reoffer_id", "duration_bucket", "active_seconds", "examination_date", "provider_count",
     "question_count", "recommended_count",
-    "route", "first_entry",
+    "route", "first_entry", "guide_type",
 }
 
 RETENTION_BRANCHES = {"medical_exam", "masterclass", "results", "other"}

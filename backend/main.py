@@ -907,6 +907,7 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                 ),
                 "entry_route": str(onboarding.get("entry_route") or ""),
                 "entry_route_choice_required": db.entry_route_choice_required(),
+                "chat_guides": db.current_user_chat_guides(),
                 "masterclass_path": (
                     f"/masterclass/{masterclass_entry['access_token']}"
                     if masterclass_entry and masterclass_entry.get("access_token") else ""
@@ -2062,6 +2063,13 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                 return self._json(422, {"detail": str(exc)})
         if path == "/api/auth/messenger/start":
             return self._start_messenger_auth()
+        if path == "/api/chat-guides/complete":
+            try:
+                payload = self._read_json(max_bytes=1_000)
+                completed = db.complete_chat_guide(payload.get("guide_type", ""))
+                return self._json(200, completed)
+            except (ValueError, json.JSONDecodeError, UnicodeDecodeError) as exc:
+                return self._json(422, {"detail": str(exc)})
         if path == "/api/conversations/weight-control":
             conversation = db.create_or_get_weight_control_conversation()
             self._track_analytics("weight_control_dialog_opened", {

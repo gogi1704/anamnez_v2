@@ -4587,12 +4587,12 @@ class OrchestratorTests(unittest.TestCase):
         self.assertIn("url.pathname.startsWith('/auth/')", worker)
         self.assertIn("consilium-shell-v203", worker)
         self.assertIn("fetch(request)", worker)
-        self.assertIn("/static/styles.css?v=20261027-vita-for-everyone-v42", index)
+        self.assertIn("/static/styles.css?v=20261028-chat-guides-v43", index)
         self.assertIn("/static/rich-text.2bf1f5fab764.css", index)
         self.assertTrue((project_root / "static" / "styles.07ffaefb4795.css").is_file())
         self.assertTrue((project_root / "static" / "rich-text.2bf1f5fab764.css").is_file())
-        self.assertIn("/static/app.js?v=20261027-vita-for-everyone-v42", index)
-        self.assertIn("/static/metrika.js?v=20261027-vita-for-everyone-v42", index)
+        self.assertIn("/static/app.js?v=20261028-chat-guides-v43", index)
+        self.assertIn("/static/metrika.js?v=20261028-chat-guides-v43", index)
         self.assertIn("function safeUrl(value)", script)
         self.assertIn("error.code === 'http_404'", script)
         self.assertIn("fallback && fallback.id !== id", script)
@@ -4687,7 +4687,7 @@ class OrchestratorTests(unittest.TestCase):
         main = (project_root / "backend" / "main.py").read_text(encoding="utf-8")
         config = (project_root / "backend" / "config.py").read_text(encoding="utf-8")
 
-        self.assertIn('src="/static/metrika.js?v=20261027-vita-for-everyone-v42"', index)
+        self.assertIn('src="/static/metrika.js?v=20261028-chat-guides-v43"', index)
         self.assertIn('YANDEX_METRIKA_COUNTER_ID', config)
         self.assertIn('path == "/api/public-config"', main)
         self.assertIn('"metrika.js"', main)
@@ -5072,6 +5072,7 @@ class OrchestratorTests(unittest.TestCase):
             db.set_current_chel_id(temporary_chel_id)
             db.mark_current_masterclass_profile_completed()
             conversation = db.create_or_get_masterclass_psychology_conversation()
+            db.complete_chat_guide("masterclass_psychology")
             db.add_message(conversation["id"], "user", "Важная история", "psychologist")
             payment_order = db.create_psychology_session_payment_order(
                 conversation["id"], 1,
@@ -5085,6 +5086,9 @@ class OrchestratorTests(unittest.TestCase):
             db.set_current_chel_id(owner_chel_id)
             self.assertEqual(
                 db.current_masterclass_psychology_conversation_id(), conversation["id"],
+            )
+            self.assertIn(
+                "masterclass_psychology", db.current_user_chat_guides(),
             )
             self.assertTrue(any(
                 item["content"] == "Важная история"

@@ -72,6 +72,32 @@ class IkpAccessTests(unittest.TestCase):
         finally:
             db.set_current_chel_id(previous_chel_id)
 
+    def test_chat_guides_are_persisted_once_per_user_and_chat_type(self):
+        previous_chel_id = db.current_chel_id()
+        try:
+            first_user = 'chel_chat_guides_user_0001'
+            second_user = 'chel_chat_guides_user_0002'
+            db.ensure_user(first_user, pending=True)
+            db.ensure_user(second_user, pending=True)
+            db.set_current_chel_id(first_user)
+
+            self.assertEqual(db.current_user_chat_guides(), [])
+            for guide_type in ('general', 'weight_control', 'masterclass_psychology'):
+                completed = db.complete_chat_guide(guide_type)
+                self.assertEqual(completed['guide_type'], guide_type)
+            db.complete_chat_guide('general')
+            self.assertEqual(
+                set(db.current_user_chat_guides()),
+                {'general', 'weight_control', 'masterclass_psychology'},
+            )
+            with self.assertRaisesRegex(ValueError, 'тип обучения'):
+                db.complete_chat_guide('unknown')
+
+            db.set_current_chel_id(second_user)
+            self.assertEqual(db.current_user_chat_guides(), [])
+        finally:
+            db.set_current_chel_id(previous_chel_id)
+
     def test_unknown_entry_direction_screen_routes_all_four_choices(self):
         project_root = Path(__file__).resolve().parents[1]
         index = (project_root / 'index.html').read_text(encoding='utf-8')
@@ -383,22 +409,31 @@ class IkpAccessTests(unittest.TestCase):
         self.assertIn('/reset`,', script)
         self.assertIn('reset_masterclass_psychology_conversation', main)
 
-    def test_masterclass_questionnaire_and_psychology_chat_guide_are_styled(self):
+    def test_masterclass_questionnaire_and_all_chat_guides_are_styled(self):
         project_root = Path(__file__).resolve().parents[1]
         index = (project_root / 'index.html').read_text(encoding='utf-8')
         script = (project_root / 'static' / 'app.js').read_text(encoding='utf-8')
         styles = (project_root / 'static' / 'styles.css').read_text(encoding='utf-8')
         dashboard = (project_root / 'static' / 'dashboard.js').read_text(encoding='utf-8')
+        main = (project_root / 'backend' / 'main.py').read_text(encoding='utf-8')
 
-        self.assertIn('id="psychologyChatGuide"', index)
-        self.assertIn('id="psychologyGuideRepeat"', index)
-        self.assertIn('id="psychologyGuideClose"', index)
-        self.assertIn('PSYCHOLOGY_CHAT_GUIDE_SLIDES', script)
+        self.assertIn('id="chatGuide"', index)
+        self.assertIn('id="chatGuideRepeat"', index)
+        self.assertIn('id="chatGuideClose"', index)
+        self.assertIn('CHAT_GUIDE_SLIDES', script)
+        self.assertIn('general: [', script)
+        self.assertIn('weight_control: [', script)
+        self.assertIn('masterclass_psychology: [', script)
         self.assertIn("target:'#psychologySessionsButton'", script)
+        self.assertIn("target:'#weightToolsButton'", script)
+        self.assertIn("target:'#capabilitiesButton'", script)
         self.assertIn("target:'#messageInput'", script)
         self.assertIn("target:'#attachButton'", script)
         self.assertIn("target:'#functionMenuButton'", script)
-        self.assertIn('maybeOpenPsychologyChatGuide();', script)
+        self.assertGreaterEqual(script.count('maybeOpenChatGuide();'), 2)
+        self.assertIn("'/api/chat-guides/complete'", script)
+        self.assertIn('if path == "/api/chat-guides/complete":', main)
+        self.assertIn('"chat_guides": db.current_user_chat_guides()', main)
         self.assertIn('masterclass-custom-select', script)
         self.assertIn("setOnboardingMeta('Мастер-класс ·\\nПсихология', 20)", script)
         self.assertIn('white-space:pre-line', styles)
@@ -423,7 +458,7 @@ class IkpAccessTests(unittest.TestCase):
         self.assertIn('Сохранение ресурса', script)
         self.assertIn('Потребность в специалисте', script)
         self.assertIn("name:'Вита'", script)
-        self.assertIn('.psychology-guide-spotlight', styles)
+        self.assertIn('.chat-guide-spotlight', styles)
         self.assertIn('.masterclass-profile-form>.onboarding-next', styles)
         self.assertIn('font-variant-numeric:tabular-nums', styles)
         self.assertIn('data-psychology-sessions-open', script)

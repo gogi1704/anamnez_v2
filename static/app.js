@@ -65,7 +65,9 @@ const state = {
   healthPassportCheckupMetric2: false,
   masterclassEntry: null,
   masterclassAnonymousPending: false,
-  psychologyChatGuideStep: -1,
+  chatGuideStep: -1,
+  chatGuideType: '',
+  chatGuidesSeen: new Set(),
 };
 
 const $ = selector => document.querySelector(selector);
@@ -80,7 +82,7 @@ const SPECIALIST_ANALYSIS_PENDING_KEY = 'consilium_specialist_analysis_pending';
 const REQUESTED_CONVERSATION_KEY = 'consilium_requested_conversation_id';
 const PAYMENT_PENDING_ORDER_KEY = 'consilium_pending_payment_order';
 const RESULT_FLOW_KEY = 'consilium_result_flow_v1';
-const PSYCHOLOGY_CHAT_GUIDE_KEY = 'consilium_psychology_chat_guide_v1';
+const LEGACY_PSYCHOLOGY_CHAT_GUIDE_KEY = 'consilium_psychology_chat_guide_v1';
 const INSTALL_REOFFER_AFTER_MS = 7 * 24 * 60 * 60 * 1000;
 let userAudioContext = null;
 let deferredInstallPrompt = null;
@@ -4664,7 +4666,7 @@ async function openConversation(id) {
     await markConversationRead(id);
     await loadConversationList();
     document.body.classList.remove('show-team');
-    maybeOpenPsychologyChatGuide();
+    maybeOpenChatGuide();
   } catch (error) {
     if (error.code === 'http_404' && id === state.conversationId) {
       state.conversationId = null;
@@ -4701,6 +4703,7 @@ function newConversation() {
   $('#taskStatus').textContent = 'Ожидает задачу';
   addMessage('agent', 'Здравствуйте! Я Ольга, ваш помощник. Задавайте вопросы о здоровье, питании, спорте или возможностях сервиса — я помогу разобраться и при необходимости предложу подключить человека.', 'manager');
   loadConversationList();
+  maybeOpenChatGuide();
 }
 
 function closeNewChatMenu() {
@@ -4818,51 +4821,125 @@ async function confirmPsychologyConversationReset() {
   }
 }
 
-const PSYCHOLOGY_CHAT_GUIDE_SLIDES = [
-  {
-    target:'#psychologySessionsButton',
-    title:'Сессии с психологом',
-    text:'Здесь находится история сессий, остаток предоплаченных сессий и кнопка новой заявки. Первая 30-минутная сессия бесплатна.',
-  },
-  {
-    target:'#messageInput',
-    title:'Напишите Вите',
-    text:'Опишите ситуацию своими словами. Вита поможет разобраться в состоянии, задаст уточняющие вопросы и предложит следующий шаг.',
-  },
-  {
-    target:'#attachButton',
-    title:'Можно приложить файл',
-    text:'Эта кнопка позволяет добавить фотографию или документ к сообщению, если без них трудно объяснить вопрос.',
-  },
-  {
-    target:'#functionMenuButton',
-    title:'Дополнительные функции',
-    text:'В общем меню доступны ваши данные, история, покупки, настройки текста и другие возможности Консилиума.',
-  },
-  {
-    target:() => window.matchMedia('(max-width: 720px)').matches
-      ? '#mobileHeaderDialogsButton' : '#newChatButton',
-    title:'Другие диалоги',
-    text:'Здесь можно открыть историю переписки или перейти в другой чат. Психологический диалог останется сохранённым.',
-  },
-];
+const CHAT_GUIDE_SLIDES = {
+  general: [
+    {
+      target:'#messageInput',
+      title:'Задайте вопрос Ольге',
+      text:'Можно спросить о здоровье, питании, активности или возможностях сервиса. Ольга уточнит детали и при необходимости подключит подходящего ИИ-специалиста.',
+    },
+    {
+      target:'#attachButton',
+      title:'Добавляйте файлы',
+      text:'К сообщению можно приложить фотографию, результат анализа или документ. Файлы можно открыть и скачать прямо из диалога.',
+    },
+    {
+      target:'#capabilitiesButton',
+      title:'Возможности Консилиума',
+      text:'Здесь собрана краткая памятка о том, чем может помочь сервис и какие задачи доступны в приложении.',
+    },
+    {
+      target:'#functionMenuButton',
+      title:'Ваши данные и покупки',
+      text:'В меню находятся профиль, история здоровья, результаты анализов, покупки, консультации и настройки приложения.',
+    },
+    {
+      target:() => window.matchMedia('(max-width: 720px)').matches
+        ? '#mobileHeaderDialogsButton' : '#newChatButton',
+      title:'Выбирайте нужный чат',
+      text:'Отсюда можно открыть новый обычный диалог, чат с Витой или контроль питания. История каждого чата сохраняется отдельно.',
+    },
+  ],
+  weight_control: [
+    {
+      target:'#weightToolsButton',
+      title:'Инструменты контроля питания',
+      text:'Здесь находятся дневник питания, замеры тела, напоминания о приёмах пищи и настройка характера помощника.',
+    },
+    {
+      target:'#messageInput',
+      title:'Расскажите о питании и цели',
+      text:'Пишите о рационе, режиме, голоде, сне и активности. Помощник будет учитывать историю именно этого диалога.',
+    },
+    {
+      target:'#attachButton',
+      title:'Прикладывайте фотографии',
+      text:'Можно отправлять фотографии еды и документов. Это поможет точнее разобрать рацион и связанные с ним вопросы.',
+    },
+    {
+      target:() => window.matchMedia('(max-width: 720px)').matches
+        ? '#mobileHeaderDialogsButton' : '#newChatButton',
+      title:'Другие диалоги',
+      text:'Контроль питания хранится отдельно. Вы можете перейти к Ольге или Вите и позднее вернуться сюда без потери истории.',
+    },
+  ],
+  masterclass_psychology: [
+    {
+      target:'#psychologySessionsButton',
+      title:'Сессии с психологом',
+      text:'Здесь находится история сессий, остаток предоплаченных сессий и кнопка новой заявки. Первая 30-минутная сессия бесплатна.',
+    },
+    {
+      target:'#messageInput',
+      title:'Напишите Вите',
+      text:'Опишите ситуацию своими словами. Вита поможет разобраться в состоянии, задаст уточняющие вопросы и предложит следующий шаг.',
+    },
+    {
+      target:'#attachButton',
+      title:'Можно приложить файл',
+      text:'Эта кнопка позволяет добавить фотографию или документ к сообщению, если без них трудно объяснить вопрос.',
+    },
+    {
+      target:'#functionMenuButton',
+      title:'Дополнительные функции',
+      text:'В общем меню доступны ваши данные, история, покупки, настройки текста и другие возможности Консилиума.',
+    },
+    {
+      target:() => window.matchMedia('(max-width: 720px)').matches
+        ? '#mobileHeaderDialogsButton' : '#newChatButton',
+      title:'Другие диалоги',
+      text:'Здесь можно открыть историю переписки или перейти в другой чат. Психологический диалог останется сохранённым.',
+    },
+  ],
+};
 
-function psychologyChatGuideSeen() {
-  try { return localStorage.getItem(PSYCHOLOGY_CHAT_GUIDE_KEY) === '1'; }
-  catch { return false; }
+const CHAT_GUIDE_FINAL_COPY = {
+  general:'Обучение завершено. Его можно повторить сейчас или закрыть и начать общение с Ольгой.',
+  weight_control:'Обучение завершено. Его можно повторить сейчас или закрыть и перейти к контролю питания.',
+  masterclass_psychology:'Обучение завершено. Его можно повторить сейчас или закрыть и начать общение с Витой.',
+};
+
+function initializeChatGuides(identity = {}) {
+  state.chatGuidesSeen = new Set(
+    (Array.isArray(identity.chat_guides) ? identity.chat_guides : [])
+      .filter(type => Object.prototype.hasOwnProperty.call(CHAT_GUIDE_SLIDES,type)),
+  );
+  try {
+    if (localStorage.getItem(LEGACY_PSYCHOLOGY_CHAT_GUIDE_KEY) === '1') {
+      state.chatGuidesSeen.add('masterclass_psychology');
+      api('/api/chat-guides/complete', {
+        method:'POST', body:JSON.stringify({guide_type:'masterclass_psychology'}),
+      }).catch(() => {});
+    }
+  } catch {}
 }
 
-function psychologyGuideTarget(slide) {
+function currentChatGuideType() {
+  return Object.prototype.hasOwnProperty.call(CHAT_GUIDE_SLIDES,state.conversationType)
+    ? state.conversationType : 'general';
+}
+
+function chatGuideTarget(slide) {
   const selector = typeof slide?.target === 'function' ? slide.target() : slide?.target;
   const target = selector ? document.querySelector(selector) : null;
   if (!target || target.getClientRects().length === 0) return null;
   return target;
 }
 
-function positionPsychologyChatGuide(target) {
-  const spotlight = $('#psychologyGuideSpotlight');
-  const arrow = $('#psychologyGuideArrow');
-  const card = $('#psychologyGuideCard');
+function positionChatGuide(target) {
+  const spotlight = $('#chatGuideSpotlight');
+  const arrow = $('#chatGuideArrow');
+  const card = $('#chatGuideCard');
   const rect = target.getBoundingClientRect();
   const padding = 7;
   const spotlightLeft = Math.max(4, rect.left - padding);
@@ -4893,77 +4970,88 @@ function positionPsychologyChatGuide(target) {
   arrow.style.top = `${below ? rect.bottom + 3 : rect.top - 35}px`;
 }
 
-function renderPsychologyChatGuide() {
-  const guide = $('#psychologyChatGuide');
+function renderChatGuide() {
+  const guide = $('#chatGuide');
   if (!guide || guide.classList.contains('hidden')) return;
-  const step = state.psychologyChatGuideStep;
-  const finalStep = step >= PSYCHOLOGY_CHAT_GUIDE_SLIDES.length;
+  const slides = CHAT_GUIDE_SLIDES[state.chatGuideType] || [];
+  const step = state.chatGuideStep;
+  const finalStep = step >= slides.length;
+  guide.dataset.guideType = state.chatGuideType;
   guide.classList.toggle('final', finalStep);
-  $('#psychologyGuideFinish').classList.toggle('hidden', !finalStep);
-  $('#psychologyGuideNext').classList.toggle('hidden', finalStep);
-  $('#psychologyGuideTapHint').classList.toggle('hidden', finalStep);
-  $('#psychologyGuideSpotlight').classList.toggle('hidden', finalStep);
-  $('#psychologyGuideArrow').classList.toggle('hidden', finalStep);
+  $('#chatGuideFinish').classList.toggle('hidden', !finalStep);
+  $('#chatGuideNext').classList.toggle('hidden', finalStep);
+  $('#chatGuideTapHint').classList.toggle('hidden', finalStep);
+  $('#chatGuideSpotlight').classList.toggle('hidden', finalStep);
+  $('#chatGuideArrow').classList.toggle('hidden', finalStep);
   if (finalStep) {
-    $('#psychologyGuideProgress').textContent = 'ГОТОВО';
-    $('#psychologyChatGuideTitle').textContent = 'Всё понятно?';
-    $('#psychologyChatGuideText').textContent = 'Обучение завершено. Его можно повторить сейчас или закрыть и начать общение с Витой.';
-    $('#psychologyGuideCard').style.cssText = 'left:50%;top:50%;transform:translate(-50%,-50%);width:min(410px,calc(100vw - 28px))';
+    $('#chatGuideProgress').textContent = 'ГОТОВО';
+    $('#chatGuideTitle').textContent = 'Всё понятно?';
+    $('#chatGuideText').textContent = CHAT_GUIDE_FINAL_COPY[state.chatGuideType] || CHAT_GUIDE_FINAL_COPY.general;
+    $('#chatGuideCard').style.cssText = 'left:50%;top:50%;transform:translate(-50%,-50%);width:min(410px,calc(100vw - 28px))';
     return;
   }
-  const slide = PSYCHOLOGY_CHAT_GUIDE_SLIDES[step];
-  $('#psychologyGuideProgress').textContent = `${step + 1} из ${PSYCHOLOGY_CHAT_GUIDE_SLIDES.length}`;
-  $('#psychologyChatGuideTitle').textContent = slide.title;
-  $('#psychologyChatGuideText').textContent = slide.text;
-  $('#psychologyGuideNext').textContent = step === PSYCHOLOGY_CHAT_GUIDE_SLIDES.length - 1 ? 'Понятно' : 'Далее';
+  const slide = slides[step];
+  $('#chatGuideProgress').textContent = `${step + 1} из ${slides.length}`;
+  $('#chatGuideTitle').textContent = slide.title;
+  $('#chatGuideText').textContent = slide.text;
+  $('#chatGuideNext').textContent = step === slides.length - 1 ? 'Понятно' : 'Далее';
   requestAnimationFrame(() => {
-    const target = psychologyGuideTarget(slide);
-    if (target) positionPsychologyChatGuide(target);
+    const target = chatGuideTarget(slide);
+    if (target) positionChatGuide(target);
     else {
-      state.psychologyChatGuideStep += 1;
-      renderPsychologyChatGuide();
+      state.chatGuideStep += 1;
+      renderChatGuide();
     }
   });
 }
 
-function startPsychologyChatGuide() {
-  state.psychologyChatGuideStep = 0;
+function startChatGuide(guideType = currentChatGuideType()) {
+  state.chatGuideType = guideType;
+  state.chatGuideStep = 0;
   closeFunctionMenu();
   closeWeightToolsMenu();
   document.body.classList.remove('show-team');
-  $('#psychologyChatGuide').classList.remove('hidden');
-  renderPsychologyChatGuide();
-  trackMasterclassScreen('psychology_chat_guide');
-  trackEvent('psychology_chat_guide_started', {screen:'psychology_chat'});
+  $('#chatGuide').classList.remove('hidden');
+  renderChatGuide();
+  if (guideType === 'masterclass_psychology') trackMasterclassScreen('psychology_chat_guide');
+  trackEvent('chat_guide_started', {screen:'chat',guide_type:guideType});
 }
 
-function maybeOpenPsychologyChatGuide() {
-  if (state.conversationType !== 'masterclass_psychology'
-      || psychologyChatGuideSeen()
-      || !$('#psychologyChatGuide').classList.contains('hidden')) return;
+function maybeOpenChatGuide() {
+  const guideType = currentChatGuideType();
+  if (state.chatGuidesSeen.has(guideType)
+      || !$('#chatGuide').classList.contains('hidden')) return;
   setTimeout(() => {
-    if (state.conversationType === 'masterclass_psychology'
-        && !psychologyChatGuideSeen()
-        && $('#psychologyChatGuide').classList.contains('hidden')) {
-      startPsychologyChatGuide();
+    if (currentChatGuideType() === guideType
+        && !state.chatGuidesSeen.has(guideType)
+        && $('#chatGuide').classList.contains('hidden')) {
+      startChatGuide(guideType);
     }
   }, 350);
 }
 
-function nextPsychologyChatGuideSlide() {
-  if (state.psychologyChatGuideStep < 0
-      || state.psychologyChatGuideStep >= PSYCHOLOGY_CHAT_GUIDE_SLIDES.length) return;
-  state.psychologyChatGuideStep += 1;
-  renderPsychologyChatGuide();
+function nextChatGuideSlide() {
+  const slides = CHAT_GUIDE_SLIDES[state.chatGuideType] || [];
+  if (state.chatGuideStep < 0 || state.chatGuideStep >= slides.length) return;
+  state.chatGuideStep += 1;
+  renderChatGuide();
 }
 
-function closePsychologyChatGuide() {
-  try { localStorage.setItem(PSYCHOLOGY_CHAT_GUIDE_KEY, '1'); } catch {}
-  state.psychologyChatGuideStep = -1;
-  $('#psychologyChatGuide').classList.add('hidden');
-  trackMasterclassAction('complete', 'psychology_chat_guide');
-  trackMasterclassScreen('psychology_chat');
-  trackEvent('psychology_chat_guide_completed', {screen:'psychology_chat'});
+function closeChatGuide() {
+  const guideType = state.chatGuideType || currentChatGuideType();
+  state.chatGuidesSeen.add(guideType);
+  if (guideType === 'masterclass_psychology') {
+    try { localStorage.setItem(LEGACY_PSYCHOLOGY_CHAT_GUIDE_KEY, '1'); } catch {}
+    trackMasterclassAction('complete', 'psychology_chat_guide');
+    trackMasterclassScreen('psychology_chat');
+  }
+  state.chatGuideStep = -1;
+  state.chatGuideType = '';
+  $('#chatGuide').classList.add('hidden');
+  api('/api/chat-guides/complete', {
+    method:'POST', body:JSON.stringify({guide_type:guideType}),
+  }).catch(() => {});
+  trackEvent('chat_guide_completed', {screen:'chat',guide_type:guideType});
 }
 
 function psychologySessionDate(value) {
@@ -7822,28 +7910,30 @@ $('#purchasesList').addEventListener('click', handlePurchaseAction);
 $('#consultationsClose').addEventListener('click', closeConsultations);
 $('#consultationsModal').addEventListener('click', event => { if (event.target.id === 'consultationsModal') closeConsultations(); });
 $('#consultationPayButton').addEventListener('click', beginConsultationPurchase);
-$('#psychologyChatGuide').addEventListener('click', event => {
-  if (event.target.closest('#psychologyGuideFinish')) return;
-  if (event.target.closest('#psychologyGuideNext')) return;
-  nextPsychologyChatGuideSlide();
+$('#chatGuide').addEventListener('click', event => {
+  if (event.target.closest('#chatGuideFinish')) return;
+  if (event.target.closest('#chatGuideNext')) return;
+  nextChatGuideSlide();
 });
-$('#psychologyGuideNext').addEventListener('click', event => {
+$('#chatGuideNext').addEventListener('click', event => {
   event.stopPropagation();
-  nextPsychologyChatGuideSlide();
+  nextChatGuideSlide();
 });
-$('#psychologyGuideRepeat').addEventListener('click', event => {
+$('#chatGuideRepeat').addEventListener('click', event => {
   event.stopPropagation();
-  state.psychologyChatGuideStep = 0;
-  renderPsychologyChatGuide();
-  trackMasterclassAction('repeat', 'psychology_chat_guide');
-  trackEvent('psychology_chat_guide_repeated', {screen:'psychology_chat'});
+  state.chatGuideStep = 0;
+  renderChatGuide();
+  if (state.chatGuideType === 'masterclass_psychology') {
+    trackMasterclassAction('repeat', 'psychology_chat_guide');
+  }
+  trackEvent('chat_guide_repeated', {screen:'chat',guide_type:state.chatGuideType});
 });
-$('#psychologyGuideClose').addEventListener('click', event => {
+$('#chatGuideClose').addEventListener('click', event => {
   event.stopPropagation();
-  closePsychologyChatGuide();
+  closeChatGuide();
 });
 window.addEventListener('resize', () => {
-  if (!$('#psychologyChatGuide').classList.contains('hidden')) renderPsychologyChatGuide();
+  if (!$('#chatGuide').classList.contains('hidden')) renderChatGuide();
 }, {passive:true});
 $('#psychologySessionsButton').addEventListener('click', openPsychologySessions);
 $('#psychologyResetButton').addEventListener('click', openPsychologyResetConfirmation);
@@ -8263,11 +8353,11 @@ document.addEventListener('keydown', event => {
   closeTopUiLayer();
 });
 document.addEventListener('keydown', event => {
-  if ($('#psychologyChatGuide').classList.contains('hidden')) return;
+  if ($('#chatGuide').classList.contains('hidden')) return;
   if (event.target.closest('button')) return;
   if (event.key === 'Enter' || event.key === ' ') {
     event.preventDefault();
-    nextPsychologyChatGuideSlide();
+    nextChatGuideSlide();
   }
 });
 
@@ -8334,6 +8424,7 @@ async function init() {
     }
     const identity = await api('/api/me');
     state.identity = identity;
+    initializeChatGuides(identity);
     consumeCompletedMessengerLink(identity);
     updateMessengerLinkMenu();
     const entryParams = new URLSearchParams(window.location.search);

@@ -24,6 +24,7 @@ TEST_COMPANY_INN = "123123"
 WEIGHT_ANALYSIS_MIN_CONFIRMED_MEALS = 20
 WEIGHT_CONTROL_PERSONALITY_MODES = {"friendly", "balanced", "strict"}
 WEIGHT_CONTROL_ADDRESS_MODES = {"formal", "informal"}
+CHAT_GUIDE_TYPES = {"general", "weight_control", "masterclass_psychology"}
 MASTERCLASS_PSYCHOLOGY_WELCOME = (
     "Здравствуйте! Я Вита — ИИ-помощник команды психологов. Я не человек и "
     "не ставлю диагнозов, но помогу разобраться, что происходит, и подберу "
@@ -2161,6 +2162,7 @@ def reset_current_user(preserve_identity: bool = False) -> None:
         conn.execute("DELETE FROM health_passports WHERE chel_id = ?", (chel_id,))
         conn.execute("DELETE FROM user_profile WHERE chel_id = ?", (chel_id,))
         conn.execute("DELETE FROM onboarding_state WHERE chel_id = ?", (chel_id,))
+        conn.execute("DELETE FROM user_chat_guides WHERE chel_id = ?", (chel_id,))
         conn.execute("DELETE FROM payment_orders WHERE chel_id = ?", (chel_id,))
         if not preserve_identity:
             conn.execute("DELETE FROM users WHERE chel_id = ?", (chel_id,))
@@ -2204,7 +2206,7 @@ def admin_delete_user_data(chel_id: str) -> dict:
     owned_tables = (
         "conversations", "memories", "body_symptoms", "lab_interpretations", "lab_result_subscriptions",
         "user_result_notification_outbox", "health_passports",
-        "user_profile", "onboarding_state", "payment_orders", "user_device_stats", "ai_usage",
+        "user_profile", "onboarding_state", "user_chat_guides", "payment_orders", "user_device_stats", "ai_usage",
         "login_tokens", "auth_intents", "user_sessions", "external_identities",
         "users",
     )
@@ -2641,6 +2643,14 @@ def _move_masterclass_psychology_data(
             f"UPDATE {table} SET chel_id=? WHERE chel_id=?",
             (target_chel_id, source_chel_id),
         )
+    conn.execute(
+        """INSERT INTO user_chat_guides (chel_id,guide_type,completed_at)
+           SELECT ?,guide_type,completed_at FROM user_chat_guides WHERE chel_id=?
+           ON CONFLICT(chel_id,guide_type) DO UPDATE SET
+             completed_at=MIN(user_chat_guides.completed_at,excluded.completed_at)""",
+        (target_chel_id, source_chel_id),
+    )
+    conn.execute("DELETE FROM user_chat_guides WHERE chel_id=?", (source_chel_id,))
     source_profile = conn.execute(
         "SELECT 1 FROM user_profile WHERE chel_id=?", (source_chel_id,),
     ).fetchone()
@@ -6877,6 +6887,15 @@ def init_db() -> None:
                 FOREIGN KEY(chel_id) REFERENCES users(chel_id) ON DELETE CASCADE
             );
 
+            CREATE TABLE IF NOT EXISTS user_chat_guides (
+                chel_id TEXT NOT NULL,
+                guide_type TEXT NOT NULL,
+                completed_at TEXT NOT NULL,
+                PRIMARY KEY(chel_id,guide_type),
+                CHECK(guide_type IN ('general','weight_control','masterclass_psychology')),
+                FOREIGN KEY(chel_id) REFERENCES users(chel_id) ON DELETE CASCADE
+            );
+
             CREATE TABLE IF NOT EXISTS conversations (
                 id TEXT PRIMARY KEY,
                 chel_id TEXT NOT NULL DEFAULT 'chel_legacy',
@@ -8977,6 +8996,39 @@ def open_checkup_reoffer(access_token: str) -> dict:
         )
         conn.commit()
     return {**dict(row), "first_click": first_click}
+
+
+def current_user_chat_guides() -> list[str]:
+    """Return chat guide types completed by the current user."""
+    with connection() as conn:
+        rows = conn.execute(
+            """SELECT guide_type FROM user_chat_guides
+               WHERE chel_id=? ORDER BY completed_at,guide_type""",
+            (current_chel_id(),),
+        ).fetchall()
+    return [str(row["guide_type"]) for row in rows]
+
+
+def complete_chat_guide(guide_type: str) -> dict:
+    """Persist one completed guide independently for each type of chat."""
+    guide_type = str(guide_type or "").strip().lower()
+    if guide_type not in CHAT_GUIDE_TYPES:
+        raise ValueError("Неизвестный тип обучения")
+    chel_id = current_chel_id()
+    completed_at = utc_now()
+    with _write_lock, connection() as conn:
+        conn.execute(
+            """INSERT INTO user_chat_guides (chel_id,guide_type,completed_at)
+               VALUES (?,?,?) ON CONFLICT(chel_id,guide_type) DO NOTHING""",
+            (chel_id, guide_type, completed_at),
+        )
+        row = conn.execute(
+            """SELECT guide_type,completed_at FROM user_chat_guides
+               WHERE chel_id=? AND guide_type=?""",
+            (chel_id, guide_type),
+        ).fetchone()
+        conn.commit()
+    return dict(row)
 
 
 def create_conversation(
