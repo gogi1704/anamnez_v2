@@ -59,6 +59,7 @@ class VitaAlgorithmTests(unittest.TestCase):
             "Не обещай заранее видео, созвон, переписку\n  или очную встречу",
             MASTERCLASS_PSYCHOLOGY_CHAT,
         )
+        self.assertNotIn("входит в пакет мастер-класса", MASTERCLASS_PSYCHOLOGY_CHAT)
 
     def test_structured_state_is_normalized_and_persisted(self):
         chat = self.create_chat()

@@ -5141,7 +5141,7 @@ function renderPsychologySessions(summary = {}) {
   const newSessionSubtitle = pending
     ? `Заявка № ${escapeHtml(pending.request_number || '—')} отправлена · психолог свяжется для согласования времени`
     : summary.free_available
-      ? '30 минут · бесплатно по пакету мастер-класса'
+      ? '30 минут · бесплатно'
       : Number(summary.remaining_paid || 0) > 0
         ? '60 минут · будет использована оплаченная сессия'
         : 'Для заявки потребуется купить 60-минутную сессию';
@@ -5251,9 +5251,8 @@ function openPsychologySessionRequest() {
   } else if (canRequest) {
     const free = Boolean(summary.free_available);
     $('#psychologySessionRequestTitle').textContent = 'Оставить заявку на сессию?';
-    const masterclassUser = Boolean(state.masterclassEntry || state.identity?.masterclass_path);
     $('#psychologySessionRequestText').textContent = free
-      ? `Пообщайтесь с дипломированным психологом. 30-минутная сессия бесплатна${masterclassUser ? ' и входит в ваш пакет мастер-класса' : ''}. После отправки заявки психолог свяжется с вами и согласует время и формат.`
+      ? 'Пообщайтесь с дипломированным психологом. 30-минутная сессия бесплатна. После отправки заявки психолог свяжется с вами и согласует время и формат.'
       : 'Будет зарезервирована одна предоплаченная 60-минутная сессия. После отправки заявки психолог свяжется с вами и согласует время и формат.';
     button.dataset.mode = 'request';
     button.textContent = 'Да, оставить заявку';
