@@ -2054,12 +2054,15 @@ async function nextQuestion() {
       blood_pressure:'unknown', blood_sugar:'unknown', dark_in_eyes:'unknown', driving_time:'unknown', joint_pain:'unknown', fatigue:'unknown', notes:'',
       ...state.onboardingAnswers,
     };
-    state.onboarding = await api('/api/onboarding/profile', { method:'POST', body:JSON.stringify(payload) });
+    state.onboarding = isMarketerVariantC()
+      ? await completeMarketerQuestionnaire(payload)
+      : await api('/api/onboarding/profile', { method:'POST', body:JSON.stringify(payload) });
     state.profile = state.onboarding.profile;
     trackEvent('examinations_opened', { screen:'examinations' });
     if (isMarketerVariantC()) renderMarketerQuestionnaireResult();
     else renderExamSelection();
   } catch (error) {
+    if (isMarketerVariantC() && $('#onboardingContent .marketer-loading-screen')) renderQuestion();
     const question = activeOnboardingQuestions()[state.onboardingStep];
     trackEvent('question_validation_error', {
       question_key:question?.key || '', step_number:state.onboardingStep + 1,
@@ -2067,6 +2070,55 @@ async function nextQuestion() {
     });
     showOnboardingError(error.message);
   }
+}
+
+function waitFor(milliseconds) {
+  return new Promise(resolve => setTimeout(resolve,Math.max(0,Number(milliseconds) || 0)));
+}
+
+function renderMarketerQuestionnaireLoading(name = '') {
+  const texts = marketerOfferTexts();
+  const title = name
+    ? offerTemplate(texts.loading_title_template || '{имя}, готовим ваши рекомендации',{имя:name})
+    : (texts.loading_title_without_name || 'Готовим ваши рекомендации');
+  const steps = [1,2,3,4].map(index => texts[`loading_step_${index}`] || '').filter(Boolean);
+  trackOnboardingScreen('questionnaire_processing');
+  setOnboardingMeta('Анкета заполнена',100);
+  $('#onboardingContent').innerHTML = `<div class="marketer-loading-screen">
+    <small class="marketer-loading-progress-label">${escapeHtml(texts.result_progress_label || '')}</small>
+    <h1>${escapeHtml(title)}</h1>
+    <p>${escapeHtml(texts.loading_subtitle || 'Это займёт несколько секунд')}</p>
+    <div class="marketer-loading-progress" aria-label="Прогресс подготовки рекомендаций"><i></i></div>
+    <ol>${steps.map((step,index) => `<li class="${index === 0 ? 'running' : 'waiting'}" data-loading-step="${index}"><span><b>✓</b><i></i></span><em>${escapeHtml(step)}</em></li>`).join('')}</ol>
+    <small class="marketer-loading-privacy"><span aria-hidden="true">⌾</span>${escapeHtml(texts.loading_privacy || 'Ваши ответы видите только вы')}</small>
+  </div>`;
+}
+
+function updateMarketerLoadingStep(doneIndex, runningIndex = null) {
+  const screen = $('#onboardingContent .marketer-loading-screen');
+  if (!screen) return;
+  screen.querySelectorAll('[data-loading-step]').forEach((node,index) => {
+    node.classList.toggle('done',index <= doneIndex);
+    node.classList.toggle('running',index === runningIndex);
+    node.classList.toggle('waiting',index > doneIndex && index !== runningIndex);
+  });
+  const progress = screen.querySelector('.marketer-loading-progress i');
+  if (progress) progress.style.width = `${Math.max(0,Math.min(100,(doneIndex + 1) * 25))}%`;
+}
+
+async function completeMarketerQuestionnaire(payload) {
+  const request = api('/api/onboarding/profile', { method:'POST', body:JSON.stringify(payload) });
+  renderMarketerQuestionnaireLoading(String(payload.preferred_name || '').trim());
+  const duration = Math.max(300,Math.min(5000,Number(marketerOfferTexts().loading_step_duration_ms || 1200)));
+  for (let index = 0; index < 3; index += 1) {
+    await waitFor(duration);
+    updateMarketerLoadingStep(index,index + 1);
+  }
+  const [onboarding] = await Promise.all([request,waitFor(duration)]);
+  updateMarketerLoadingStep(3,null);
+  await waitFor(200);
+  trackOnboardingAction('automatic','questionnaire_processing');
+  return onboarding;
 }
 
 async function skipMedicalExam() {
@@ -2351,52 +2403,63 @@ function marketerResultContext() {
   const priority = [...new Set([...configuredPriority,...matched])];
   const ordered = matched.slice().sort((left,right) => priority.indexOf(left) - priority.indexOf(right));
   const explanationRuleIds = ordered.slice(0,2);
-  const chipRuleIds = [...explanationRuleIds];
-  const ageRule = ordered.find(ruleId => [7,8].includes(ruleId));
-  if (ageRule && !chipRuleIds.includes(ageRule) && chipRuleIds.length < 3) chipRuleIds.push(ageRule);
-  const packageLists = explanationRuleIds.map(ruleId => (
-    source.rule_test_ids?.[String(ruleId)] || []
-  ).filter(testId => !['ca125','ca153','ca199'].includes(testId)));
-  const packageOrder = packageLists.length > 1
-    ? [packageLists[0][0],...packageLists[1],...packageLists[0].slice(1)]
-    : (packageLists[0] || []);
-  const packageIds = packageOrder.filter((testId,index,list) => testId && list.indexOf(testId) === index);
-  const checks = [];
-  explanationRuleIds.forEach((ruleId,index) => {
-    const dynamicRows = source.rule_check_lines?.[String(ruleId)];
-    const rows = Array.isArray(dynamicRows) && dynamicRows.length
-      ? dynamicRows.map(item => String(item || '').trim()).filter(Boolean)
-      : String(texts[`result_rule_${ruleId}_checks`] || '').split('\n').map(item => item.trim()).filter(Boolean);
-    const limit = explanationRuleIds.length === 1 ? 3 : index === 0 ? 2 : 1;
-    for (const row of rows.slice(0,limit)) {
-      if (!checks.includes(row) && checks.length < 3) checks.push(row);
-    }
+  const parseCsv = value => String(value || '').split(',').map(item => item.trim()).filter(Boolean);
+  const parseRow = id => {
+    const [label = '',subtitle = '',phrase = ''] = String(texts[`result_row_${id}`] || '').split('|').map(item => item.trim());
+    return {id,label,subtitle,phrase:phrase || label.toLowerCase()};
+  };
+  const uniqueRows = ids => [...new Set(ids)].map(parseRow).filter(row => row.label);
+  const medicalRows = uniqueRows(explanationRuleIds.flatMap(ruleId => parseCsv(texts[`result_rule_${ruleId}_medical_rows`])));
+  let additionalRows = uniqueRows(explanationRuleIds.flatMap(ruleId => parseCsv(texts[`result_rule_${ruleId}_additional_rows`])));
+  if (explanationRuleIds.includes(9) && !additionalRows.length) {
+    additionalRows = (source.rule_check_lines?.['9'] || []).map((value,index) => ({
+      id:`R9-${index}`,label:String(value || '').trim(),subtitle:'',phrase:String(value || '').trim().toLowerCase(),
+    })).filter(row => row.label);
+  }
+  const packageLists = explanationRuleIds.map(ruleId => {
+    const configured = parseCsv(texts[`result_rule_${ruleId}_packages`]);
+    const values = configured.includes('dynamic') || !configured.length
+      ? (source.rule_test_ids?.[String(ruleId)] || [])
+      : configured;
+    return values.filter(testId => !['ca125','ca153','ca199'].includes(testId));
   });
-  return {matched,explanationRuleIds,chipRuleIds,packageIds:packageIds.slice(0,3),checks};
+  const packageOrder = packageLists.length > 1
+    ? [packageLists[0][0],packageLists[1][0],...packageLists[0].slice(1),...packageLists[1].slice(1)]
+    : (packageLists[0] || []);
+  const byId = new Map((state.onboarding?.tests || []).map(test => [test.id,test]));
+  const indicators = testId => new Set(String(byId.get(testId)?.includes || '')
+    .split(/[,;\n]/).map(item => item.trim().toLowerCase().replace(/[«»"'.]/g,'')).filter(Boolean));
+  const packageIds = [];
+  packageOrder.filter((testId,index,list) => testId && list.indexOf(testId) === index).forEach(testId => {
+    const candidate = indicators(testId);
+    const covered = candidate.size && packageIds.some(previousId => {
+      const previous = indicators(previousId);
+      return [...candidate].every(item => previous.has(item));
+    });
+    if (!covered && packageIds.length < 3) packageIds.push(testId);
+  });
+  const joinPhrases = rows => {
+    const values = rows.map(row => row.phrase).filter(Boolean);
+    if (values.length < 2) return values[0] || '';
+    return `${values.slice(0,-1).join(', ')} и ${values.at(-1)}`;
+  };
+  const gapText = explanationRuleIds.length === 1
+    ? String(texts[`result_rule_${explanationRuleIds[0]}_gap`] || '')
+    : offerTemplate(
+        medicalRows.length ? texts.result_two_signal_gap_with_medical : texts.result_two_signal_gap_without_medical,
+        {medical:joinPhrases(medicalRows),additional:joinPhrases(additionalRows)},
+      );
+  const recommendations = explanationRuleIds.map(ruleId => ({
+    ruleId,
+    title:texts[`result_rule_${ruleId}_title`] || '',
+    reason:texts[`result_rule_${ruleId}_reason`] || '',
+    ending:texts[`result_rule_${ruleId}_ending`] || '',
+  }));
+  return {matched,explanationRuleIds,packageIds,medicalRows,additionalRows,gapText,recommendations};
 }
 
-function marketerResultChips(context) {
-  const texts = marketerOfferTexts();
-  if (!context.chipRuleIds.includes(10)) {
-    const age = String(state.profile?.age || state.onboarding?.profile?.age || '').trim();
-    return context.chipRuleIds.map(ruleId => offerTemplate(
-      texts[`result_rule_${ruleId}_chip`] || '',{'возраст':age},
-    )).filter(Boolean);
-  }
-  const profile = state.profile || state.onboarding?.profile || {};
-  const chips = [];
-  const notes = String(profile.notes || '').trim().toLowerCase();
-  if (!notes || ['нет','нет жалоб','жалоб нет','не беспокоит','ничего'].includes(notes)) {
-    chips.push(texts.result_rule_10_chip || 'жалоб нет');
-  }
-  if (profile.blood_pressure === 'normal') chips.push(texts.result_rule_10_chip_pressure || 'давление в норме');
-  if (profile.smoking === 'never') chips.push(texts.result_rule_10_chip_no_smoking || 'не курите');
-  return chips.slice(0,3).length ? chips.slice(0,3) : [texts.result_rule_10_chip || 'жалоб нет'];
-}
-
-function marketerResultCheckMarkup(value) {
-  const [label,...details] = String(value || '').split('·').map(item => item.trim()).filter(Boolean);
-  return `<li><span>✓</span><b>${escapeHtml(label || '')}</b>${details.length ? `<small>${escapeHtml(details.join(' · '))}</small>` : ''}</li>`;
+function marketerResultRowMarkup(row, additional = false) {
+  return `<li><span class="${additional ? 'additional' : 'included'}">${additional ? '+' : '✓'}</span><b>${escapeHtml(row.label || '')}</b>${row.subtitle && row.subtitle !== '—' ? `<small>${escapeHtml(row.subtitle)}</small>` : ''}</li>`;
 }
 
 function setupMarketerResultObserver() {
@@ -2417,19 +2480,27 @@ function renderMarketerQuestionnaireResult() {
   const title = name
     ? offerTemplate(texts.result_title_template || '{имя}, вот что показали ваши ответы',{имя:name})
     : (texts.result_title_without_name || 'Вот что показали ваши ответы');
-  const chips = marketerResultChips(context);
-  const prevention = context.explanationRuleIds[0] === 10;
-  const explanations = context.explanationRuleIds.map(ruleId => `<p>${escapeHtml(texts[`result_rule_${ruleId}_explanation`] || '')}</p>`).join('');
+  const prevention = context.explanationRuleIds.length === 1 && context.explanationRuleIds[0] === 10;
+  const recommendationItems = context.recommendations.map(item => `<article class="marketer-recommendation-item"><span aria-hidden="true">→</span><div><h2>${escapeHtml(item.title)}</h2><p>${escapeHtml(item.reason)}</p><strong>${escapeHtml(item.ending)}</strong></div></article>`).join('');
+  const totalRows = context.medicalRows.length + context.additionalRows.length;
+  const segments = Array.from({length:Math.max(1,totalRows)},(_,index) => `<i class="${index < context.medicalRows.length ? 'included' : 'additional'}"></i>`).join('');
   trackOnboardingScreen('questionnaire_results');
-  setOnboardingMeta('Ваши ответы',100);
+  setOnboardingMeta('Рекомендации',100);
   $('#onboardingContent').innerHTML = `<div class="marketer-result-screen">
     <small class="marketer-result-progress">${escapeHtml(texts.result_progress_label || '')}</small>
     <h1>${escapeHtml(title)}</h1>
     <p class="marketer-result-bridge">${escapeHtml(texts.result_bridge || '')}</p>
-    <section class="marketer-result-signals"><h2>${escapeHtml(texts.result_detected_title || 'Вы отметили')}</h2><div>${chips.map(chip => `<span>${escapeHtml(chip)}</span>`).join('')}</div></section>
-    <section class="marketer-result-explanation"><h2>${escapeHtml(prevention ? texts.result_prevention_explanation_title : texts.result_explanation_title)}</h2>${explanations}<small class="marketer-result-doctor"><i>${escapeHtml(texts.result_doctor_initials || 'ТВ')}</i>${escapeHtml(texts.result_doctor_signature || '')}</small></section>
-    <section class="marketer-result-checks"><h2>${escapeHtml(prevention ? texts.result_prevention_checks_title : texts.result_checks_title)}</h2><ul>${context.checks.map(marketerResultCheckMarkup).join('')}</ul></section>
+    <section class="marketer-result-recommendations">${recommendationItems}<aside><b>✓</b><div><h2>${escapeHtml(texts.result_help_title || '')}</h2><p>${escapeHtml(texts.result_help_body || '')}</p></div></aside><small class="marketer-result-doctor"><i>${escapeHtml(texts.result_doctor_initials || 'ТВ')}</i>${escapeHtml(texts.result_doctor_signature || '')}</small></section>
+    <section class="marketer-result-comparison">
+      <h2>${escapeHtml(prevention ? texts.result_prevention_checks_title : texts.result_checks_title)}</h2>
+      <h3>${escapeHtml(texts.result_comparison_title || '')}</h3>
+      <div class="marketer-coverage"><strong>${escapeHtml(offerTemplate(texts.result_coverage_template || 'Медосмотр проверит {n} из {m}',{n:context.medicalRows.length,m:totalRows}))}</strong><span>${segments}</span></div>
+      ${context.medicalRows.length ? `<h4>${escapeHtml(texts.result_standard_title || '')}</h4><ul>${context.medicalRows.map(row => marketerResultRowMarkup(row,false)).join('')}</ul>` : `<p class="marketer-no-medical">${escapeHtml(texts.result_no_medical_title || '')}</p>`}
+      <h4>${escapeHtml(texts.result_additional_title || '')}</h4><ul>${context.additionalRows.map(row => marketerResultRowMarkup(row,true)).join('')}</ul>
+      <p class="marketer-result-gap">${escapeHtml(context.gapText || '')}</p>
+    </section>
     <section class="marketer-result-decision"><h2>${escapeHtml(texts.result_decision_title || '')}</h2><p>${escapeHtml(texts.result_decision_body || '')}</p><small><span>🔒</span>${escapeHtml(texts.result_privacy || '')}</small></section>
+    <p class="marketer-result-callout">${escapeHtml(texts.result_callout || '')}</p>
     <button id="marketerResultMainCta" type="button" class="marketer-primary-cta" data-onboarding-action="marketer-result-continue">${escapeHtml(texts.result_primary_cta || 'Выбрать анализы')}</button>
     <button type="button" class="marketer-decline-link" data-onboarding-action="marketer-result-decline">${escapeHtml(texts.result_decline_link || '')}</button>
     <p class="marketer-fine-print">${escapeHtml(texts.result_disclaimer || '')}</p>
@@ -2532,7 +2603,7 @@ function marketerOfferCardC(test, {primary = false, recommended = false} = {}) {
   const expanded = primary || selected || state.marketerExpandedTests.has(test.id);
   const extendedId = EXAMINATION_UPGRADE_PAIRS[test.id];
   const disabled = Boolean(extendedId && state.selectedTests.has(extendedId));
-  const indicators = String(test.includes || '').split(',').map(item => item.trim()).filter(Boolean).slice(0,3);
+  const indicators = String(test.includes || '').split(',').map(item => item.trim()).filter(Boolean);
   return `<article class="marketer-package-card marketer-package-card-c${primary ? ' primary' : ''}${expanded ? ' expanded' : ' compact'}${selected ? ' selected' : ''}${disabled ? ' disabled-by-upgrade' : ''}" ${disabled ? 'aria-disabled="true"' : ''}>
     <label class="marketer-package-toggle" data-test-card="${escapeAttr(test.id)}" aria-label="${selected ? 'Убрать' : 'Выбрать'} ${escapeAttr(test.name)}">
       <input type="checkbox" ${selected ? 'checked' : ''} ${disabled ? 'disabled' : ''}>
@@ -2540,19 +2611,16 @@ function marketerOfferCardC(test, {primary = false, recommended = false} = {}) {
     </label>
     ${primary || recommended ? `<small class="marketer-recommended-badge">${escapeHtml(marketerOfferTexts().recommended_badge || 'Рекомендуем по вашим ответам')}</small>` : ''}
     <button type="button" class="marketer-package-heading" data-onboarding-action="toggle-marketer-card" data-test-id="${escapeAttr(test.id)}" aria-expanded="${expanded}"><strong>${escapeHtml(test.name)}</strong>${marketerPriceMarkup(test)}</button>
-    ${expanded ? `<span class="marketer-package-details"><small>${escapeHtml(test.description || '')}</small>${indicators.length ? `<em>${indicators.map(item => `<i>${escapeHtml(item)}</i>`).join('')}</em>` : `<em>${escapeHtml(test.includes || '')}</em>`}</span>` : ''}
+    ${expanded ? `<span class="marketer-package-details"><small>${escapeHtml(test.description || '')}</small>${indicators.length ? `<em>${indicators.map(item => `<i>${escapeHtml(item)}</i>`).join('')}</em>` : `<em>${escapeHtml(test.includes || '')}</em>`}</span>` : `<small class="marketer-package-composition">${escapeHtml(test.includes || '')}</small>`}
   </article>`;
 }
 
 function marketerSelectionPersonalText(context) {
   const texts = marketerOfferTexts();
-  const phrases = context.explanationRuleIds.map(ruleId => texts[`result_rule_${ruleId}_phrase`] || '').filter(Boolean);
-  if (!phrases.length) return '';
   const name = String(state.profile?.preferred_name || '').trim();
-  return offerTemplate(texts.selection_personal_template || '{имя}, эти анализы покажут, {phrase1}{phrase2_part}.',{
-    имя:name || 'По вашим ответам',phrase1:phrases[0],
-    phrase2_part:phrases[1] ? `, а ${phrases[1]}` : '',
-  }).replace(/^По вашим ответам,\s*/,'Эти анализы покажут, ');
+  return name
+    ? offerTemplate(texts.selection_personal_template || '{имя}, мы отметили анализы по вашим рекомендациям',{имя:name})
+    : (texts.selection_personal_without_name || 'Мы отметили анализы по вашим рекомендациям');
 }
 
 function setupMarketerOfferObserver() {

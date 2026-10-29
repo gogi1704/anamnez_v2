@@ -1563,12 +1563,17 @@ function metric2PreviewMarkup(screen, large = false, suppliedData = null) {
   } else if (kind === 'exam_catalog') {
     const cards = examinations.map(test => `<span class="metric2-mock-catalog-card"><header><strong>${escapeHtml(test.name)}</strong><em>${Number(test.price || 0).toLocaleString('ru-RU')} ₽</em></header><small>КОМУ ПОДХОДИТ</small><p>${escapeHtml(metric2ExamAudiences[test.id] || test.description || 'Тем, кто хочет получить больше информации о состоянии здоровья.')}</p><small>ДЛЯ ЧЕГО</small><p>${escapeHtml(test.description || 'Для дополнительной оценки показателей здоровья.')}</p><small>ЧТО ВХОДИТ</small><p>${escapeHtml(test.includes || 'Состав уточняется')}</p></span>`).join('');
     content = `<small>ДОСТУПНЫЕ ЧЕК-АПЫ</small><b>Что можно проверить</b><p>Краткое описание поможет сориентироваться. Необходимость обследований и интерпретацию результатов лучше обсуждать с врачом.</p>${cards}${action('Выбрать анализы')}${action('Вернуться к вопросу',true)}`;
+  } else if (kind === 'questionnaire_processing_c') {
+    const texts = previewData.marketer_examination_texts || {};
+    const steps = [1,2,3,4].map(index => texts[`loading_step_${index}`] || '').filter(Boolean);
+    content = `<small>${escapeHtml(texts.result_progress_label || 'АНКЕТА ЗАПОЛНЕНА')}</small><b>${escapeHtml(previewTemplate(texts.loading_title_template || '{имя}, готовим ваши рекомендации',{имя:'Анна'}))}</b><p>${escapeHtml(texts.loading_subtitle || '')}</p>${steps.map((step,index) => `<span class="metric2-mock-info"><b>${index < 3 ? '✓' : '◌'} ${escapeHtml(step)}</b></span>`).join('')}<p class="metric2-mock-note">⌾ ${escapeHtml(texts.loading_privacy || '')}</p>`;
   } else if (kind === 'questionnaire_results_c') {
     const texts = previewData.marketer_examination_texts || {};
-    const chip = texts[`result_rule_${previewRuleId}_chip`] || 'Профилактическая проверка';
-    const explanation = texts[`result_rule_${previewRuleId}_explanation`] || '';
-    const checks = String(texts[`result_rule_${previewRuleId}_checks`] || '').split('\n').filter(Boolean).slice(0,3);
-    content = `<small>${escapeHtml(texts.result_progress_label || 'АНКЕТА ЗАПОЛНЕНА')}</small><b>${escapeHtml(previewTemplate(texts.result_title_template || '{имя}, вот что показали ваши ответы',{имя:'Анна'}))}</b><p>${escapeHtml(texts.result_bridge || '')}</p><span class="metric2-mock-info"><b>${escapeHtml(texts.result_detected_title || 'Вы отметили')}</b><small>${escapeHtml(chip)}</small></span><span class="metric2-mock-info"><b>${escapeHtml(previewRuleId === 10 ? texts.result_prevention_explanation_title : texts.result_explanation_title)}</b><small>${escapeHtml(explanation)}</small><small>${escapeHtml(texts.result_doctor_initials || 'ТВ')} · ${escapeHtml(texts.result_doctor_signature || '')}</small></span><span class="metric2-mock-info"><b>${escapeHtml(previewRuleId === 10 ? texts.result_prevention_checks_title : texts.result_checks_title)}</b><small>${checks.map(escapeHtml).join(' · ')}</small></span><span class="metric2-mock-info"><b>${escapeHtml(texts.result_decision_title || '')}</b><small>${escapeHtml(texts.result_decision_body || '')}</small><small>🔒 ${escapeHtml(texts.result_privacy || '')}</small></span>${action(texts.result_primary_cta || 'Выбрать анализы')}${action(texts.result_decline_link || 'Завершить без дополнительных анализов',true)}<p>${escapeHtml(texts.result_disclaimer || '')}</p>`;
+    const medicalIds = String(texts[`result_rule_${previewRuleId}_medical_rows`] || '').split(',').filter(Boolean);
+    const additionalIds = String(texts[`result_rule_${previewRuleId}_additional_rows`] || '').split(',').filter(Boolean);
+    const rowLabel = id => String(texts[`result_row_${id.trim()}`] || id).split('|')[0];
+    const rows = [...medicalIds.map(id => `✓ ${rowLabel(id)}`),...additionalIds.map(id => `＋ ${rowLabel(id)}`)];
+    content = `<small>${escapeHtml(texts.result_progress_label || 'АНКЕТА ЗАПОЛНЕНА')}</small><b>${escapeHtml(previewTemplate(texts.result_title_template || '{имя}, рекомендации по вашим ответам',{имя:'Анна'}))}</b><p>${escapeHtml(texts.result_bridge || '')}</p><span class="metric2-mock-info"><b>${escapeHtml(texts[`result_rule_${previewRuleId}_title`] || '')}</b><small>${escapeHtml(texts[`result_rule_${previewRuleId}_reason`] || '')}</small><small>${escapeHtml(texts[`result_rule_${previewRuleId}_ending`] || '')}</small></span><span class="metric2-mock-info"><b>✓ ${escapeHtml(texts.result_help_title || '')}</b><small>${escapeHtml(texts.result_help_body || '')}</small></span><span class="metric2-mock-info"><b>${escapeHtml(previewRuleId === 10 ? texts.result_prevention_checks_title : texts.result_checks_title)}</b><small>${rows.map(escapeHtml).join(' · ')}</small><small>${escapeHtml(texts[`result_rule_${previewRuleId}_gap`] || '')}</small></span><span class="metric2-mock-info"><b>${escapeHtml(texts.result_decision_title || '')}</b><small>${escapeHtml(texts.result_decision_body || '')}</small><small>🔒 ${escapeHtml(texts.result_privacy || '')}</small></span>${action(texts.result_primary_cta || 'Добавить к медосмотру')}${action(texts.result_decline_link || 'Завершить без дополнительных анализов',true)}<p>${escapeHtml(texts.result_disclaimer || '')}</p>`;
   } else if (kind === 'exam_objection_marketer') {
     const texts = previewData.marketer_examination_texts || {};
     const first = marketerScenario[0] || examinations[0] || {};
@@ -1664,7 +1669,8 @@ function metric2PreviewMarkup(screen, large = false, suppliedData = null) {
     : kind === 'not_medical_exam_info' ? 'Анкета'
     : kind.startsWith('question_') ? 'Анкета'
     : kind === 'exam_catalog' ? 'Описание чек-апов'
-    : kind === 'questionnaire_results_c' ? 'Результаты анкеты'
+    : kind === 'questionnaire_processing_c' ? 'Подготовка рекомендаций'
+    : kind === 'questionnaire_results_c' ? 'Рекомендации'
     : ['exam_objection','exam_objection_marketer','exam_selection','exam_selection_marketer','exam_selection_marketer_c','exam_selection_no_questionnaire','exam_results_preview'].includes(kind) ? 'Обследования'
     : ['payment','payment_processing','payment_success','payment_result','payment_unavailable'].includes(kind) ? 'Оплата'
     : ['health_passport_offer','health_passport_ready','health_passport_checkups'].includes(kind) ? 'Паспорт здоровья'
@@ -1674,6 +1680,7 @@ function metric2PreviewMarkup(screen, large = false, suppliedData = null) {
   const progress = kind === 'appearance' ? 2
     : kind === 'not_medical_exam_info' ? 8
     : kind.startsWith('question_') ? 5 + Math.round((Math.max(0,questionIndex) / metric2QuestionContent.length) * 60)
+    : kind === 'questionnaire_processing_c' ? 90
     : kind === 'questionnaire_results_c' ? 100
     : ['exam_catalog','exam_objection','exam_objection_marketer'].includes(kind) ? 76
     : ['exam_selection','exam_selection_marketer','exam_selection_marketer_c','exam_selection_no_questionnaire','exam_results_preview'].includes(kind) ? 80
@@ -2512,6 +2519,11 @@ function showContentTextsStatus(message = '', error = false) {
 function ensureMarketerResultRuleFields() {
   const root = $('#marketerResultRulesFields');
   if (!root || root.childElementCount) return;
+  const rowsRoot = $('#marketerResultRowsFields');
+  const rowIds = ['M1','M2','M3','M4','M5','M6','M7','M8','M9','M10','D1','D3','D4','D5','D6','D7','D8','D9','D10','D11','D12','D13','D14','D15','D16'];
+  if (rowsRoot && !rowsRoot.childElementCount) {
+    rowsRoot.innerHTML = `<section class="content-result-rule"><h3>Справочник строк сравнения</h3><p>Формат: название | пояснение | форма слова для итоговой фразы.</p>${rowIds.map(id => `<label>${id}<input type="text" maxlength="1000" data-text-key="result_row_${id}" required></label>`).join('')}</section>`;
+  }
   const labels = [
     'Усталость у женщины','Усталость у мужчины','Повышенное или нестабильное давление',
     'ИМТ от 30','Алкоголь чаще раза в неделю','Боли или отёчность суставов',
@@ -2520,6 +2532,13 @@ function ensureMarketerResultRuleFields() {
   root.innerHTML = labels.map((label,index) => {
     const rule = index + 1;
     return `<section class="content-result-rule"><h3>${rule}. ${escapeHtml(label)}</h3>
+      <label>Заголовок рекомендации<input type="text" maxlength="1000" data-text-key="result_rule_${rule}_title" required></label>
+      <label>Причина<textarea rows="3" maxlength="2000" data-text-key="result_rule_${rule}_reason" required></textarea></label>
+      <label>Итоговая фраза<textarea rows="2" maxlength="2000" data-text-key="result_rule_${rule}_ending" required></textarea></label>
+      <label>Строки стандартного медосмотра<input type="text" maxlength="500" data-text-key="result_rule_${rule}_medical_rows"><small>ID через запятую; для правил 5 и 9 поле может быть пустым.</small></label>
+      <label>Дополнительные строки<input type="text" maxlength="500" data-text-key="result_rule_${rule}_additional_rows"><small>ID через запятую; для динамического правила 9 поле может быть пустым.</small></label>
+      <label>Фраза о разнице<textarea rows="2" maxlength="2000" data-text-key="result_rule_${rule}_gap" required></textarea></label>
+      <label>Пакеты по порядку<input type="text" maxlength="500" data-text-key="result_rule_${rule}_packages" required><small>ID пакетов через запятую; для правила 9 — dynamic.</small></label>
       <label>Плашка<input type="text" maxlength="500" data-text-key="result_rule_${rule}_chip" required></label>
       <label>Объяснение<textarea rows="3" maxlength="2000" data-text-key="result_rule_${rule}_explanation" required></textarea></label>
       <label>Что проверить<textarea rows="3" maxlength="2000" data-text-key="result_rule_${rule}_checks" required></textarea><small>Каждый пункт с новой строки.</small></label>
@@ -2554,7 +2573,7 @@ function renderContentTextPreview(values = contentTextDraftValues()) {
   const screen = {
     kind: retention ? 'exam_objection_marketer' : result ? 'questionnaire_results_c' : 'exam_selection_marketer',
     stage: String(values.stage_label || 'Обследования'),
-    title: retention ? 'Удержание после отказа' : result ? 'Результаты анкеты' : 'Новое предложение чек-апов',
+    title: retention ? 'Удержание после отказа' : result ? 'Рекомендации по ответам' : 'Новое предложение чек-апов',
   };
   preview.innerHTML = metric2PreviewMarkup(screen,true,{
     examinations: contentTextPreviewExaminations,
@@ -2562,7 +2581,7 @@ function renderContentTextPreview(values = contentTextDraftValues()) {
     marketer_preview_rule_id: ruleId,
   });
   const title = $('#contentTextPreviewTitle');
-  if (title) title.textContent = retention ? 'Экран удержания' : result ? 'Результаты анкеты C' : 'Экран дополнительных обследований';
+  if (title) title.textContent = retention ? 'Экран удержания' : result ? 'Рекомендации C' : 'Экран дополнительных обследований';
   $('#contentTextPreviewRuleWrap')?.classList.toggle('hidden',retention);
 }
 

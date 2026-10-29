@@ -2630,7 +2630,7 @@ def _metric2_report_uncached(
                 if definition["id"] == "question_notes":
                     for action in definition.get("actions", []):
                         if action.get("id") in {"answer", "skip"}:
-                            action["target"] = "questionnaire_results"
+                            action["target"] = "questionnaire_processing"
                 elif definition["id"] == "exam_selection":
                     definition.update({
                         "kind": "exam_selection_marketer_c",
@@ -2640,14 +2640,24 @@ def _metric2_report_uncached(
                     for action in definition.get("actions", []):
                         if action.get("id") == "back":
                             action["target"] = "questionnaire_results"
+            processing_screen = {
+                "id": "questionnaire_processing",
+                "title": "Подготовка рекомендаций",
+                "stage": "Анкета · обработка",
+                "kind": "questionnaire_processing_c",
+                "description": "Четыре шага сопоставления ответов с методикой и составом медосмотра.",
+                "actions": [
+                    {"id": "automatic", "label": "Рекомендации сформированы", "target": "questionnaire_results", "legacy": []},
+                ],
+            }
             result_screen = {
                 "id": "questionnaire_results",
-                "title": "Результаты анкеты",
-                "stage": "Анкета · результат",
+                "title": "Рекомендации по ответам",
+                "stage": "Анкета · рекомендации",
                 "kind": "questionnaire_results_c",
-                "description": "Краткое персональное резюме, направления проверки и переход к анализам.",
+                "description": "Сопоставление стандартного медосмотра с дополнительными показателями по одному или двум приоритетным сигналам.",
                 "actions": [
-                    {"id": "continue", "label": "Выбрать анализы", "target": "exam_selection", "legacy": []},
+                    {"id": "continue", "label": "Добавить к медосмотру", "target": "exam_selection", "legacy": []},
                     {"id": "decline", "label": "Завершить без дополнительных анализов", "target": "exam_objection", "legacy": []},
                 ],
             }
@@ -2655,7 +2665,7 @@ def _metric2_report_uncached(
                 index for index, definition in enumerate(definitions)
                 if definition["id"] == "exam_selection"
             )
-            definitions.insert(exam_index, result_screen)
+            definitions[exam_index:exam_index] = [processing_screen, result_screen]
     relevant_events = {"onboarding_screen_viewed", "onboarding_screen_action"}
     for definition in definitions:
         relevant_events.update(

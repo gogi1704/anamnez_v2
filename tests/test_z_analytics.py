@@ -806,6 +806,7 @@ class AnalyticsTests(unittest.TestCase):
         marketer_c = analytics.metric2_report("30", flow="marketer_c")
         self.assertEqual(marketer_c["flow_label"], "Ветка marketer C")
         self.assertEqual(marketer_c["summary"]["start_users"], 1)
+        self.assertIn("questionnaire_processing", {item["id"] for item in marketer_c["screens"]})
         self.assertIn("questionnaire_results", {item["id"] for item in marketer_c["screens"]})
 
         standard = analytics.metric2_report("30", flow="standard")

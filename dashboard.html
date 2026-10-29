@@ -11,7 +11,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/static/dashboard.css?v=20261028-masterclass-groups-v21">
+  <link rel="stylesheet" href="/static/dashboard.css?v=20261029-marketer-c-v22">
 </head>
 <body>
   <main class="dashboard-shell">
@@ -386,7 +386,7 @@
           <div class="panel-heading"><div><p class="eyebrow">Контент без публикации кода</p><h2>Изменение текстов</h2><p>Выберите экран и измените его тексты без публикации новой версии приложения.</p></div></div>
           <div class="content-text-tabs" role="tablist" aria-label="Редактируемый экран">
             <button class="active" type="button" role="tab" aria-selected="true" data-content-text-tab="offer">Экран дополнительных обследований</button>
-            <button type="button" role="tab" aria-selected="false" data-content-text-tab="result">Результаты анкеты C</button>
+            <button type="button" role="tab" aria-selected="false" data-content-text-tab="result">Рекомендации C</button>
             <button type="button" role="tab" aria-selected="false" data-content-text-tab="retention">Экран удержания</button>
           </div>
         </article>
@@ -454,8 +454,14 @@
             <label>Кнопка возврата<input type="text" maxlength="500" data-text-key="retention_back_template" required></label>
             <label>Окончательный отказ<input type="text" maxlength="200" data-text-key="retention_decline" required></label>
           </fieldset>
-          <fieldset class="hidden" data-content-text-panel="result"><legend>Экран результатов анкеты — вариант C</legend>
+          <fieldset class="hidden" data-content-text-panel="result"><legend>Загрузка и рекомендации — вариант C</legend>
             <label>Приоритет сигналов<input type="text" maxlength="100" data-text-key="result_signal_priority" required><small>Номера от 1 до 10 через запятую. Выбираются первые два сработавших правила.</small></label>
+            <label>Длительность каждого шага загрузки, мс<input type="number" min="300" max="5000" data-text-key="loading_step_duration_ms" required></label>
+            <div class="content-text-pair"><label>Загрузка — заголовок с именем<input type="text" maxlength="500" data-text-key="loading_title_template" required></label><label>Загрузка — без имени<input type="text" maxlength="500" data-text-key="loading_title_without_name" required></label></div>
+            <label>Загрузка — пояснение<input type="text" maxlength="500" data-text-key="loading_subtitle" required></label>
+            <label>Загрузка — конфиденциальность<input type="text" maxlength="500" data-text-key="loading_privacy" required></label>
+            <div class="content-text-pair"><label>Шаг загрузки 1<input type="text" maxlength="500" data-text-key="loading_step_1" required></label><label>Шаг загрузки 2<input type="text" maxlength="500" data-text-key="loading_step_2" required></label></div>
+            <div class="content-text-pair"><label>Шаг загрузки 3<input type="text" maxlength="500" data-text-key="loading_step_3" required></label><label>Шаг загрузки 4<input type="text" maxlength="500" data-text-key="loading_step_4" required></label></div>
             <label>Строка завершения анкеты<input type="text" maxlength="500" data-text-key="result_progress_label" required></label>
             <label>Заголовок с именем<input type="text" maxlength="500" data-text-key="result_title_template" required></label>
             <label>Заголовок без имени<input type="text" maxlength="500" data-text-key="result_title_without_name" required></label>
@@ -464,13 +470,22 @@
             <div class="content-text-pair"><label>Заголовок объяснения<input type="text" maxlength="300" data-text-key="result_explanation_title" required></label><label>Заголовок профилактики<input type="text" maxlength="300" data-text-key="result_prevention_explanation_title" required></label></div>
             <div class="content-text-pair"><label>Что проверить<input type="text" maxlength="300" data-text-key="result_checks_title" required></label><label>Профилактическая проверка<input type="text" maxlength="300" data-text-key="result_prevention_checks_title" required></label></div>
             <div class="content-text-pair"><label>Инициалы специалиста<input type="text" maxlength="20" data-text-key="result_doctor_initials" required></label><label>Подпись специалиста<input type="text" maxlength="500" data-text-key="result_doctor_signature" required></label></div>
+            <label>Плашка помощи — заголовок<input type="text" maxlength="500" data-text-key="result_help_title" required></label>
+            <label>Плашка помощи — текст<textarea rows="3" maxlength="2000" data-text-key="result_help_body" required></textarea></label>
+            <label>Заголовок сравнения<input type="text" maxlength="500" data-text-key="result_comparison_title" required></label>
+            <div class="content-text-pair"><label>Шаблон покрытия<input type="text" maxlength="500" data-text-key="result_coverage_template" required></label><label>Если стандартных строк нет<input type="text" maxlength="500" data-text-key="result_no_medical_title" required></label></div>
+            <div class="content-text-pair"><label>Заголовок стандартных проверок<input type="text" maxlength="500" data-text-key="result_standard_title" required></label><label>Заголовок дополнительных проверок<input type="text" maxlength="500" data-text-key="result_additional_title" required></label></div>
+            <div class="content-text-pair"><label>Разрыв при двух сигналах и наличии медосмотра<input type="text" maxlength="1000" data-text-key="result_two_signal_gap_with_medical" required></label><label>Разрыв при двух сигналах без строк медосмотра<input type="text" maxlength="1000" data-text-key="result_two_signal_gap_without_medical" required></label></div>
             <label>Заголовок решения<input type="text" maxlength="500" data-text-key="result_decision_title" required></label>
             <label>Пояснение решения<textarea rows="2" maxlength="2000" data-text-key="result_decision_body" required></textarea></label>
             <label>Конфиденциальность<textarea rows="2" maxlength="2000" data-text-key="result_privacy" required></textarea></label>
+            <label>Призыв перед кнопкой<input type="text" maxlength="500" data-text-key="result_callout" required></label>
             <div class="content-text-pair"><label>Основная кнопка<input type="text" maxlength="300" data-text-key="result_primary_cta" required></label><label>Ссылка отказа<input type="text" maxlength="500" data-text-key="result_decline_link" required></label></div>
             <label>Дисклеймер<textarea rows="2" maxlength="2000" data-text-key="result_disclaimer" required></textarea></label>
             <label>Заголовок выбора анализов<input type="text" maxlength="500" data-text-key="selection_title" required></label>
             <label>Персональная строка выбора<input type="text" maxlength="1000" data-text-key="selection_personal_template" required></label>
+            <label>Строка выбора без имени<input type="text" maxlength="1000" data-text-key="selection_personal_without_name" required></label>
+            <div class="content-result-rules" id="marketerResultRowsFields"></div>
             <div class="content-result-rules" id="marketerResultRulesFields"></div>
           </fieldset>
           <fieldset data-content-text-panel="offer"><legend>Персональные строки по приоритету</legend>
@@ -886,6 +901,6 @@
       </div>
     </section>
   </div>
-  <script src="/static/dashboard.js?v=20261028-masterclass-groups-v22" defer></script>
+  <script src="/static/dashboard.js?v=20261029-marketer-c-v23" defer></script>
 </body>
 </html>

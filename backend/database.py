@@ -682,25 +682,43 @@ MARKETER_EXAMINATION_TEXT_DEFAULTS = {
     "personal_rule_9": "{имя}, после 40 заболевания простаты встречаются часто, а на ранних стадиях проявляются слабо. Чем раньше контролируются такие показатели, тем спокойнее и понятнее ситуация",
     "personal_rule_10": "{имя}, жалоб нет — это как раз хорошо. Многие изменения долго не дают ярких симптомов, поэтому профилактическая проверка и важна. Можно начать с самого базового",
     "result_signal_priority": "1,2,3,4,5,6,7,8,9,10",
+    "loading_step_duration_ms": 1200,
+    "loading_title_template": "{имя}, готовим ваши рекомендации",
+    "loading_title_without_name": "Готовим ваши рекомендации",
+    "loading_subtitle": "Это займёт несколько секунд",
+    "loading_privacy": "Ваши ответы видите только вы",
+    "loading_step_1": "Сверяем ответы с методикой врачей",
+    "loading_step_2": "Учитываем возраст и самочувствие",
+    "loading_step_3": "Проверяем, что входит в ваш медосмотр",
+    "loading_step_4": "Формируем рекомендации",
     "result_progress_label": "Анкета заполнена · спасибо, что уделили время",
-    "result_title_template": "{имя}, вот что показали ваши ответы",
-    "result_title_without_name": "Вот что показали ваши ответы",
-    "result_bridge": "Анкета — не формальность: по ответам видно, на что врач обратил бы внимание в первую очередь.",
+    "result_title_template": "{имя}, рекомендации по вашим ответам",
+    "result_title_without_name": "Рекомендации по вашим ответам",
+    "result_bridge": "Мы сопоставили ваши ответы с тем, что уже входит в медосмотр.",
     "result_detected_title": "Вы отметили",
     "result_explanation_title": "С чем это часто связано",
     "result_prevention_explanation_title": "Что это значит",
-    "result_checks_title": "Что стоит проверить",
+    "result_checks_title": "Что это проверяет",
     "result_prevention_checks_title": "Что обычно проверяют для профилактики",
     "result_doctor_initials": "ТВ",
     "result_doctor_signature": "Татьяна Витальевна, врач высшей категории",
-    "result_decision_title": "Это можно сдать прямо на медосмотре",
-    "result_decision_body": "Из той же пробы, что возьмут на осмотре — без записи и отдельной поездки.",
-    "result_privacy": "Конфиденциально: ваш выбор и результаты анализов видите только вы.",
-    "result_primary_cta": "Выбрать анализы",
+    "result_help_title": "Разбираться самому не придётся",
+    "result_help_body": "Результаты появятся в личном кабинете. ИИ-помощник объяснит показатели простыми словами, а при необходимости их можно будет обсудить со специалистом.",
+    "result_comparison_title": "Что покажет медосмотр и что можно добавить",
+    "result_coverage_template": "Медосмотр проверит {n} из {m}",
+    "result_standard_title": "Уже входит в медосмотр",
+    "result_additional_title": "Можно добавить",
+    "result_no_medical_title": "Медосмотр этого не проверяет",
+    "result_decision_title": "Всё сдаётся прямо на медосмотре",
+    "result_decision_body": "Из той же пробы крови — без записи, без нового укола и отдельной поездки",
+    "result_privacy": "Ваш выбор и результаты анализов видите только вы.",
+    "result_callout": "Получите полную картину состояния здоровья",
+    "result_primary_cta": "Добавить к медосмотру",
     "result_decline_link": "Завершить без дополнительных анализов",
-    "result_disclaimer": "Это не диагноз, а то, на что стоит обратить внимание. Добавлять анализы не обязательно.",
+    "result_disclaimer": "Рекомендации носят информационный характер. Добавлять анализы не обязательно.",
     "selection_title": "Анализы к медосмотру",
-    "selection_personal_template": "{имя}, эти анализы покажут, {phrase1}{phrase2_part}.",
+    "selection_personal_template": "{имя}, мы отметили анализы по вашим рекомендациям",
+    "selection_personal_without_name": "Мы отметили анализы по вашим рекомендациям",
     "result_rule_1_chip": "усталость, которая не проходит после отдыха",
     "result_rule_1_explanation": "У женщин слабость и снижение энергии очень часто связаны с дефицитом железа. Это частая находка, и хорошая новость в том, что она обычно корректируется.",
     "result_rule_1_checks": "Запасы железа · ферритин, железо\nЩитовидную железу · ТТГ\nВитамин D",
@@ -743,6 +761,103 @@ MARKETER_EXAMINATION_TEXT_DEFAULTS = {
     "result_rule_10_explanation": "Тревожных сигналов в ответах нет — и это хорошо. Многие изменения долго не дают ярких симптомов, поэтому профилактическая проверка и важна: по самочувствию не всегда видно реальную картину.",
     "result_rule_10_checks": "Работу печени · АЛТ, АСТ, билирубин\nРаботу почек · креатинин, мочевина\nВитамин D",
     "result_rule_10_phrase": "всё ли в порядке по базовым показателям",
+    "result_rule_1_title": "Проверьте запасы железа и щитовидную железу",
+    "result_rule_1_reason": "Нехватка железа и сбои щитовидной железы — частые причины постоянной усталости у женщин.",
+    "result_rule_1_ending": "Анализ покажет, в норме ли ферритин, железо и ТТГ.",
+    "result_rule_2_title": "Проверьте витамин D и щитовидную железу",
+    "result_rule_2_reason": "Нехватка витамина D и изменения в работе щитовидной железы могут отражаться на уровне энергии и самочувствии.",
+    "result_rule_2_ending": "Анализ покажет, в норме ли витамин D, ТТГ, ферритин и железо.",
+    "result_rule_3_title": "Проверьте работу почек и щитовидной железы",
+    "result_rule_3_reason": "Эти показатели помогают увидеть факторы, которые могут влиять на повышенное или нестабильное давление.",
+    "result_rule_3_ending": "Анализ покажет, в норме ли креатинин, мочевина, ТТГ, ЛПНП и ЛПВП.",
+    "result_rule_4_title": "Проверьте щитовидную железу, печень и холестерин",
+    "result_rule_4_reason": "Эти показатели помогают оценить обменные процессы и нагрузку на организм при повышенном индексе массы тела.",
+    "result_rule_4_ending": "Анализ покажет, в норме ли ТТГ, Т3, Т4, АЛТ, АСТ, ЛПНП и ЛПВП.",
+    "result_rule_5_title": "Проверьте печень, поджелудочную железу и почки",
+    "result_rule_5_reason": "Регулярное употребление алкоголя может отражаться на работе этих органов ещё до заметных изменений самочувствия.",
+    "result_rule_5_ending": "Анализ покажет, в норме ли АЛТ, АСТ, билирубин, альфа-амилаза и креатинин.",
+    "result_rule_6_title": "Проверьте признаки воспаления в суставах",
+    "result_rule_6_reason": "При боли или отёчности суставов эти показатели помогают понять, есть ли признаки воспалительного процесса.",
+    "result_rule_6_ending": "Анализ покажет, в норме ли СРБ, мочевая кислота и ревматоидный фактор.",
+    "result_rule_7_title": "Проверьте гормональный фон",
+    "result_rule_7_reason": "После 45 лет изменения гормонального фона могут влиять на самочувствие, сон и уровень энергии.",
+    "result_rule_7_ending": "Анализ покажет, в норме ли ФСГ, ЛГ и эстрадиол.",
+    "result_rule_8_title": "Проверьте мужское здоровье и холестерин",
+    "result_rule_8_reason": "После 40 лет полезно контролировать ключевые показатели мужского здоровья и липидного обмена.",
+    "result_rule_8_ending": "Анализ покажет, в норме ли тестостерон, ПСА, ЛПНП и ЛПВП.",
+    "result_rule_9_title": "Проверьте показатели, связанные с вашими жалобами",
+    "result_rule_9_reason": "По описанным жалобам мы подобрали показатели, с которых удобно начать дополнительную проверку.",
+    "result_rule_9_ending": "Анализ покажет, в норме ли выбранные показатели.",
+    "result_rule_10_title": "Проверьте печень, почки и витамин D",
+    "result_rule_10_reason": "Даже при хорошем самочувствии базовая профилактическая проверка помогает лучше понимать состояние организма.",
+    "result_rule_10_ending": "Анализ покажет, в норме ли АЛТ, АСТ, креатинин и витамин D.",
+    "result_rule_1_medical_rows": "M1",
+    "result_rule_1_additional_rows": "D1,D3",
+    "result_rule_1_gap": "Медосмотр покажет гемоглобин, но не запасы железа и щитовидную железу.",
+    "result_rule_2_medical_rows": "M1",
+    "result_rule_2_additional_rows": "D5,D3,D1",
+    "result_rule_2_gap": "Медосмотр покажет гемоглобин, но не витамин D, щитовидную железу и запасы железа.",
+    "result_rule_3_medical_rows": "M3,M4,M5",
+    "result_rule_3_additional_rows": "D6,D3,D8",
+    "result_rule_3_gap": "Медосмотр покажет давление, общий холестерин и белок в моче, но не работу почек, щитовидную железу и соотношение холестерина.",
+    "result_rule_4_medical_rows": "M6,M7,M4",
+    "result_rule_4_additional_rows": "D4,D9,D8",
+    "result_rule_4_gap": "Медосмотр покажет ИМТ, сахар и общий холестерин, но не работу щитовидной железы, печени и соотношение холестерина.",
+    "result_rule_5_medical_rows": "",
+    "result_rule_5_additional_rows": "D10,D11,D7",
+    "result_rule_5_gap": "Медосмотр не проверяет печень, поджелудочную железу и почки.",
+    "result_rule_6_medical_rows": "M8",
+    "result_rule_6_additional_rows": "D12,D13,D14",
+    "result_rule_6_gap": "Медосмотр покажет СОЭ, но не СРБ, мочевую кислоту и ревматоидный фактор.",
+    "result_rule_7_medical_rows": "M2",
+    "result_rule_7_additional_rows": "D15",
+    "result_rule_7_gap": "Медосмотр включает осмотр гинеколога, но не проверяет гормональный фон.",
+    "result_rule_8_medical_rows": "M4",
+    "result_rule_8_additional_rows": "D16,D8",
+    "result_rule_8_gap": "Медосмотр покажет общий холестерин, но не мужское здоровье и соотношение холестерина.",
+    "result_rule_9_medical_rows": "",
+    "result_rule_9_additional_rows": "",
+    "result_rule_9_gap": "Этих показателей нет в медосмотре.",
+    "result_rule_10_medical_rows": "M9,M10,M7,M4",
+    "result_rule_10_additional_rows": "D9,D7,D5",
+    "result_rule_10_gap": "Медосмотр покажет общий анализ крови, мочу, сахар и общий холестерин, но не работу печени, почек и витамин D.",
+    "result_two_signal_gap_with_medical": "Медосмотр покажет {medical}, но не {additional}.",
+    "result_two_signal_gap_without_medical": "Медосмотр не проверяет {additional}.",
+    "result_rule_1_packages": "fatigue_basic",
+    "result_rule_2_packages": "fatigue_basic",
+    "result_rule_3_packages": "kidneys,thyroid,lipids",
+    "result_rule_4_packages": "weight_basic",
+    "result_rule_5_packages": "liver_basic,kidneys",
+    "result_rule_6_packages": "joints",
+    "result_rule_7_packages": "female_hormones",
+    "result_rule_8_packages": "male_health,lipids",
+    "result_rule_9_packages": "dynamic",
+    "result_rule_10_packages": "liver_basic,kidneys,vitamin_d",
+    "result_row_M1": "Гемоглобин|общий анализ крови|гемоглобин",
+    "result_row_M2": "Осмотр гинеколога и УЗИ|входит для женщин|осмотр гинеколога",
+    "result_row_M3": "Артериальное давление|измеряется на осмотре|давление",
+    "result_row_M4": "Общий холестерин|анализ крови|общий холестерин",
+    "result_row_M5": "Белок в моче|общий анализ мочи|белок в моче",
+    "result_row_M6": "Рост, вес и ИМТ|измеряются на осмотре|ИМТ",
+    "result_row_M7": "Сахар крови|глюкоза натощак|сахар",
+    "result_row_M8": "СОЭ|общий анализ крови|СОЭ",
+    "result_row_M9": "Общий анализ крови|гемоглобин, лейкоциты, СОЭ|кровь",
+    "result_row_M10": "Общий анализ мочи|—|анализ мочи",
+    "result_row_D1": "Запасы железа|ферритин, железо|запасы железа",
+    "result_row_D3": "Щитовидная железа|ТТГ|щитовидную железу",
+    "result_row_D4": "Щитовидная железа|ТТГ, Т3, Т4|щитовидную железу",
+    "result_row_D5": "Витамин D|—|витамин D",
+    "result_row_D6": "Работа почек|креатинин, мочевина|работу почек",
+    "result_row_D7": "Почки|креатинин|почки",
+    "result_row_D8": "Плохой и хороший холестерин|ЛПНП, ЛПВП|соотношение холестерина",
+    "result_row_D9": "Печень|АЛТ, АСТ|печень",
+    "result_row_D10": "Печень|АЛТ, АСТ, билирубин|печень",
+    "result_row_D11": "Поджелудочная железа|альфа-амилаза|поджелудочную железу",
+    "result_row_D12": "Признаки воспаления|СРБ|признаки воспаления",
+    "result_row_D13": "Мочевая кислота|—|мочевую кислоту",
+    "result_row_D14": "Ревматоидный фактор|—|ревматоидный фактор",
+    "result_row_D15": "Гормональный фон|ФСГ, ЛГ, эстрадиол|гормональный фон",
+    "result_row_D16": "Мужское здоровье|тестостерон, ПСА|мужское здоровье",
 }
 
 
@@ -765,6 +880,21 @@ def admin_marketer_examination_texts() -> dict:
     for key in result:
         if key in saved:
             result[key] = saved[key]
+    legacy_v3_defaults = {
+        "result_title_template": "{имя}, вот что показали ваши ответы",
+        "result_title_without_name": "Вот что показали ваши ответы",
+        "result_bridge": "Анкета — не формальность: по ответам видно, на что врач обратил бы внимание в первую очередь.",
+        "result_checks_title": "Что стоит проверить",
+        "result_decision_title": "Это можно сдать прямо на медосмотре",
+        "result_decision_body": "Из той же пробы, что возьмут на осмотре — без записи и отдельной поездки.",
+        "result_privacy": "Конфиденциально: ваш выбор и результаты анализов видите только вы.",
+        "result_primary_cta": "Выбрать анализы",
+        "result_disclaimer": "Это не диагноз, а то, на что стоит обратить внимание. Добавлять анализы не обязательно.",
+        "selection_personal_template": "{имя}, эти анализы покажут, {phrase1}{phrase2_part}.",
+    }
+    for key, old_value in legacy_v3_defaults.items():
+        if saved.get(key) == old_value:
+            result[key] = MARKETER_EXAMINATION_TEXT_DEFAULTS[key]
     # Preserve genuinely edited copy, but migrate values that were saved from
     # the previous default form so an ordinary deployment receives the fixed UI.
     if result["price_caption_template"] == "{online} ₽ онлайн · {full} ₽ на медосмотре":
@@ -779,6 +909,12 @@ def admin_marketer_examination_texts() -> dict:
         result["result_days"] = max(1, min(90, int(result["result_days"])))
     except (TypeError, ValueError):
         result["result_days"] = MARKETER_EXAMINATION_TEXT_DEFAULTS["result_days"]
+    try:
+        result["loading_step_duration_ms"] = max(
+            300, min(5000, int(result["loading_step_duration_ms"])),
+        )
+    except (TypeError, ValueError):
+        result["loading_step_duration_ms"] = MARKETER_EXAMINATION_TEXT_DEFAULTS["loading_step_duration_ms"]
     return result
 
 
@@ -793,17 +929,19 @@ def admin_update_marketer_examination_texts(payload: dict) -> dict:
     for key in MARKETER_EXAMINATION_TEXT_DEFAULTS:
         if key not in payload:
             continue
-        if key == "result_days":
+        if key in {"result_days", "loading_step_duration_ms"}:
             try:
                 value = int(payload[key])
             except (TypeError, ValueError):
-                raise ValueError("Срок готовности должен быть целым числом") from None
-            if not 1 <= value <= 90:
-                raise ValueError("Срок готовности должен быть от 1 до 90 дней")
+                raise ValueError("Числовое поле должно быть целым числом") from None
+            minimum, maximum = ((1, 90) if key == "result_days" else (300, 5000))
+            if not minimum <= value <= maximum:
+                raise ValueError(f"Поле {key} должно быть от {minimum} до {maximum}")
             current[key] = value
             continue
         value = str(payload[key] or "").strip()
-        if not value:
+        optional_empty = {"result_rule_5_medical_rows", "result_rule_9_medical_rows", "result_rule_9_additional_rows"}
+        if not value and key not in optional_empty:
             raise ValueError(f"Поле {key} не может быть пустым")
         if len(value) > 2000:
             raise ValueError(f"Поле {key} слишком длинное")

@@ -32,16 +32,16 @@ class NewLineMarketerTests(unittest.TestCase):
         self.assertIn("retention_benefit_4_body", texts)
         self.assertEqual(
             texts["result_bridge"],
-            "Анкета — не формальность: по ответам видно, на что врач обратил бы внимание в первую очередь.",
+            "Мы сопоставили ваши ответы с тем, что уже входит в медосмотр.",
         )
         self.assertEqual(texts["result_explanation_title"], "С чем это часто связано")
         self.assertEqual(
             texts["result_decision_body"],
-            "Из той же пробы, что возьмут на осмотре — без записи и отдельной поездки.",
+            "Из той же пробы крови — без записи, без нового укола и отдельной поездки",
         )
         self.assertEqual(
             texts["result_disclaimer"],
-            "Это не диагноз, а то, на что стоит обратить внимание. Добавлять анализы не обязательно.",
+            "Рекомендации носят информационный характер. Добавлять анализы не обязательно.",
         )
         texts["result_days"] = 21
         texts["headline"] = "Новый проверочный заголовок"
@@ -68,8 +68,19 @@ class NewLineMarketerTests(unittest.TestCase):
         }, available)
         self.assertEqual(
             male_fatigue["rule_test_ids"]["2"],
-            ["fatigue_basic", "vitamin_d"],
+            ["fatigue_basic"],
         )
+        self.assertEqual(texts["result_rule_5_medical_rows"], "")
+        self.assertEqual(texts["result_rule_5_additional_rows"], "D10,D11,D7")
+        self.assertEqual(texts["result_rule_10_packages"], "liver_basic,kidneys,vitamin_d")
+        for rule in range(1, 11):
+            combined = " ".join(
+                str(texts[f"result_rule_{rule}_{suffix}"]).lower()
+                for suffix in ("title", "reason", "ending")
+            )
+            self.assertNotIn("диагноз", combined)
+            self.assertNotIn("исключить", combined)
+            self.assertNotIn("ожирение", combined)
 
     def test_offer_context_selects_one_primary_and_three_visible_packages(self):
         available = {item["id"] for item in db.list_examinations()}
@@ -170,9 +181,12 @@ class NewLineMarketerTests(unittest.TestCase):
         self.assertIn('"examinations": db.list_examinations()', main)
         self.assertIn('class="marketer-offer-actions"', app)
         self.assertIn('class="marketer-retention-benefits"', app)
-        self.assertIn("setOnboardingMeta('Ваши ответы',100)", app)
-        self.assertIn("result_rule_10_chip_no_smoking", app)
-        self.assertIn("phrase2_part:phrases[1] ? `, а ${phrases[1]}` : ''", app)
+        self.assertIn("setOnboardingMeta('Рекомендации',100)", app)
+        self.assertIn("completeMarketerQuestionnaire(payload)", app)
+        self.assertIn("questionnaire_processing", app)
+        self.assertIn("result_rule_${ruleId}_medical_rows", app)
+        self.assertIn("result_rule_${ruleId}_packages", app)
+        self.assertIn("selection_personal_without_name", app)
         self.assertIn("width:min(560px,calc(100vw - 32px))", (root / "static" / "styles.css").read_text(encoding="utf-8"))
         self.assertNotIn("Ещё может быть полезно", app)
         self.assertNotIn('data-text-key="personal_rule_1"', dashboard)

@@ -102,13 +102,13 @@ MARKETER_RULE_TEST_IDS = {
 # of tumour markers: the result screen must never recommend them without an
 # individual clinician indication.
 MARKETER_RESULT_RULE_TEST_IDS = {
-    1: ("fatigue_basic", "iron", "vitamin_d"),
-    2: ("fatigue_basic", "vitamin_d"),
+    1: ("fatigue_basic",),
+    2: ("fatigue_basic",),
     3: ("kidneys", "thyroid", "lipids"),
-    4: ("weight_basic", "lipids", "liver_basic"),
+    4: ("weight_basic",),
     5: ("liver_basic", "kidneys"),
-    6: ("joints", "inflammation"),
-    7: ("female_hormones", "thyroid"),
+    6: ("joints",),
+    7: ("female_hormones",),
     8: ("male_health", "lipids"),
     10: ("liver_basic", "kidneys", "vitamin_d"),
 }

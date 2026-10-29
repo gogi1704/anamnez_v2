@@ -1,5 +1,5 @@
-const CACHE_NAME = 'consilium-shell-v203';
-const ASSET_VERSION = '20261028-chat-guides-v43';
+const CACHE_NAME = 'consilium-shell-v204';
+const ASSET_VERSION = '20261029-marketer-c-v44';
 const APP_SHELL = [
   '/',
   '/manifest.webmanifest',
