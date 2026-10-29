@@ -177,6 +177,7 @@ class NewLineMarketerTests(unittest.TestCase):
         self.assertIn("function renderContentTextPreview", dashboard_script)
         self.assertIn("preview_marketer_variant=${marketerCFlow ? 'c' : 'b'}", dashboard_script)
         self.assertIn("Открыть тестовую ветку C", dashboard_script)
+        self.assertIn("if (funnelPreviewRequested && !messengerLoginRequired)", app)
         self.assertIn("suppliedData = null", dashboard_script)
         self.assertIn('"examinations": db.list_examinations()', main)
         self.assertIn('class="marketer-offer-actions"', app)

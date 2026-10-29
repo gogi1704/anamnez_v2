@@ -8507,6 +8507,7 @@ async function init() {
     const masterclassEntryRequested = isMasterclassEntryUrl();
     const ikpEntryRequested = isIkpEntryUrl();
     const pendingResultFlow = readResultFlow();
+    const funnelPreviewRequested = ['marketer','control'].includes(previewFunnel);
     if (messengerLoginCompleted) {
       entryParams.delete('auth');
       const cleanQuery = entryParams.toString();
@@ -8518,6 +8519,13 @@ async function init() {
     }
     if (masterclassEntryRequested && !messengerLoginRequired) {
       await enterMasterclassFlow();
+      return;
+    }
+    // The QA links from the dashboard must open the selected medical funnel
+    // directly.  They are preview-only and must not be routed through the
+    // generic "why are you here" chooser used for an unattributed real visit.
+    if (funnelPreviewRequested && !messengerLoginRequired) {
+      await startApplication();
       return;
     }
     if (
