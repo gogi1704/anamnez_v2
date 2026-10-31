@@ -28,6 +28,7 @@ class NewLineMarketerTests(unittest.TestCase):
         texts = db.admin_marketer_examination_texts()
         self.assertEqual(texts["result_days"], 14)
         self.assertEqual(texts["price_caption_template"], "При оплате онлайн")
+        self.assertEqual(texts["result_additional_title"], "Добавить для полной картины")
         self.assertIn("retention_body_3", texts)
         self.assertIn("retention_benefit_4_body", texts)
         self.assertEqual(
@@ -45,9 +46,11 @@ class NewLineMarketerTests(unittest.TestCase):
         )
         texts["result_days"] = 21
         texts["headline"] = "Новый проверочный заголовок"
+        texts["result_additional_title"] = "Можно добавить"
         saved = db.admin_update_marketer_examination_texts(texts)
         self.assertEqual(saved["result_days"], 21)
         self.assertEqual(saved["headline"], "Новый проверочный заголовок")
+        self.assertEqual(saved["result_additional_title"], "Добавить для полной картины")
 
     def test_online_discount_is_ten_percent_for_every_real_price(self):
         self.assertEqual(online_examination_price({"price": 1000}), 900)
@@ -166,6 +169,7 @@ class NewLineMarketerTests(unittest.TestCase):
         dashboard_css = (root / "static" / "dashboard.css").read_text(encoding="utf-8")
         dashboard_script = (root / "static" / "dashboard.js").read_text(encoding="utf-8")
         app = (root / "static" / "app.js").read_text(encoding="utf-8")
+        styles = (root / "static" / "styles.css").read_text(encoding="utf-8")
         main = (root / "backend" / "main.py").read_text(encoding="utf-8")
         self.assertIn('data-content-text-tab="retention"', dashboard)
         self.assertIn('id="contentTextPreviewPhone"', dashboard)
@@ -178,6 +182,8 @@ class NewLineMarketerTests(unittest.TestCase):
         self.assertIn("preview_marketer_variant=${marketerCFlow ? 'c' : 'b'}", dashboard_script)
         self.assertIn("Открыть тестовую ветку C", dashboard_script)
         self.assertIn("if (funnelPreviewRequested && !messengerLoginRequired)", app)
+        self.assertIn("scenarioIds.forEach(id => state.selectedTests.add(id))", app)
+        self.assertIn(".marketer-result-screen h1{font-size:calc(17px + var(--text-bump))", styles)
         self.assertIn("suppliedData = null", dashboard_script)
         self.assertIn('"examinations": db.list_examinations()', main)
         self.assertIn('class="marketer-offer-actions"', app)

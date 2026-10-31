@@ -2668,7 +2668,12 @@ function renderMarketerExamSelection(scrollPosition = null) {
   const primaryId = context.primary_test_id || visibleIds[0] || tests[0]?.id || '';
   if (!state.marketerOfferInitialized) {
     state.marketerOfferInitialized = true;
-    if (!state.selectedTests.size && primaryId) state.selectedTests.add(primaryId);
+    if (variantC) {
+      scenarioIds.forEach(id => state.selectedTests.add(id));
+      normalizeSelectedTestPairs();
+    } else if (!state.selectedTests.size && primaryId) {
+      state.selectedTests.add(primaryId);
+    }
   }
   const primary = byId.get(primaryId);
   const recommendedExtras = visibleIds.filter(id => id !== primaryId).slice(0,2).map(id => byId.get(id)).filter(Boolean);

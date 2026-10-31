@@ -707,7 +707,7 @@ MARKETER_EXAMINATION_TEXT_DEFAULTS = {
     "result_comparison_title": "Что покажет медосмотр и что можно добавить",
     "result_coverage_template": "Медосмотр проверит {n} из {m}",
     "result_standard_title": "Уже входит в медосмотр",
-    "result_additional_title": "Можно добавить",
+    "result_additional_title": "Добавить для полной картины",
     "result_no_medical_title": "Медосмотр этого не проверяет",
     "result_decision_title": "Всё сдаётся прямо на медосмотре",
     "result_decision_body": "Из той же пробы крови — без записи, без нового укола и отдельной поездки",
@@ -905,6 +905,8 @@ def admin_marketer_examination_texts() -> dict:
         result["retention_body_2"] = MARKETER_EXAMINATION_TEXT_DEFAULTS["retention_body_2"]
     if result["personal_rule_10"] == "{имя}, по ответам анкеты не выделяется одно приоритетное направление. Для профилактической проверки можно начать с базового чек-апа":
         result["personal_rule_10"] = MARKETER_EXAMINATION_TEXT_DEFAULTS["personal_rule_10"]
+    if result["result_additional_title"] == "Можно добавить":
+        result["result_additional_title"] = MARKETER_EXAMINATION_TEXT_DEFAULTS["result_additional_title"]
     try:
         result["result_days"] = max(1, min(90, int(result["result_days"])))
     except (TypeError, ValueError):
