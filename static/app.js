@@ -732,18 +732,18 @@ async function selectEntryDirection(route, button) {
     if (route === 'masterclass') {
       history.replaceState({}, '', result.route_path || '/');
       state.masterclassEntry = result.masterclass_entry || null;
-      await enterMasterclassFlow();
+      // A choice made on the direction screen always starts with the branch
+      // landing.  Do not let a continuation flag left by another user of the
+      // same browser skip this screen.
+      renderMasterclassLanding(state.masterclassEntry);
       return;
     }
     if (route === 'medical_exam') {
-      if (
+      const canStartImmediately = Boolean(
         state.identity?.authenticated
         || localStorage.getItem(ANONYMOUS_ACCESS_KEY) === state.identity?.chel_id
-      ) {
-        await startApplication();
-      } else {
-        showAuthGate();
-      }
+      );
+      showWelcome(canStartImmediately ? startApplication : () => showAuthGate());
       return;
     }
     if (route === 'results') {
@@ -820,7 +820,8 @@ function isIkpEntryUrl() {
 
 function masterclassContinuationKey() {
   const token = window.location.pathname.replace(/\/+$/, '').split('/').pop() || '';
-  return `consilium_masterclass_continued_${token.slice(0,80)}`;
+  const user = String(state.identity?.chel_id || 'anonymous').slice(0,80);
+  return `consilium_masterclass_continued_${token.slice(0,80)}_${user}`;
 }
 
 function trackMasterclassScreen(screen = 'masterclass_landing') {
