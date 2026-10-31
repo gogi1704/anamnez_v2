@@ -62,6 +62,10 @@ class ExperimentTests(unittest.TestCase):
         self.assertEqual(preview["variant"], "marketer")
         self.assertEqual(preview["version"], "market_v1")
         self.assertTrue(preview.get("preview"))
+        control_preview = db.experiment_preview_assignment("control")
+        self.assertEqual(control_preview["variant"], "control")
+        self.assertEqual(control_preview["version"], "main_v1")
+        self.assertTrue(control_preview.get("preview"))
         # Opening the demo link repeatedly must not create real assignments.
         db.experiment_preview_assignment("marketer")
         db.experiment_preview_assignment("marketer")

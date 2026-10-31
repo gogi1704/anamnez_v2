@@ -1715,6 +1715,7 @@ function renderMetric2(data) {
   const experimentFlow = marketerBFlow || marketerCFlow;
   const reofferFlow = metric2ActiveFlow === 'reoffer';
   const masterclassFlow = metric2ActiveFlow === 'masterclass';
+  const standardFlow = !resultFlow && !experimentFlow && !reofferFlow && !masterclassFlow;
   $('#metric2StandardFlow').classList.toggle('active', !resultFlow && !experimentFlow && !reofferFlow && !masterclassFlow);
   $('#metric2StandardFlow').setAttribute('aria-selected', String(!resultFlow && !experimentFlow && !reofferFlow && !masterclassFlow));
   $('#metric2ResultFlow').classList.toggle('active', resultFlow);
@@ -1727,10 +1728,17 @@ function renderMetric2(data) {
   $('#metric2ReofferFlow').setAttribute('aria-selected', String(reofferFlow));
   $('#metric2MasterclassFlow').classList.toggle('active', masterclassFlow);
   $('#metric2MasterclassFlow').setAttribute('aria-selected', String(masterclassFlow));
+  $('#metric2StandardTestNote').classList.toggle('hidden', !standardFlow);
   $('#metric2ExperimentNote').classList.toggle('hidden', !experimentFlow);
   $('#metric2ReofferDiagnostics').classList.toggle('hidden', !reofferFlow);
   $('#metric2MasterclassStats').classList.toggle('hidden', !masterclassFlow);
   $('#metric2MasterclassTestNote').classList.toggle('hidden', !masterclassFlow);
+  if (standardFlow) {
+    const link = `${location.origin}/?preview_funnel=control`;
+    $('#metric2StandardTestLink').textContent = link;
+    $('#metric2StandardTestLink').dataset.link = link;
+    $('#metric2StandardTestLinkOpen').href = link;
+  }
   if (experimentFlow) {
     const link = `${location.origin}/?preview_funnel=marketer&preview_marketer_variant=${marketerCFlow ? 'c' : 'b'}`;
     $('#metric2ExperimentLink').textContent = link;
@@ -3249,6 +3257,17 @@ $('#metric2MarketerCFlow').addEventListener('click', () => {
 $('#metric2ExperimentLinkCopy').addEventListener('click', async () => {
   const link = $('#metric2ExperimentLink').dataset.link || '';
   const button = $('#metric2ExperimentLinkCopy');
+  try {
+    await navigator.clipboard.writeText(link);
+    const previousText = button.textContent;
+    button.textContent = 'Скопировано';
+    setTimeout(() => { button.textContent = previousText; }, 1500);
+  } catch {}
+});
+$('#metric2StandardTestLinkCopy').addEventListener('click', async () => {
+  const link = $('#metric2StandardTestLink').dataset.link || '';
+  const button = $('#metric2StandardTestLinkCopy');
+  if (!link) return;
   try {
     await navigator.clipboard.writeText(link);
     const previousText = button.textContent;
