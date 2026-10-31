@@ -973,3 +973,12 @@ article.capability-card strong { font-weight:650; }
   .entry-direction-options button { grid-template-columns:44px minmax(0,1fr) 18px; gap:11px; padding:15px 13px; }
   .entry-direction-options i { width:44px; height:44px; border-radius:13px; font-size:20px; }
 }
+
+/* Keep the fixed marketer CTA aligned with the onboarding card's content box. */
+.marketer-offer-screen > .marketer-sticky-cta,
+.marketer-result-screen > .marketer-sticky-cta {
+  left:50%;
+  right:auto;
+  width:min(488px,calc(100vw - 36px));
+  transform:translateX(-50%);
+}

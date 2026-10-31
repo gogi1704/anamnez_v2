@@ -186,6 +186,7 @@ class NewLineMarketerTests(unittest.TestCase):
         self.assertIn(".marketer-result-screen h1{margin:0 18px;font-size:calc(17px + var(--text-bump))", styles)
         self.assertIn(".marketer-result-screen h1{margin-left:12px;margin-right:12px}", styles)
         self.assertIn(".marketer-result-screen>.marketer-primary-cta{width:auto}", styles)
+        self.assertIn("width:min(488px,calc(100vw - 36px))", styles)
         self.assertIn("suppliedData = null", dashboard_script)
         self.assertIn('"examinations": db.list_examinations()', main)
         self.assertIn('class="marketer-offer-actions"', app)
