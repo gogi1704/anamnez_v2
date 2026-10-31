@@ -389,7 +389,7 @@ MAX_BOT_AUTH_URL=
 SESSION_TTL_DAYS=90
 SESSION_COOKIE_NAME=consilium_session
 
-AFTER_TESTS_GOOGLE_CREDENTIALS_HOST=/root/anketa_bot_max_web/docs/after-tests-db-e0cd34372c4a.json
+AFTER_TESTS_GOOGLE_CREDENTIALS_HOST=/root/consilium-secrets/after-tests-google.json
 LAB_RESULTS_ENABLED=1
 AFTER_TESTS_GOOGLE_CREDENTIALS=/run/secrets/after-tests-google.json
 AFTER_TESTS_SPREADSHEET=after_tests_db
@@ -700,14 +700,21 @@ DADATA_SUGGESTIONS_CACHE_SECONDS=600
 chmod 600 /root/anamnez_v2/.env
 ```
 
-Проверьте существующий ключ Google до запуска контейнера:
+Храните Google-ключ отдельно от репозиториев и проверьте его до запуска
+контейнера. Файл должен быть доступен на чтение группе пользователя
+`appuser` внутри контейнера (в стандартном образе это GID `1000`):
 
 ```bash
-test -f /root/anketa_bot_max_web/docs/after-tests-db-e0cd34372c4a.json
-ls -l /root/anketa_bot_max_web/docs/after-tests-db-e0cd34372c4a.json
+install -d -m 750 -o root -g 1000 /root/consilium-secrets
+chown root:1000 /root/consilium-secrets/after-tests-google.json
+chmod 640 /root/consilium-secrets/after-tests-google.json
+test -f /root/consilium-secrets/after-tests-google.json
+ls -l /root/consilium-secrets/after-tests-google.json
 ```
 
-Docker подключает только этот файл в
+`AFTER_TESTS_GOOGLE_CREDENTIALS_HOST` является обязательной переменной для
+Docker Compose: без неё контейнер не будет запущен со случайным или устаревшим
+путём. Docker подключает только указанный файл в
 `/run/secrets/after-tests-google.json` с флагом `:ro`. Не копируйте JSON-ключ
 в репозиторий «Консилиума» и не добавляйте его содержимое в `.env`.
 

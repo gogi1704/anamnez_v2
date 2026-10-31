@@ -4795,6 +4795,17 @@ class OrchestratorTests(unittest.TestCase):
         self.assertIn("HOST=0.0.0.0", docker_env)
         self.assertIn("CONSILIUM_HOST_PORT=8002", docker_env)
         self.assertIn("127.0.0.1:${CONSILIUM_HOST_PORT:-8002}:8000", compose)
+        self.assertIn(
+            "${AFTER_TESTS_GOOGLE_CREDENTIALS_HOST:?Set AFTER_TESTS_GOOGLE_CREDENTIALS_HOST",
+            compose,
+        )
+        self.assertIn(
+            "AFTER_TESTS_GOOGLE_CREDENTIALS_HOST=/root/consilium-secrets/after-tests-google.json",
+            docker_env,
+        )
+        self.assertNotIn("anketa_bot_max_web/docs/after-tests", compose)
+        self.assertNotIn("anketa_bot_max_web/docs/after-tests", docker_env)
+        self.assertNotIn("anketa_bot_max_web/docs/after-tests", server_guide)
         self.assertIn("external: true", compose)
         self.assertNotIn("0.0.0.0:${CONSILIUM_HOST_PORT", compose)
         self.assertEqual(nginx.count("proxy_pass http://127.0.0.1:8002;"), 5)
