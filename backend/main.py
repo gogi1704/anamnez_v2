@@ -16,7 +16,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, quote, urlparse
 
-from . import analytics, checkup_reoffers, company_suggestions, data_retention, database as db, examination_schedule, funnel_monitor, manager_daily_report, splitter_tracking, weight_reminders
+from . import analytics, checkup_reoffers, company_suggestions, data_retention, database as db, examination_schedule, funnel_monitor, manager_daily_report, notification_health, splitter_tracking, weight_reminders
 from . import chat_attachments
 from .config import BASE_DIR, settings
 from .health_passport import build_health_passport_pdf
@@ -3786,6 +3786,9 @@ def serve() -> None:
     manager_daily_report_stop = manager_daily_report.start_background_scheduler(
         _record_startup_event,
     )
+    notification_health_stop = notification_health.start_background_scheduler(
+        _record_startup_event,
+    )
     retention_stop = data_retention.start_background_scheduler(_record_startup_event)
     server = ConsiliumHTTPServer((settings.host, settings.port), ConsiliumHandler)
     _record_startup_event(f"Порт {settings.port} открыт")
@@ -3819,6 +3822,7 @@ def serve() -> None:
         weight_reminder_stop.set()
         funnel_monitor_stop.set()
         manager_daily_report_stop.set()
+        notification_health_stop.set()
         retention_stop.set()
         _record_startup_event("Остановка сервера")
         server.server_close()

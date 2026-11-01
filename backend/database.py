@@ -2515,6 +2515,7 @@ def fail_data_retention_audit(run_id: str, error: str) -> None:
 
 def queue_system_notification(
     provider: str, recipient_id: str, event_type: str, payload: dict, dedupe_key: str,
+    expires_at: str | None = None,
 ) -> bool:
     provider = str(provider or "").strip().lower()
     recipient_id = str(recipient_id or "").strip()
@@ -2523,12 +2524,12 @@ def queue_system_notification(
     with _write_lock, connection() as conn:
         cursor = conn.execute(
             """INSERT OR IGNORE INTO system_notification_outbox
-               (provider,recipient_id,event_type,dedupe_key,payload,status,created_at)
-               VALUES (?,?,?,?,?,'pending',?)""",
+               (provider,recipient_id,event_type,dedupe_key,payload,status,created_at,expires_at)
+               VALUES (?,?,?,?,?,'pending',?,?)""",
             (
                 provider, recipient_id, str(event_type or "system"),
                 str(dedupe_key or "")[:160],
-                json.dumps(payload or {}, ensure_ascii=False), utc_now(),
+                json.dumps(payload or {}, ensure_ascii=False), utc_now(), expires_at,
             ),
         )
         conn.commit()
@@ -2547,14 +2548,23 @@ def claim_system_notifications(provider: str, limit: int = 20) -> list[dict]:
     stale_before = (now - timedelta(minutes=2)).isoformat()
     result: list[dict] = []
     with _write_lock, connection() as conn:
+        conn.execute(
+            """UPDATE system_notification_outbox
+               SET status='cancelled',last_error='Срок доставки истёк',
+                   next_attempt_at=NULL,lease_token=NULL,leased_at=NULL
+               WHERE status IN ('pending','delivering')
+                 AND expires_at IS NOT NULL AND expires_at<=?""",
+            (now.isoformat(),),
+        )
         rows = conn.execute(
             """SELECT id,recipient_id,event_type,payload,attempts
                FROM system_notification_outbox
                WHERE provider=? AND attempts<100
+                  AND (expires_at IS NULL OR expires_at>?)
                  AND (next_attempt_at IS NULL OR next_attempt_at<=?)
                  AND (status='pending' OR (status='delivering' AND leased_at<?))
                ORDER BY id LIMIT ?""",
-            (provider, now.isoformat(), stale_before, limit),
+            (provider, now.isoformat(), now.isoformat(), stale_before, limit),
         ).fetchall()
         for row in rows:
             lease_token = secrets.token_urlsafe(18)
@@ -7199,6 +7209,7 @@ def init_db() -> None:
                 sent_at TEXT,
                 last_error TEXT NOT NULL DEFAULT '',
                 created_at TEXT NOT NULL,
+                expires_at TEXT,
                 UNIQUE(provider, recipient_id, dedupe_key)
             );
 
@@ -8193,6 +8204,11 @@ def init_db() -> None:
         outbox_columns = {row[1] for row in conn.execute("PRAGMA table_info(manager_notification_outbox)").fetchall()}
         if "next_attempt_at" not in outbox_columns:
             conn.execute("ALTER TABLE manager_notification_outbox ADD COLUMN next_attempt_at TEXT")
+        system_outbox_columns = {
+            row[1] for row in conn.execute("PRAGMA table_info(system_notification_outbox)").fetchall()
+        }
+        if "expires_at" not in system_outbox_columns:
+            conn.execute("ALTER TABLE system_notification_outbox ADD COLUMN expires_at TEXT")
 
         result_subscription_columns = {
             row[1] for row in conn.execute("PRAGMA table_info(lab_result_subscriptions)").fetchall()
@@ -8509,6 +8525,7 @@ def init_db() -> None:
             "CREATE INDEX IF NOT EXISTS idx_user_notification_outbox_delivery "
             "ON user_notification_outbox(provider, status, next_attempt_at)"
         )
+        _reconcile_terminal_messenger_failures(conn)
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_lab_result_value_estimates_status "
             "ON lab_result_value_estimates(status, updated_at)"
@@ -11888,8 +11905,78 @@ def _permanent_messenger_delivery_error(error: str) -> bool:
     normalized = str(error or "").lower()
     return any(code in normalized for code in (
         "chat.not.found", "dialog.not.found", "chat not found", "dialog not found",
-        "bot was blocked", "user is deactivated",
+        "bot was blocked", "user is deactivated", "chat.denied",
+        "dialog.suspended", "error.dialog.suspended",
     ))
+
+
+def _reconcile_terminal_messenger_failures(conn) -> int:
+    """Stop legacy poison messages from occupying every delivery batch forever."""
+    markers = (
+        "%chat.not.found%", "%dialog.not.found%", "%chat not found%",
+        "%dialog not found%", "%bot was blocked%", "%user is deactivated%",
+        "%chat.denied%", "%dialog.suspended%", "%error.dialog.suspended%",
+    )
+    changed = 0
+    for table in (
+        "manager_notification_outbox", "system_notification_outbox",
+        "weight_control_reminder_outbox", "user_result_notification_outbox",
+        "user_notification_outbox",
+    ):
+        columns = {
+            row[1] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()
+        }
+        if not {"status", "attempts", "last_error"}.issubset(columns):
+            continue
+        assignments = [
+            "status='failed'", "next_attempt_at=NULL", "lease_token=NULL", "leased_at=NULL",
+        ]
+        if "updated_at" in columns:
+            assignments.append("updated_at=?")
+        params: list[object] = []
+        if "updated_at" in columns:
+            params.append(utc_now())
+        conditions = " OR ".join("LOWER(last_error) LIKE ?" for _ in markers)
+        params.extend(markers)
+        cursor = conn.execute(
+            f"UPDATE {table} SET {','.join(assignments)} "
+            f"WHERE status IN ('pending','delivering') "
+            f"AND (attempts>=100 OR {conditions})",
+            params,
+        )
+        changed += int(cursor.rowcount or 0)
+    return changed
+
+
+def notification_delivery_snapshot(provider: str = "max") -> dict:
+    provider = str(provider or "").strip().lower()
+    if provider not in {"telegram", "max"}:
+        raise ValueError("Неизвестный мессенджер")
+    tables = (
+        "manager_notification_outbox", "system_notification_outbox",
+        "weight_control_reminder_outbox", "user_result_notification_outbox",
+        "user_notification_outbox",
+    )
+    totals = {"pending": 0, "delivering": 0, "failed": 0, "sent": 0}
+    last_sent_at = ""
+    with connection() as conn:
+        for table in tables:
+            rows = conn.execute(
+                f"SELECT status,COUNT(*) count FROM {table} WHERE provider=? GROUP BY status",
+                (provider,),
+            ).fetchall()
+            for row in rows:
+                status = str(row["status"] or "")
+                if status in totals:
+                    totals[status] += int(row["count"] or 0)
+            row = conn.execute(
+                f"SELECT MAX(sent_at) value FROM {table} WHERE provider=? AND status='sent'",
+                (provider,),
+            ).fetchone()
+            value = str(row["value"] or "") if row else ""
+            if value > last_sent_at:
+                last_sent_at = value
+    return {**totals, "last_sent_at": last_sent_at}
 
 
 def acknowledge_user_result_notification(
