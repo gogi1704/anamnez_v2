@@ -6159,28 +6159,28 @@ class OrchestratorTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "driving_time"):
             ConsiliumHandler._validate_profile({"driving_time": "all_day"})
 
-    def test_checkup_catalog_matches_2026_09_17_contract_everywhere(self):
+    def test_checkup_catalog_matches_2026_10_30_contract_everywhere(self):
         expected_names_and_prices = {
             "fatigue_basic": ("«Энергия и бодрость» — базовый", 3500),
-            "fatigue_extended": ("«Энергия и бодрость» — расширенный", 5700),
-            "weight_basic": ("«Контроль веса» — базовый", 4000),
-            "weight_extended": ("«Контроль веса» — расширенный", 5700),
-            "hair_loss": ("«Здоровые волосы и кожа»", 3000),
-            "lipids": ("«Здоровье сердца и сосудов»", 1500),
-            "liver_basic": ("«Здоровье печени и поджелудочной железы» — базовый", 2000),
-            "liver_extended": ("«Здоровье печени и поджелудочной железы» — расширенный", 2500),
-            "iron": ("«Профилактика анемии»", 1000),
-            "kidneys": ("«Здоровье почек»", 1000),
+            "fatigue_extended": ("«Энергия и бодрость» — расширенный", 6000),
+            "weight_basic": ("«Контроль веса» — базовый", 3300),
+            "weight_extended": ("«Контроль веса» — расширенный", 6000),
+            "hair_loss": ("«Здоровые волосы и кожа»", 2300),
+            "lipids": ("«Здоровье сердца и сосудов»", 900),
+            "liver_basic": ("«Здоровье печени и поджелудочной железы» — базовый", 1300),
+            "liver_extended": ("«Здоровье печени и поджелудочной железы» — расширенный", 1900),
+            "iron": ("«Профилактика анемии»", 950),
+            "kidneys": ("«Здоровье почек»", 800),
             "protein": ("«Баланс белка»", 500),
-            "joints": ("«Здоровье суставов»", 1000),
+            "joints": ("«Здоровье суставов»", 1150),
             "inflammation": ("«Диагностика воспаления»", 500),
-            "thyroid": ("«Здоровье щитовидной железы»", 3800),
-            "female_hormones": ("«Женское гормональное здоровье»", 3500),
-            "male_health": ("«Мужское здоровье и сила»", 2500),
-            "vitamin_d": ("«Витамин D и иммунитет»", 2500),
-            "ca125": ("«Женский онкоскрининг: яичники и шейка матки»", 1300),
-            "ca153": ("«Онкоскрининг молочной железы»", 1300),
-            "ca199": ("«Онкоскрининг ЖКТ и поджелудочной железы»", 1300),
+            "thyroid": ("«Здоровье щитовидной железы»", 2900),
+            "female_hormones": ("«Женское гормональное здоровье»", 3200),
+            "male_health": ("«Мужское здоровье и сила»", 1900),
+            "vitamin_d": ("«Витамин D и иммунитет»", 2000),
+            "ca125": ("«Женский онкоскрининг: яичники и шейка матки»", 990),
+            "ca153": ("«Онкоскрининг молочной железы»", 990),
+            "ca199": ("«Онкоскрининг ЖКТ и поджелудочной железы»", 890),
         }
         catalog = {item["id"]: item for item in TEST_CATALOG}
         self.assertEqual(
@@ -6201,6 +6201,10 @@ class OrchestratorTests(unittest.TestCase):
         self.assertEqual(persisted["fatigue_basic"]["name"], expected_names_and_prices["fatigue_basic"][0])
         self.assertEqual(persisted["fatigue_basic"]["default_name"], "Хроническая усталость – базовый")
         self.assertEqual(persisted["protein"]["default_name"], "Белковый обмен")
+        self.assertEqual(
+            {key: item["price"] for key, item in persisted.items()},
+            {key: price for key, (_name, price) in expected_names_and_prices.items()},
+        )
         self.assertTrue(all(item["default_name"] for item in persisted.values()))
         self.assertEqual(analytics._current_examination_labels()["lipids"], expected_names_and_prices["lipids"][0])
 
@@ -6210,6 +6214,7 @@ class OrchestratorTests(unittest.TestCase):
         dashboard = (project_root / "static" / "dashboard.js").read_text(encoding="utf-8")
         self.assertIn("examination_catalog_2026_08_31", database_source)
         self.assertIn("examination_catalog_2026_09_17", database_source)
+        self.assertIn("examination_catalog_prices_2026_10_30", database_source)
         self.assertIn("DELETE FROM examination_catalog WHERE id = 'ferritin'", database_source)
         self.assertIn("DELETE FROM examination_catalog WHERE id = 'cortisol'", database_source)
         self.assertIn("catalog_labels.get(exam_id)", (project_root / "backend" / "analytics.py").read_text(encoding="utf-8"))
@@ -6217,6 +6222,46 @@ class OrchestratorTests(unittest.TestCase):
         self.assertNotIn("cortisol:", app)
         self.assertNotIn("cortisol:", dashboard)
         self.assertNotIn("ferritin:", dashboard)
+
+    def test_2026_10_30_price_migration_preserves_admin_catalog_copy(self):
+        migration_key = "examination_catalog_prices_2026_10_30"
+        with db.connection() as conn:
+            original = dict(conn.execute(
+                "SELECT * FROM examination_catalog WHERE id='lipids'",
+            ).fetchone())
+            conn.execute(
+                """UPDATE examination_catalog
+                   SET name='Настроенное название',description='Настроенное описание',
+                       includes='Настроенный состав',price=1234
+                   WHERE id='lipids'""",
+            )
+            conn.execute(
+                "DELETE FROM app_migrations WHERE migration_key=?",
+                (migration_key,),
+            )
+            conn.commit()
+        try:
+            db.init_db()
+            with db.connection() as conn:
+                migrated = dict(conn.execute(
+                    "SELECT * FROM examination_catalog WHERE id='lipids'",
+                ).fetchone())
+            self.assertEqual(migrated["name"], "Настроенное название")
+            self.assertEqual(migrated["description"], "Настроенное описание")
+            self.assertEqual(migrated["includes"], "Настроенный состав")
+            self.assertEqual(migrated["price"], 900)
+        finally:
+            with db.connection() as conn:
+                conn.execute(
+                    """UPDATE examination_catalog
+                       SET name=?,description=?,includes=?,price=?,updated_at=?
+                       WHERE id='lipids'""",
+                    (
+                        original["name"], original["description"], original["includes"],
+                        original["price"], original["updated_at"],
+                    ),
+                )
+                conn.commit()
 
     def test_extended_examinations_replace_matching_basic_complexes(self):
         self.assertEqual(EXAMINATION_UPGRADE_PAIRS, {

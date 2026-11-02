@@ -8098,6 +8098,23 @@ def init_db() -> None:
                 "INSERT INTO app_migrations (migration_key, applied_at) VALUES (?, ?)",
                 (contract_catalog_migration_key, now),
             )
+        price_catalog_migration_key = "examination_catalog_prices_2026_10_30"
+        price_catalog_migrated = conn.execute(
+            "SELECT 1 FROM app_migrations WHERE migration_key = ?",
+            (price_catalog_migration_key,),
+        ).fetchone()
+        if not price_catalog_migrated:
+            # The appendix dated 2026-10-30 changes sale prices only. Keep every
+            # administrator-edited name, description, composition and display option.
+            for examination in TEST_CATALOG:
+                conn.execute(
+                    "UPDATE examination_catalog SET price = ?, updated_at = ? WHERE id = ?",
+                    (int(examination["price"]), now, examination["id"]),
+                )
+            conn.execute(
+                "INSERT INTO app_migrations (migration_key, applied_at) VALUES (?, ?)",
+                (price_catalog_migration_key, now),
+            )
         default_names_migration_key = "examination_default_names_2026_09_09"
         default_names_migrated = conn.execute(
             "SELECT 1 FROM app_migrations WHERE migration_key = ?",
