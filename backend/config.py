@@ -199,6 +199,15 @@ class Settings:
     telegram_feed_timeout_seconds: int = int(os.getenv(
         "TELEGRAM_FEED_TIMEOUT_SECONDS", "20",
     ))
+    telegram_feed_mtproto_api_id: int = int(os.getenv(
+        "TELEGRAM_FEED_MTPROTO_API_ID", "0",
+    ))
+    telegram_feed_mtproto_api_hash: str = os.getenv(
+        "TELEGRAM_FEED_MTPROTO_API_HASH", "",
+    ).strip()
+    telegram_feed_mtproto_timeout_seconds: int = int(os.getenv(
+        "TELEGRAM_FEED_MTPROTO_TIMEOUT_SECONDS", "30",
+    ))
     max_bot_auth_url: str = os.getenv("MAX_BOT_AUTH_URL", "").strip()
     session_ttl_days: int = int(os.getenv("SESSION_TTL_DAYS", "90"))
     session_cookie_name: str = os.getenv("SESSION_COOKIE_NAME", "consilium_session")

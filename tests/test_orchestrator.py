@@ -21,7 +21,7 @@ from backend import analytics
 from backend import bitrix_payments  # noqa: E402
 from backend import database as db  # noqa: E402
 from backend import examination_schedule  # noqa: E402
-from backend import telegram_feed  # noqa: E402
+from backend import telegram_feed, telegram_mtproto  # noqa: E402
 from backend import weight_reminders  # noqa: E402
 from backend import yookassa  # noqa: E402
 from backend.ai_costs import usage_record  # noqa: E402
@@ -7571,6 +7571,8 @@ class OrchestratorTests(unittest.TestCase):
             self.assertTrue(post["media"][0]["url"].startswith("/api/feed/media/"))
             stored_media = db.telegram_feed_media(post["media"][0]["id"])
             self.assertEqual(stored_media["file_id"], "video-two")
+            self.assertEqual(stored_media["channel_id"], "-100777")
+            self.assertEqual(stored_media["message_id"], 991001)
         finally:
             object.__setattr__(settings, "telegram_feed_channel_id", old_values[0])
             object.__setattr__(settings, "telegram_feed_channel_username", old_values[1])
@@ -7581,6 +7583,7 @@ class OrchestratorTests(unittest.TestCase):
         app = (project_root / "static" / "app.js").read_text(encoding="utf-8")
         main = (project_root / "backend" / "main.py").read_text(encoding="utf-8")
         proxy = (project_root / "backend" / "telegram_feed.py").read_text(encoding="utf-8")
+        mtproto = (project_root / "backend" / "telegram_mtproto.py").read_text(encoding="utf-8")
         self.assertIn('id="feedModal"', index)
         self.assertIn("/api/feed?limit=20", app)
         self.assertIn("/api/feed/media/", main)
@@ -7588,6 +7591,29 @@ class OrchestratorTests(unittest.TestCase):
         self.assertIn("upstream.read(64 * 1024)", main)
         self.assertNotIn("write_bytes", proxy)
         self.assertNotIn("NamedTemporaryFile", proxy)
+        self.assertIn("MemorySession()", mtproto)
+        self.assertIn("iter_download", mtproto)
+        self.assertNotIn("write_bytes", mtproto)
+        self.assertNotIn("NamedTemporaryFile", mtproto)
+
+    def test_telegram_mtproto_http_ranges(self):
+        self.assertEqual(telegram_mtproto._byte_range("", 1_000), (200, 0, 1_000))
+        self.assertEqual(
+            telegram_mtproto._byte_range("bytes=100-199", 1_000),
+            (206, 100, 100),
+        )
+        self.assertEqual(
+            telegram_mtproto._byte_range("bytes=900-", 1_000),
+            (206, 900, 100),
+        )
+        self.assertEqual(
+            telegram_mtproto._byte_range("bytes=-250", 1_000),
+            (206, 750, 250),
+        )
+        with self.assertRaises(telegram_mtproto.TelegramRangeNotSatisfiable):
+            telegram_mtproto._byte_range("bytes=1000-", 1_000)
+        with self.assertRaises(telegram_mtproto.TelegramRangeNotSatisfiable):
+            telegram_mtproto._byte_range("bytes=0-1,3-4", 1_000)
 
     def test_telegram_media_proxy_forwards_range_without_writing_a_file(self):
         class FakeResponse:

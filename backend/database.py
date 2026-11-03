@@ -231,7 +231,7 @@ def list_telegram_feed_posts(limit: int = 20, before_id: int = 0) -> list[dict]:
 def telegram_feed_media(media_id: int) -> dict | None:
     with connection() as conn:
         row = conn.execute(
-            """SELECT m.* FROM telegram_feed_media m
+            """SELECT m.*, p.channel_id, p.message_id FROM telegram_feed_media m
                JOIN telegram_feed_posts p ON p.id=m.post_id
                WHERE m.id=? AND p.status='published'""",
             (int(media_id),),

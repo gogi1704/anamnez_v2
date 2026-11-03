@@ -59,7 +59,7 @@ def get_file_path(file_id: str) -> str:
         if "file is too big" in str(detail).lower():
             raise TelegramFeedUnavailable(
                 "Видео слишком большое для облачного Telegram API. "
-                "Подключите локальный Telegram Bot API."
+                "Настройте MTProto-поток для больших файлов."
             ) from exc
         raise TelegramFeedUnavailable(detail or "Telegram не отдал файл") from exc
     except (URLError, TimeoutError, ValueError, UnicodeDecodeError) as exc:

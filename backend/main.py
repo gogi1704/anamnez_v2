@@ -16,7 +16,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, quote, urlparse
 
-from . import analytics, checkup_reoffers, company_suggestions, data_retention, database as db, examination_schedule, funnel_monitor, manager_daily_report, notification_health, splitter_tracking, telegram_feed, weight_reminders
+from . import analytics, checkup_reoffers, company_suggestions, data_retention, database as db, examination_schedule, funnel_monitor, manager_daily_report, notification_health, splitter_tracking, telegram_feed, telegram_mtproto, weight_reminders
 from . import chat_attachments
 from .config import BASE_DIR, settings
 from .health_passport import build_health_passport_pdf
@@ -448,12 +448,17 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
             media = db.telegram_feed_media(media_id)
             if not media:
                 return self._json(404, {"detail": "Медиафайл не найден"})
+            range_header = self.headers.get("Range", "")
+            if int(media.get("file_size") or 0) > 20 * 1024 * 1024:
+                return self._serve_mtproto_media(media, range_header)
             try:
                 upstream = telegram_feed.open_media(
-                    str(media.get("file_id") or ""), self.headers.get("Range", ""),
+                    str(media.get("file_id") or ""), range_header,
                 )
                 return self._stream_telegram_media(upstream, media)
             except telegram_feed.TelegramFeedUnavailable as exc:
+                if telegram_mtproto.configured() and "слишком большое" in str(exc):
+                    return self._serve_mtproto_media(media, range_header)
                 return self._json(503, {"detail": str(exc)})
         if path.startswith("/api/chat-attachments/"):
             token = path.removeprefix("/api/chat-attachments/").strip("/")
@@ -3695,6 +3700,41 @@ small{{display:block;color:#82918c;text-align:center;margin-top:18px}}
             return
         finally:
             upstream.close()
+
+    def _serve_mtproto_media(self, media: dict, range_header: str) -> None:
+        """Stream large Telegram media through MTProto without disk storage."""
+        try:
+            stream = telegram_mtproto.open_media(media, range_header)
+        except telegram_mtproto.TelegramRangeNotSatisfiable as exc:
+            self.send_response(416)
+            self._send_security_headers()
+            self.send_header("Content-Range", f"bytes */{exc.total_size}")
+            self.send_header("Accept-Ranges", "bytes")
+            self.send_header("Content-Length", "0")
+            self.end_headers()
+            return
+        except telegram_mtproto.TelegramMTProtoUnavailable as exc:
+            return self._json(503, {"detail": str(exc)})
+        try:
+            self.send_response(stream.status)
+            self._send_security_headers()
+            self.send_header("Content-Type", stream.content_type)
+            self.send_header("Content-Length", str(stream.content_length))
+            if stream.content_range:
+                self.send_header("Content-Range", stream.content_range)
+            self.send_header("Accept-Ranges", "bytes")
+            self.send_header("Cache-Control", "private, max-age=300")
+            self._send_identity_cookie()
+            self.end_headers()
+            while True:
+                chunk = stream.read()
+                if not chunk:
+                    break
+                self.wfile.write(chunk)
+        except (BrokenPipeError, ConnectionResetError, telegram_mtproto.TelegramMTProtoUnavailable):
+            return
+        finally:
+            stream.close()
 
     def _ensure_user_context(self) -> None:
         query = parse_qs(urlparse(self.path).query)
