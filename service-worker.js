@@ -1,5 +1,5 @@
-const CACHE_NAME = 'consilium-shell-v211';
-const ASSET_VERSION = '20261031-entry-route-landing-v51';
+const CACHE_NAME = 'consilium-shell-v213';
+const ASSET_VERSION = '20261103-telegram-feed-v53';
 const APP_SHELL = [
   '/',
   '/manifest.webmanifest',
@@ -16,6 +16,8 @@ const APP_SHELL = [
   '/static/icon-512.png',
   '/static/icon-maskable-512.png',
   '/static/apple-touch-icon.png',
+  '/static/feed-preview-stretch.svg',
+  '/static/feed-preview-breathing.svg',
 ];
 
 self.addEventListener('install', event => {

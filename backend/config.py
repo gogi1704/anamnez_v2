@@ -187,6 +187,18 @@ class Settings:
     auth_link_ttl_seconds: int = int(os.getenv("AUTH_LINK_TTL_SECONDS", "604800"))
     auth_intent_ttl_seconds: int = int(os.getenv("AUTH_INTENT_TTL_SECONDS", "604800"))
     telegram_bot_auth_url: str = os.getenv("TELEGRAM_BOT_AUTH_URL", "").strip()
+    telegram_feed_enabled: bool = env_bool("TELEGRAM_FEED_ENABLED", False)
+    telegram_feed_bot_token: str = os.getenv("TELEGRAM_FEED_BOT_TOKEN", "").strip()
+    telegram_feed_channel_id: str = os.getenv("TELEGRAM_FEED_CHANNEL_ID", "").strip()
+    telegram_feed_channel_username: str = os.getenv(
+        "TELEGRAM_FEED_CHANNEL_USERNAME", "",
+    ).strip().lstrip("@")
+    telegram_feed_bot_api_url: str = os.getenv(
+        "TELEGRAM_FEED_BOT_API_URL", "https://api.telegram.org",
+    ).strip().rstrip("/")
+    telegram_feed_timeout_seconds: int = int(os.getenv(
+        "TELEGRAM_FEED_TIMEOUT_SECONDS", "20",
+    ))
     max_bot_auth_url: str = os.getenv("MAX_BOT_AUTH_URL", "").strip()
     session_ttl_days: int = int(os.getenv("SESSION_TTL_DAYS", "90"))
     session_cookie_name: str = os.getenv("SESSION_COOKIE_NAME", "consilium_session")

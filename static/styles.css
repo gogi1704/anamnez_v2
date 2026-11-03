@@ -982,3 +982,66 @@ article.capability-card strong { font-weight:650; }
   width:min(488px,calc(100vw - 36px));
   transform:translateX(-50%);
 }
+
+/* Preview of the future Telegram-backed health feed. */
+.feed-backdrop { align-items:start; padding-block:24px; }
+.feed-modal { width:min(720px,100%); max-height:none; padding:0; overflow:visible; border-radius:24px; background:#f4f8f5; text-align:left; }
+.feed-modal > .modal-close { z-index:2; top:18px; right:20px; display:grid; place-items:center; width:38px; height:38px; border:1px solid #d6e4dc; border-radius:12px; background:rgba(255,255,255,.94); color:#52675f; font-size:25px; }
+.feed-header { display:flex; align-items:center; gap:16px; padding:28px 72px 23px 28px; border-bottom:1px solid #dfe9e3; border-radius:24px 24px 0 0; background:white; }
+.feed-header-icon { flex:none; display:grid; place-items:center; width:58px; height:58px; border-radius:18px; background:linear-gradient(145deg,#176f57,#3e8b71); color:white; font-size:24px; font-weight:700; box-shadow:0 10px 24px rgba(23,111,87,.2); }
+.feed-header > div { min-width:0; }
+.feed-header span { color:var(--green); font-size:11px; font-weight:700; letter-spacing:.1em; }
+.feed-header h2 { margin:4px 0 3px; padding:0; font-size:25px; text-align:left; }
+.feed-header p { margin:0; color:var(--muted); font-size:13px; line-height:1.45; }
+.feed-preview-note { display:flex; align-items:center; gap:9px; margin:18px 24px 0; padding:10px 12px; border:1px solid #d8e7df; border-radius:12px; background:#eaf4ef; color:#4f665d!important; font-size:12px!important; line-height:1.4!important; }
+.feed-preview-note span { flex:none; padding:4px 7px; border-radius:7px; background:white; color:var(--green); font-size:10px; font-weight:700; text-transform:uppercase; letter-spacing:.05em; }
+.feed-list { display:grid; gap:16px; padding:18px 24px 28px; }
+.feed-post { overflow:hidden; border:1px solid #dce7e1; border-radius:20px; background:white; box-shadow:0 8px 25px rgba(35,75,60,.07); }
+.feed-post-author { display:grid; grid-template-columns:42px minmax(0,1fr) auto; align-items:center; gap:10px; padding:17px 18px 13px; }
+.feed-post-author > span { display:grid; place-items:center; width:42px; height:42px; border-radius:13px; background:#e2f0e9; color:var(--green); font-size:17px; font-weight:800; }
+.feed-post-author strong,.feed-post-author small { display:block; }
+.feed-post-author strong { color:var(--ink); font-size:14px; }
+.feed-post-author small { margin-top:2px; color:var(--muted); font-size:11px; }
+.feed-post-author > i { display:grid; place-items:center; width:21px; height:21px; border-radius:50%; background:var(--green); color:white; font-size:11px; font-style:normal; }
+.feed-post-copy { padding:2px 18px 17px; }
+.feed-post-copy h3 { margin:3px 0 9px; color:var(--ink); font-size:20px; line-height:1.28; }
+.feed-post-copy p { margin:8px 0 0; color:#4f625b; font-size:14px; line-height:1.58; }
+.feed-post-copy ul { margin:10px 0 0; padding-left:20px; color:#4f625b; font-size:14px; line-height:1.55; }
+.feed-post-copy li + li { margin-top:4px; }
+.feed-media { position:relative; display:block; width:calc(100% - 36px); margin:0 18px 15px; overflow:hidden; border:0; border-radius:16px; background:#dfece5; }
+.feed-media img { display:block; width:100%; aspect-ratio:16/9; object-fit:cover; }
+.feed-photo figcaption { padding:8px 11px; background:#eff6f2; color:#60756d; font-size:10px; line-height:1.4; }
+.feed-video { padding:0; cursor:pointer; }
+.feed-video::after { content:''; position:absolute; inset:0; background:linear-gradient(180deg,transparent 45%,rgba(10,32,24,.28)); pointer-events:none; }
+.feed-play { position:absolute; z-index:1; inset:50% auto auto 50%; display:grid; place-items:center; width:58px; height:58px; padding-left:4px; transform:translate(-50%,-50%); border:3px solid rgba(255,255,255,.85); border-radius:50%; background:rgba(23,111,87,.9); color:white; font-size:21px; box-shadow:0 8px 24px rgba(9,38,29,.3); }
+.feed-duration { position:absolute; z-index:1; right:10px; bottom:9px; padding:4px 7px; border-radius:6px; background:rgba(11,27,21,.72); color:white; font-size:10px; font-weight:700; }
+.feed-post-footer { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:12px 18px 15px; border-top:1px solid #edf2ef; }
+.feed-post-footer button { padding:0; border:0; background:transparent; color:var(--green); font:inherit; font-size:12px; font-weight:700; cursor:pointer; }
+.feed-post-footer button span { margin-left:3px; }
+.feed-post-footer a { color:var(--green); font-size:12px; font-weight:700; text-decoration:none; }
+.feed-post-footer > span { color:#89978f; font-size:10px; }
+.feed-video video { display:block; width:100%; max-height:70vh; background:#101914; }
+.feed-document { display:flex; align-items:center; justify-content:space-between; gap:12px; padding:14px; color:var(--green); text-decoration:none; }
+.feed-document span { min-width:0; overflow:hidden; color:var(--muted); font-size:12px; text-overflow:ellipsis; white-space:nowrap; }
+.feed-loading,.feed-empty { margin:0; padding:35px 20px; border:1px solid #dce7e1; border-radius:18px; background:white; color:var(--muted)!important; text-align:center; }
+.feed-demo-status { position:sticky; bottom:12px; z-index:2; margin:-10px 24px 22px; padding:11px 14px; border-radius:12px; background:#173f32; color:white!important; font-size:12px!important; line-height:1.45!important; box-shadow:0 10px 30px rgba(20,52,42,.25); }
+
+@media(max-width:520px) {
+  .feed-backdrop { padding:0; background:#f4f8f5; backdrop-filter:none; }
+  .feed-modal { width:100%; min-height:100dvh; border-radius:0; }
+  .feed-modal > .modal-close { position:fixed; top:max(10px,env(safe-area-inset-top)); right:10px; }
+  .feed-header { align-items:flex-start; padding:calc(18px + env(safe-area-inset-top)) 58px 18px 15px; border-radius:0; }
+  .feed-header-icon { width:46px; height:46px; border-radius:14px; font-size:20px; }
+  .feed-header h2 { font-size:21px; }
+  .feed-header p { font-size:11px; }
+  .feed-preview-note { align-items:flex-start; flex-direction:column; margin:12px 10px 0; }
+  .feed-list { gap:11px; padding:12px 10px calc(24px + env(safe-area-inset-bottom)); }
+  .feed-post { border-radius:16px; }
+  .feed-post-author { padding:14px 14px 11px; }
+  .feed-post-copy { padding:1px 14px 14px; }
+  .feed-post-copy h3 { font-size:17px; }
+  .feed-post-copy p,.feed-post-copy ul { font-size:13px; }
+  .feed-media { width:calc(100% - 28px); margin:0 14px 13px; border-radius:13px; }
+  .feed-post-footer { padding:11px 14px 13px; }
+  .feed-demo-status { bottom:8px; margin:-3px 10px 14px; }
+}

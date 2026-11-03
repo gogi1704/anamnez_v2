@@ -21,6 +21,7 @@ from backend import analytics
 from backend import bitrix_payments  # noqa: E402
 from backend import database as db  # noqa: E402
 from backend import examination_schedule  # noqa: E402
+from backend import telegram_feed  # noqa: E402
 from backend import weight_reminders  # noqa: E402
 from backend import yookassa  # noqa: E402
 from backend.ai_costs import usage_record  # noqa: E402
@@ -4585,14 +4586,14 @@ class OrchestratorTests(unittest.TestCase):
         self.assertIn("controllerchange", script)
         self.assertIn("url.pathname.startsWith('/api/')", worker)
         self.assertIn("url.pathname.startsWith('/auth/')", worker)
-        self.assertIn("consilium-shell-v211", worker)
+        self.assertIn("consilium-shell-v213", worker)
         self.assertIn("fetch(request)", worker)
-        self.assertIn("/static/styles.css?v=20261031-entry-route-landing-v51", index)
+        self.assertIn("/static/styles.css?v=20261103-telegram-feed-v53", index)
         self.assertIn("/static/rich-text.2bf1f5fab764.css", index)
         self.assertTrue((project_root / "static" / "styles.07ffaefb4795.css").is_file())
         self.assertTrue((project_root / "static" / "rich-text.2bf1f5fab764.css").is_file())
-        self.assertIn("/static/app.js?v=20261031-entry-route-landing-v51", index)
-        self.assertIn("/static/metrika.js?v=20261031-entry-route-landing-v51", index)
+        self.assertIn("/static/app.js?v=20261103-telegram-feed-v53", index)
+        self.assertIn("/static/metrika.js?v=20261103-telegram-feed-v53", index)
         self.assertIn("function safeUrl(value)", script)
         self.assertIn("error.code === 'http_404'", script)
         self.assertIn("fallback && fallback.id !== id", script)
@@ -4687,7 +4688,7 @@ class OrchestratorTests(unittest.TestCase):
         main = (project_root / "backend" / "main.py").read_text(encoding="utf-8")
         config = (project_root / "backend" / "config.py").read_text(encoding="utf-8")
 
-        self.assertIn('src="/static/metrika.js?v=20261031-entry-route-landing-v51"', index)
+        self.assertIn('src="/static/metrika.js?v=20261103-telegram-feed-v53"', index)
         self.assertIn('YANDEX_METRIKA_COUNTER_ID', config)
         self.assertIn('path == "/api/public-config"', main)
         self.assertIn('"metrika.js"', main)
@@ -7537,6 +7538,99 @@ class OrchestratorTests(unittest.TestCase):
         self.assertIn("closeProfileModal()", open_passport)
         self.assertIn("/api/health-passport/pdf", app + main)
         self.assertIn("«Мои данные» → «Паспорт здоровья»", prompt)
+
+    def test_telegram_feed_stores_only_metadata_and_replaces_edited_media(self):
+        old_values = (
+            settings.telegram_feed_channel_id,
+            settings.telegram_feed_channel_username,
+        )
+        object.__setattr__(settings, "telegram_feed_channel_id", "-100777")
+        object.__setattr__(settings, "telegram_feed_channel_username", "health_channel")
+        try:
+            first = db.upsert_telegram_feed_post({
+                "channel": {"id": "-100777", "title": "Здоровье", "username": "health_channel"},
+                "message_id": 991001,
+                "published_at": "2026-11-03T08:00:00+00:00",
+                "text": "Первый текст",
+                "media": [{"kind": "photo", "file_id": "photo-one", "file_size": 123}],
+            })
+            updated = db.upsert_telegram_feed_post({
+                "channel": {"id": "-100777", "title": "Здоровье", "username": "health_channel"},
+                "message_id": 991001,
+                "published_at": "2026-11-03T08:00:00+00:00",
+                "edited_at": "2026-11-03T09:00:00+00:00",
+                "text": "Исправленный текст",
+                "media": [{"kind": "video", "file_id": "video-two", "mime_type": "video/mp4"}],
+            })
+            posts = db.list_telegram_feed_posts(10)
+            post = next(item for item in posts if item["message_id"] == 991001)
+            self.assertEqual(first["id"], updated["id"])
+            self.assertEqual(post["text"], "Исправленный текст")
+            self.assertEqual(len(post["media"]), 1)
+            self.assertEqual(post["media"][0]["kind"], "video")
+            self.assertTrue(post["media"][0]["url"].startswith("/api/feed/media/"))
+            stored_media = db.telegram_feed_media(post["media"][0]["id"])
+            self.assertEqual(stored_media["file_id"], "video-two")
+        finally:
+            object.__setattr__(settings, "telegram_feed_channel_id", old_values[0])
+            object.__setattr__(settings, "telegram_feed_channel_username", old_values[1])
+
+    def test_telegram_feed_ui_and_streaming_routes_are_wired(self):
+        project_root = Path(__file__).resolve().parents[1]
+        index = (project_root / "index.html").read_text(encoding="utf-8")
+        app = (project_root / "static" / "app.js").read_text(encoding="utf-8")
+        main = (project_root / "backend" / "main.py").read_text(encoding="utf-8")
+        proxy = (project_root / "backend" / "telegram_feed.py").read_text(encoding="utf-8")
+        self.assertIn('id="feedModal"', index)
+        self.assertIn("/api/feed?limit=20", app)
+        self.assertIn("/api/feed/media/", main)
+        self.assertIn("while True:", main)
+        self.assertIn("upstream.read(64 * 1024)", main)
+        self.assertNotIn("write_bytes", proxy)
+        self.assertNotIn("NamedTemporaryFile", proxy)
+
+    def test_telegram_media_proxy_forwards_range_without_writing_a_file(self):
+        class FakeResponse:
+            def __init__(self, body: bytes, headers=None, status=200):
+                self.body = io.BytesIO(body)
+                self.headers = headers or {}
+                self.status = status
+
+            def read(self, size=-1):
+                return self.body.read(size)
+
+            def close(self):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, *args):
+                self.close()
+
+        names = (
+            "telegram_feed_enabled", "telegram_feed_bot_token",
+            "telegram_feed_channel_id", "telegram_feed_bot_api_url",
+        )
+        old = {name: getattr(settings, name) for name in names}
+        object.__setattr__(settings, "telegram_feed_enabled", True)
+        object.__setattr__(settings, "telegram_feed_bot_token", "123:secret")
+        object.__setattr__(settings, "telegram_feed_channel_id", "-100777")
+        object.__setattr__(settings, "telegram_feed_bot_api_url", "https://api.telegram.org")
+        responses = [
+            FakeResponse(json.dumps({"ok": True, "result": {"file_path": "videos/a.mp4"}}).encode()),
+            FakeResponse(b"video-bytes", {"Content-Type": "video/mp4"}, 206),
+        ]
+        try:
+            with patch("backend.telegram_feed.urlopen", side_effect=responses) as opener:
+                stream = telegram_feed.open_media("file-id", "bytes=10-20")
+                self.assertEqual(stream.read(), b"video-bytes")
+            request = opener.call_args_list[1].args[0]
+            self.assertEqual(request.get_header("Range"), "bytes=10-20")
+            self.assertTrue(request.full_url.endswith("/videos/a.mp4"))
+        finally:
+            for name, value in old.items():
+                object.__setattr__(settings, name, value)
 
 
 if __name__ == "__main__":

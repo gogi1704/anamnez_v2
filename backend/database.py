@@ -107,6 +107,138 @@ def utc_now() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _telegram_feed_channel_allowed(channel_id: str, username: str) -> bool:
+    expected_id = str(settings.telegram_feed_channel_id or "").strip()
+    expected_username = str(settings.telegram_feed_channel_username or "").strip().lstrip("@").casefold()
+    return bool(
+        (expected_id and channel_id == expected_id)
+        or (expected_username and username.lstrip("@").casefold() == expected_username)
+    )
+
+
+def upsert_telegram_feed_post(payload: dict) -> dict:
+    if not isinstance(payload, dict):
+        raise ValueError("Некорректная публикация")
+    channel = payload.get("channel") if isinstance(payload.get("channel"), dict) else {}
+    channel_id = str(channel.get("id") or payload.get("channel_id") or "").strip()[:80]
+    username = str(channel.get("username") or payload.get("channel_username") or "").strip().lstrip("@")[:80]
+    if not _telegram_feed_channel_allowed(channel_id, username):
+        raise ValueError("Публикация получена не из настроенного канала")
+    try:
+        message_id = int(payload.get("message_id"))
+    except (TypeError, ValueError) as exc:
+        raise ValueError("Некорректный номер публикации") from exc
+    if message_id <= 0:
+        raise ValueError("Некорректный номер публикации")
+    published_at = str(payload.get("published_at") or utc_now()).strip()[:50]
+    edited_at = str(payload.get("edited_at") or "").strip()[:50]
+    text = str(payload.get("text") or "")[:16_000]
+    entities = payload.get("entities") if isinstance(payload.get("entities"), list) else []
+    media = payload.get("media") if isinstance(payload.get("media"), list) else []
+    normalized_media = []
+    for position, item in enumerate(media[:10]):
+        if not isinstance(item, dict):
+            continue
+        kind = str(item.get("kind") or "").strip().lower()
+        file_id = str(item.get("file_id") or "").strip()
+        if kind not in {"photo", "video", "animation", "document"} or not file_id:
+            continue
+        normalized_media.append({
+            "position": position, "kind": kind, "file_id": file_id[:512],
+            "file_unique_id": str(item.get("file_unique_id") or "")[:160],
+            "mime_type": str(item.get("mime_type") or "")[:160],
+            "file_name": str(item.get("file_name") or "")[:300],
+            "file_size": max(0, int(item.get("file_size") or 0)),
+            "width": max(0, int(item.get("width") or 0)),
+            "height": max(0, int(item.get("height") or 0)),
+            "duration": max(0, int(item.get("duration") or 0)),
+        })
+    now = utc_now()
+    post_url = str(payload.get("post_url") or "")[:500]
+    if not post_url and username:
+        post_url = f"https://t.me/{username}/{message_id}"
+    with _write_lock, connection() as conn:
+        conn.execute(
+            """INSERT INTO telegram_feed_posts(
+                   channel_id,message_id,media_group_id,channel_title,channel_username,
+                   published_at,edited_at,text,entities,author_signature,post_url,status,
+                   created_at,updated_at
+               ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?,?,?)
+               ON CONFLICT(channel_id,message_id) DO UPDATE SET
+                   media_group_id=excluded.media_group_id,channel_title=excluded.channel_title,
+                   channel_username=excluded.channel_username,edited_at=excluded.edited_at,
+                   text=excluded.text,entities=excluded.entities,
+                   author_signature=excluded.author_signature,post_url=excluded.post_url,
+                   status='published',updated_at=excluded.updated_at""",
+            (
+                channel_id, message_id, str(payload.get("media_group_id") or "")[:160],
+                str(channel.get("title") or payload.get("channel_title") or "")[:200], username,
+                published_at, edited_at, text,
+                json.dumps(entities, ensure_ascii=False)[:20_000],
+                str(payload.get("author_signature") or "")[:200], post_url,
+                "published", now, now,
+            ),
+        )
+        post_id = conn.execute(
+            "SELECT id FROM telegram_feed_posts WHERE channel_id=? AND message_id=?",
+            (channel_id, message_id),
+        ).fetchone()[0]
+        conn.execute("DELETE FROM telegram_feed_media WHERE post_id=?", (post_id,))
+        for item in normalized_media:
+            conn.execute(
+                """INSERT INTO telegram_feed_media(
+                       post_id,position,kind,file_id,file_unique_id,mime_type,file_name,
+                       file_size,width,height,duration,created_at
+                   ) VALUES(?,?,?,?,?,?,?,?,?,?,?,?)""",
+                (post_id, item["position"], item["kind"], item["file_id"],
+                 item["file_unique_id"], item["mime_type"], item["file_name"],
+                 item["file_size"], item["width"], item["height"], item["duration"], now),
+            )
+        conn.commit()
+    return {"id": post_id, "message_id": message_id, "media_count": len(normalized_media)}
+
+
+def list_telegram_feed_posts(limit: int = 20, before_id: int = 0) -> list[dict]:
+    limit = max(1, min(50, int(limit)))
+    with connection() as conn:
+        where, params = "status='published'", []
+        if before_id > 0:
+            where += " AND id < ?"
+            params.append(before_id)
+        rows = conn.execute(
+            f"SELECT * FROM telegram_feed_posts WHERE {where} ORDER BY id DESC LIMIT ?",
+            (*params, limit),
+        ).fetchall()
+        result = []
+        for row in rows:
+            post = dict(row)
+            post["entities"] = json.loads(post.get("entities") or "[]")
+            media_rows = conn.execute(
+                "SELECT * FROM telegram_feed_media WHERE post_id=? ORDER BY position,id",
+                (post["id"],),
+            ).fetchall()
+            post["media"] = [{
+                "id": media["id"], "kind": media["kind"],
+                "mime_type": media["mime_type"], "file_name": media["file_name"],
+                "file_size": media["file_size"], "width": media["width"],
+                "height": media["height"], "duration": media["duration"],
+                "url": f"/api/feed/media/{media['id']}",
+            } for media in media_rows]
+            result.append(post)
+        return result
+
+
+def telegram_feed_media(media_id: int) -> dict | None:
+    with connection() as conn:
+        row = conn.execute(
+            """SELECT m.* FROM telegram_feed_media m
+               JOIN telegram_feed_posts p ON p.id=m.post_id
+               WHERE m.id=? AND p.status='published'""",
+            (int(media_id),),
+        ).fetchone()
+    return dict(row) if row else None
+
+
 AI_BRANCH_MAIN = "main"
 AI_BRANCH_TEST = "deepseek_test"
 
@@ -7872,6 +8004,45 @@ def init_db() -> None:
                 total_cost_usd REAL NOT NULL DEFAULT 0,
                 created_at TEXT NOT NULL
             );
+
+            CREATE TABLE IF NOT EXISTS telegram_feed_posts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                channel_id TEXT NOT NULL,
+                message_id INTEGER NOT NULL,
+                media_group_id TEXT NOT NULL DEFAULT '',
+                channel_title TEXT NOT NULL DEFAULT '',
+                channel_username TEXT NOT NULL DEFAULT '',
+                published_at TEXT NOT NULL,
+                edited_at TEXT NOT NULL DEFAULT '',
+                text TEXT NOT NULL DEFAULT '',
+                entities TEXT NOT NULL DEFAULT '[]',
+                author_signature TEXT NOT NULL DEFAULT '',
+                post_url TEXT NOT NULL DEFAULT '',
+                status TEXT NOT NULL DEFAULT 'published',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                UNIQUE(channel_id, message_id)
+            );
+
+            CREATE TABLE IF NOT EXISTS telegram_feed_media (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                post_id INTEGER NOT NULL,
+                position INTEGER NOT NULL DEFAULT 0,
+                kind TEXT NOT NULL,
+                file_id TEXT NOT NULL,
+                file_unique_id TEXT NOT NULL DEFAULT '',
+                mime_type TEXT NOT NULL DEFAULT '',
+                file_name TEXT NOT NULL DEFAULT '',
+                file_size INTEGER NOT NULL DEFAULT 0,
+                width INTEGER NOT NULL DEFAULT 0,
+                height INTEGER NOT NULL DEFAULT 0,
+                duration INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL,
+                UNIQUE(post_id, position),
+                FOREIGN KEY(post_id) REFERENCES telegram_feed_posts(id) ON DELETE CASCADE
+            );
+            CREATE INDEX IF NOT EXISTS idx_telegram_feed_posts_published
+                ON telegram_feed_posts(status, id DESC);
             """
         )
         now = utc_now()

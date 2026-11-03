@@ -16,7 +16,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from urllib.parse import parse_qs, quote, urlparse
 
-from . import analytics, checkup_reoffers, company_suggestions, data_retention, database as db, examination_schedule, funnel_monitor, manager_daily_report, notification_health, splitter_tracking, weight_reminders
+from . import analytics, checkup_reoffers, company_suggestions, data_retention, database as db, examination_schedule, funnel_monitor, manager_daily_report, notification_health, splitter_tracking, telegram_feed, weight_reminders
 from . import chat_attachments
 from .config import BASE_DIR, settings
 from .health_passport import build_health_passport_pdf
@@ -37,6 +37,7 @@ ALLOWED_STATIC = {
     "manager.js", "manager.css", "icon-192.png", "icon-512.png",
     "icon-maskable-512.png", "apple-touch-icon.png", "favicon.svg",
     "example-lab-result.pdf", "psychology-offer.pdf",
+    "feed-preview-stretch.svg", "feed-preview-breathing.svg",
 }
 SERVER_ERROR_LOG = settings.log_path
 MANAGER_SESSION_COOKIE = "consilium_manager_session"
@@ -426,6 +427,34 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
             )
         if path == "/api/health":
             return self._json(200, {"status": "ok"})
+        if path == "/api/feed":
+            self._ensure_user_context()
+            query = parse_qs(parsed.query)
+            try:
+                limit = max(1, min(50, int(query.get("limit", ["20"])[0])))
+                before_id = max(0, int(query.get("before_id", ["0"])[0]))
+            except (TypeError, ValueError):
+                return self._json(422, {"detail": "Некорректные параметры ленты"})
+            return self._json(200, {
+                "enabled": telegram_feed.configured(),
+                "posts": db.list_telegram_feed_posts(limit, before_id),
+            })
+        if path.startswith("/api/feed/media/"):
+            self._ensure_user_context()
+            try:
+                media_id = int(path.removeprefix("/api/feed/media/").strip("/"))
+            except (TypeError, ValueError):
+                return self._json(404, {"detail": "Медиафайл не найден"})
+            media = db.telegram_feed_media(media_id)
+            if not media:
+                return self._json(404, {"detail": "Медиафайл не найден"})
+            try:
+                upstream = telegram_feed.open_media(
+                    str(media.get("file_id") or ""), self.headers.get("Range", ""),
+                )
+                return self._stream_telegram_media(upstream, media)
+            except telegram_feed.TelegramFeedUnavailable as exc:
+                return self._json(503, {"detail": str(exc)})
         if path.startswith("/api/chat-attachments/"):
             token = path.removeprefix("/api/chat-attachments/").strip("/")
             query = parse_qs(parsed.query)
@@ -493,6 +522,7 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                 "personal_data_policy_url": personal_data_policy_url,
                 "payment_receipt_email_required": bool(settings.yookassa_receipts_enabled),
                 "company_suggestions_enabled": company_suggestions.configured(),
+                "telegram_feed_enabled": telegram_feed.configured(),
             })
         if path == "/api/bot/manager-notifications":
             if not bot_token_valid(self.headers.get("Authorization", "")):
@@ -1084,6 +1114,16 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
 
     def do_POST(self) -> None:
         path = urlparse(self.path).path
+        if path == "/api/bot/feed-posts":
+            if not bot_token_valid(self.headers.get("Authorization", "")):
+                return self._json(401, {"detail": "Неверные данные интеграции"})
+            if not settings.telegram_feed_enabled:
+                return self._json(409, {"detail": "Лента Telegram отключена"})
+            try:
+                result = db.upsert_telegram_feed_post(self._read_json(max_bytes=64_000))
+                return self._json(200, result)
+            except (ValueError, TypeError, json.JSONDecodeError, UnicodeDecodeError) as exc:
+                return self._json(422, {"detail": str(exc)})
         if path in {"/auth/max", "/auth/messenger"}:
             try:
                 length = int(self.headers.get("Content-Length", "0"))
@@ -3625,6 +3665,36 @@ small{{display:block;color:#82918c;text-align:center;margin-top:18px}}
             # Browsers can cancel an obsolete polling request while a newer one
             # is already in flight. This is not a server-side chat failure.
             return
+
+    def _stream_telegram_media(self, upstream, media: dict) -> None:
+        """Copy Telegram bytes to the browser without buffering or local files."""
+        try:
+            status = int(getattr(upstream, "status", None) or upstream.getcode() or 200)
+            content_type = str(
+                upstream.headers.get("Content-Type")
+                or media.get("mime_type") or "application/octet-stream"
+            )
+            self.send_response(status)
+            self._send_security_headers()
+            self.send_header("Content-Type", content_type)
+            for header in ("Content-Length", "Content-Range", "Accept-Ranges"):
+                value = upstream.headers.get(header)
+                if value:
+                    self.send_header(header, str(value))
+            if not upstream.headers.get("Accept-Ranges"):
+                self.send_header("Accept-Ranges", "bytes")
+            self.send_header("Cache-Control", "private, max-age=300")
+            self._send_identity_cookie()
+            self.end_headers()
+            while True:
+                chunk = upstream.read(64 * 1024)
+                if not chunk:
+                    break
+                self.wfile.write(chunk)
+        except (BrokenPipeError, ConnectionResetError):
+            return
+        finally:
+            upstream.close()
 
     def _ensure_user_context(self) -> None:
         query = parse_qs(urlparse(self.path).query)

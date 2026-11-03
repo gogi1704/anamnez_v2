@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 540" role="img" aria-labelledby="title desc">
+  <title id="title">Пять минут движения</title><desc id="desc">Абстрактная иллюстрация спокойной разминки</desc>
+  <defs><linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#dfeee7"/><stop offset="1" stop-color="#a7ceb9"/></linearGradient><linearGradient id="shirt" x1="0" y1="0" x2="0" y2="1"><stop stop-color="#2d8669"/><stop offset="1" stop-color="#176f57"/></linearGradient></defs>
+  <rect width="960" height="540" fill="url(#bg)"/><circle cx="790" cy="88" r="150" fill="#f5e7c8" opacity=".72"/><path d="M0 410C165 350 280 450 438 403c158-47 284-19 522 66v71H0Z" fill="#f3f7f4"/>
+  <rect x="90" y="104" width="300" height="240" rx="22" fill="#fff" opacity=".72"/><path d="M145 282h190M145 237h132M145 192h174" stroke="#7ea893" stroke-width="16" stroke-linecap="round" opacity=".55"/>
+  <circle cx="600" cy="166" r="55" fill="#edc6a7"/><path d="M523 252c18-42 135-42 157 0l31 160H492Z" fill="url(#shirt)"/><path d="M532 276 421 185M670 277l116-95" fill="none" stroke="#176f57" stroke-width="34" stroke-linecap="round"/><path d="M417 184 361 126M789 181l55-62" fill="none" stroke="#edc6a7" stroke-width="25" stroke-linecap="round"/><path d="M548 411 506 518M658 411l54 107" stroke="#344c43" stroke-width="41" stroke-linecap="round"/>
+  <text x="54" y="476" fill="#176f57" font-family="Arial,sans-serif" font-size="42" font-weight="700">5 минут движения</text>
+</svg>

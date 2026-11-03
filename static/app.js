@@ -7826,6 +7826,80 @@ function openMobileSidebar() {
 
 function closeProfileModal() { $('#profileModal').classList.add('hidden'); }
 
+function feedPreviewMode() {
+  return new URLSearchParams(location.search).get('preview_feed') === '1';
+}
+
+function feedDate(value) {
+  const date = new Date(value || '');
+  if (Number.isNaN(date.getTime())) return '';
+  return new Intl.DateTimeFormat('ru', {
+    day:'numeric', month:'long', hour:'2-digit', minute:'2-digit',
+  }).format(date);
+}
+
+function feedPostMarkup(post) {
+  const text = String(post.text || '').trim();
+  const lines = text.split(/\n+/).map(line => line.trim()).filter(Boolean);
+  const title = lines.length > 1 && lines[0].length <= 140 ? lines.shift() : '';
+  const copy = lines.length ? lines.join('\n\n') : (title ? '' : text);
+  const media = Array.isArray(post.media) ? post.media : [];
+  const mediaMarkup = media.map(item => {
+    const url = escapeAttr(item.url || '');
+    if (item.kind === 'photo') {
+      return `<figure class="feed-media feed-photo"><img src="${url}" loading="lazy" alt="Изображение из публикации"></figure>`;
+    }
+    if (item.kind === 'video' || item.kind === 'animation') {
+      return `<div class="feed-media feed-video"><video controls playsinline preload="metadata"><source src="${url}"${item.mime_type ? ` type="${escapeAttr(item.mime_type)}"` : ''}></video></div>`;
+    }
+    return `<a class="feed-media feed-document" href="${url}" download="${escapeAttr(item.file_name || 'file')}"><strong>Скачать документ</strong><span>${escapeHtml(item.file_name || 'Файл')}</span></a>`;
+  }).join('');
+  const safePostUrl = /^https:\/\/t\.me\//i.test(String(post.post_url || '')) ? post.post_url : '';
+  return `<article class="feed-post" data-feed-post="${Number(post.id) || 0}">
+    <header class="feed-post-author"><span>К</span><div><strong>${escapeHtml(post.channel_title || 'Консилиум')}</strong><small>${escapeHtml(feedDate(post.published_at))}</small></div><i aria-label="Публичный канал">✓</i></header>
+    ${mediaMarkup}
+    ${text ? `<div class="feed-post-copy">${title ? `<h3>${escapeHtml(title)}</h3>` : ''}<p>${escapeHtml(copy || text).replace(/\n/g, '<br>')}</p></div>` : ''}
+    <footer class="feed-post-footer">${safePostUrl ? `<a href="${escapeAttr(safePostUrl)}" target="_blank" rel="noopener noreferrer" data-feed-source>Открыть в Telegram <span>↗</span></a>` : '<span></span>'}<span>${media.some(item => ['video','animation'].includes(item.kind)) ? 'Видео' : 'Публикация'}</span></footer>
+  </article>`;
+}
+
+async function loadFeed() {
+  if (feedPreviewMode()) return;
+  const list = $('#feedList');
+  $('#feedPreviewNote').classList.add('hidden');
+  list.innerHTML = '<p class="feed-loading">Загружаем публикации…</p>';
+  try {
+    const payload = await api('/api/feed?limit=20');
+    if (!payload.enabled) {
+      list.innerHTML = '<p class="feed-empty">Лента скоро появится. Канал пока не подключён.</p>';
+      return;
+    }
+    list.innerHTML = payload.posts?.length
+      ? payload.posts.map(feedPostMarkup).join('')
+      : '<p class="feed-empty">В ленте пока нет публикаций.</p>';
+  } catch (error) {
+    list.innerHTML = `<p class="feed-empty">${escapeHtml(error.message || 'Не удалось загрузить ленту')}</p>`;
+  }
+}
+
+function openFeed() {
+  closeFunctionMenu();
+  $('#feedDemoStatus').classList.add('hidden');
+  $('#feedModal').classList.remove('hidden');
+  $('#feedModal').scrollTop = 0;
+  trackEvent('feed_opened', { source:'menu', mode:feedPreviewMode() ? 'preview' : 'live' });
+  void loadFeed();
+}
+
+function closeFeed() { $('#feedModal').classList.add('hidden'); }
+
+function showFeedDemoStatus(message) {
+  const status = $('#feedDemoStatus');
+  status.textContent = message;
+  status.classList.remove('hidden');
+  status.scrollIntoView({ behavior:'smooth', block:'nearest' });
+}
+
 function closeVisibleModal() {
   const layers = [...document.querySelectorAll(
     '.auth-warning-backdrop:not(.hidden), .modal-backdrop:not(.hidden)',
@@ -7842,6 +7916,7 @@ function closeVisibleModal() {
     case 'installAppModal': closeInstallApp(); break;
     case 'messengerLinkModal': closeMessengerLinkModal(); break;
     case 'purchasesModal': closePurchases(); break;
+    case 'feedModal': closeFeed(); break;
     case 'consultationsModal': closeConsultations(); break;
     case 'psychologySessionsModal': closePsychologySessions(); break;
     case 'psychologySessionRequestModal': closePsychologySessionRequest(); break;
@@ -7953,6 +8028,21 @@ $('#fontSizeClose').addEventListener('click', closeFontSizeModal);
 $('#fontSizeModal').addEventListener('click', event => { if (event.target.id === 'fontSizeModal') closeFontSizeModal(); });
 $('#fontSizeOptions').addEventListener('click', event => { const option=event.target.closest('.font-size-choice[data-size]'); if (option) updateFontSize(option.dataset.size); });
 $('#menuProfileButton').addEventListener('click', openProfile);
+$('#menuFeedButton').addEventListener('click', openFeed);
+$('#feedClose').addEventListener('click', closeFeed);
+$('#feedModal').addEventListener('click', event => {
+  if (event.target.id === 'feedModal') closeFeed();
+  if (event.target.closest('[data-feed-demo-video]')) {
+    trackEvent('feed_video_started', { post_id:'demo-video', mode:'preview' });
+    showFeedDemoStatus('В рабочей ленте здесь запустится видео непосредственно из Telegram.');
+  }
+  if (event.target.closest('[data-feed-demo-link]')) {
+    trackEvent('feed_telegram_opened', { post_id:event.target.closest('.feed-post')?.dataset.demoPost || 'demo', mode:'preview' });
+    showFeedDemoStatus('После подключения канала эта кнопка откроет исходную публикацию в Telegram.');
+  }
+  const source = event.target.closest('[data-feed-source]');
+  if (source) trackEvent('feed_telegram_opened', { post_id:source.closest('.feed-post')?.dataset.feedPost || '', mode:'live' });
+});
 $('#menuMessengerLinkButton').addEventListener('click', () => openMessengerLinkModal({source:'menu'}));
 $('#menuLabResultsButton').addEventListener('click', openLabResults);
 $('#menuPurchasesButton').addEventListener('click', () => openPurchases());
@@ -8461,6 +8551,7 @@ async function initMainApp() {
     }
   } else if (state.conversationId) await openConversation(state.conversationId);
   else newConversation();
+  if (query.get('preview_feed') === '1') requestAnimationFrame(openFeed);
   const pendingSpecialistDocument = sessionStorage.getItem(SPECIALIST_ANALYSIS_PENDING_KEY);
   if (pendingSpecialistDocument && linkedMessengerProviders().size) {
     sessionStorage.removeItem(SPECIALIST_ANALYSIS_PENDING_KEY);
@@ -8513,6 +8604,7 @@ async function init() {
     const ikpEntryRequested = isIkpEntryUrl();
     const pendingResultFlow = readResultFlow();
     const funnelPreviewRequested = ['marketer','control'].includes(previewFunnel);
+    const feedPreviewRequested = previewParams.get('preview_feed') === '1';
     if (messengerLoginCompleted) {
       entryParams.delete('auth');
       const cleanQuery = entryParams.toString();
@@ -8530,6 +8622,10 @@ async function init() {
     // directly.  They are preview-only and must not be routed through the
     // generic "why are you here" chooser used for an unattributed real visit.
     if (funnelPreviewRequested && !messengerLoginRequired) {
+      await startApplication();
+      return;
+    }
+    if (feedPreviewRequested && !messengerLoginRequired) {
       await startApplication();
       return;
     }

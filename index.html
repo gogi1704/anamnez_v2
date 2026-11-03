@@ -17,7 +17,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/static/styles.css?v=20261031-entry-route-landing-v51">
+  <link rel="stylesheet" href="/static/styles.css?v=20261103-telegram-feed-v53">
   <link rel="stylesheet" href="/static/rich-text.2bf1f5fab764.css">
 </head>
 <body>
@@ -203,6 +203,7 @@
             <div class="function-menu hidden" id="functionMenu" role="menu">
               <strong>Функции</strong>
               <button id="mobileDialogsButton" role="menuitem"><i>≡</i><span>Мои диалоги<small>Открыть историю переписок</small></span></button>
+              <button id="menuFeedButton" role="menuitem"><i>▥</i><span>Лента<small>Полезные материалы о здоровье</small></span></button>
               <button id="menuLabResultsButton" role="menuitem"><i>▤</i><span>Результаты анализов<small id="menuLabResultsStatus">Проверить по номеру пробирки</small></span></button>
               <button id="menuProfileButton" role="menuitem"><i>♙</i><span>Мои данные<small>Анкета, номер пробирки и память</small></span></button>
               <button id="menuPurchasesButton" role="menuitem"><i>₽</i><span>Мои покупки<small>Оплаты и попытки оплаты</small></span></button>
@@ -445,6 +446,47 @@
       <label class="field-label">Подтверждённые факты<textarea id="contextFacts" rows="6"></textarea></label>
       <label class="field-label">Что ещё нужно выяснить<textarea id="contextQuestions" rows="4"></textarea></label>
       <button class="primary-button" id="saveContextButton">Сохранить контекст</button>
+    </div>
+  </div>
+
+  <div class="modal-backdrop feed-backdrop hidden" id="feedModal" role="dialog" aria-modal="true" aria-labelledby="feedTitle">
+    <div class="modal feed-modal">
+      <button class="modal-close" id="feedClose" type="button" aria-label="Закрыть ленту">×</button>
+      <header class="feed-header">
+        <span class="feed-header-icon" aria-hidden="true">К</span>
+        <div><span>ПОЛЕЗНЫЕ МАТЕРИАЛЫ</span><h2 id="feedTitle">Лента здоровья</h2><p>Коротко и понятно о самочувствии, профилактике и полезных привычках.</p></div>
+      </header>
+      <p class="feed-preview-note" id="feedPreviewNote"><span>Предпросмотр</span> Так будут выглядеть публикации из Telegram-канала.</p>
+      <div class="feed-list" id="feedList">
+        <article class="feed-post" data-demo-post="text">
+          <header class="feed-post-author"><span>К</span><div><strong>Консилиум</strong><small>Сегодня, 09:00</small></div><i aria-label="Публичный канал">✓</i></header>
+          <div class="feed-post-copy">
+            <h3>Почему после сна всё равно нет сил?</h3>
+            <p>Иногда дело не в количестве часов, а в качестве восстановления. Обратите внимание на три простых признака:</p>
+            <ul><li>тяжело проснуться даже после 7–8 часов сна;</li><li>энергии хватает только на первую половину дня;</li><li>выходные не возвращают ощущение бодрости.</li></ul>
+            <p>Если это продолжается несколько недель, стоит спокойно обсудить состояние со специалистом и проверить базовые показатели здоровья.</p>
+          </div>
+          <footer class="feed-post-footer"><button type="button" data-feed-demo-link>Открыть в Telegram <span>↗</span></button><span>3 мин</span></footer>
+        </article>
+
+        <article class="feed-post" data-demo-post="photo">
+          <header class="feed-post-author"><span>К</span><div><strong>Консилиум</strong><small>Вчера, 18:30</small></div><i aria-label="Публичный канал">✓</i></header>
+          <figure class="feed-media feed-photo"><img src="/static/feed-preview-stretch.svg" alt="Небольшая разминка во время рабочего дня"><figcaption>Фото будет загружаться из Telegram и не займёт место на сервере.</figcaption></figure>
+          <div class="feed-post-copy"><h3>Пять минут движения посреди рабочего дня</h3><p>Небольшая пауза помогает снять напряжение с плеч и спины. Не нужна тренировка: встаньте, расправьте плечи, сделайте несколько спокойных наклонов и немного пройдитесь.</p></div>
+          <footer class="feed-post-footer"><button type="button" data-feed-demo-link>Открыть в Telegram <span>↗</span></button><span>1 мин</span></footer>
+        </article>
+
+        <article class="feed-post" data-demo-post="video">
+          <header class="feed-post-author"><span>К</span><div><strong>Консилиум</strong><small>1 ноября, 12:15</small></div><i aria-label="Публичный канал">✓</i></header>
+          <button class="feed-media feed-video" type="button" data-feed-demo-video aria-label="Воспроизвести дыхательную практику">
+            <img src="/static/feed-preview-breathing.svg" alt="Обложка дыхательной практики">
+            <span class="feed-play" aria-hidden="true">▶</span><span class="feed-duration">02:10</span>
+          </button>
+          <div class="feed-post-copy"><h3>Дыхательная практика на две минуты</h3><p>Короткое видео, которое можно включить во время напряжённого дня. Дышите в комфортном темпе и остановитесь, если почувствуете головокружение.</p></div>
+          <footer class="feed-post-footer"><button type="button" data-feed-demo-link>Открыть в Telegram <span>↗</span></button><span>Видео</span></footer>
+        </article>
+      </div>
+      <p class="feed-demo-status hidden" id="feedDemoStatus" role="status"></p>
     </div>
   </div>
 
@@ -926,9 +968,9 @@
     </div>
   </div>
 
-  <script src="/static/metrika.js?v=20261031-entry-route-landing-v51"></script>
-  <script src="/static/agents.js?v=20261031-entry-route-landing-v51"></script>
+  <script src="/static/metrika.js?v=20261103-telegram-feed-v53"></script>
+  <script src="/static/agents.js?v=20261103-telegram-feed-v53"></script>
   <script src="/static/rich-text.js?v=20260929-loose-lists-v1"></script>
-  <script src="/static/app.js?v=20261031-entry-route-landing-v51"></script>
+  <script src="/static/app.js?v=20261103-telegram-feed-v53"></script>
 </body>
 </html>
