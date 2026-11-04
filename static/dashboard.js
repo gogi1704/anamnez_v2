@@ -1547,7 +1547,9 @@ function metric2PreviewMarkup(screen, large = false, suppliedData = null) {
   else if (kind === 'warning') content = `<div class="metric2-mock-modal"><span class="metric2-mock-close">×</span><span class="metric2-mock-icon">!</span><b>Продолжить без мессенджера?</b><p>Данные будут связаны только с этим браузером.</p><ul><li>после очистки cookies доступ может потеряться;</li><li>на другом телефоне или компьютере история не откроется;</li><li>восстановить анонимный профиль служба поддержки не сможет.</li></ul><p class="metric2-mock-note">Мессенджер можно будет привязать позже без повторного заполнения анкеты.</p><div class="metric2-mock-actions">${action('Назад',true)}${action('Понимаю, продолжить')}</div></div>`;
   else if (kind === 'appearance') content = `<small>ПЕРЕД НАЧАЛОМ</small><b>Какой размер текста вам удобен?</b><p>Вы увидите изменение сразу. Позже размер можно поменять через меню функций.</p><span class="metric2-mock-choice"><b>Аа &nbsp; Обычный</b><small>Чуть крупнее базового интерфейса</small></span><span class="metric2-mock-choice"><b>Аа &nbsp; Крупный</b><small>Комфортно для большинства экранов</small></span><span class="metric2-mock-choice selected"><b>Аа &nbsp; Очень крупный</b><small>Максимальная читаемость</small></span>${action('Продолжить')}`;
   else if (kind === 'not_medical_exam_info') content = `<small>ПЕРЕД ПРОДОЛЖЕНИЕМ</small><b>Анкета — важная часть медосмотра</b><p>Ответы помогают подготовиться к осмотру и подобрать актуальные для вас дополнительные обследования.</p><span class="metric2-mock-info"><b>Если вы нажали эту кнопку только потому, что не знаете ИНН</b><small>Лучше уточните ИНН у работодателя и вернитесь к анкете. Так рекомендации будут учитывать ваши ответы.</small></span><p>Если вы действительно не проходите медосмотр, можно продолжить без анкеты и выбрать дополнительные услуги из общего списка.</p><div class="metric2-mock-actions">${action('Вернуться',true)}${action('Продолжить')}</div>`;
-  else if (kind === 'reoffer_message') content = `<small>ЗАВТРА МЕДОСМОТР</small><b>Дополнительные чек-апы без нового укола</b><p>Во время осмотра можно сдать дополнительные чек-апы из той же пробы крови — без отдельного визита.</p><p>После готовности результаты появятся в Консилиуме: с ИИ-расшифровкой и возможностью бесплатно передать их медицинскому специалисту.</p>${action('Выбрать чек-апы →')}`;
+  else if (kind === 'reoffer_message' && screen.id === 'pre_exam_paid_message') content = `<small>📅 ЗАВТРА МЕДОСМОТР</small><b>✅ Обследования уже оплачены</b><p>🧾 Заказ №A1B2C3D4</p><span class="metric2-mock-info"><b>В заказ входят</b><small>«Здоровье сердца и сосудов»<br>«Витамин D и иммунитет»</small></span><p>💳 Оплачено: 2 900 ₽ · полностью</p><p>📱 Покажите это сообщение сотруднику медицинской бригады.</p>`;
+  else if (kind === 'reoffer_message' && screen.id === 'pre_exam_selected_message') content = `<small>📅 ЗАВТРА МЕДОСМОТР</small><b>Вы выбрали дополнительные обследования</b><span class="metric2-mock-info"><b>Сохранённый выбор</b><small>«Здоровье сердца и сосудов»<br>«Витамин D и иммунитет»</small></span><p>💚 При оплате онлайн действует скидка 10%.</p><p>На медосмотре: 2 900 ₽<br>Онлайн: 2 610 ₽<br>Экономия: 290 ₽</p>${action('Оплатить онлайн со скидкой')}`;
+  else if (kind === 'reoffer_message') content = `<small>📅 ЗАВТРА МЕДОСМОТР</small><b>Можно сразу сдать дополнительные обследования</b><p>Без отдельной записи и повторной поездки.</p><span class="metric2-mock-info"><b>По вашим ответам могут быть полезны</b><small>«Здоровье сердца и сосудов»<br>«Витамин D и иммунитет»</small></span><p>💚 При оплате онлайн действует скидка 10%.</p>${action('Выбрать чек-апы')}`;
   else if (kind === 'questionnaire_body_map') content = `<div class="metric2-mock-modal"><span class="metric2-mock-close">×</span><span class="metric2-mock-icon">◉</span><b>Интерактивная карта тела</b><p>Пользователь проходит три понятных этапа и возвращается к вопросу о жалобах.</p><span class="metric2-mock-info"><b>1. Выберите область тела</b><small>Нажмите на нужную область на изображении</small></span><span class="metric2-mock-info"><b>2. Укажите ощущение</b><small>Выберите наиболее подходящий вариант</small></span><span class="metric2-mock-info"><b>3. Добавьте подробности</b><small>Уточните интенсивность и особенности симптома</small></span>${action('Сохранить отметку')}${action('Закрыть')}</div>`;
   else if (kind.startsWith('question_')) {
     const index = metric2QuestionContent.findIndex(item => item.key === screen.question_key);
@@ -1752,7 +1754,7 @@ function renderMetric2(data) {
       ? 'Открывает новый экран результатов анкеты и следующий за ним выбор анализов. Ссылка обходит распределение 50/50 и не меняет закреплённый вариант пользователя.'
       : 'Открывает текущую ветку маркетолога B. Ссылка обходит распределение 50/50 и не меняет закреплённый вариант пользователя.';
   }
-  $('#metric2FlowEyebrow').textContent = resultFlow ? 'Ссылка /result' : masterclassFlow ? 'QR-коды мастер-классов' : marketerCFlow ? 'Ветка маркетолога C' : marketerBFlow ? 'Ветка маркетолога B' : reofferFlow ? 'Повторное предложение' : 'Обычная ссылка';
+  $('#metric2FlowEyebrow').textContent = resultFlow ? 'Ссылка /result' : masterclassFlow ? 'QR-коды мастер-классов' : marketerCFlow ? 'Ветка маркетолога C' : marketerBFlow ? 'Ветка маркетолога B' : reofferFlow ? 'За день до медосмотра' : 'Обычная ссылка';
   $('#metric2FlowTitle').textContent = resultFlow ? 'Получение результатов анализов' : masterclassFlow ? 'Посадочная страница мастер-класса' : marketerCFlow ? 'Результаты анкеты и выбор анализов' : marketerBFlow ? 'Текущее предложение marketer' : reofferFlow ? 'Напоминание перед медосмотром' : 'Основной вариант анкеты';
   $('#metric2FlowDescription').textContent = resultFlow
     ? 'Отдельная воронка для пользователей, которые пришли по специальной ссылке за результатами. Обычное анкетирование сюда не входит.'
@@ -1763,11 +1765,11 @@ function renderMetric2(data) {
     : marketerBFlow
     ? 'Текущий путь B: предложение чек-апов, экран удержания, выбор оплаты и финальный результат. Считаются только закреплённые за B пользователи.'
     : reofferFlow
-    ? 'Путь основного варианта: от сообщения за день до медосмотра до выбора обследований и финального решения. Вариант «маркетолог» сюда не входит.'
+    ? 'Все пользователи с медосмотром на следующий день: оплатившие онлайн, выбравшие оплату на месте и пока ничего не выбравшие.'
     : 'Основная воронка новых пользователей: приветствие, регистрация, анкета, обследования и завершение. Переходы по ссылке /result сюда не входят.';
   const summary = $('#metric2Summary');
   const primarySummary = [
-    [resultFlow ? 'Пришли по пути result' : masterclassFlow ? 'Открыли страницу мастер-класса' : experimentFlow ? 'Попали в вариант «маркетолог»' : reofferFlow ? 'Получили повторное предложение' : 'На первом экране',data.summary?.start_users || 0,'100% — база этой ветки'],
+    [resultFlow ? 'Пришли по пути result' : masterclassFlow ? 'Открыли страницу мастер-класса' : experimentFlow ? 'Попали в вариант «маркетолог»' : reofferFlow ? 'Получили напоминание' : 'На первом экране',data.summary?.start_users || 0,'100% — база этой ветки'],
     [resultFlow ? 'Получили результат пути' : masterclassFlow ? 'Открыли Консилиум' : 'Дошли до завершения',data.summary?.reached_completion || 0,'уникальных пользователей'],
   ];
   const metricCards = items => items.map(([label,value,note]) => `<article class="analytics-metric"><span>${escapeHtml(label)}</span><strong>${typeof value === 'number' ? Number(value).toLocaleString('ru-RU') : escapeHtml(String(value))}</strong><small>${escapeHtml(note)}</small></article>`).join('');
@@ -1789,7 +1791,19 @@ function renderMetric2(data) {
   }
   if (reofferFlow) {
     const reoffer = data.summary?.reoffer || {};
-    summary.innerHTML += (reoffer.duration_buckets || []).map(item => `<article class="analytics-metric"><span>${escapeHtml(item.label)}</span><strong>${Number(item.users || 0).toLocaleString('ru-RU')}</strong><small>активное время на экране предложения</small></article>`).join('');
+    const groupNames = {
+      paid_online:'Оплатили онлайн', selected:'Выбрали, но не оплатили', unselected:'Ничего не выбрали',
+    };
+    summary.innerHTML += metricGroup(
+      'Получатели напоминаний',
+      'Разделение по состоянию заказа на момент формирования сообщения.',
+      (reoffer.audience_groups || []).flatMap(item => [
+        [`${groupNames[item.id] || item.label || item.id}: отправлено`,item.sent_users || 0,'уникальных пользователей'],
+        [`${groupNames[item.id] || item.label || item.id}: доставлено`,item.delivered_users || 0,'в Telegram или MAX'],
+        [`${groupNames[item.id] || item.label || item.id}: перешли`,item.clicked_users || 0,'нажали кнопку в сообщении'],
+      ]),
+      'pre-exam-groups',
+    );
   }
   if (masterclassFlow) {
     const material = (data.screens || []).find(item => item.id === 'masterclass_burnout');
@@ -2038,7 +2052,7 @@ async function loadMetric2(flow = metric2ActiveFlow) {
   const loadingLabel = metric2ActiveFlow === 'result' ? 'Строим путь получения результатов…'
     : metric2ActiveFlow === 'masterclass' ? 'Строим путь мастер-классов…'
     : ['experiment','marketer_b','marketer_c'].includes(metric2ActiveFlow) ? 'Строим путь воронки маркетолога…'
-    : metric2ActiveFlow === 'reoffer' ? 'Строим путь повторного предложения…' : 'Строим обычный стартовый путь…';
+    : metric2ActiveFlow === 'reoffer' ? 'Строим путь напоминаний перед медосмотром…' : 'Строим обычный стартовый путь…';
   return withPanelLoading('#metric2AdminView', async () => {
     const params = new URLSearchParams({period:selection.period || 'all',flow:metric2ActiveFlow});
     for (const [key,selector] of [['device','#metric2Device'],['method','#metric2Method'],['source','#metric2Source']]) {
@@ -2064,7 +2078,6 @@ function showReofferDiagnosticStatus(message, error = false) {
 function renderCheckupReofferDiagnostics(data) {
   const settings = data.settings || {};
   const schedule = data.schedule || {};
-  const candidates = data.candidates || {};
   const outbox = data.outbox || {};
   const linked = data.linked_messengers || {};
   $('#reofferEnabled').checked = Boolean(settings.enabled);
@@ -2078,12 +2091,14 @@ function renderCheckupReofferDiagnostics(data) {
     linked.telegram ? `Telegram: ${Number(linked.telegram).toLocaleString('ru-RU')}` : '',
     linked.max ? `MAX: ${Number(linked.max).toLocaleString('ru-RU')}` : '',
   ].filter(Boolean).join(' · ') || 'нет привязанных аккаунтов';
+  const groups = data.audience_groups || {};
+  const scheduledGroups = data.scheduled_audience_groups || {};
+  const groupNote = values => `оплачено: ${Number(values.paid_online || 0).toLocaleString('ru-RU')} · выбрано: ${Number(values.selected || 0).toLocaleString('ru-RU')} · не выбрано: ${Number(values.unselected || 0).toLocaleString('ru-RU')}`;
   const cards = [
     ['Режим', settings.enabled ? 'Включено' : 'Выключено', settings.updated_at ? `изменено ${formatDate(settings.updated_at)}` : 'настройка по умолчанию'],
     ['График chelovekgrafik', `${Number(schedule.rows || 0).toLocaleString('ru-RU')} строк`, `${Number(schedule.inns || 0).toLocaleString('ru-RU')} ИНН · синхронизация ${formatDate(schedule.last_synced_at)}`],
-    ['Ближайшая отправка', `${Number(data.pending_today || 0).toLocaleString('ru-RU')} пользователей`, `медосмотр ${data.tomorrow || 'завтра'} · до исключений ${Number(data.due_tomorrow || 0).toLocaleString('ru-RU')}`],
-    ['Запланировано на завтра', `${Number(data.scheduled_tomorrow || 0).toLocaleString('ru-RU')} пользователей`, `медосмотр ${data.day_after_tomorrow || 'послезавтра'} · уже исключены выбравшие и оплатившие`],
-    ['Кандидаты 30+ секунд', Number(candidates.eligible || 0).toLocaleString('ru-RU'), `30–120: ${Number(candidates.between_30_120 || 0).toLocaleString('ru-RU')} · более 120: ${Number(candidates.over_120 || 0).toLocaleString('ru-RU')}`],
+    ['Ближайшая отправка', `${Number(data.pending_today || 0).toLocaleString('ru-RU')} пользователей`, `медосмотр ${data.tomorrow || 'завтра'} · ${groupNote(groups)}`],
+    ['Следующий запуск', `${Number(data.scheduled_tomorrow || 0).toLocaleString('ru-RU')} пользователей`, `медосмотр ${data.day_after_tomorrow || 'послезавтра'} · ${groupNote(scheduledGroups)}`],
     ['Отправлено', Number(data.sent_total || 0).toLocaleString('ru-RU'), `последняя отправка ${formatDate(data.last_sent_at)}`],
     ['Очередь мессенджеров', pending.toLocaleString('ru-RU'), `повторных ошибок: ${Number(outbox.errors || 0).toLocaleString('ru-RU')} · исчерпано попыток: ${Number(outbox.exhausted || 0).toLocaleString('ru-RU')}`],
     ['Привязанные мессенджеры', Number(Object.values(linked).reduce((sum,value) => sum + Number(value || 0),0)).toLocaleString('ru-RU'), messengerText],
@@ -2118,13 +2133,15 @@ async function checkExaminationSchedule() {
 
 async function sendCheckupReofferTest() {
   const identifier = $('#reofferTestIdentifier').value.trim();
+  const audience_group = $('#reofferTestAudienceGroup').value;
   if (!identifier) throw new Error('Укажите chel_id или ИНН пользователя');
   if (!window.confirm(`Отправить тестовое сообщение пользователю ${identifier}?`)) return;
   const data = await adminFetch('/api/admin/checkup-reoffers/test-send', undefined, {
-    method:'POST', body:JSON.stringify({identifier}),
+    method:'POST', body:JSON.stringify({identifier,audience_group}),
   });
   const providers = (data.messenger_providers || []).join(', ') || 'нет — сообщение создано только в чате';
-  showReofferDiagnosticStatus(`Тест отправлен: чат создан, мессенджеры: ${providers}.`);
+  const groupLabels = {paid_online:'оплачено онлайн',selected:'выбрано без онлайн-оплаты',unselected:'ничего не выбрано'};
+  showReofferDiagnosticStatus(`Тест отправлен: сценарий «${groupLabels[data.audience_group] || data.audience_group}», мессенджеры: ${providers}.`);
   await loadCheckupReofferDiagnostics();
 }
 

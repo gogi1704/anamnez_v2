@@ -214,6 +214,8 @@ ALLOWED_EVENTS = {
     "checkup_reoffer_candidate", "checkup_reoffer_sent",
     "checkup_reoffer_messenger_queued", "checkup_reoffer_messenger_delivered",
     "checkup_reoffer_clicked",
+    "pre_exam_reminder_sent", "pre_exam_reminder_messenger_queued",
+    "pre_exam_reminder_messenger_delivered", "pre_exam_reminder_clicked",
     "health_passport_offer_viewed", "health_passport_generation_requested",
     "health_passport_generation_started", "health_passport_generated",
     "health_passport_declined", "health_passport_checkups_opened",
@@ -231,6 +233,7 @@ ALLOWED_PROPERTIES = {
     "selection_id", "exam_name", "context", "linked_count",
     "experiment_key", "experiment_variant", "funnel_version", "marketer_variant",
     "reoffer_id", "duration_bucket", "active_seconds", "examination_date", "provider_count",
+    "audience_group",
     "question_count", "recommended_count",
     "route", "first_entry", "guide_type",
 }
@@ -1007,19 +1010,40 @@ def _metric2_screen_definitions() -> list[dict]:
     standard_by_id = {
         item["id"]: item for item in screens if not item.get("flow")
     }
-    reoffer_screens = [{
-        "id": "reoffer_message", "title": "Повторное предложение",
-        "stage": "Напоминание · за день до медосмотра", "kind": "reoffer_message",
-        "description": "Сообщение в чате и привязанных мессенджерах с кнопкой выбора чек-апов.",
-        "root": True, "flow": "reoffer",
-        "legacy_reach": [_metric2_spec("checkup_reoffer_sent")],
-        "actions": [
-            {
-                "id": "open_checkups", "label": "Выбрать чек-апы",
-                "target": "exam_selection", "legacy": [_metric2_spec("checkup_reoffer_clicked")],
-            },
-        ],
-    }]
+    reoffer_screens = [
+        {
+            "id": "pre_exam_paid_message", "title": "Заказ уже оплачен",
+            "stage": "Напоминание · за день до медосмотра", "kind": "reoffer_message",
+            "description": "Подтверждение состава и оплаты заказа с просьбой показать сообщение медицинской бригаде.",
+            "root": True, "flow": "reoffer",
+            "legacy_reach": [_metric2_spec("pre_exam_reminder_sent", audience_group="paid_online")],
+            "actions": [],
+        },
+        {
+            "id": "pre_exam_selected_message", "title": "Чекапы выбраны",
+            "stage": "Напоминание · за день до медосмотра", "kind": "reoffer_message",
+            "description": "Сохранённый выбор, полная стоимость и онлайн-цена со скидкой.",
+            "root": True, "flow": "reoffer",
+            "legacy_reach": [_metric2_spec("pre_exam_reminder_sent", audience_group="selected")],
+            "actions": [{
+                "id": "pay_online", "label": "Оплатить онлайн со скидкой",
+                "target": "payment",
+                "legacy": [_metric2_spec("pre_exam_reminder_clicked", audience_group="selected")],
+            }],
+        },
+        {
+            "id": "pre_exam_unselected_message", "title": "Чекапы не выбраны",
+            "stage": "Напоминание · за день до медосмотра", "kind": "reoffer_message",
+            "description": "Предложение выбрать обследования и до двух рекомендаций по анкете.",
+            "root": True, "flow": "reoffer",
+            "legacy_reach": [_metric2_spec("pre_exam_reminder_sent", audience_group="unselected")],
+            "actions": [{
+                "id": "choose_checkups", "label": "Выбрать чек-апы",
+                "target": "exam_selection",
+                "legacy": [_metric2_spec("pre_exam_reminder_clicked", audience_group="unselected")],
+            }],
+        },
+    ]
     for screen_id in (
         "exam_selection", "exam_results_preview", "exam_objection", "payment",
         "payment_processing", "payment_success", "payment_result", "payment_unavailable",
@@ -1031,8 +1055,10 @@ def _metric2_screen_definitions() -> list[dict]:
         item["flow"] = "reoffer"
         item.pop("root", None)
         if screen_id == "exam_selection":
-            item["parent_id"] = "reoffer_message"
-            item["description"] = "Экран выбора, открытый из повторного предложения."
+            item["parent_id"] = "pre_exam_unselected_message"
+            item["description"] = "Экран выбора, открытый из напоминания перед медосмотром."
+        elif screen_id == "payment":
+            item["parent_id"] = "pre_exam_selected_message"
         reoffer_screens.append(item)
     screens.extend(reoffer_screens)
     return screens
@@ -3187,53 +3213,33 @@ def _metric2_report_uncached(
 
         reoffer_summary = {}
         if flow == "reoffer":
-            bucket_labels = {
-                "under_30": "До 30 секунд",
-                "30_to_120": "30–120 секунд",
-                "over_120": "Более 120 секунд",
+            group_labels = {
+                "paid_online": "Оплатили онлайн",
+                "selected": "Выбрали чекапы",
+                "unselected": "Ничего не выбирали",
             }
             reoffer_summary = {
-                "duration_buckets": [
+                "audience_groups": [
                     {
-                        "id": bucket, "label": label,
-                        "users": len(users_for([_metric2_spec(
-                            "checkup_reoffer_candidate", duration_bucket=bucket,
+                        "id": group, "label": label,
+                        "sent_users": len(users_for([_metric2_spec(
+                            "pre_exam_reminder_sent", audience_group=group,
+                        )])),
+                        "delivered_users": len(users_for([_metric2_spec(
+                            "pre_exam_reminder_messenger_delivered", audience_group=group,
+                        )])),
+                        "clicked_users": len(users_for([_metric2_spec(
+                            "pre_exam_reminder_clicked", audience_group=group,
                         )])),
                     }
-                    for bucket, label in bucket_labels.items()
+                    for group, label in group_labels.items()
                 ],
-                "sent_users": len(users_for([_metric2_spec("checkup_reoffer_sent")])),
-                "clicked_users": len(users_for([_metric2_spec("checkup_reoffer_clicked")])),
+                "sent_users": len(users_for([_metric2_spec("pre_exam_reminder_sent")])),
+                "delivered_users": len(users_for([_metric2_spec(
+                    "pre_exam_reminder_messenger_delivered",
+                )])),
+                "clicked_users": len(users_for([_metric2_spec("pre_exam_reminder_clicked")])),
             }
-            main_conn = None
-            try:
-                range_start, range_end = _payment_date_bounds(period, date_from, date_to)
-                clauses = ["experiment_variant NOT IN ('marketer','diagnostic')"]
-                dwell_params: list[Any] = []
-                if range_start:
-                    clauses.append("last_seen_at>=?")
-                    dwell_params.append(range_start)
-                if range_end:
-                    clauses.append("last_seen_at<?")
-                    dwell_params.append(range_end)
-                main_conn = sqlite3.connect(settings.database_path, timeout=5)
-                dwell_rows = main_conn.execute(
-                    "SELECT chel_id,MAX(active_seconds) FROM checkup_reoffer_candidates WHERE "
-                    + " AND ".join(clauses) + " GROUP BY chel_id",
-                    dwell_params,
-                ).fetchall()
-                counts = {"under_30": 0, "30_to_120": 0, "over_120": 0}
-                for _, seconds in dwell_rows:
-                    value = int(seconds or 0)
-                    bucket = "over_120" if value > 120 else "30_to_120" if value >= 30 else "under_30"
-                    counts[bucket] += 1
-                for item in reoffer_summary["duration_buckets"]:
-                    item["users"] = counts[item["id"]]
-            except sqlite3.Error:
-                pass
-            finally:
-                if main_conn is not None:
-                    main_conn.close()
     completed_user_ids = set().union(*(
         screen_users.get(item["id"], set())
         for item in result_screens if item.get("terminal")
@@ -3269,7 +3275,7 @@ def _metric2_report_uncached(
             else "Ветка marketer B" if flow == "marketer_b"
             else "Ветка marketer C" if flow == "marketer_c"
             else "Новое предложение marketer" if flow == "experiment"
-            else "Повторное предложение" if flow == "reoffer"
+            else "Напоминание перед медосмотром" if flow == "reoffer"
             else "Мастер-классы" if flow == "masterclass"
             else "Обычный путь"
         ),

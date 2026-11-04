@@ -1,5 +1,5 @@
-const CACHE_NAME = 'consilium-shell-v213';
-const ASSET_VERSION = '20261103-telegram-feed-v53';
+const CACHE_NAME = 'consilium-shell-v214';
+const ASSET_VERSION = '20261104-pre-exam-reminders-v54';
 const APP_SHELL = [
   '/',
   '/manifest.webmanifest',

@@ -1,4 +1,4 @@
-"""Daily check-up reoffer scheduling for the ordinary (non-marketer) funnel."""
+"""Daily reminders for every known user with a medical examination tomorrow."""
 
 from __future__ import annotations
 
@@ -14,6 +14,14 @@ from .config import settings
 MOSCOW = timezone(timedelta(hours=3), name="Europe/Moscow")
 
 
+def _message_screen(group: str) -> str:
+    return {
+        db.PRE_EXAM_GROUP_PAID: "pre_exam_paid_message",
+        db.PRE_EXAM_GROUP_SELECTED: "pre_exam_selected_message",
+        db.PRE_EXAM_GROUP_UNSELECTED: "pre_exam_unselected_message",
+    }.get(str(group or ""), "pre_exam_unselected_message")
+
+
 def send_due(*, now: datetime | None = None) -> dict:
     local_now = now.astimezone(MOSCOW) if now else datetime.now(MOSCOW)
     examination_date = (local_now.date() + timedelta(days=1))
@@ -24,17 +32,19 @@ def send_due(*, now: datetime | None = None) -> dict:
         }
     queued = db.queue_due_checkup_reoffers(examination_date, settings.public_base_url)
     for item in queued:
+        audience_group = str(item.get("audience_group") or db.PRE_EXAM_GROUP_UNSELECTED)
         common = {
-            "screen": "reoffer_message",
+            "screen": _message_screen(audience_group),
             "context": "reoffer",
-            "source": "checkup_reoffer",
+            "source": "pre_exam_reminder",
             "reoffer_id": item["id"],
-            "duration_bucket": item["duration_bucket"],
-            "active_seconds": item["active_seconds"],
+            "audience_group": audience_group,
             "examination_date": item["examination_date"],
+            "selected_count": item.get("selected_count", 0),
+            "recommended_count": item.get("recommended_count", 0),
         }
         analytics.record_server_event(
-            item["chel_id"], "checkup_reoffer_sent", common,
+            item["chel_id"], "pre_exam_reminder_sent", common,
             session_id=f"reoffer-{item['id']}",
         )
         analytics.record_server_event(
@@ -43,7 +53,7 @@ def send_due(*, now: datetime | None = None) -> dict:
         )
         if item["messenger_count"]:
             analytics.record_server_event(
-                item["chel_id"], "checkup_reoffer_messenger_queued",
+                item["chel_id"], "pre_exam_reminder_messenger_queued",
                 {**common, "provider_count": item["messenger_count"]},
                 session_id=f"reoffer-{item['id']}",
             )
@@ -69,11 +79,11 @@ def start_background_scheduler(record_status=None) -> threading.Event:
                     result = send_due(now=now)
                     if record_status and result["queued"]:
                         record_status(
-                            f"Повторные предложения: {result['queued']} отправлено"
+                            f"Напоминания перед медосмотром: {result['queued']} отправлено"
                         )
                 except Exception as exc:  # keep the web service alive
                     if record_status:
-                        record_status(f"Ошибка повторных предложений: {exc}")
+                        record_status(f"Ошибка напоминаний перед медосмотром: {exc}")
             stop.wait(300)
 
     threading.Thread(target=worker, name="checkup-reoffer-scheduler", daemon=True).start()

@@ -7949,6 +7949,8 @@ def init_db() -> None:
                 opened_at TEXT,
                 clicked_at TEXT,
                 is_test INTEGER NOT NULL DEFAULT 0,
+                audience_group TEXT NOT NULL DEFAULT 'legacy',
+                payload_snapshot TEXT NOT NULL DEFAULT '{}',
                 UNIQUE(chel_id, examination_date),
                 FOREIGN KEY(chel_id) REFERENCES users(chel_id) ON DELETE CASCADE,
                 FOREIGN KEY(candidate_id) REFERENCES checkup_reoffer_candidates(id) ON DELETE CASCADE
@@ -8112,6 +8114,14 @@ def init_db() -> None:
         if "is_test" not in reoffer_columns:
             conn.execute(
                 "ALTER TABLE checkup_reoffers ADD COLUMN is_test INTEGER NOT NULL DEFAULT 0"
+            )
+        if "audience_group" not in reoffer_columns:
+            conn.execute(
+                "ALTER TABLE checkup_reoffers ADD COLUMN audience_group TEXT NOT NULL DEFAULT 'legacy'"
+            )
+        if "payload_snapshot" not in reoffer_columns:
+            conn.execute(
+                "ALTER TABLE checkup_reoffers ADD COLUMN payload_snapshot TEXT NOT NULL DEFAULT '{}'"
             )
         experiment_settings_columns = {
             row[1] for row in conn.execute("PRAGMA table_info(experiment_settings)").fetchall()
@@ -8874,6 +8884,7 @@ def admin_checkup_reoffer_diagnostics(reference_date: date | None = None) -> dic
     today = reference_date or date.today()
     tomorrow = (today + timedelta(days=1)).isoformat()
     day_after_tomorrow = (today + timedelta(days=2)).isoformat()
+    catalog = {str(item["id"]): item for item in list_examinations()}
     with connection() as conn:
         schedule = conn.execute(
             """SELECT COUNT(*) rows_count,COUNT(DISTINCT inn) inns_count,
@@ -8896,59 +8907,37 @@ def admin_checkup_reoffer_diagnostics(reference_date: date | None = None) -> dic
             FROM checkup_reoffer_candidates
             WHERE experiment_variant NOT IN ('marketer','diagnostic')"""
         ).fetchone()
-        due = conn.execute(
-            """SELECT COUNT(DISTINCT c.chel_id) count
-            FROM checkup_reoffer_candidates c
-            WHERE c.active_seconds>=30
-              AND c.experiment_variant NOT IN ('marketer','diagnostic')
-              AND EXISTS (SELECT 1 FROM enterprise_examination_schedule s
-                WHERE s.inn=c.company_inn AND s.status='active' AND s.examination_date=?)""",
-            (tomorrow,),
-        ).fetchone()
-
-        def planned_count(examination_date: str) -> int:
+        def planned_groups(examination_date: str, *, exclude_sent: bool) -> dict[str, int]:
             rows = conn.execute(
-                """SELECT c.chel_id FROM checkup_reoffer_candidates c
-                WHERE c.active_seconds>=30
-                  AND c.experiment_variant NOT IN ('marketer','diagnostic')
-                  AND EXISTS (SELECT 1 FROM enterprise_examination_schedule s
-                    WHERE s.inn=c.company_inn AND s.status='active'
-                      AND s.examination_date=?)
-                GROUP BY c.chel_id""",
+                """SELECT u.chel_id,p.* FROM users u
+                   JOIN user_profile p ON p.chel_id=u.chel_id
+                   WHERE IS_STATS_USER(u.chel_id)=1
+                     AND TRIM(COALESCE(p.company_inn,''))<>''
+                     AND EXISTS (SELECT 1 FROM enterprise_examination_schedule s
+                       WHERE s.inn=p.company_inn AND s.status='active'
+                         AND s.examination_date=?)""",
                 (examination_date,),
             ).fetchall()
-            planned = 0
-            for candidate in rows:
-                chel_id = str(candidate["chel_id"])
-                if conn.execute(
+            counts = {
+                PRE_EXAM_GROUP_PAID: 0,
+                PRE_EXAM_GROUP_SELECTED: 0,
+                PRE_EXAM_GROUP_UNSELECTED: 0,
+            }
+            for user in rows:
+                chel_id = str(user["chel_id"])
+                if exclude_sent and conn.execute(
                     "SELECT 1 FROM checkup_reoffers WHERE chel_id=? AND examination_date=?",
                     (chel_id, examination_date),
                 ).fetchone():
                     continue
-                onboarding = conn.execute(
-                    "SELECT status,selected_tests,payment_status FROM onboarding_state WHERE chel_id=?",
-                    (chel_id,),
-                ).fetchone()
-                try:
-                    selected = json.loads(onboarding["selected_tests"] or "[]") if onboarding else []
-                except json.JSONDecodeError:
-                    selected = []
-                if (
-                    onboarding and onboarding["status"] == "complete" and selected
-                    and onboarding["payment_status"] != "skipped"
-                ):
-                    continue
-                if conn.execute(
-                    """SELECT 1 FROM payment_orders WHERE chel_id=? AND paid=1
-                    AND order_type='examinations' LIMIT 1""",
-                    (chel_id,),
-                ).fetchone():
-                    continue
-                planned += 1
-            return planned
+                group, _ = _pre_exam_audience(conn, chel_id, dict(user), catalog)
+                counts[group] += 1
+            counts["total"] = sum(counts.values())
+            return counts
 
-        pending_today = planned_count(tomorrow)
-        scheduled_tomorrow = planned_count(day_after_tomorrow)
+        due_groups = planned_groups(tomorrow, exclude_sent=False)
+        pending_groups = planned_groups(tomorrow, exclude_sent=True)
+        scheduled_groups = planned_groups(day_after_tomorrow, exclude_sent=True)
         sent = conn.execute(
             """SELECT COUNT(*) count,MAX(sent_at) last_sent_at FROM checkup_reoffers
             WHERE is_test=0"""
@@ -8995,9 +8984,11 @@ def admin_checkup_reoffer_diagnostics(reference_date: date | None = None) -> dic
         "candidates": {key: int(candidates[key] or 0) for key in (
             "under_30", "between_30_120", "over_120", "eligible"
         )},
-        "due_tomorrow": int(due["count"] or 0),
-        "pending_today": pending_today,
-        "scheduled_tomorrow": scheduled_tomorrow,
+        "due_tomorrow": due_groups["total"],
+        "pending_today": pending_groups["total"],
+        "scheduled_tomorrow": scheduled_groups["total"],
+        "audience_groups": pending_groups,
+        "scheduled_audience_groups": scheduled_groups,
         "sent_total": int(sent["count"] or 0),
         "last_sent_at": sent["last_sent_at"],
         "outbox": {
@@ -9011,12 +9002,150 @@ def admin_checkup_reoffer_diagnostics(reference_date: date | None = None) -> dic
     }
 
 
+PRE_EXAM_GROUP_PAID = "paid_online"
+PRE_EXAM_GROUP_SELECTED = "selected"
+PRE_EXAM_GROUP_UNSELECTED = "unselected"
+PRE_EXAM_GROUPS = {
+    PRE_EXAM_GROUP_PAID, PRE_EXAM_GROUP_SELECTED, PRE_EXAM_GROUP_UNSELECTED,
+}
+
+
+def _rubles(value: int) -> str:
+    return f"{max(0, int(value or 0)):,}".replace(",", " ") + " ₽"
+
+
+def _pre_exam_greeting(profile: dict) -> str:
+    name = " ".join(str(profile.get("preferred_name") or "").split())[:80]
+    return f"Здравствуйте, {name}! 👋" if name else "Здравствуйте! 👋"
+
+
+def _pre_exam_audience(
+    conn: sqlite3.Connection, chel_id: str, profile: dict, catalog: dict[str, dict],
+    forced_group: str = "",
+) -> tuple[str, dict]:
+    """Classify one user using paid orders first, then their saved selection."""
+    paid_order = conn.execute(
+        """SELECT id,amount_kopecks,items,paid_at FROM payment_orders
+           WHERE chel_id=? AND paid=1 AND test=0 AND order_type='examinations'
+           ORDER BY COALESCE(paid_at,updated_at) DESC,id DESC LIMIT 1""",
+        (chel_id,),
+    ).fetchone()
+    onboarding = conn.execute(
+        "SELECT selected_tests,payment_status FROM onboarding_state WHERE chel_id=?",
+        (chel_id,),
+    ).fetchone()
+    try:
+        selected_ids = json.loads(onboarding["selected_tests"] or "[]") if onboarding else []
+    except json.JSONDecodeError:
+        selected_ids = []
+    selected_ids = [str(item) for item in selected_ids if str(item) in catalog]
+    group = (
+        PRE_EXAM_GROUP_PAID if paid_order else
+        PRE_EXAM_GROUP_SELECTED if selected_ids else PRE_EXAM_GROUP_UNSELECTED
+    )
+    if forced_group in PRE_EXAM_GROUPS:
+        group = forced_group
+    if group == PRE_EXAM_GROUP_PAID:
+        order_items = _payment_items(paid_order["items"]) if paid_order else []
+        if not order_items:
+            order_items = [
+                {"id": item_id, "name": catalog[item_id]["name"], "price": 0}
+                for item_id in selected_ids
+            ]
+        return group, {
+            "order_id": str(paid_order["id"] if paid_order else "TEST-ORDER"),
+            "amount_kopecks": int(paid_order["amount_kopecks"] if paid_order else 0),
+            "items": order_items,
+        }
+    if group == PRE_EXAM_GROUP_SELECTED:
+        if not selected_ids:
+            selected_ids = list(catalog)[:2]
+        from .onboarding import effective_examination_price, online_examination_price
+        items = [catalog[item_id] for item_id in selected_ids]
+        full_total = sum(effective_examination_price(item) for item in items)
+        online_total = sum(online_examination_price(item) for item in items)
+        return group, {
+            "selected_ids": selected_ids,
+            "items": [{"id": item["id"], "name": item["name"]} for item in items],
+            "full_total": full_total,
+            "online_total": online_total,
+            "saving": max(0, full_total - online_total),
+        }
+    from .onboarding import EXAMINATION_UPGRADE_PAIRS, recommend_test_ids
+    recommendation_ids: list[str] = []
+    extended_ids = set(EXAMINATION_UPGRADE_PAIRS.values())
+    for item_id in recommend_test_ids(profile):
+        if item_id not in catalog or item_id in extended_ids:
+            continue
+        recommendation_ids.append(item_id)
+        if len(recommendation_ids) == 2:
+            break
+    return group, {
+        "recommendation_ids": recommendation_ids,
+        "items": [
+            {"id": item_id, "name": catalog[item_id]["name"]}
+            for item_id in recommendation_ids
+        ],
+    }
+
+
+def _pre_exam_message(group: str, profile: dict, snapshot: dict) -> tuple[str, str]:
+    greeting = _pre_exam_greeting(profile)
+    heading = f"{greeting}\n\n📅 Завтра у вас медицинский осмотр."
+    if group == PRE_EXAM_GROUP_PAID:
+        order_id = str(snapshot.get("order_id") or "")
+        public_number = order_id.removeprefix("ord_")[:8].upper() or "—"
+        lines = "\n".join(
+            f"• «{str(item.get('name') or item.get('id') or 'Обследование')}»"
+            for item in snapshot.get("items", [])
+        ) or "• Состав заказа сохранён в Консилиуме"
+        amount = _rubles(int(snapshot.get("amount_kopecks") or 0) // 100)
+        return (
+            f"{heading}\n\n✅ Дополнительные обследования уже оплачены онлайн.\n\n"
+            f"🧾 Заказ №{public_number}\n\nВ заказ входят:\n{lines}\n\n"
+            f"💳 Оплачено: {amount}\nСтатус: оплачено полностью\n\n"
+            "📱 Покажите это сообщение сотруднику медицинской бригады перед сдачей анализов.\n\n"
+            "Доплачивать за перечисленные обследования на медосмотре не нужно.",
+            "",
+        )
+    if group == PRE_EXAM_GROUP_SELECTED:
+        lines = "\n".join(
+            f"• «{str(item.get('name') or 'Обследование')}»"
+            for item in snapshot.get("items", [])
+        )
+        return (
+            f"{heading}\n\nРанее вы выбрали дополнительные обследования:\n\n{lines}\n\n"
+            "Оплатить их можно непосредственно на медосмотре.\n\n"
+            "💚 При оплате онлайн действует скидка 10%.\n\n"
+            f"Стоимость на медосмотре: {_rubles(snapshot.get('full_total', 0))}\n"
+            f"Стоимость онлайн: {_rubles(snapshot.get('online_total', 0))}\n"
+            f"Ваша экономия: {_rubles(snapshot.get('saving', 0))}\n\n"
+            "Выбранные обследования сохранятся — повторно выбирать их не потребуется.",
+            "💳 Оплатить онлайн со скидкой",
+        )
+    items = snapshot.get("items", [])
+    recommendations = ""
+    if items:
+        lines = "\n".join(
+            f"• «{str(item.get('name') or 'Обследование')}»" for item in items
+        )
+        recommendations = (
+            "\n\nПо вашим ответам в анкете вам могут быть полезны:\n\n"
+            f"{lines}"
+        )
+    return (
+        f"{heading}\n\nВо время осмотра можно сразу сдать дополнительные обследования — "
+        "без отдельной записи и повторной поездки.\n\n"
+        f"💚 При оплате онлайн действует скидка 10%.{recommendations}\n\n"
+        "Дополнительные обследования добровольны. Рекомендации носят информационный "
+        "характер и не являются назначением врача.",
+        "🩺 Выбрать чек-апы",
+    )
+
+
 CHECKUP_REOFFER_MESSAGE = (
-    "Завтра у вас медосмотр. Во время осмотра можно сдать дополнительные "
-    "чек-апы из той же пробы крови — без нового укола и отдельного визита.\n\n"
-    "После готовности результаты появятся в Консилиуме: вы получите понятную "
-    "ИИ-расшифровку и сможете бесплатно передать результаты медицинскому специалисту.\n\n"
-    "Возможно, вы захотите добавить чек-апы к завтрашнему осмотру."
+    "Здравствуйте! 👋\n\n📅 Завтра у вас медицинский осмотр.\n\n"
+    "Во время осмотра можно сразу сдать дополнительные обследования."
 )
 
 CHECKUP_REOFFER_TEST_MESSAGE = (
@@ -9025,7 +9154,9 @@ CHECKUP_REOFFER_TEST_MESSAGE = (
 )
 
 
-def queue_test_checkup_reoffer(identifier: str, public_url: str) -> dict:
+def queue_test_checkup_reoffer(
+    identifier: str, public_url: str, audience_group: str = "",
+) -> dict:
     """Send the real chat/messenger payload to one explicitly selected user."""
     target = str(identifier or "").strip()
     if not target:
@@ -9047,10 +9178,16 @@ def queue_test_checkup_reoffer(identifier: str, public_url: str) -> dict:
         if not user:
             raise ValueError("Пользователь не найден")
         chel_id = str(user["chel_id"])
-        profile = conn.execute(
-            "SELECT company_inn FROM user_profile WHERE chel_id=?", (chel_id,),
+        profile_row = conn.execute(
+            "SELECT * FROM user_profile WHERE chel_id=?", (chel_id,),
         ).fetchone()
-        company_inn = re.sub(r"\D", "", str(profile["company_inn"] or "")) if profile else ""
+        profile = dict(profile_row) if profile_row else {"chel_id": chel_id}
+        company_inn = re.sub(r"\D", "", str(profile.get("company_inn") or ""))
+        catalog = {str(item["id"]): item for item in list_examinations()}
+        group, snapshot = _pre_exam_audience(
+            conn, chel_id, profile, catalog, str(audience_group or ""),
+        )
+        message, action_label = _pre_exam_message(group, profile, snapshot)
         now = utc_now()
         diagnostic_key = f"diagnostic-{uuid.uuid4().hex}"
         candidate_cursor = conn.execute(
@@ -9064,12 +9201,18 @@ def queue_test_checkup_reoffer(identifier: str, public_url: str) -> dict:
         reoffer_cursor = conn.execute(
             """INSERT INTO checkup_reoffers
             (chel_id,candidate_id,company_inn,examination_date,active_seconds,
-             duration_bucket,access_token,status,created_at,is_test)
-            VALUES (?,?,?, ?,30,'30_to_120',?,'queued',?,1)""",
-            (chel_id, int(candidate_cursor.lastrowid), company_inn, diagnostic_key, token, now),
+             duration_bucket,access_token,status,created_at,is_test,audience_group,payload_snapshot)
+            VALUES (?,?,?, ?,0,'pre_exam',?,'queued',?,1,?,?)""",
+            (
+                chel_id, int(candidate_cursor.lastrowid), company_inn, diagnostic_key,
+                token, now, group, json.dumps(snapshot, ensure_ascii=False),
+            ),
         )
         reoffer_id = int(reoffer_cursor.lastrowid)
-        action_url = f"{str(public_url or '').rstrip('/')}/?checkup_reoffer={token}"
+        action_url = (
+            f"{str(public_url or '').rstrip('/')}/?checkup_reoffer={token}"
+            if group != PRE_EXAM_GROUP_PAID else ""
+        )
         conversation = conn.execute(
             "SELECT id FROM conversations WHERE chel_id=? AND status='active' ORDER BY updated_at DESC LIMIT 1",
             (chel_id,),
@@ -9086,16 +9229,17 @@ def queue_test_checkup_reoffer(identifier: str, public_url: str) -> dict:
                 (conversation_id, now),
             )
         metadata = {
-            "action": "checkup_reoffer", "reoffer_id": reoffer_id,
-            "access_token": token, "action_label": "Проверить кнопку →",
-            "action_url": action_url, "diagnostic": True,
+            "action": "checkup_reoffer" if action_url else "pre_exam_paid_notice",
+            "reoffer_id": reoffer_id, "access_token": token,
+            "action_label": action_label, "action_url": action_url,
+            "diagnostic": True, "audience_group": group,
         }
         message_cursor = conn.execute(
             """INSERT INTO messages
             (conversation_id,role,agent_id,content,metadata,created_at)
             VALUES (?,'assistant','manager',?,?,?)""",
             (
-                conversation_id, CHECKUP_REOFFER_TEST_MESSAGE,
+                conversation_id, "ТЕСТОВОЕ УВЕДОМЛЕНИЕ\n\n" + message,
                 json.dumps(metadata, ensure_ascii=False), now,
             ),
         )
@@ -9112,11 +9256,11 @@ def queue_test_checkup_reoffer(identifier: str, public_url: str) -> dict:
             (chel_id,),
         ).fetchall()
         payload = json.dumps({
-            "title": "Тест повторного предложения",
-            "body": CHECKUP_REOFFER_TEST_MESSAGE,
-            "kind": "checkup_reoffer", "diagnostic": True,
-            "action_url": action_url, "action_label": "Проверить кнопку",
-            "reoffer_id": reoffer_id,
+            "title": "Тест напоминания перед медосмотром",
+            "body": "ТЕСТОВОЕ УВЕДОМЛЕНИЕ\n\n" + message,
+            "kind": "pre_exam_reminder", "diagnostic": True,
+            "action_url": action_url, "action_label": action_label,
+            "reoffer_id": reoffer_id, "audience_group": group,
         }, ensure_ascii=False)
         providers: list[str] = []
         for identity in identities:
@@ -9140,6 +9284,7 @@ def queue_test_checkup_reoffer(identifier: str, public_url: str) -> dict:
         "status": "queued", "reoffer_id": reoffer_id, "chel_id": chel_id,
         "conversation_id": conversation_id, "chat_message_id": message_id,
         "messenger_providers": providers, "action_url": action_url,
+        "audience_group": group,
     }
 
 
@@ -9186,70 +9331,70 @@ def save_checkup_reoffer_dwell(journey_id: str, active_seconds: int) -> dict:
 
 
 def queue_due_checkup_reoffers(examination_date: date, public_url: str) -> list[dict]:
-    """Create chat messages and messenger jobs for eligible users exactly once."""
+    """Notify every known user whose company has an examination tomorrow."""
     exam_day = examination_date.isoformat()
     now = utc_now()
     base_url = str(public_url or "").rstrip("/")
+    catalog = {str(item["id"]): item for item in list_examinations()}
     queued: list[dict] = []
     with _write_lock, connection() as conn:
-        candidates = conn.execute(
-            """SELECT c.* FROM checkup_reoffer_candidates c
-            JOIN (
-              SELECT chel_id,MAX(active_seconds) max_seconds,MAX(last_seen_at) last_seen
-              FROM checkup_reoffer_candidates
-              WHERE active_seconds>=30
-                AND experiment_variant NOT IN ('marketer','diagnostic')
-              GROUP BY chel_id
-            ) best ON best.chel_id=c.chel_id AND best.max_seconds=c.active_seconds
-            WHERE c.active_seconds>=30
-              AND c.experiment_variant NOT IN ('marketer','diagnostic')
+        users = conn.execute(
+            """SELECT u.chel_id,p.* FROM users u
+            JOIN user_profile p ON p.chel_id=u.chel_id
+            WHERE IS_STATS_USER(u.chel_id)=1
+              AND TRIM(COALESCE(p.company_inn,''))<>''
               AND EXISTS (
                 SELECT 1 FROM enterprise_examination_schedule s
-                WHERE s.inn=c.company_inn AND s.status='active' AND s.examination_date=?
+                WHERE s.inn=p.company_inn AND s.status='active' AND s.examination_date=?
               )
-            GROUP BY c.chel_id ORDER BY c.last_seen_at DESC""",
+            ORDER BY u.last_seen_at DESC""",
             (exam_day,),
         ).fetchall()
-        for candidate in candidates:
-            chel_id = str(candidate["chel_id"])
+        for user in users:
+            chel_id = str(user["chel_id"])
             existing = conn.execute(
                 "SELECT id FROM checkup_reoffers WHERE chel_id=? AND examination_date=?",
                 (chel_id, exam_day),
             ).fetchone()
             if existing:
                 continue
-            onboarding = conn.execute(
-                "SELECT status,selected_tests,payment_status FROM onboarding_state WHERE chel_id=?",
-                (chel_id,),
-            ).fetchone()
-            try:
-                selected = json.loads(onboarding["selected_tests"] or "[]") if onboarding else []
-            except json.JSONDecodeError:
-                selected = []
-            reached_completion = bool(
-                onboarding and onboarding["status"] == "complete" and selected
-                and onboarding["payment_status"] != "skipped"
+            profile = dict(user)
+            audience_group, snapshot = _pre_exam_audience(
+                conn, chel_id, profile, catalog,
             )
-            paid = bool(conn.execute(
-                """SELECT 1 FROM payment_orders WHERE chel_id=? AND paid=1
-                AND order_type='examinations' LIMIT 1""",
-                (chel_id,),
-            ).fetchone())
-            if reached_completion or paid:
-                continue
+            message, action_label = _pre_exam_message(
+                audience_group, profile, snapshot,
+            )
+            journey_id = f"pre-exam:{exam_day}"
+            conn.execute(
+                """INSERT OR IGNORE INTO checkup_reoffer_candidates
+                (chel_id,journey_id,company_inn,active_seconds,duration_bucket,
+                 experiment_variant,first_seen_at,last_seen_at)
+                VALUES (?,?,?,0,'pre_exam','pre_exam',?,?)""",
+                (chel_id, journey_id, profile.get("company_inn", ""), now, now),
+            )
+            candidate = conn.execute(
+                """SELECT id FROM checkup_reoffer_candidates
+                   WHERE chel_id=? AND journey_id=?""",
+                (chel_id, journey_id),
+            ).fetchone()
             token = secrets.token_urlsafe(32)
             cursor = conn.execute(
                 """INSERT INTO checkup_reoffers
                 (chel_id,candidate_id,company_inn,examination_date,active_seconds,
-                 duration_bucket,access_token,status,created_at)
-                VALUES (?,?,?,?,?,?,?,'queued',?)""",
+                 duration_bucket,access_token,status,created_at,audience_group,payload_snapshot)
+                VALUES (?,?,?,?,0,'pre_exam',?,'queued',?,?,?)""",
                 (
-                    chel_id, candidate["id"], candidate["company_inn"], exam_day,
-                    candidate["active_seconds"], candidate["duration_bucket"], token, now,
+                    chel_id, candidate["id"], profile.get("company_inn", ""), exam_day,
+                    token, now, audience_group,
+                    json.dumps(snapshot, ensure_ascii=False),
                 ),
             )
             reoffer_id = int(cursor.lastrowid)
-            action_url = f"{base_url}/?checkup_reoffer={token}"
+            action_url = (
+                f"{base_url}/?checkup_reoffer={token}"
+                if audience_group != PRE_EXAM_GROUP_PAID else ""
+            )
             conversation = conn.execute(
                 "SELECT id FROM conversations WHERE chel_id=? AND status='active' ORDER BY updated_at DESC LIMIT 1",
                 (chel_id,),
@@ -9266,15 +9411,16 @@ def queue_due_checkup_reoffers(examination_date: date, public_url: str) -> list[
                     (conversation_id, now),
                 )
             metadata = {
-                "action": "checkup_reoffer", "reoffer_id": reoffer_id,
-                "access_token": token, "action_label": "Выбрать чек-апы →",
-                "action_url": action_url, "examination_date": exam_day,
+                "action": "checkup_reoffer" if action_url else "pre_exam_paid_notice",
+                "reoffer_id": reoffer_id, "access_token": token,
+                "action_label": action_label, "action_url": action_url,
+                "examination_date": exam_day, "audience_group": audience_group,
             }
             message_cursor = conn.execute(
                 """INSERT INTO messages
                 (conversation_id,role,agent_id,content,metadata,created_at)
                 VALUES (?,'assistant','manager',?,?,?)""",
-                (conversation_id, CHECKUP_REOFFER_MESSAGE, json.dumps(metadata, ensure_ascii=False), now),
+                (conversation_id, message, json.dumps(metadata, ensure_ascii=False), now),
             )
             message_id = int(message_cursor.lastrowid)
             conn.execute("UPDATE conversations SET updated_at=? WHERE id=?", (now, conversation_id))
@@ -9290,11 +9436,9 @@ def queue_due_checkup_reoffers(examination_date: date, public_url: str) -> list[
             ).fetchall()
             payload = json.dumps({
                 "title": "Завтра медосмотр",
-                "body": CHECKUP_REOFFER_MESSAGE,
-                "kind": "checkup_reoffer",
-                "action_url": action_url,
-                "action_label": "Выбрать чек-апы",
-                "reoffer_id": reoffer_id,
+                "body": message, "kind": "pre_exam_reminder",
+                "action_url": action_url, "action_label": action_label,
+                "reoffer_id": reoffer_id, "audience_group": audience_group,
             }, ensure_ascii=False)
             messenger_count = 0
             for identity in identities:
@@ -9308,15 +9452,16 @@ def queue_due_checkup_reoffers(examination_date: date, public_url: str) -> list[
                     VALUES (?,?,?,?,?,?,'pending',0,?,?)""",
                     (
                         reoffer_id, chel_id, identity["provider"], recipient,
-                        "checkup_reoffer", payload, now, now,
+                        "pre_exam_reminder", payload, now, now,
                     ),
                 )
                 messenger_count += int(bool(cursor.rowcount))
             queued.append({
                 "id": reoffer_id, "chel_id": chel_id,
-                "active_seconds": int(candidate["active_seconds"]),
-                "duration_bucket": str(candidate["duration_bucket"]),
-                "examination_date": exam_day,
+                "active_seconds": 0, "duration_bucket": "pre_exam",
+                "examination_date": exam_day, "audience_group": audience_group,
+                "selected_count": len(snapshot.get("selected_ids", [])),
+                "recommended_count": len(snapshot.get("recommendation_ids", [])),
                 "messenger_count": messenger_count,
             })
         conn.commit()
@@ -12220,7 +12365,8 @@ USER_NOTIFICATION_ID_OFFSET = 1_000_000_000
 def user_notification_details(notification_id: int) -> dict | None:
     with connection() as conn:
         row = conn.execute(
-            """SELECT o.chel_id,o.provider,o.event_type,o.reoffer_id,r.duration_bucket,r.is_test
+            """SELECT o.chel_id,o.provider,o.event_type,o.reoffer_id,
+            r.duration_bucket,r.audience_group,r.is_test
             FROM user_notification_outbox o
             LEFT JOIN checkup_reoffers r ON r.id=o.reoffer_id WHERE o.id=?""",
             (int(notification_id),),

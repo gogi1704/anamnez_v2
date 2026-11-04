@@ -11,7 +11,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/static/dashboard.css?v=20261029-marketer-c-v22">
+  <link rel="stylesheet" href="/static/dashboard.css?v=20261104-pre-exam-reminders-v23">
 </head>
 <body>
   <main class="dashboard-shell">
@@ -307,7 +307,7 @@
             <button id="metric2MasterclassFlow" type="button" role="tab" aria-selected="false">Мастер-классы</button>
             <button id="metric2ExperimentFlow" type="button" role="tab" aria-selected="false">Маркетолог B</button>
             <button id="metric2MarketerCFlow" type="button" role="tab" aria-selected="false">Маркетолог C</button>
-            <button id="metric2ReofferFlow" type="button" role="tab" aria-selected="false">Повторное предложение</button>
+            <button id="metric2ReofferFlow" type="button" role="tab" aria-selected="false">Перед медосмотром</button>
           </div>
           <div class="analytics-filters metric2-filters">
             <label>Период<select id="metric2Period"><option value="" selected disabled>Выберите период</option><option value="today">Сегодня</option><option value="7">7 дней</option><option value="30">30 дней</option><option value="90">90 дней</option><option value="all">Всё время</option></select></label>
@@ -361,7 +361,7 @@
         </article>
         <article class="panel reoffer-diagnostics hidden" id="metric2ReofferDiagnostics">
           <div class="panel-heading">
-            <div><p class="eyebrow">Управление и проверка</p><h2>Диагностика повторного предложения</h2><p>Проверяет всю цепочку: график медосмотров, кандидатов, чат, очередь Telegram/MAX и ссылку на выбор чек-апов.</p></div>
+            <div><p class="eyebrow">Управление и проверка</p><h2>Напоминания перед медосмотром</h2><p>Проверяет всю цепочку: график медосмотров, три группы получателей, сообщения в чате и доставку в Telegram/MAX.</p></div>
             <span class="reoffer-health-badge" id="reofferHealthBadge">Не проверено</span>
           </div>
           <div class="reoffer-diagnostic-grid" id="reofferDiagnosticGrid"></div>
@@ -378,6 +378,7 @@
             <section class="reoffer-control-card reoffer-test-send">
               <div><h3>Тест конкретному пользователю</h3><p>Укажите точный chel_id или ИНН. Сообщение появится в чате и уйдёт в привязанные мессенджеры. Тест не попадает в конверсии.</p></div>
               <label>chel_id или ИНН<input id="reofferTestIdentifier" type="text" maxlength="100" placeholder="chel_… или 10/12 цифр"></label>
+              <label>Сценарий сообщения<select id="reofferTestAudienceGroup"><option value="">Определить по данным пользователя</option><option value="paid_online">Чекапы оплачены онлайн</option><option value="selected">Выбраны для оплаты на медосмотре</option><option value="unselected">Ничего не выбрано</option></select></label>
               <button class="secondary" type="button" id="reofferTestSend">Отправить тест</button>
             </section>
           </div>
@@ -910,6 +911,6 @@
       </div>
     </section>
   </div>
-  <script src="/static/dashboard.js?v=20261031-standard-preview-v25" defer></script>
+  <script src="/static/dashboard.js?v=20261104-pre-exam-reminders-v26" defer></script>
 </body>
 </html>

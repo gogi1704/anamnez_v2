@@ -133,7 +133,7 @@ function analyticsAttribution() {
     source: state.checkupReoffer?.test
       ? 'diagnostic'
       : state.checkupReoffer?.active
-      ? 'checkup_reoffer'
+      ? 'pre_exam_reminder'
       : isMasterclassEntryUrl()
       ? 'masterclass'
       : isResultEntryUrl()
@@ -143,6 +143,7 @@ function analyticsAttribution() {
     medium: params.get('utm_medium') || '',
     app_mode: isInstalledApp() ? 'standalone' : 'browser',
     page_version: '20260805',
+    audience_group: state.checkupReoffer?.audienceGroup || '',
   };
 }
 
@@ -1536,6 +1537,7 @@ async function openCheckupReoffer(token, {render = true} = {}) {
   state.checkupReoffer = {
     active:true, test:Boolean(result.test), id:Number(result.reoffer_id || 0),
     token:String(result.token || token),
+    audienceGroup:String(result.audience_group || 'unselected'),
   };
   const reofferUrl = new URL(location.href);
   reofferUrl.searchParams.set('checkup_reoffer', state.checkupReoffer.token);
@@ -1546,13 +1548,19 @@ async function openCheckupReoffer(token, {render = true} = {}) {
   state.profile = result.onboarding.profile;
   seedOnboardingAnswers(state.profile);
   state.selectedTests = new Set(result.onboarding.selected_tests || []);
-  trackOnboardingScreen('reoffer_message');
+  const messageScreen = state.checkupReoffer.audienceGroup === 'selected'
+    ? 'pre_exam_selected_message'
+    : 'pre_exam_unselected_message';
+  trackOnboardingScreen(messageScreen);
   if (!render) return;
   $('#welcomeScreen').classList.add('hidden');
   $('#authGate').classList.add('hidden');
   $('#appShell').classList.add('hidden');
   $('#onboarding').classList.remove('hidden');
-  renderExamSelection();
+  if (state.checkupReoffer.audienceGroup === 'selected') {
+    state.paymentReviewSource = 'pre_exam_reminder';
+    renderPayment();
+  } else renderExamSelection();
 }
 
 function clearCheckupReoffer() {

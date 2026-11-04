@@ -1248,6 +1248,7 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                 payload = self._read_json(max_bytes=4_000)
                 result = db.queue_test_checkup_reoffer(
                     payload.get("identifier", ""), settings.public_base_url,
+                    payload.get("audience_group", ""),
                 )
                 return self._json(202, result)
             except (ValueError, TypeError, json.JSONDecodeError, UnicodeDecodeError) as exc:
@@ -1362,14 +1363,22 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                     )
                     if (acknowledged and payload["success"] and notification
                             and not notification.get("is_test")):
+                        audience_group = str(
+                            notification.get("audience_group") or db.PRE_EXAM_GROUP_UNSELECTED
+                        )
+                        screen = {
+                            db.PRE_EXAM_GROUP_PAID: "pre_exam_paid_message",
+                            db.PRE_EXAM_GROUP_SELECTED: "pre_exam_selected_message",
+                            db.PRE_EXAM_GROUP_UNSELECTED: "pre_exam_unselected_message",
+                        }.get(audience_group, "pre_exam_unselected_message")
                         analytics.record_server_event(
-                            notification["chel_id"], "checkup_reoffer_messenger_delivered",
+                            notification["chel_id"], "pre_exam_reminder_messenger_delivered",
                             {
-                                "screen": "reoffer_message", "context": "reoffer",
-                                "source": "checkup_reoffer",
+                                "screen": screen, "context": "reoffer",
+                                "source": "pre_exam_reminder",
                                 "provider": notification.get("provider", ""),
                                 "reoffer_id": notification.get("reoffer_id", 0),
-                                "duration_bucket": notification.get("duration_bucket", ""),
+                                "audience_group": audience_group,
                             },
                             session_id=f"reoffer-{notification.get('reoffer_id', 0)}",
                         )
@@ -2071,18 +2080,30 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                     self._user_session_to_set = login["session"]
                     self._identity_cookie_required = False
                 if result.get("first_click") and not result.get("is_test"):
+                    audience_group = str(
+                        result.get("audience_group") or db.PRE_EXAM_GROUP_UNSELECTED
+                    )
+                    screen = {
+                        db.PRE_EXAM_GROUP_SELECTED: "pre_exam_selected_message",
+                        db.PRE_EXAM_GROUP_UNSELECTED: "pre_exam_unselected_message",
+                    }.get(audience_group, "pre_exam_unselected_message")
+                    action = (
+                        "pay_online" if audience_group == db.PRE_EXAM_GROUP_SELECTED
+                        else "choose_checkups"
+                    )
                     properties = {
-                        "screen": "reoffer_message", "action": "open_checkups",
-                        "context": "reoffer", "source": "checkup_reoffer",
+                        "screen": screen, "action": action,
+                        "context": "reoffer", "source": "pre_exam_reminder",
                         "reoffer_id": result.get("id", 0),
-                        "duration_bucket": result.get("duration_bucket", ""),
+                        "audience_group": audience_group,
                     }
-                    self._track_analytics("checkup_reoffer_clicked", properties)
+                    self._track_analytics("pre_exam_reminder_clicked", properties)
                     self._track_analytics("onboarding_screen_action", properties)
                 return self._json(200, {
                     "status": "ok", "reoffer_id": result.get("id", 0),
                     "token": result.get("access_token", ""),
                     "test": bool(result.get("is_test")),
+                    "audience_group": str(result.get("audience_group") or "unselected"),
                     "onboarding": public_onboarding(
                         db.get_onboarding(), db.get_profile(), db.list_examinations(),
                         db.list_body_symptoms(status="active", limit=20),

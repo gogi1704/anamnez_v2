@@ -17,9 +17,25 @@ class CheckupReofferTests(unittest.TestCase):
         object.__setattr__(settings, "analytics_database_path", Path(self.temp_dir.name) / "analytics.db")
         db.init_db()
         analytics.init_db()
-        db.set_current_chel_id("chel_reoffer_test")
-        db.ensure_user("chel_reoffer_test", pending=False)
+        db.set_current_chel_id("chel_reoffer_primary")
+        db.ensure_user("chel_reoffer_primary", pending=False)
         db.save_profile({"company_inn": "1234567890"})
+
+    def schedule(self, offset=1):
+        examination_day = date.today() + timedelta(days=offset)
+        db.replace_enterprise_examination_schedule([{
+            "source_sheet_id": "1", "source_row_id": str(offset),
+            "inn": "1234567890", "organization_name": "Завод",
+            "examination_date": examination_day.isoformat(), "brigade": "Бригада 1",
+        }], ["1"])
+        return examination_day
+
+    def latest_message(self):
+        with db.connection() as conn:
+            row = conn.execute(
+                "SELECT content,metadata FROM messages ORDER BY id DESC LIMIT 1"
+            ).fetchone()
+        return str(row["content"]), json.loads(row["metadata"])
 
     def tearDown(self):
         object.__setattr__(settings, "database_path", self.original_database)
@@ -29,12 +45,7 @@ class CheckupReofferTests(unittest.TestCase):
     def test_dwell_bucket_and_due_delivery_are_idempotent(self):
         candidate = db.save_checkup_reoffer_dwell("journey-12345678", 67)
         self.assertEqual(candidate["duration_bucket"], "30_to_120")
-        tomorrow = date.today() + timedelta(days=1)
-        db.replace_enterprise_examination_schedule([{
-            "source_sheet_id": "1", "source_row_id": "1", "inn": "1234567890",
-            "organization_name": "Завод", "examination_date": tomorrow.isoformat(),
-            "brigade": "Бригада 1",
-        }], ["1"])
+        tomorrow = self.schedule()
         with db.connection() as conn:
             conn.execute(
                 """INSERT INTO external_identities
@@ -48,32 +59,87 @@ class CheckupReofferTests(unittest.TestCase):
         self.assertEqual(db.queue_due_checkup_reoffers(tomorrow, "https://example.test"), [])
         notifications = db.claim_user_notifications("telegram")
         self.assertEqual(len(notifications), 1)
-        self.assertEqual(notifications[0]["event_type"], "checkup_reoffer")
+        self.assertEqual(notifications[0]["event_type"], "pre_exam_reminder")
+        self.assertEqual(notifications[0]["payload"]["audience_group"], "unselected")
         self.assertIn("checkup_reoffer=", notifications[0]["payload"]["action_url"])
 
-    def test_completed_selection_is_excluded(self):
-        db.save_checkup_reoffer_dwell("journey-12345678", 130)
-        tomorrow = date.today() + timedelta(days=1)
-        db.replace_enterprise_examination_schedule([{
-            "source_sheet_id": "1", "source_row_id": "1", "inn": "1234567890",
-            "organization_name": "Завод", "examination_date": tomorrow.isoformat(),
-            "brigade": "Бригада 1",
-        }], ["1"])
+    def test_selected_for_payment_at_exam_gets_discount_message(self):
+        tomorrow = self.schedule()
         db.save_onboarding(
             status="complete", selected_tests=["protein"], payment_status="pay_at_exam",
         )
-        self.assertEqual(db.queue_due_checkup_reoffers(tomorrow, "https://example.test"), [])
+        queued = db.queue_due_checkup_reoffers(tomorrow, "https://example.test")
+        self.assertEqual(queued[0]["audience_group"], "selected")
+        content, metadata = self.latest_message()
+        self.assertIn("Ранее вы выбрали", content)
+        self.assertIn("скидка 10%", content)
+        self.assertIn("Баланс белка", content)
+        self.assertEqual(metadata["action_label"], "💳 Оплатить онлайн со скидкой")
+        opened = db.open_checkup_reoffer(metadata["access_token"])
+        self.assertEqual(opened["audience_group"], "selected")
 
-    def test_short_visit_is_recorded_but_not_sent(self):
+    def test_short_or_missing_visit_does_not_exclude_user(self):
         candidate = db.save_checkup_reoffer_dwell("journey-12345678", 12)
         self.assertEqual(candidate["duration_bucket"], "under_30")
-        tomorrow = date.today() + timedelta(days=1)
-        db.replace_enterprise_examination_schedule([{
-            "source_sheet_id": "1", "source_row_id": "1", "inn": "1234567890",
-            "organization_name": "Завод", "examination_date": tomorrow.isoformat(),
-            "brigade": "Бригада 1",
-        }], ["1"])
-        self.assertEqual(db.queue_due_checkup_reoffers(tomorrow, "https://example.test"), [])
+        tomorrow = self.schedule()
+        queued = db.queue_due_checkup_reoffers(tomorrow, "https://example.test")
+        self.assertEqual(len(queued), 1)
+        self.assertEqual(queued[0]["audience_group"], "unselected")
+
+    def test_paid_online_gets_receipt_without_action_button(self):
+        tomorrow = self.schedule()
+        db.save_onboarding(
+            status="payment", selected_tests=["lipids"], payment_status="pending",
+        )
+        order = db.create_payment_order()
+        amount = db.payment_order_private(order["id"])["amount_kopecks"]
+        payment = {
+            "id": "provider-real-payment", "status": "succeeded", "paid": True,
+            "test": False, "amount": {"value": f"{amount / 100:.2f}", "currency": "RUB"},
+            "metadata": {"order_id": order["id"]},
+        }
+        db.attach_yookassa_payment(order["id"], {
+            **payment, "status": "pending", "paid": False,
+            "confirmation": {"confirmation_url": "https://yoomoney.ru/pay/real"},
+        })
+        db.apply_yookassa_status(order["id"], payment)
+        queued = db.queue_due_checkup_reoffers(tomorrow, "https://example.test")
+        self.assertEqual(queued[0]["audience_group"], "paid_online")
+        content, metadata = self.latest_message()
+        self.assertIn("уже оплачены онлайн", content)
+        self.assertIn("Здоровье сердца и сосудов", content)
+        self.assertIn("Статус: оплачено полностью", content)
+        self.assertEqual(metadata["action_url"], "")
+        self.assertEqual(metadata["action_label"], "")
+
+    def test_test_payment_is_not_treated_as_real_paid_order(self):
+        tomorrow = self.schedule()
+        db.save_onboarding(
+            status="payment", selected_tests=["lipids"], payment_status="pending",
+        )
+        order = db.create_payment_order()
+        amount = db.payment_order_private(order["id"])["amount_kopecks"]
+        pending = {
+            "id": "provider-test-payment", "status": "pending", "paid": False,
+            "test": True, "amount": {"value": f"{amount / 100:.2f}", "currency": "RUB"},
+            "metadata": {"order_id": order["id"]},
+            "confirmation": {"confirmation_url": "https://yoomoney.ru/pay/test"},
+        }
+        db.attach_yookassa_payment(order["id"], pending)
+        db.apply_yookassa_status(order["id"], {**pending, "status": "succeeded", "paid": True})
+        queued = db.queue_due_checkup_reoffers(tomorrow, "https://example.test")
+        self.assertEqual(queued[0]["audience_group"], "selected")
+
+    def test_unselected_gets_up_to_two_questionnaire_recommendations(self):
+        tomorrow = self.schedule()
+        db.save_profile({"company_inn": "1234567890", "fatigue": "yes", "hair_loss": "yes"})
+        queued = db.queue_due_checkup_reoffers(tomorrow, "https://example.test")
+        self.assertEqual(queued[0]["audience_group"], "unselected")
+        self.assertLessEqual(queued[0]["recommended_count"], 2)
+        content, metadata = self.latest_message()
+        self.assertIn("Завтра у вас медицинский осмотр", content)
+        self.assertIn("По вашим ответам", content)
+        self.assertEqual(metadata["action_label"], "🩺 Выбрать чек-апы")
 
     def test_marketer_variant_is_not_recorded_for_reoffer(self):
         settings_payload = db.admin_experiment_settings()
@@ -86,35 +152,41 @@ class CheckupReofferTests(unittest.TestCase):
         self.assertEqual(count, 0)
 
     def test_metric2_reoffer_flow_starts_at_message(self):
-        analytics.record_server_event(
-            db.current_chel_id(), "onboarding_screen_viewed",
-            {"screen": "reoffer_message", "context": "reoffer", "source": "checkup_reoffer"},
-            session_id="reoffer-test-session",
-        )
-        analytics.record_server_event(
-            db.current_chel_id(), "onboarding_screen_action",
-            {
-                "screen": "reoffer_message", "action": "open_checkups",
-                "context": "reoffer", "source": "checkup_reoffer",
-            },
-            session_id="reoffer-test-session",
-        )
-        analytics.record_server_event(
-            db.current_chel_id(), "onboarding_screen_viewed",
-            {
-                "screen": "exam_selection", "previous_screen": "reoffer_message",
-                "context": "reoffer", "source": "checkup_reoffer",
-            },
-            session_id="reoffer-test-session",
-        )
+        base = {"context": "reoffer", "source": "pre_exam_reminder"}
+        recorded = analytics.record_events(db.current_chel_id(), [
+            {"event_id": "pre-exam-sent-0001", "session_id": "reoffer-session",
+             "event_name": "pre_exam_reminder_sent", "properties": {
+                 **base, "screen": "pre_exam_unselected_message", "audience_group": "unselected",
+             }},
+            {"event_id": "pre-exam-root-0001", "session_id": "reoffer-session",
+             "event_name": "onboarding_screen_viewed", "properties": {
+                 **base, "screen": "pre_exam_unselected_message",
+                 "audience_group": "unselected",
+             }},
+            {"event_id": "pre-exam-click-0001", "session_id": "reoffer-session",
+             "event_name": "pre_exam_reminder_clicked", "properties": {
+                 **base, "screen": "pre_exam_unselected_message", "action": "choose_checkups",
+                 "audience_group": "unselected",
+             }},
+            {"event_id": "pre-exam-screen-0001", "session_id": "reoffer-session",
+             "event_name": "onboarding_screen_viewed", "properties": {
+                 **base, "screen": "exam_selection",
+                 "previous_screen": "pre_exam_unselected_message",
+             }},
+        ], is_server=True)
+        self.assertEqual(recorded["accepted"], 4)
+        analytics.refresh_reports()
         report = analytics.metric2_report("all", flow="reoffer")
         self.assertEqual(report["flow"], "reoffer")
         self.assertEqual(report["summary"]["start_users"], 1)
         screens = {item["id"]: item for item in report["screens"]}
-        self.assertEqual(screens["reoffer_message"]["users"], 1)
+        self.assertEqual(screens["pre_exam_unselected_message"]["users"], 1)
         self.assertEqual(screens["exam_selection"]["users"], 1)
-        action_ids = {item["id"] for item in screens["reoffer_message"]["actions"]}
-        self.assertEqual(action_ids, {"open_checkups"})
+        action_ids = {item["id"] for item in screens["pre_exam_unselected_message"]["actions"]}
+        self.assertEqual(action_ids, {"choose_checkups"})
+        groups = {item["id"]: item for item in report["summary"]["reoffer"]["audience_groups"]}
+        self.assertEqual(groups["unselected"]["sent_users"], 1)
+        self.assertEqual(groups["unselected"]["clicked_users"], 1)
 
     def test_admin_can_disable_scheduler_without_restart(self):
         updated = db.admin_update_checkup_reoffer_settings(False)
@@ -196,22 +268,18 @@ class CheckupReofferTests(unittest.TestCase):
             ).fetchone()[0]
         self.assertEqual(status, "failed")
 
-    def test_diagnostics_show_tomorrows_planned_sends_after_exclusions(self):
-        db.save_checkup_reoffer_dwell("journey-12345678", 75)
-        examination_day = date.today() + timedelta(days=2)
-        db.replace_enterprise_examination_schedule([{
-            "source_sheet_id": "1", "source_row_id": "planned", "inn": "1234567890",
-            "organization_name": "Завод", "examination_date": examination_day.isoformat(),
-            "brigade": "Бригада 1",
-        }], ["1"])
+    def test_diagnostics_show_all_three_planned_groups(self):
+        examination_day = self.schedule(offset=2)
         diagnostics = db.admin_checkup_reoffer_diagnostics()
         self.assertEqual(diagnostics["day_after_tomorrow"], examination_day.isoformat())
         self.assertEqual(diagnostics["scheduled_tomorrow"], 1)
+        self.assertEqual(diagnostics["scheduled_audience_groups"]["unselected"], 1)
         db.save_onboarding(
             status="complete", selected_tests=["protein"], payment_status="pay_at_exam",
         )
         diagnostics = db.admin_checkup_reoffer_diagnostics()
-        self.assertEqual(diagnostics["scheduled_tomorrow"], 0)
+        self.assertEqual(diagnostics["scheduled_tomorrow"], 1)
+        self.assertEqual(diagnostics["scheduled_audience_groups"]["selected"], 1)
 
 
 if __name__ == "__main__":
