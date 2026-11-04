@@ -1544,6 +1544,7 @@ async function openCheckupReoffer(token, {render = true} = {}) {
   history.replaceState({}, '', reofferUrl);
   state.resultFlowActive = false;
   state.returnToChatAfterExaminations = false;
+  state.paymentReviewSource = 'pre_exam_reminder';
   state.onboarding = result.onboarding;
   state.profile = result.onboarding.profile;
   seedOnboardingAnswers(state.profile);
@@ -1558,7 +1559,6 @@ async function openCheckupReoffer(token, {render = true} = {}) {
   $('#appShell').classList.add('hidden');
   $('#onboarding').classList.remove('hidden');
   if (state.checkupReoffer.audienceGroup === 'selected') {
-    state.paymentReviewSource = 'pre_exam_reminder';
     renderPayment();
   } else renderExamSelection();
 }
@@ -1569,6 +1569,23 @@ function clearCheckupReoffer() {
   const url = new URL(location.href);
   url.searchParams.delete('checkup_reoffer');
   history.replaceState({}, '', url);
+}
+
+function preExamReminderActive() {
+  return Boolean(
+    state.checkupReoffer?.active
+    || state.paymentReviewSource === 'pre_exam_reminder'
+  );
+}
+
+async function closePreExamReminder() {
+  trackOnboardingAction('close', currentOnboardingAnalyticsScreen || 'pre_exam_reminder');
+  clearCheckupReoffer();
+  state.paymentReviewSource = '';
+  state.paymentReviewOrderId = '';
+  state.paymentReceiptEmail = '';
+  state.returnToChatAfterExaminations = false;
+  await openMainApp({skipIntro:true, allowIncompleteOnboarding:true});
 }
 
 function showAuthGate() {
@@ -2761,6 +2778,7 @@ function renderExamSelection(scrollPosition = null) {
   const totals = selectedOfferTotals();
   const copy = state.onboarding.examination_recommendation_copy || {};
   const questionnaireSkipped = Boolean(state.onboarding.questionnaire_skipped);
+  const reminderSelection = preExamReminderActive();
   const repeatedSelection = Boolean(state.returnToChatAfterExaminations);
   const selectionHeader = repeatedSelection
     ? `<span class="onboarding-kicker">Ваши обследования</span><h1>Выберите чекапы</h1><p class="onboarding-lead">Проверьте выбор и при необходимости измените его. Рекомендованные варианты уже отмечены.</p>`
@@ -2771,7 +2789,9 @@ function renderExamSelection(scrollPosition = null) {
   const selectionBenefits = repeatedSelection ? '' : questionnaireSkipped
     ? `<div class="exam-selection-benefits"><div class="exam-blood-note"><span aria-hidden="true">＋</span><p>Состав и стоимость указаны в каждой карточке. Вы можете выбрать один или несколько подходящих вариантов.</p></div>${resultsBenefit}</div>`
     : `<div class="exam-selection-benefits"><div class="exam-blood-note"><span aria-hidden="true">🩸</span><p>Во время медосмотра у вас в любом случае возьмут кровь на общий анализ — за счёт работодателя. Дополнительные чек-апы делаются из той же пробы, без нового укола.</p></div>${resultsBenefit}</div>`;
-  const selectionActions = repeatedSelection
+  const selectionActions = reminderSelection
+    ? `<div class="onboarding-actions"><button type="button" class="onboarding-back" data-onboarding-action="close-pre-exam-reminder">Закрыть</button><button type="button" class="onboarding-next" data-onboarding-action="continue-payment" ${state.selectedTests.size ? '' : 'disabled'}>Далее</button></div>`
+    : repeatedSelection
     ? `<div class="onboarding-actions"><button type="button" class="onboarding-next" data-onboarding-action="continue-payment" ${state.selectedTests.size ? '' : 'disabled'}>Далее</button></div><button type="button" class="exam-skip" data-onboarding-action="close-current-exams">Закрыть</button>`
     : `<div class="onboarding-actions"><button type="button" class="onboarding-back" data-onboarding-action="exam-offer">Назад</button><button type="button" class="onboarding-next" data-onboarding-action="continue-payment" ${state.selectedTests.size ? '' : 'disabled'}>Далее</button></div><button type="button" class="exam-skip" data-onboarding-action="review-exam-skip">Ничего не выбирать</button>`;
   const totalMarkup = `<div class="exam-total exam-total-online"><span>Выбрано: ${state.selectedTests.size}</span><span class="exam-total-prices"><span><s>${totals.full.toLocaleString('ru-RU')} ₽</s><strong>${totals.online.toLocaleString('ru-RU')} ₽</strong></span><small>При оплате онлайн · скидка 10 %</small></span></div>`;
@@ -2914,7 +2934,9 @@ function renderPayment() {
   const nameField = `<label class="payment-email-label">ФИО <span>только при оплате онлайн — нужно, чтобы идентифицировать вас на предприятии</span><input id="paymentCustomerName" type="text" autocomplete="name" maxlength="100" placeholder="Иванов Иван Иванович" value="${escapeAttr(customerName)}"></label>`;
   const emailField = state.publicConfig.online_payments_enabled && state.publicConfig.payment_receipt_email_required
     ? `<label class="payment-email-label">Электронная почта для онлайн-чека <span>только при оплате онлайн</span><input id="paymentReceiptEmail" type="email" autocomplete="email" maxlength="254" placeholder="name@example.ru" required value="${escapeAttr(state.paymentReceiptEmail)}"></label>` : '';
-  const exitAction = state.paymentReviewSource === 'purchases'
+  const exitAction = state.paymentReviewSource === 'pre_exam_reminder'
+    ? '<button type="button" class="payment-back-button" data-onboarding-action="close-pre-exam-reminder">Закрыть</button>'
+    : state.paymentReviewSource === 'purchases'
     ? '<button type="button" class="payment-back-button" data-onboarding-action="close-payment-review">Закрыть</button>'
     : '<button type="button" class="payment-back-button" data-onboarding-action="back-to-exams">← Вернуться к обследованиям</button>';
   const onlineLabel = `Оплатить онлайн · ${onlineTotal.toLocaleString('ru')} ₽`;
@@ -2938,12 +2960,23 @@ function paymentCustomerName() {
 }
 
 function setPaymentActionsBusy(busy, activeLabel = '') {
-  const controls = [...document.querySelectorAll('#onboardingContent [data-onboarding-action="pay-online"], #onboardingContent [data-onboarding-action="pay-at-exam"], #onboardingContent [data-onboarding-action="back-to-exams"], #onboardingContent [data-onboarding-action="close-payment-review"]')];
+  const controls = [...document.querySelectorAll('#onboardingContent [data-onboarding-action="pay-online"], #onboardingContent [data-onboarding-action="pay-at-exam"], #onboardingContent [data-onboarding-action="back-to-exams"], #onboardingContent [data-onboarding-action="close-payment-review"], #onboardingContent [data-onboarding-action="close-pre-exam-reminder"]')];
   controls.forEach(control => { control.disabled = Boolean(busy); });
   const online = $('#onboardingContent [data-onboarding-action="pay-online"]');
   const atExam = $('#onboardingContent [data-onboarding-action="pay-at-exam"]');
   if (online) online.textContent = busy && activeLabel === 'online' ? 'Открываем оплату…' : (online.dataset.idleLabel || online.textContent);
   if (atExam) atExam.textContent = busy && activeLabel === 'at_exam' ? 'Сохраняем…' : (atExam.dataset.idleLabel || atExam.textContent);
+}
+
+async function persistPreExamReminderSelection() {
+  if (!preExamReminderActive()) return;
+  const selectedTests = [...state.selectedTests];
+  if (!selectedTests.length) throw new Error('Выберите хотя бы один чек-ап');
+  state.onboarding = await api('/api/onboarding/exams', {
+    method:'POST', body:JSON.stringify({selected_tests:selectedTests}),
+  });
+  state.profile = state.onboarding.profile;
+  state.selectedTests = new Set(state.onboarding.selected_tests || []);
 }
 
 async function startOnlinePayment() {
@@ -2963,6 +2996,7 @@ async function startOnlinePayment() {
   trackEvent('funnel_action', {stage:'examinations_options',action:'pay_online'});
   setPaymentActionsBusy(true, 'online');
   try {
+    await persistPreExamReminderSelection();
     const result = await api('/api/payments/yookassa/create', {
       method:'POST', body:JSON.stringify({
         receipt_email:receiptEmail,
@@ -3174,7 +3208,9 @@ async function leavePaymentResult() {
   buttons.forEach(button => { button.disabled = true; });
   try {
     trackOnboardingAction('back', 'payment_result');
-    if (source === 'psychology_session') {
+    if (source === 'pre_exam_reminder') {
+      await closePreExamReminder();
+    } else if (source === 'psychology_session') {
       await openMainApp({skipIntro:true, allowIncompleteOnboarding:true});
       if (state.paymentReviewConversationId) await openConversation(state.paymentReviewConversationId);
       state.paymentReviewSource = '';
@@ -3518,6 +3554,7 @@ async function confirmPaymentAtExam() {
   trackEvent('funnel_action', {stage:'examinations_options',action:'pay_at_exam'});
   setPaymentActionsBusy(true, 'at_exam');
   try {
+    await persistPreExamReminderSelection();
     const returnDirectlyToChat = state.returnToChatAfterExaminations;
     state.onboarding = await api('/api/onboarding/payment', { method:'POST', body:JSON.stringify({method:'at_exam'}) });
     state.profile = state.onboarding.profile;
@@ -3925,6 +3962,7 @@ $('#onboardingContent').addEventListener('click', async event => {
   else if (action === 'confirm-skip-exams') { trackOnboardingAction('refuse', 'exam_objection'); trackEvent('funnel_action', {stage:'examinations_offer',action:'refuse'}); trackEvent('examinations_skipped', { screen:'examinations_skip' }); sendOfferGoal('retain_decline'); submitExamSelection(true); }
   else if (action === 'continue-payment') { submitExamSelection(false); }
   else if (action === 'back-to-exams') { trackOnboardingAction('back', 'payment'); renderExamSelection(); }
+  else if (action === 'close-pre-exam-reminder') await closePreExamReminder();
   else if (action === 'close-payment-review') {
     trackOnboardingAction('close', 'payment');
     const orderId = state.paymentReviewOrderId;

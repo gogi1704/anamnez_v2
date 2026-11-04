@@ -250,6 +250,22 @@ class WeightControlLLM(FakeLLM):
 
 
 class OrchestratorTests(unittest.TestCase):
+    def test_pre_exam_reminder_is_isolated_from_questionnaire_and_persists_payment_selection(self):
+        project_dir = Path(__file__).resolve().parents[1]
+        script = (project_dir / "static" / "app.js").read_text(encoding="utf-8")
+
+        self.assertIn("state.paymentReviewSource = 'pre_exam_reminder';", script)
+        self.assertIn('data-onboarding-action="close-pre-exam-reminder">Закрыть', script)
+        self.assertIn("async function closePreExamReminder()", script)
+        self.assertIn("openMainApp({skipIntro:true, allowIncompleteOnboarding:true})", script)
+        self.assertIn("async function persistPreExamReminderSelection()", script)
+        self.assertIn("await persistPreExamReminderSelection();", script)
+        reminder_actions = script.split("const selectionActions = reminderSelection", 1)[1].split(
+            ": repeatedSelection", 1,
+        )[0]
+        self.assertNotIn('data-onboarding-action="exam-offer"', reminder_actions)
+        self.assertNotIn('data-onboarding-action="review-exam-skip"', reminder_actions)
+
     @classmethod
     def setUpClass(cls):
         db.init_db()
@@ -4586,14 +4602,14 @@ class OrchestratorTests(unittest.TestCase):
         self.assertIn("controllerchange", script)
         self.assertIn("url.pathname.startsWith('/api/')", worker)
         self.assertIn("url.pathname.startsWith('/auth/')", worker)
-        self.assertIn("consilium-shell-v214", worker)
+        self.assertIn("consilium-shell-v215", worker)
         self.assertIn("fetch(request)", worker)
-        self.assertIn("/static/styles.css?v=20261104-pre-exam-reminders-v54", index)
+        self.assertIn("/static/styles.css?v=20261104-pre-exam-reminder-isolation-v55", index)
         self.assertIn("/static/rich-text.2bf1f5fab764.css", index)
         self.assertTrue((project_root / "static" / "styles.07ffaefb4795.css").is_file())
         self.assertTrue((project_root / "static" / "rich-text.2bf1f5fab764.css").is_file())
-        self.assertIn("/static/app.js?v=20261104-pre-exam-reminders-v54", index)
-        self.assertIn("/static/metrika.js?v=20261104-pre-exam-reminders-v54", index)
+        self.assertIn("/static/app.js?v=20261104-pre-exam-reminder-isolation-v55", index)
+        self.assertIn("/static/metrika.js?v=20261104-pre-exam-reminder-isolation-v55", index)
         self.assertIn("function safeUrl(value)", script)
         self.assertIn("error.code === 'http_404'", script)
         self.assertIn("fallback && fallback.id !== id", script)
@@ -4688,7 +4704,7 @@ class OrchestratorTests(unittest.TestCase):
         main = (project_root / "backend" / "main.py").read_text(encoding="utf-8")
         config = (project_root / "backend" / "config.py").read_text(encoding="utf-8")
 
-        self.assertIn('src="/static/metrika.js?v=20261104-pre-exam-reminders-v54"', index)
+        self.assertIn('src="/static/metrika.js?v=20261104-pre-exam-reminder-isolation-v55"', index)
         self.assertIn('YANDEX_METRIKA_COUNTER_ID', config)
         self.assertIn('path == "/api/public-config"', main)
         self.assertIn('"metrika.js"', main)
