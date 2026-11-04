@@ -7912,6 +7912,7 @@ function feedPostMarkup(post) {
 async function loadFeed() {
   if (feedPreviewMode()) return;
   const list = $('#feedList');
+  stopFeedVideos({release:true});
   $('#feedPreviewNote').classList.add('hidden');
   list.innerHTML = '<p class="feed-loading">Загружаем публикации…</p>';
   try {
@@ -7937,7 +7938,21 @@ function openFeed() {
   void loadFeed();
 }
 
-function closeFeed() { $('#feedModal').classList.add('hidden'); }
+function stopFeedVideos({except = null, release = false} = {}) {
+  $('#feedModal').querySelectorAll('video').forEach(video => {
+    if (video === except) return;
+    video.pause();
+    if (!release) return;
+    video.removeAttribute('src');
+    video.querySelectorAll('source').forEach(source => source.removeAttribute('src'));
+    video.load();
+  });
+}
+
+function closeFeed() {
+  stopFeedVideos({release:true});
+  $('#feedModal').classList.add('hidden');
+}
 
 function showFeedDemoStatus(message) {
   const status = $('#feedDemoStatus');
@@ -8076,6 +8091,14 @@ $('#fontSizeOptions').addEventListener('click', event => { const option=event.ta
 $('#menuProfileButton').addEventListener('click', openProfile);
 $('#menuFeedButton').addEventListener('click', openFeed);
 $('#feedClose').addEventListener('click', closeFeed);
+$('#feedModal').addEventListener('play', event => {
+  const video = event.target.closest('video');
+  if (!video) return;
+  stopFeedVideos({except:video});
+  trackEvent('feed_video_started', {
+    post_id:video.closest('.feed-post')?.dataset.feedPost || '', mode:'live',
+  });
+}, true);
 $('#feedModal').addEventListener('click', event => {
   if (event.target.id === 'feedModal') closeFeed();
   if (event.target.closest('[data-feed-demo-video]')) {

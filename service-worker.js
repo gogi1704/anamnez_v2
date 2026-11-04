@@ -1,5 +1,5 @@
-const CACHE_NAME = 'consilium-shell-v215';
-const ASSET_VERSION = '20261104-pre-exam-reminder-isolation-v55';
+const CACHE_NAME = 'consilium-shell-v216';
+const ASSET_VERSION = '20261104-feed-video-control-v56';
 const APP_SHELL = [
   '/',
   '/manifest.webmanifest',
