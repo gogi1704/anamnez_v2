@@ -8674,6 +8674,7 @@ async function init() {
     const pendingResultFlow = readResultFlow();
     const funnelPreviewRequested = ['marketer','control'].includes(previewFunnel);
     const feedPreviewRequested = previewParams.get('preview_feed') === '1';
+    const splitterMedicalExamEntry = Boolean(currentSplitterTracking());
     if (messengerLoginCompleted) {
       entryParams.delete('auth');
       const cleanQuery = entryParams.toString();
@@ -8708,6 +8709,19 @@ async function init() {
     }
     if (entryParams.get('checkup_reoffer') && !messengerLoginRequired) {
       await enterKnownUser();
+      return;
+    }
+    // The public splitter is the entry point for the medical-exam funnel.
+    // Persist that route for a genuinely new visitor instead of showing the
+    // generic direction chooser. Established users keep their existing route.
+    if (
+      identity.entry_route_choice_required
+      && splitterMedicalExamEntry
+      && !messengerLoginRequired
+      && !entryParams.get('payment_return')
+      && !requestedConversation
+    ) {
+      await selectEntryDirection('medical_exam');
       return;
     }
     if (

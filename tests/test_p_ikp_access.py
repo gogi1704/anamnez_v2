@@ -122,6 +122,12 @@ class IkpAccessTests(unittest.TestCase):
         self.assertIn("state.identity?.chel_id || 'anonymous'", script)
         self.assertIn("$('#entryDirectionScreen').classList.add('hidden');", script)
         self.assertIn("showEntryDirection();\n    $('#entryDirectionError').textContent", script)
+        self.assertIn("const splitterMedicalExamEntry = Boolean(currentSplitterTracking())", script)
+        self.assertIn("await selectEntryDirection('medical_exam')", script)
+        self.assertLess(
+            script.index("&& splitterMedicalExamEntry"),
+            script.index("showEntryDirection();\n      return;", script.index("&& splitterMedicalExamEntry")),
+        )
         self.assertIn('.entry-direction-options', styles)
         self.assertIn('if path == "/api/entry-route":', main)
 

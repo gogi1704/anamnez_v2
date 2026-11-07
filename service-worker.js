@@ -1,5 +1,5 @@
-const CACHE_NAME = 'consilium-shell-v216';
-const ASSET_VERSION = '20261104-feed-video-control-v56';
+const CACHE_NAME = 'consilium-shell-v217';
+const ASSET_VERSION = '20261107-splitter-medical-route-v57';
 const APP_SHELL = [
   '/',
   '/manifest.webmanifest',
