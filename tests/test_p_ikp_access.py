@@ -122,7 +122,9 @@ class IkpAccessTests(unittest.TestCase):
         self.assertIn("state.identity?.chel_id || 'anonymous'", script)
         self.assertIn("$('#entryDirectionScreen').classList.add('hidden');", script)
         self.assertIn("showEntryDirection();\n    $('#entryDirectionError').textContent", script)
-        self.assertIn("const splitterMedicalExamEntry = Boolean(currentSplitterTracking())", script)
+        self.assertIn("function isMedicalExamSplitterEntry()", script)
+        self.assertIn("uuidPattern.test(visitorId) && ['a','b'].includes(variant)", script)
+        self.assertIn("const splitterMedicalExamEntry = isMedicalExamSplitterEntry()", script)
         self.assertIn("await selectEntryDirection('medical_exam')", script)
         self.assertLess(
             script.index("&& splitterMedicalExamEntry"),

@@ -155,6 +155,14 @@ function currentSplitterTracking() {
   return uuidPattern.test(attemptId) && uuidPattern.test(visitorId) ? {attemptId,visitorId} : null;
 }
 
+function isMedicalExamSplitterEntry() {
+  const params = new URLSearchParams(location.search);
+  const visitorId = params.get('splitter_id') || '';
+  const variant = params.get('splitter_variant') || '';
+  const uuidPattern = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+  return uuidPattern.test(visitorId) && ['a','b'].includes(variant);
+}
+
 function readSplitterStageQueue() {
   try {
     const queue = JSON.parse(localStorage.getItem(SPLITTER_STAGE_QUEUE_KEY) || '[]');
@@ -8674,7 +8682,7 @@ async function init() {
     const pendingResultFlow = readResultFlow();
     const funnelPreviewRequested = ['marketer','control'].includes(previewFunnel);
     const feedPreviewRequested = previewParams.get('preview_feed') === '1';
-    const splitterMedicalExamEntry = Boolean(currentSplitterTracking());
+    const splitterMedicalExamEntry = isMedicalExamSplitterEntry();
     if (messengerLoginCompleted) {
       entryParams.delete('auth');
       const cleanQuery = entryParams.toString();
