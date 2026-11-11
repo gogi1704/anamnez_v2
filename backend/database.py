@@ -7978,6 +7978,79 @@ def init_db() -> None:
                 FOREIGN KEY(chel_id) REFERENCES users(chel_id) ON DELETE CASCADE
             );
 
+            CREATE TABLE IF NOT EXISTS broadcast_campaigns (
+                id TEXT PRIMARY KEY,
+                kind TEXT NOT NULL CHECK(kind IN ('message','poll')),
+                title TEXT NOT NULL DEFAULT '',
+                body TEXT NOT NULL,
+                button_label TEXT NOT NULL DEFAULT 'Открыть Консилиум',
+                provider_scope TEXT NOT NULL DEFAULT 'all'
+                    CHECK(provider_scope IN ('all','telegram','max')),
+                app_url TEXT NOT NULL DEFAULT '',
+                status TEXT NOT NULL DEFAULT 'queued',
+                is_test INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL,
+                started_at TEXT,
+                completed_at TEXT
+            );
+
+            CREATE TABLE IF NOT EXISTS broadcast_options (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                campaign_id TEXT NOT NULL,
+                option_key TEXT NOT NULL,
+                label TEXT NOT NULL,
+                position INTEGER NOT NULL DEFAULT 0,
+                UNIQUE(campaign_id, option_key),
+                FOREIGN KEY(campaign_id) REFERENCES broadcast_campaigns(id) ON DELETE CASCADE
+            );
+
+            CREATE TABLE IF NOT EXISTS broadcast_recipients (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                campaign_id TEXT NOT NULL,
+                chel_id TEXT NOT NULL,
+                provider TEXT NOT NULL CHECK(provider IN ('telegram','max')),
+                recipient_id TEXT NOT NULL,
+                click_token TEXT NOT NULL UNIQUE,
+                status TEXT NOT NULL DEFAULT 'pending',
+                attempts INTEGER NOT NULL DEFAULT 0,
+                lease_token TEXT,
+                leased_at TEXT,
+                next_attempt_at TEXT,
+                sent_at TEXT,
+                last_error TEXT NOT NULL DEFAULT '',
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                UNIQUE(campaign_id, provider, recipient_id),
+                FOREIGN KEY(campaign_id) REFERENCES broadcast_campaigns(id) ON DELETE CASCADE,
+                FOREIGN KEY(chel_id) REFERENCES users(chel_id) ON DELETE CASCADE
+            );
+
+            CREATE TABLE IF NOT EXISTS broadcast_clicks (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                campaign_id TEXT NOT NULL,
+                chel_id TEXT NOT NULL,
+                provider TEXT NOT NULL,
+                click_count INTEGER NOT NULL DEFAULT 1,
+                first_clicked_at TEXT NOT NULL,
+                last_clicked_at TEXT NOT NULL,
+                UNIQUE(campaign_id, chel_id),
+                FOREIGN KEY(campaign_id) REFERENCES broadcast_campaigns(id) ON DELETE CASCADE,
+                FOREIGN KEY(chel_id) REFERENCES users(chel_id) ON DELETE CASCADE
+            );
+
+            CREATE TABLE IF NOT EXISTS broadcast_votes (
+                campaign_id TEXT NOT NULL,
+                chel_id TEXT NOT NULL,
+                provider TEXT NOT NULL,
+                option_id INTEGER NOT NULL,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                PRIMARY KEY(campaign_id, chel_id),
+                FOREIGN KEY(campaign_id) REFERENCES broadcast_campaigns(id) ON DELETE CASCADE,
+                FOREIGN KEY(chel_id) REFERENCES users(chel_id) ON DELETE CASCADE,
+                FOREIGN KEY(option_id) REFERENCES broadcast_options(id) ON DELETE CASCADE
+            );
+
             CREATE TABLE IF NOT EXISTS checkup_reoffer_settings (
                 id INTEGER PRIMARY KEY CHECK(id = 1),
                 enabled INTEGER NOT NULL DEFAULT 1,
@@ -8722,6 +8795,14 @@ def init_db() -> None:
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_user_notification_outbox_delivery "
             "ON user_notification_outbox(provider, status, next_attempt_at)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_broadcast_recipients_delivery "
+            "ON broadcast_recipients(provider, status, next_attempt_at)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_broadcast_recipients_campaign "
+            "ON broadcast_recipients(campaign_id, status)"
         )
         _reconcile_terminal_messenger_failures(conn)
         conn.execute(
@@ -12254,7 +12335,7 @@ def _reconcile_terminal_messenger_failures(conn) -> int:
     for table in (
         "manager_notification_outbox", "system_notification_outbox",
         "weight_control_reminder_outbox", "user_result_notification_outbox",
-        "user_notification_outbox",
+        "user_notification_outbox", "broadcast_recipients",
     ):
         columns = {
             row[1] for row in conn.execute(f"PRAGMA table_info({table})").fetchall()
@@ -12288,7 +12369,7 @@ def notification_delivery_snapshot(provider: str = "max") -> dict:
     tables = (
         "manager_notification_outbox", "system_notification_outbox",
         "weight_control_reminder_outbox", "user_result_notification_outbox",
-        "user_notification_outbox",
+        "user_notification_outbox", "broadcast_recipients",
     )
     totals = {"pending": 0, "delivering": 0, "failed": 0, "sent": 0}
     last_sent_at = ""
@@ -12441,6 +12522,368 @@ def acknowledge_user_notification(
         )
         conn.commit()
     return bool(cursor.rowcount)
+
+
+BROADCAST_NOTIFICATION_ID_OFFSET = 4_000_000_000
+BROADCAST_CALLBACK_PREFIX = "broadcast_vote:"
+BROADCAST_MAX_ATTEMPTS = 8
+
+
+def _normalize_broadcast_payload(payload: dict) -> dict:
+    kind = str(payload.get("kind") or "message").strip().lower()
+    if kind not in {"message", "poll"}:
+        raise ValueError("Выберите сообщение или голосование")
+    title = " ".join(str(payload.get("title") or "Консилиум").split())[:120]
+    body = str(payload.get("body") or "").strip()
+    if not body:
+        raise ValueError("Введите текст рассылки")
+    if len(body) > 3500:
+        raise ValueError("Текст рассылки не должен превышать 3500 символов")
+    button_label = " ".join(
+        str(payload.get("button_label") or "Открыть Консилиум").split()
+    )[:64]
+    provider_scope = str(payload.get("provider_scope") or "all").strip().lower()
+    if provider_scope not in {"all", "telegram", "max"}:
+        raise ValueError("Неизвестный канал рассылки")
+    raw_options = payload.get("options") or []
+    options = [" ".join(str(value or "").split())[:80] for value in raw_options]
+    options = [value for value in options if value]
+    if kind == "poll" and not 2 <= len(options) <= 10:
+        raise ValueError("Для голосования укажите от 2 до 10 вариантов")
+    if len(set(value.casefold() for value in options)) != len(options):
+        raise ValueError("Варианты ответа не должны повторяться")
+    return {
+        "kind": kind, "title": title or "Консилиум", "body": body,
+        "button_label": button_label or "Открыть Консилиум",
+        "provider_scope": provider_scope,
+        "options": options if kind == "poll" else [],
+    }
+
+
+def create_broadcast_campaign(
+    payload: dict, *, test_chel_id: str = "",
+) -> dict:
+    normalized = _normalize_broadcast_payload(payload)
+    test_chel_id = str(test_chel_id or "").strip()
+    campaign_id = str(uuid.uuid4())
+    now = utc_now()
+    provider_scope = normalized["provider_scope"]
+    with _write_lock, connection() as conn:
+        if test_chel_id and not conn.execute(
+            "SELECT 1 FROM users WHERE chel_id=?", (test_chel_id,),
+        ).fetchone():
+            raise ValueError("Пользователь с таким chel_id не найден")
+        provider_sql = "" if provider_scope == "all" else "AND provider=?"
+        params: list[object] = [test_chel_id] if test_chel_id else []
+        if provider_scope != "all":
+            params.append(provider_scope)
+        chel_sql = "AND chel_id=?" if test_chel_id else ""
+        identities = conn.execute(
+            f"""SELECT chel_id,provider,provider_user_id,chat_id
+                FROM external_identities
+                WHERE access_status='active' {chel_sql} {provider_sql}
+                ORDER BY chel_id,provider""",
+            params,
+        ).fetchall()
+        recipients = []
+        seen = set()
+        for identity in identities:
+            recipient_id = _external_identity_recipient(identity)
+            key = (str(identity["provider"]), recipient_id)
+            if not recipient_id or key in seen:
+                continue
+            seen.add(key)
+            recipients.append((identity, recipient_id))
+        if not recipients:
+            if test_chel_id:
+                raise ValueError("У пользователя нет активной привязки к выбранному мессенджеру")
+            raise ValueError("Нет пользователей с активной привязкой к выбранному мессенджеру")
+        title = normalized["title"]
+        if test_chel_id:
+            title = f"ТЕСТ · {title}"[:120]
+        conn.execute(
+            """INSERT INTO broadcast_campaigns
+               (id,kind,title,body,button_label,provider_scope,app_url,status,is_test,created_at)
+               VALUES (?,?,?,?,?,?,?,'queued',?,?)""",
+            (
+                campaign_id, normalized["kind"], title, normalized["body"],
+                normalized["button_label"], provider_scope,
+                str(settings.public_base_url or "").rstrip("/"),
+                int(bool(test_chel_id)), now,
+            ),
+        )
+        for position, label in enumerate(normalized["options"], 1):
+            conn.execute(
+                """INSERT INTO broadcast_options
+                   (campaign_id,option_key,label,position) VALUES (?,?,?,?)""",
+                (campaign_id, f"o{position}", label, position),
+            )
+        conn.executemany(
+            """INSERT INTO broadcast_recipients
+               (campaign_id,chel_id,provider,recipient_id,click_token,status,
+                attempts,created_at,updated_at)
+               VALUES (?,?,?,?,?,'pending',0,?,?)""",
+            [
+                (
+                    campaign_id, identity["chel_id"], identity["provider"],
+                    recipient_id, secrets.token_urlsafe(24), now, now,
+                )
+                for identity, recipient_id in recipients
+            ],
+        )
+        conn.commit()
+    return {
+        "id": campaign_id, "status": "queued", "is_test": bool(test_chel_id),
+        "recipients": len(recipients),
+        "users": len({str(item[0]["chel_id"]) for item in recipients}),
+        "providers": sorted({str(item[0]["provider"]) for item in recipients}),
+    }
+
+
+def admin_broadcast_report() -> dict:
+    with connection() as conn:
+        audience_row = conn.execute(
+            """SELECT COUNT(DISTINCT chel_id) users,
+                      COUNT(DISTINCT CASE WHEN provider='telegram' THEN chel_id END) telegram,
+                      COUNT(DISTINCT CASE WHEN provider='max' THEN chel_id END) max
+               FROM external_identities
+               WHERE access_status='active'
+                 AND ((provider='telegram' AND TRIM(provider_user_id)<>'')
+                   OR (provider='max' AND TRIM(chat_id)<>''))"""
+        ).fetchone()
+        rows = conn.execute(
+            """SELECT c.*,
+                      COUNT(DISTINCT r.chel_id) recipient_users,
+                      COUNT(r.id) recipient_deliveries,
+                      SUM(CASE WHEN r.status='sent' THEN 1 ELSE 0 END) sent,
+                      SUM(CASE WHEN r.status='failed' THEN 1 ELSE 0 END) failed,
+                      SUM(CASE WHEN r.status IN ('pending','delivering') THEN 1 ELSE 0 END) pending,
+                      COALESCE((SELECT COUNT(*) FROM broadcast_clicks x
+                                WHERE x.campaign_id=c.id),0) unique_clicks,
+                      COALESCE((SELECT SUM(click_count) FROM broadcast_clicks x
+                                WHERE x.campaign_id=c.id),0) total_clicks,
+                      COALESCE((SELECT COUNT(*) FROM broadcast_votes v
+                                WHERE v.campaign_id=c.id),0) voters
+               FROM broadcast_campaigns c
+               LEFT JOIN broadcast_recipients r ON r.campaign_id=c.id
+               WHERE c.is_test=0
+               GROUP BY c.id ORDER BY c.created_at DESC LIMIT 50"""
+        ).fetchall()
+        campaigns = []
+        for raw in rows:
+            item = dict(raw)
+            options = conn.execute(
+                """SELECT o.id,o.option_key,o.label,o.position,COUNT(v.chel_id) votes
+                   FROM broadcast_options o
+                   LEFT JOIN broadcast_votes v ON v.option_id=o.id
+                   WHERE o.campaign_id=? GROUP BY o.id ORDER BY o.position""",
+                (item["id"],),
+            ).fetchall()
+            item["options"] = [dict(option) for option in options]
+            campaigns.append(item)
+    return {
+        "audience": {
+            "users": int(audience_row["users"] or 0),
+            "telegram": int(audience_row["telegram"] or 0),
+            "max": int(audience_row["max"] or 0),
+        },
+        "campaigns": campaigns,
+    }
+
+
+def claim_broadcast_notifications(provider: str, limit: int = 5) -> list[dict]:
+    provider = _messenger_provider(provider)
+    limit = max(1, min(10, int(limit)))
+    now = datetime.now(timezone.utc)
+    stale_before = (now - timedelta(minutes=2)).isoformat()
+    result = []
+    with _write_lock, connection() as conn:
+        rows = conn.execute(
+            """SELECT r.id,r.recipient_id,r.click_token,r.attempts,
+                      c.id campaign_id,c.kind,c.title,c.body,c.button_label,c.app_url
+               FROM broadcast_recipients r
+               JOIN broadcast_campaigns c ON c.id=r.campaign_id
+               WHERE r.provider=? AND c.status IN ('queued','sending')
+                 AND r.attempts<?
+                 AND (r.next_attempt_at IS NULL OR r.next_attempt_at<=?)
+                 AND (r.status='pending' OR (r.status='delivering' AND r.leased_at<?))
+               ORDER BY c.created_at,r.id LIMIT ?""",
+            (provider, BROADCAST_MAX_ATTEMPTS, now.isoformat(), stale_before, limit),
+        ).fetchall()
+        campaign_ids = set()
+        for row in rows:
+            lease_token = secrets.token_urlsafe(18)
+            conn.execute(
+                """UPDATE broadcast_recipients
+                   SET status='delivering',lease_token=?,leased_at=?,attempts=attempts+1,
+                       updated_at=? WHERE id=?""",
+                (lease_token, now.isoformat(), now.isoformat(), row["id"]),
+            )
+            payload = {
+                "title": row["title"], "body": row["body"],
+                "kind": f"broadcast_{row['kind']}",
+                "campaign_id": row["campaign_id"],
+            }
+            if row["kind"] == "message":
+                payload.update({
+                    "action_url": (
+                        f"{str(row['app_url'] or '').rstrip('/')}/broadcast/open"
+                        f"?t={row['click_token']}"
+                    ),
+                    "action_label": row["button_label"],
+                })
+            else:
+                options = conn.execute(
+                    """SELECT option_key,label FROM broadcast_options
+                       WHERE campaign_id=? ORDER BY position""",
+                    (row["campaign_id"],),
+                ).fetchall()
+                payload["poll_options"] = [{
+                    "label": option["label"],
+                    "callback_data": (
+                        f"{BROADCAST_CALLBACK_PREFIX}{row['campaign_id']}:{option['option_key']}"
+                    ),
+                } for option in options]
+            result.append({
+                "id": -(BROADCAST_NOTIFICATION_ID_OFFSET + int(row["id"])),
+                "recipient_id": row["recipient_id"], "event_type": payload["kind"],
+                "conversation_id": "", "lease_token": lease_token,
+                "payload": payload,
+            })
+            campaign_ids.add(str(row["campaign_id"]))
+        for campaign_id in campaign_ids:
+            conn.execute(
+                """UPDATE broadcast_campaigns SET status='sending',started_at=COALESCE(started_at,?)
+                   WHERE id=? AND status='queued'""",
+                (now.isoformat(), campaign_id),
+            )
+        conn.commit()
+    return result
+
+
+def acknowledge_broadcast_notification(
+    notification_id: int, lease_token: str, success: bool, error: str = "",
+) -> bool:
+    now_dt = datetime.now(timezone.utc)
+    now = now_dt.isoformat()
+    with _write_lock, connection() as conn:
+        row = conn.execute(
+            """SELECT attempts,campaign_id FROM broadcast_recipients
+               WHERE id=? AND lease_token=? AND status='delivering'""",
+            (int(notification_id), str(lease_token or "")),
+        ).fetchone()
+        if not row:
+            return False
+        permanent_failure = not success and (
+            _permanent_messenger_delivery_error(error)
+            or int(row["attempts"]) >= BROADCAST_MAX_ATTEMPTS
+        )
+        retry_delay = min(3600, 5 * (2 ** min(int(row["attempts"]), 10)))
+        next_attempt_at = (
+            (now_dt + timedelta(seconds=retry_delay)).isoformat()
+            if not success and not permanent_failure else None
+        )
+        cursor = conn.execute(
+            """UPDATE broadcast_recipients SET status=?,sent_at=?,last_error=?,
+               next_attempt_at=?,lease_token=NULL,leased_at=NULL,updated_at=?
+               WHERE id=? AND lease_token=? AND status='delivering'""",
+            (
+                "sent" if success else ("failed" if permanent_failure else "pending"),
+                now if success else None, str(error or "")[:500], next_attempt_at,
+                now, int(notification_id), str(lease_token or ""),
+            ),
+        )
+        remaining = conn.execute(
+            """SELECT COUNT(*) FROM broadcast_recipients
+               WHERE campaign_id=? AND status IN ('pending','delivering')""",
+            (row["campaign_id"],),
+        ).fetchone()[0]
+        if not remaining:
+            conn.execute(
+                """UPDATE broadcast_campaigns SET status='completed',completed_at=?
+                   WHERE id=?""",
+                (now, row["campaign_id"]),
+            )
+        conn.commit()
+    return bool(cursor.rowcount)
+
+
+def record_broadcast_click(click_token: str) -> str | None:
+    click_token = str(click_token or "").strip()
+    if not click_token:
+        return None
+    now = utc_now()
+    with _write_lock, connection() as conn:
+        row = conn.execute(
+            """SELECT r.campaign_id,r.chel_id,r.provider,c.app_url,c.kind
+               FROM broadcast_recipients r
+               JOIN broadcast_campaigns c ON c.id=r.campaign_id
+               WHERE r.click_token=?""",
+            (click_token,),
+        ).fetchone()
+        if not row or row["kind"] != "message":
+            return None
+        conn.execute(
+            """INSERT INTO broadcast_clicks
+               (campaign_id,chel_id,provider,click_count,first_clicked_at,last_clicked_at)
+               VALUES (?,?,?,1,?,?)
+               ON CONFLICT(campaign_id,chel_id) DO UPDATE SET
+                 click_count=broadcast_clicks.click_count+1,
+                 last_clicked_at=excluded.last_clicked_at""",
+            (row["campaign_id"], row["chel_id"], row["provider"], now, now),
+        )
+        conn.commit()
+    return str(row["app_url"] or "/")
+
+
+def record_broadcast_vote(
+    provider: str, provider_user_id: str, callback_data: str,
+) -> dict:
+    provider = _messenger_provider(provider)
+    provider_user_id = str(provider_user_id or "").strip()
+    match = re.fullmatch(
+        rf"{re.escape(BROADCAST_CALLBACK_PREFIX)}([0-9a-f-]{{36}}):(o[1-9][0-9]?)",
+        str(callback_data or ""), re.IGNORECASE,
+    )
+    if not provider_user_id or not match:
+        raise ValueError("Некорректный вариант ответа")
+    campaign_id, option_key = match.groups()
+    now = utc_now()
+    with _write_lock, connection() as conn:
+        identity = conn.execute(
+            """SELECT chel_id FROM external_identities
+               WHERE provider=? AND provider_user_id=? AND access_status='active'""",
+            (provider, provider_user_id),
+        ).fetchone()
+        if not identity:
+            raise ValueError("Сначала привяжите мессенджер к Консилиуму")
+        option = conn.execute(
+            """SELECT o.id,o.label FROM broadcast_options o
+               JOIN broadcast_campaigns c ON c.id=o.campaign_id
+               JOIN broadcast_recipients r ON r.campaign_id=c.id AND r.chel_id=?
+               WHERE c.id=? AND c.kind='poll' AND o.option_key=? AND r.provider=?""",
+            (identity["chel_id"], campaign_id, option_key.lower(), provider),
+        ).fetchone()
+        if not option:
+            raise ValueError("Голосование недоступно")
+        previous = conn.execute(
+            "SELECT option_id FROM broadcast_votes WHERE campaign_id=? AND chel_id=?",
+            (campaign_id, identity["chel_id"]),
+        ).fetchone()
+        conn.execute(
+            """INSERT INTO broadcast_votes
+               (campaign_id,chel_id,provider,option_id,created_at,updated_at)
+               VALUES (?,?,?,?,?,?)
+               ON CONFLICT(campaign_id,chel_id) DO UPDATE SET
+                 provider=excluded.provider,option_id=excluded.option_id,
+                 updated_at=excluded.updated_at""",
+            (campaign_id, identity["chel_id"], provider, option["id"], now, now),
+        )
+        conn.commit()
+    return {
+        "status": "recorded", "label": option["label"],
+        "changed": bool(previous and int(previous["option_id"]) != int(option["id"])),
+    }
 
 
 def get_onboarding() -> dict:

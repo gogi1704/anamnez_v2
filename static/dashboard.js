@@ -2145,6 +2145,123 @@ async function sendCheckupReofferTest() {
   await loadCheckupReofferDiagnostics();
 }
 
+function broadcastPayload() {
+  return {
+    kind:$('#broadcastKind').value,
+    provider_scope:$('#broadcastProvider').value,
+    title:$('#broadcastTitle').value.trim(),
+    body:$('#broadcastBody').value.trim(),
+    button_label:$('#broadcastButtonLabel').value.trim(),
+    options:$('#broadcastOptions').value.split('\n').map(value => value.trim()).filter(Boolean),
+  };
+}
+
+function showBroadcastStatus(message = '', error = false) {
+  const node = $('#broadcastStatus');
+  node.textContent = message;
+  node.classList.toggle('hidden', !message);
+  node.classList.toggle('error', error);
+}
+
+function renderBroadcastPreview() {
+  const payload = broadcastPayload();
+  const isPoll = payload.kind === 'poll';
+  $('#broadcastButtonLabelWrap').classList.toggle('hidden', isPoll);
+  $('#broadcastOptionsWrap').classList.toggle('hidden', !isPoll);
+  $('#broadcastBodyLength').textContent = String($('#broadcastBody').value.length);
+  const options = payload.options.slice(0,10);
+  $('#broadcastPreview').innerHTML = `
+    <small>Предпросмотр</small>
+    <strong>${escapeHtml(payload.title || 'Консилиум')}</strong>
+    <p>${escapeHtml(payload.body || 'Здесь появится текст рассылки').replace(/\n/g,'<br>')}</p>
+    <div>${isPoll
+      ? (options.length ? options.map(value => `<span>${escapeHtml(value)}</span>`).join('') : '<em>Добавьте варианты ответа</em>')
+      : `<span>${escapeHtml(payload.button_label || 'Открыть Консилиум')}</span>`}</div>`;
+}
+
+function renderBroadcasts(data) {
+  const audience = data.audience || {};
+  $('#broadcastAudience').innerHTML = `
+    <div><strong>${formatTokens(audience.users)}</strong><span>уникальных пользователей</span></div>
+    <div><strong>${formatTokens(audience.telegram)}</strong><span>доступны в Telegram</span></div>
+    <div><strong>${formatTokens(audience.max)}</strong><span>доступны в MAX</span></div>`;
+  const root = $('#broadcastHistory');
+  const campaigns = data.campaigns || [];
+  if (!campaigns.length) {
+    root.innerHTML = '<div class="broadcast-empty"><strong>Рассылок пока нет</strong><span>Создайте сообщение или голосование слева.</span></div>';
+    return;
+  }
+  root.innerHTML = campaigns.map(item => {
+    const deliveries = Number(item.recipient_deliveries || 0);
+    const sent = Number(item.sent || 0);
+    const failed = Number(item.failed || 0);
+    const pending = Number(item.pending || 0);
+    const uniqueClicks = Number(item.unique_clicks || 0);
+    const clickRate = Number(item.recipient_users || 0)
+      ? Math.round(uniqueClicks * 1000 / Number(item.recipient_users)) / 10 : 0;
+    const voters = Number(item.voters || 0);
+    const options = (item.options || []).map(option => {
+      const votes = Number(option.votes || 0);
+      const percent = voters ? Math.round(votes * 1000 / voters) / 10 : 0;
+      return `<div class="broadcast-option-result"><span>${escapeHtml(option.label)}</span><b>${formatTokens(votes)} · ${percent.toLocaleString('ru-RU')}%</b><i><u style="width:${Math.min(100,percent)}%"></u></i></div>`;
+    }).join('');
+    const status = item.status === 'completed' ? 'Завершена' : item.status === 'sending' ? 'Отправляется' : 'В очереди';
+    return `<article class="broadcast-campaign-card">
+      <header><div><small>${item.kind === 'poll' ? 'Голосование' : 'Сообщение'} · ${formatDate(item.created_at)}</small><h3>${escapeHtml(item.title)}</h3></div><span class="broadcast-campaign-status ${escapeHtml(item.status)}">${status}</span></header>
+      <p>${escapeHtml(item.body).replace(/\n/g,'<br>')}</p>
+      <div class="broadcast-delivery-stats"><span><b>${formatTokens(item.recipient_users)}</b> пользователей</span><span><b>${formatTokens(sent)}</b> доставлено</span><span><b>${formatTokens(pending)}</b> ожидает</span><span><b>${formatTokens(failed)}</b> ошибок</span></div>
+      ${item.kind === 'message'
+        ? `<div class="broadcast-result-highlight"><strong>${formatTokens(uniqueClicks)}</strong><span>уникальных переходов · ${clickRate.toLocaleString('ru-RU')}% аудитории</span><small>Всего нажатий: ${formatTokens(item.total_clicks)}</small></div>`
+        : `<div class="broadcast-result-highlight"><strong>${formatTokens(voters)}</strong><span>пользователей проголосовали</span></div><div class="broadcast-option-results">${options}</div>`}
+      <footer>Отправок: ${formatTokens(deliveries)} · канал: ${item.provider_scope === 'all' ? 'Telegram и MAX' : item.provider_scope === 'telegram' ? 'Telegram' : 'MAX'}</footer>
+    </article>`;
+  }).join('');
+}
+
+async function loadBroadcasts() {
+  const data = await adminFetch('/api/admin/broadcasts');
+  renderBroadcasts(data);
+}
+
+async function submitBroadcast(event) {
+  event.preventDefault();
+  const payload = broadcastPayload();
+  const optionsCount = payload.options.length;
+  if (payload.kind === 'poll' && (optionsCount < 2 || optionsCount > 10)) {
+    return showBroadcastStatus('Для голосования укажите от 2 до 10 вариантов.', true);
+  }
+  if (!confirm('Запустить рассылку всем пользователям выбранного мессенджера?')) return;
+  const button = $('#broadcastSendButton');
+  button.disabled = true;
+  showBroadcastStatus('Ставим рассылку в очередь…');
+  try {
+    const result = await adminFetch('/api/admin/broadcasts',undefined,{
+      method:'POST',body:JSON.stringify(payload),
+    });
+    showBroadcastStatus(`Рассылка поставлена в очередь: ${formatTokens(result.users)} пользователей, ${formatTokens(result.recipients)} отправок.`);
+    loadedAdminViews.delete('broadcasts');
+    await loadBroadcasts();
+  } catch (error) {
+    showBroadcastStatus(error.message,true);
+  } finally { button.disabled = false; }
+}
+
+async function sendBroadcastTest() {
+  const chelId = $('#broadcastTestChelId').value.trim();
+  if (!chelId) return showBroadcastStatus('Укажите chel_id для тестовой отправки.',true);
+  const button = $('#broadcastTestButton');
+  button.disabled = true;
+  showBroadcastStatus('Отправляем тест…');
+  try {
+    const result = await adminFetch('/api/admin/broadcasts/test',undefined,{
+      method:'POST',body:JSON.stringify({...broadcastPayload(),chel_id:chelId}),
+    });
+    showBroadcastStatus(`Тест поставлен в очередь: ${result.providers.join(' и ')}.`);
+  } catch (error) {
+    showBroadcastStatus(error.message,true);
+  } finally { button.disabled = false; }
+}
+
 async function loadFavoriteSources() {
   const ids = [...favoriteAnalytics];
   const tasks = [];
@@ -2698,7 +2815,7 @@ async function testFunnelMonitor(analysis = 'all', button = null) {
 }
 
 function showAdminView(view) {
-  activeAdminView = ['favorites','retention','analytics','service_results','schedule_revenue','experiments','metric2','content_texts','personality','monitor','ikp','managers','examinations','costs'].includes(view) ? view : 'dashboard';
+  activeAdminView = ['favorites','retention','analytics','service_results','schedule_revenue','experiments','metric2','broadcasts','content_texts','personality','monitor','ikp','managers','examinations','costs'].includes(view) ? view : 'dashboard';
   const favoritesVisible = activeAdminView === 'favorites';
   const retentionVisible = activeAdminView === 'retention';
   const analyticsVisible = activeAdminView === 'analytics';
@@ -2706,6 +2823,7 @@ function showAdminView(view) {
   const scheduleRevenueVisible = activeAdminView === 'schedule_revenue';
   const experimentsVisible = activeAdminView === 'experiments';
   const metric2Visible = activeAdminView === 'metric2';
+  const broadcastsVisible = activeAdminView === 'broadcasts';
   const contentTextsVisible = activeAdminView === 'content_texts';
   const personalityVisible = activeAdminView === 'personality';
   const monitorVisible = activeAdminView === 'monitor';
@@ -2722,6 +2840,7 @@ function showAdminView(view) {
   $('#dashboard').classList.toggle('show-schedule-revenue', scheduleRevenueVisible);
   $('#dashboard').classList.toggle('show-experiments', experimentsVisible);
   $('#dashboard').classList.toggle('show-metric2', metric2Visible);
+  $('#dashboard').classList.toggle('show-broadcasts', broadcastsVisible);
   $('#dashboard').classList.toggle('show-content-texts', contentTextsVisible);
   $('#dashboard').classList.toggle('show-personality', personalityVisible);
   $('#dashboard').classList.toggle('show-monitor', monitorVisible);
@@ -2734,6 +2853,7 @@ function showAdminView(view) {
   $('#scheduleRevenueAdminView').classList.toggle('hidden', !scheduleRevenueVisible);
   $('#experimentsAdminView').classList.toggle('hidden', !experimentsVisible);
   $('#metric2AdminView').classList.toggle('hidden', !metric2Visible);
+  $('#broadcastsAdminView').classList.toggle('hidden', !broadcastsVisible);
   $('#contentTextsAdminView').classList.toggle('hidden', !contentTextsVisible);
   $('#personalityAdminView').classList.toggle('hidden', !personalityVisible);
   $('#monitorAdminView').classList.toggle('hidden', !monitorVisible);
@@ -2749,6 +2869,7 @@ function showAdminView(view) {
   $('#scheduleRevenueTab').classList.toggle('active', scheduleRevenueVisible);
   $('#experimentsTab').classList.toggle('active', experimentsVisible);
   $('#metric2Tab').classList.toggle('active', metric2Visible);
+  $('#broadcastsTab').classList.toggle('active', broadcastsVisible);
   $('#contentTextsTab').classList.toggle('active', contentTextsVisible);
   $('#personalityTab').classList.toggle('active', personalityVisible);
   $('#monitorTab').classList.toggle('active', monitorVisible);
@@ -2777,6 +2898,7 @@ async function loadAdminViewData(view = activeAdminView, {force = false} = {}) {
   else if (view === 'schedule_revenue') request = loadScheduleRevenueView();
   else if (view === 'experiments') request = loadExperiments();
   else if (view === 'metric2') request = loadMetric2();
+  else if (view === 'broadcasts') request = loadBroadcasts();
   else if (view === 'content_texts') request = loadContentTexts();
   else if (view === 'personality') request = loadPersonality();
   else if (view === 'monitor') request = loadFunnelMonitor();
@@ -3206,6 +3328,7 @@ $('#scheduleRevenueApply').addEventListener('click', () => loadScheduleRevenue()
 $('#salesDynamicsGranularity').addEventListener('change', () => loadSalesDynamics().catch(showDashboardError));
 $('#experimentsTab').addEventListener('click', () => showAdminView('experiments'));
 $('#metric2Tab').addEventListener('click', () => showAdminView('metric2'));
+$('#broadcastsTab').addEventListener('click', () => showAdminView('broadcasts'));
 $('#contentTextsTab').addEventListener('click', () => showAdminView('content_texts'));
 $('#personalityTab').addEventListener('click', () => showAdminView('personality'));
 $('#personalityYandexForm').addEventListener('submit', savePersonalityYandex);
@@ -3253,6 +3376,16 @@ document.querySelectorAll('[data-monitor-analysis]').forEach(button => button.ad
   testFunnelMonitor(button.dataset.monitorAnalysis,button).catch(error => showMonitorStatus(error.message,true));
 }));
 $('#metric2Apply').addEventListener('click', () => loadMetric2().catch(showDashboardError));
+$('#broadcastForm').addEventListener('submit', submitBroadcast);
+$('#broadcastTestButton').addEventListener('click', sendBroadcastTest);
+$('#broadcastRefresh').addEventListener('click', () => loadBroadcasts().catch(showDashboardError));
+$('#broadcastKind').addEventListener('change', renderBroadcastPreview);
+$('#broadcastProvider').addEventListener('change', renderBroadcastPreview);
+$('#broadcastTitle').addEventListener('input', renderBroadcastPreview);
+$('#broadcastBody').addEventListener('input', renderBroadcastPreview);
+$('#broadcastButtonLabel').addEventListener('input', renderBroadcastPreview);
+$('#broadcastOptions').addEventListener('input', renderBroadcastPreview);
+renderBroadcastPreview();
 ['#metric2Period','#metric2DateFrom','#metric2DateTo'].forEach(selector => {
   $(selector).addEventListener('change', showMetric2PeriodPrompt);
 });

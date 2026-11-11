@@ -11,7 +11,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/static/dashboard.css?v=20261104-pre-exam-reminders-v23">
+  <link rel="stylesheet" href="/static/dashboard.css?v=20261111-broadcasts-v24">
 </head>
 <body>
   <main class="dashboard-shell">
@@ -59,6 +59,7 @@
         <button id="scheduleRevenueTab" type="button">График и выручка</button>
         <button id="experimentsTab" type="button">Эксперименты</button>
         <button id="metric2Tab" type="button">Метрика 2.0</button>
+        <button id="broadcastsTab" type="button">Рассылки</button>
         <button id="contentTextsTab" type="button">Изменение текстов</button>
         <button id="personalityTab" type="button">Характер Ольги</button>
         <button id="monitorTab" type="button">Мониторинг в Bitrix24</button>
@@ -389,6 +390,41 @@
           <div class="panel-heading"><div><p class="eyebrow" id="metric2FlowEyebrow">Обычная ссылка</p><h2 id="metric2FlowTitle">Анкета и выбор обследований</h2><p id="metric2FlowDescription">Нажмите на любой экран, чтобы открыть крупный макет и увидеть статистику всех кнопок и переходов.</p></div></div>
           <div class="metric2-flow" id="metric2Flow"></div>
         </article>
+      </section>
+
+      <section class="broadcasts-admin hidden" id="broadcastsAdminView">
+        <article class="panel broadcasts-heading-panel">
+          <div class="panel-heading"><div><p class="eyebrow">Telegram и MAX</p><h2>Рассылки пользователям</h2><p>Сообщения отправляются фоновой очередью небольшими пакетами и не блокируют работу Консилиума.</p></div></div>
+          <div class="broadcast-audience" id="broadcastAudience"></div>
+        </article>
+        <div class="broadcast-layout">
+          <article class="panel broadcast-compose-panel">
+            <div class="panel-heading"><div><p class="eyebrow">Новая рассылка</p><h2>Сообщение или голосование</h2></div></div>
+            <form id="broadcastForm" class="broadcast-form">
+              <div class="broadcast-form-row">
+                <label>Формат<select id="broadcastKind"><option value="message">Сообщение с кнопкой</option><option value="poll">Голосование</option></select></label>
+                <label>Куда отправлять<select id="broadcastProvider"><option value="all">Telegram и MAX</option><option value="telegram">Только Telegram</option><option value="max">Только MAX</option></select></label>
+              </div>
+              <label>Заголовок<input id="broadcastTitle" maxlength="120" value="Консилиум" required></label>
+              <label>Текст сообщения<textarea id="broadcastBody" maxlength="3500" rows="7" required placeholder="Введите текст, который получат пользователи"></textarea><small><span id="broadcastBodyLength">0</span> из 3500 символов</small></label>
+              <label id="broadcastButtonLabelWrap">Текст кнопки<input id="broadcastButtonLabel" maxlength="64" value="Открыть Консилиум"></label>
+              <label class="hidden" id="broadcastOptionsWrap">Варианты ответа<textarea id="broadcastOptions" rows="6" placeholder="Каждый вариант с новой строки"></textarea><small>От 2 до 10 вариантов, один вариант на строку.</small></label>
+              <div class="broadcast-preview" id="broadcastPreview"></div>
+              <div class="broadcast-test-row">
+                <label>Тестовый получатель<input id="broadcastTestChelId" placeholder="chel_..."></label>
+                <button class="secondary" id="broadcastTestButton" type="button">Отправить тест</button>
+              </div>
+              <div class="broadcast-submit-row">
+                <button id="broadcastSendButton" type="submit">Запустить рассылку</button>
+                <span class="form-status hidden" id="broadcastStatus" role="status"></span>
+              </div>
+            </form>
+          </article>
+          <article class="panel broadcast-history-panel">
+            <div class="panel-heading"><div><p class="eyebrow">Доставка и реакции</p><h2>История рассылок</h2></div><button class="secondary" id="broadcastRefresh" type="button">Обновить</button></div>
+            <div class="broadcast-history" id="broadcastHistory"></div>
+          </article>
+        </div>
       </section>
 
       <section class="content-texts-admin hidden" id="contentTextsAdminView">
@@ -911,6 +947,6 @@
       </div>
     </section>
   </div>
-  <script src="/static/dashboard.js?v=20261104-pre-exam-reminders-v26" defer></script>
+  <script src="/static/dashboard.js?v=20261111-broadcasts-v27" defer></script>
 </body>
 </html>

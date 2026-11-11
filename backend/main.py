@@ -427,6 +427,19 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
             )
         if path == "/api/health":
             return self._json(200, {"status": "ok"})
+        if path == "/broadcast/open":
+            token = parse_qs(parsed.query).get("t", [""])[0]
+            target = db.record_broadcast_click(token)
+            if not target:
+                return self._json(404, {"detail": "Ссылка рассылки недействительна"})
+            if not str(target).startswith(("http://", "https://")):
+                target = settings.public_base_url or "/"
+            self.send_response(303)
+            self._send_security_headers()
+            self.send_header("Location", str(target))
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            return
         if path == "/api/feed":
             self._ensure_user_context()
             query = parse_qs(parsed.query)
@@ -555,6 +568,11 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                     user_notifications += db.claim_user_result_notifications(
                         provider, min(5, remaining),
                     )
+                remaining = limit - len(user_notifications)
+                if remaining > 0:
+                    user_notifications += db.claim_broadcast_notifications(
+                        provider, min(5, remaining),
+                    )
                 manager_notifications = db.claim_manager_notifications(
                     provider, max(1, limit - len(user_notifications)),
                 ) if len(user_notifications) < limit else []
@@ -653,6 +671,7 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
             "/api/admin/ikp",
             "/api/admin/funnel-monitor", "/api/admin/funnel-monitor/preview",
             "/api/admin/checkup-reoffers",
+            "/api/admin/broadcasts",
             "/api/admin/schedule-revenue",
             "/api/admin/sales-dynamics",
         }:
@@ -682,6 +701,8 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                     "outbox_without_failures": diagnostics["outbox"].get("exhausted", 0) == 0,
                 }
                 return self._json(200, diagnostics)
+            if path == "/api/admin/broadcasts":
+                return self._json(200, db.admin_broadcast_report())
             if path == "/api/admin/schedule-revenue":
                 query = parse_qs(parsed.query)
                 try:
@@ -1253,6 +1274,23 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                 return self._json(202, result)
             except (ValueError, TypeError, json.JSONDecodeError, UnicodeDecodeError) as exc:
                 return self._json(422, {"detail": str(exc)})
+        if path in {"/api/admin/broadcasts", "/api/admin/broadcasts/test"}:
+            if not self._admin_authorized():
+                return
+            try:
+                payload = self._read_json(max_bytes=32_000)
+                test_chel_id = (
+                    str(payload.get("chel_id") or "").strip()
+                    if path.endswith("/test") else ""
+                )
+                if path.endswith("/test") and not test_chel_id:
+                    raise ValueError("Укажите chel_id для тестовой отправки")
+                result = db.create_broadcast_campaign(
+                    payload, test_chel_id=test_chel_id,
+                )
+                return self._json(202, result)
+            except (ValueError, TypeError, json.JSONDecodeError, UnicodeDecodeError) as exc:
+                return self._json(422, {"detail": str(exc)})
         if path == "/api/splitter/event":
             try:
                 payload = self._read_json(max_bytes=4_000)
@@ -1331,6 +1369,18 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                 })
             except (ValueError, TypeError, json.JSONDecodeError, UnicodeDecodeError) as exc:
                 return self._json(422, {"detail": str(exc)})
+        if path == "/api/bot/broadcast-vote":
+            if not bot_token_valid(self.headers.get("Authorization", "")):
+                return self._json(401, {"detail": "Неверные данные интеграции"})
+            try:
+                payload = self._read_json(max_bytes=4_000)
+                return self._json(200, db.record_broadcast_vote(
+                    str(payload.get("provider") or ""),
+                    str(payload.get("provider_user_id") or ""),
+                    str(payload.get("callback_data") or ""),
+                ))
+            except (ValueError, TypeError, json.JSONDecodeError, UnicodeDecodeError) as exc:
+                return self._json(422, {"detail": str(exc)})
         if path.startswith("/api/bot/manager-notifications/") and path.endswith("/ack"):
             if not bot_token_valid(self.headers.get("Authorization", "")):
                 return self._json(401, {"detail": "Неверные данные интеграции"})
@@ -1341,7 +1391,13 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                 payload = self._read_json()
                 if not isinstance(payload.get("success"), bool):
                     raise ValueError("success должен быть true или false")
-                if notification_id <= -db.SYSTEM_NOTIFICATION_ID_OFFSET:
+                if notification_id <= -db.BROADCAST_NOTIFICATION_ID_OFFSET:
+                    broadcast_id = abs(notification_id) - db.BROADCAST_NOTIFICATION_ID_OFFSET
+                    acknowledged = db.acknowledge_broadcast_notification(
+                        broadcast_id, str(payload.get("lease_token", "")),
+                        payload["success"], str(payload.get("error", "")),
+                    )
+                elif notification_id <= -db.SYSTEM_NOTIFICATION_ID_OFFSET:
                     system_id = abs(notification_id) - db.SYSTEM_NOTIFICATION_ID_OFFSET
                     acknowledged = db.acknowledge_system_notification(
                         system_id, str(payload.get("lease_token", "")),
