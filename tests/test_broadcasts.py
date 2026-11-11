@@ -126,6 +126,16 @@ class BroadcastTests(unittest.TestCase):
         self.assertEqual(report["status"], "completed")
         self.assertEqual(report["failed"], 1)
 
+    def test_broadcast_admin_view_hides_main_dashboard_and_labels_analytics(self):
+        project = Path(__file__).resolve().parents[1]
+        css = (project / "static" / "dashboard.css").read_text(encoding="utf-8")
+        html = (project / "dashboard.html").read_text(encoding="utf-8")
+        self.assertIn(
+            ".dashboard.show-broadcasts > :not(.dashboard-header):not(.admin-tabs):not(.broadcasts-admin)",
+            css,
+        )
+        self.assertIn("Аналитика и история рассылок", html)
+
 
 if __name__ == "__main__":
     unittest.main()

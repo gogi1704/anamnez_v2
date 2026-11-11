@@ -59,6 +59,7 @@ button:hover,.button:hover { background:var(--green-dark); }
 .dashboard.show-schedule-revenue > :not(.dashboard-header):not(.admin-tabs):not(.schedule-revenue-admin):not(.dashboard-error) { display:none!important; }
 .dashboard.show-experiments > :not(.dashboard-header):not(.admin-tabs):not(.experiments-admin):not(.dashboard-error) { display:none!important; }
 .dashboard.show-metric2 > :not(.dashboard-header):not(.admin-tabs):not(.metric2-admin):not(.dashboard-error) { display:none!important; }
+.dashboard.show-broadcasts > :not(.dashboard-header):not(.admin-tabs):not(.broadcasts-admin):not(.dashboard-error) { display:none!important; }
 .dashboard.show-content-texts > :not(.dashboard-header):not(.admin-tabs):not(.content-texts-admin):not(.dashboard-error) { display:none!important; }
 .dashboard.show-personality > :not(.dashboard-header):not(.admin-tabs):not(.personality-admin):not(.dashboard-error) { display:none!important; }
 .dashboard.show-monitor > :not(.dashboard-header):not(.admin-tabs):not(.monitor-admin):not(.dashboard-error) { display:none!important; }
