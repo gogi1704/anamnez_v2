@@ -9017,7 +9017,14 @@ def admin_checkup_reoffer_diagnostics(reference_date: date | None = None) -> dic
             for user in rows:
                 chel_id = str(user["chel_id"])
                 if exclude_sent and conn.execute(
-                    "SELECT 1 FROM checkup_reoffers WHERE chel_id=? AND is_test=0",
+                    """SELECT 1 FROM checkup_reoffers r
+                    WHERE r.chel_id=? AND r.is_test=0
+                      AND r.duration_bucket='pre_exam'
+                      AND EXISTS (
+                        SELECT 1 FROM user_notification_outbox o
+                        WHERE o.reoffer_id=r.id
+                          AND o.event_type='pre_exam_reminder'
+                      )""",
                     (chel_id,),
                 ).fetchone():
                     continue
@@ -9459,7 +9466,14 @@ def queue_due_checkup_reoffers(examination_date: date, public_url: str) -> list[
         for user in users:
             chel_id = str(user["chel_id"])
             existing = conn.execute(
-                "SELECT id FROM checkup_reoffers WHERE chel_id=? AND is_test=0",
+                """SELECT r.id FROM checkup_reoffers r
+                WHERE r.chel_id=? AND r.is_test=0
+                  AND r.duration_bucket='pre_exam'
+                  AND EXISTS (
+                    SELECT 1 FROM user_notification_outbox o
+                    WHERE o.reoffer_id=r.id
+                      AND o.event_type='pre_exam_reminder'
+                  )""",
                 (chel_id,),
             ).fetchone()
             if existing:
@@ -12415,9 +12429,16 @@ def _cancel_redundant_pre_exam_notifications(conn) -> int:
             JOIN checkup_reoffers earlier_reminder
               ON earlier_reminder.chel_id=current_reminder.chel_id
              AND earlier_reminder.is_test=0
+             AND earlier_reminder.duration_bucket='pre_exam'
              AND earlier_reminder.id<current_reminder.id
             WHERE current_reminder.id=user_notification_outbox.reoffer_id
               AND current_reminder.is_test=0
+              AND current_reminder.duration_bucket='pre_exam'
+              AND EXISTS (
+                SELECT 1 FROM user_notification_outbox earlier_delivery
+                WHERE earlier_delivery.reoffer_id=earlier_reminder.id
+                  AND earlier_delivery.event_type='pre_exam_reminder'
+              )
           )""",
         (now,),
     )

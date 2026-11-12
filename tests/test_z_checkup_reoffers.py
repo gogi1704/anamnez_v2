@@ -127,6 +127,36 @@ class CheckupReofferTests(unittest.TestCase):
                 ).fetchone()[0], 1
             )
 
+    def test_old_internal_offer_without_messenger_delivery_does_not_block_reminder(self):
+        tomorrow = self.schedule()
+        now = db.utc_now()
+        with db.connection() as conn:
+            conn.execute(
+                """INSERT INTO checkup_reoffer_candidates
+                (chel_id,journey_id,company_inn,active_seconds,duration_bucket,
+                 experiment_variant,first_seen_at,last_seen_at)
+                VALUES (?,?,?,0,'pre_exam','pre_exam',?,?)""",
+                (db.current_chel_id(), "old-internal-only", "1234567890", now, now),
+            )
+            candidate_id = conn.execute(
+                "SELECT id FROM checkup_reoffer_candidates WHERE journey_id='old-internal-only'"
+            ).fetchone()[0]
+            conn.execute(
+                """INSERT INTO checkup_reoffers
+                (chel_id,candidate_id,company_inn,examination_date,active_seconds,
+                 duration_bucket,access_token,status,created_at,is_test)
+                VALUES (?,?,?, ?,0,'pre_exam',?,'sent',?,0)""",
+                (
+                    db.current_chel_id(), candidate_id, "1234567890",
+                    (tomorrow - timedelta(days=1)).isoformat(), "old-internal-token", now,
+                ),
+            )
+            conn.commit()
+
+        queued = db.queue_due_checkup_reoffers(tomorrow, "https://example.test")
+        self.assertEqual(len(queued), 1)
+        self.assertEqual(queued[0]["examination_date"], tomorrow.isoformat())
+
     def test_upgrade_cancels_already_queued_later_reminder(self):
         first_day = self.schedule()
         first = db.queue_due_checkup_reoffers(first_day, "https://example.test")[0]
