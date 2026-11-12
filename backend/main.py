@@ -1285,6 +1285,12 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                 )
                 if path.endswith("/test") and not test_chel_id:
                     raise ValueError("Укажите chel_id для тестовой отправки")
+                if not path.endswith("/test") and str(
+                    payload.get("confirmation") or ""
+                ).strip().upper() != "ОТПРАВИТЬ":
+                    raise ValueError(
+                        "Подтвердите массовую рассылку словом ОТПРАВИТЬ"
+                    )
                 result = db.create_broadcast_campaign(
                     payload, test_chel_id=test_chel_id,
                 )

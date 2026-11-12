@@ -75,6 +75,7 @@ let personalityProfiles = {};
 let personalitySaveTimer = null;
 let personalitySaveInFlight = false;
 let personalitySaveQueued = false;
+let broadcastAudienceSnapshot = {users:0,telegram:0,max:0};
 let personalityPresets = {
   professional:{address_mode:'formal',formality:75,warmth:55,sociability:35,supportiveness:65,humor:0,emoji:0,initiative:40},
   balanced:{address_mode:'formal',formality:35,warmth:80,sociability:70,supportiveness:85,humor:15,emoji:5,initiative:60},
@@ -2181,6 +2182,11 @@ function renderBroadcastPreview() {
 
 function renderBroadcasts(data) {
   const audience = data.audience || {};
+  broadcastAudienceSnapshot = {
+    users:Number(audience.users || 0),
+    telegram:Number(audience.telegram || 0),
+    max:Number(audience.max || 0),
+  };
   $('#broadcastAudience').innerHTML = `
     <div><strong>${formatTokens(audience.users)}</strong><span>уникальных пользователей</span></div>
     <div><strong>${formatTokens(audience.telegram)}</strong><span>доступны в Telegram</span></div>
@@ -2230,7 +2236,20 @@ async function submitBroadcast(event) {
   if (payload.kind === 'poll' && (optionsCount < 2 || optionsCount > 10)) {
     return showBroadcastStatus('Для голосования укажите от 2 до 10 вариантов.', true);
   }
-  if (!confirm('Запустить рассылку всем пользователям выбранного мессенджера?')) return;
+  const audienceCount = payload.provider_scope === 'telegram'
+    ? broadcastAudienceSnapshot.telegram
+    : payload.provider_scope === 'max'
+      ? broadcastAudienceSnapshot.max
+      : broadcastAudienceSnapshot.users;
+  const confirmation = prompt(
+    `Массовая рассылка будет поставлена в очередь для ${formatTokens(audienceCount)} пользователей.\n\nЭто действие начнёт отправку сообщений. Для подтверждения введите слово ОТПРАВИТЬ`,
+    '',
+  );
+  if (String(confirmation || '').trim().toUpperCase() !== 'ОТПРАВИТЬ') {
+    showBroadcastStatus('Массовая рассылка отменена.');
+    return;
+  }
+  payload.confirmation = 'ОТПРАВИТЬ';
   const button = $('#broadcastSendButton');
   button.disabled = true;
   showBroadcastStatus('Ставим рассылку в очередь…');

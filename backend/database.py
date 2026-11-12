@@ -12953,19 +12953,27 @@ def record_broadcast_vote(
             "SELECT option_id FROM broadcast_votes WHERE campaign_id=? AND chel_id=?",
             (campaign_id, identity["chel_id"]),
         ).fetchone()
+        if previous:
+            selected = conn.execute(
+                "SELECT label FROM broadcast_options WHERE id=?",
+                (previous["option_id"],),
+            ).fetchone()
+            return {
+                "status": "recorded",
+                "label": selected["label"] if selected else option["label"],
+                "changed": False,
+                "already_recorded": True,
+            }
         conn.execute(
             """INSERT INTO broadcast_votes
                (campaign_id,chel_id,provider,option_id,created_at,updated_at)
-               VALUES (?,?,?,?,?,?)
-               ON CONFLICT(campaign_id,chel_id) DO UPDATE SET
-                 provider=excluded.provider,option_id=excluded.option_id,
-                 updated_at=excluded.updated_at""",
+               VALUES (?,?,?,?,?,?)""",
             (campaign_id, identity["chel_id"], provider, option["id"], now, now),
         )
         conn.commit()
     return {
         "status": "recorded", "label": option["label"],
-        "changed": bool(previous and int(previous["option_id"]) != int(option["id"])),
+        "changed": False, "already_recorded": False,
     }
 
 

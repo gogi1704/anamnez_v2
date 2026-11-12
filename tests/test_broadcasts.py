@@ -67,7 +67,7 @@ class BroadcastTests(unittest.TestCase):
         self.assertEqual(report["unique_clicks"], 1)
         self.assertEqual(report["total_clicks"], 2)
 
-    def test_poll_counts_one_user_and_allows_changing_answer(self):
+    def test_poll_counts_one_user_and_locks_first_answer(self):
         campaign = db.create_broadcast_campaign({
             "kind": "poll", "title": "Опрос", "body": "Как вы себя чувствуете?",
             "provider_scope": "telegram", "options": ["Хорошо", "Нормально", "Плохо"],
@@ -76,13 +76,16 @@ class BroadcastTests(unittest.TestCase):
         options = notification["payload"]["poll_options"]
         first = db.record_broadcast_vote("telegram", "101", options[0]["callback_data"])
         self.assertFalse(first["changed"])
-        changed = db.record_broadcast_vote("telegram", "101", options[1]["callback_data"])
-        self.assertTrue(changed["changed"])
+        self.assertFalse(first["already_recorded"])
+        repeated = db.record_broadcast_vote("telegram", "101", options[1]["callback_data"])
+        self.assertFalse(repeated["changed"])
+        self.assertTrue(repeated["already_recorded"])
+        self.assertEqual(repeated["label"], "Хорошо")
         db.record_broadcast_vote("telegram", "102", options[1]["callback_data"])
         report = db.admin_broadcast_report()["campaigns"][0]
         self.assertEqual(report["voters"], 2)
         votes = {item["label"]: item["votes"] for item in report["options"]}
-        self.assertEqual(votes, {"Хорошо": 0, "Нормально": 2, "Плохо": 0})
+        self.assertEqual(votes, {"Хорошо": 1, "Нормально": 1, "Плохо": 0})
         self.assertEqual(campaign["users"], 2)
 
     def test_test_send_targets_only_requested_chel_id(self):
@@ -135,6 +138,11 @@ class BroadcastTests(unittest.TestCase):
             css,
         )
         self.assertIn("Аналитика и история рассылок", html)
+        script = (project / "static" / "dashboard.js").read_text(encoding="utf-8")
+        main = (project / "backend" / "main.py").read_text(encoding="utf-8")
+        self.assertIn("Для подтверждения введите слово ОТПРАВИТЬ", script)
+        self.assertIn("payload.confirmation = 'ОТПРАВИТЬ'", script)
+        self.assertIn("Подтвердите массовую рассылку словом ОТПРАВИТЬ", main)
 
 
 if __name__ == "__main__":
