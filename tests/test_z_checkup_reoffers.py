@@ -28,6 +28,14 @@ class CheckupReofferTests(unittest.TestCase):
             "inn": "1234567890", "organization_name": "Завод",
             "examination_date": examination_day.isoformat(), "brigade": "Бригада 1",
         }], ["1"])
+        with db.connection() as conn:
+            conn.execute(
+                """INSERT OR IGNORE INTO external_identities
+                (provider,provider_user_id,chel_id,access_status,created_at,last_login_at)
+                VALUES ('telegram','scheduled-user',?,'active',?,?)""",
+                (db.current_chel_id(), db.utc_now(), db.utc_now()),
+            )
+            conn.commit()
         return examination_day
 
     def latest_message(self):
@@ -62,6 +70,114 @@ class CheckupReofferTests(unittest.TestCase):
         self.assertEqual(notifications[0]["event_type"], "pre_exam_reminder")
         self.assertEqual(notifications[0]["payload"]["audience_group"], "unselected")
         self.assertIn("checkup_reoffer=", notifications[0]["payload"]["action_url"])
+
+    def test_user_without_linked_messenger_gets_no_chat_or_reminder(self):
+        tomorrow = self.schedule()
+        with db.connection() as conn:
+            conn.execute(
+                "DELETE FROM external_identities WHERE chel_id=?",
+                (db.current_chel_id(),),
+            )
+            conn.commit()
+
+        self.assertEqual(
+            db.queue_due_checkup_reoffers(tomorrow, "https://example.test"), []
+        )
+        with db.connection() as conn:
+            self.assertEqual(
+                conn.execute("SELECT COUNT(*) FROM checkup_reoffers").fetchone()[0], 0
+            )
+            self.assertEqual(
+                conn.execute("SELECT COUNT(*) FROM messages").fetchone()[0], 0
+            )
+
+    def test_consecutive_company_dates_create_only_one_user_reminder(self):
+        first_day = date.today() + timedelta(days=1)
+        second_day = date.today() + timedelta(days=2)
+        db.replace_enterprise_examination_schedule([
+            {
+                "source_sheet_id": "1", "source_row_id": "first",
+                "inn": "1234567890", "organization_name": "Завод",
+                "examination_date": first_day.isoformat(), "brigade": "Бригада 1",
+            },
+            {
+                "source_sheet_id": "1", "source_row_id": "second",
+                "inn": "1234567890", "organization_name": "Завод",
+                "examination_date": second_day.isoformat(), "brigade": "Бригада 2",
+            },
+        ], ["1"])
+        with db.connection() as conn:
+            conn.execute(
+                """INSERT INTO external_identities
+                (provider,provider_user_id,chel_id,access_status,created_at,last_login_at)
+                VALUES ('telegram','consecutive-user',?,'active',?,?)""",
+                (db.current_chel_id(), db.utc_now(), db.utc_now()),
+            )
+            conn.commit()
+
+        first = db.queue_due_checkup_reoffers(first_day, "https://example.test")
+        second = db.queue_due_checkup_reoffers(second_day, "https://example.test")
+
+        self.assertEqual(len(first), 1)
+        self.assertEqual(second, [])
+        with db.connection() as conn:
+            self.assertEqual(
+                conn.execute(
+                    "SELECT COUNT(*) FROM checkup_reoffers WHERE is_test=0"
+                ).fetchone()[0], 1
+            )
+
+    def test_upgrade_cancels_already_queued_later_reminder(self):
+        first_day = self.schedule()
+        first = db.queue_due_checkup_reoffers(first_day, "https://example.test")[0]
+        later_day = first_day + timedelta(days=1)
+        now = db.utc_now()
+        with db.connection() as conn:
+            conn.execute(
+                """INSERT INTO checkup_reoffer_candidates
+                (chel_id,journey_id,company_inn,active_seconds,duration_bucket,
+                 experiment_variant,first_seen_at,last_seen_at)
+                VALUES (?,?,?,0,'pre_exam','pre_exam',?,?)""",
+                (db.current_chel_id(), "pre-exam:later", "1234567890", now, now),
+            )
+            candidate_id = conn.execute(
+                "SELECT id FROM checkup_reoffer_candidates WHERE journey_id='pre-exam:later'"
+            ).fetchone()[0]
+            cursor = conn.execute(
+                """INSERT INTO checkup_reoffers
+                (chel_id,candidate_id,company_inn,examination_date,active_seconds,
+                 duration_bucket,access_token,status,created_at,is_test)
+                VALUES (?,?,?, ?,0,'pre_exam',?,'sent',?,0)""",
+                (
+                    db.current_chel_id(), candidate_id, "1234567890",
+                    later_day.isoformat(), "later-token", now,
+                ),
+            )
+            later_id = int(cursor.lastrowid)
+            conn.execute(
+                """INSERT INTO user_notification_outbox
+                (reoffer_id,chel_id,provider,recipient_id,event_type,payload,status,
+                 attempts,created_at,updated_at)
+                VALUES (?,?,?,?,?,'{}','pending',0,?,?)""",
+                (
+                    later_id, db.current_chel_id(), "telegram", "scheduled-user",
+                    "pre_exam_reminder", now, now,
+                ),
+            )
+            self.assertEqual(db._cancel_redundant_pre_exam_notifications(conn), 1)
+            conn.commit()
+
+        with db.connection() as conn:
+            status = conn.execute(
+                "SELECT status FROM user_notification_outbox WHERE reoffer_id=?",
+                (later_id,),
+            ).fetchone()[0]
+            first_status = conn.execute(
+                "SELECT status FROM user_notification_outbox WHERE reoffer_id=?",
+                (first["id"],),
+            ).fetchone()[0]
+        self.assertEqual(status, "cancelled")
+        self.assertEqual(first_status, "pending")
 
     def test_selected_for_payment_at_exam_gets_discount_message(self):
         tomorrow = self.schedule()

@@ -8805,6 +8805,7 @@ def init_db() -> None:
             "ON broadcast_recipients(campaign_id, status)"
         )
         _reconcile_terminal_messenger_failures(conn)
+        _cancel_redundant_pre_exam_notifications(conn)
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_lab_result_value_estimates_status "
             "ON lab_result_value_estimates(status, updated_at)"
@@ -8994,6 +8995,15 @@ def admin_checkup_reoffer_diagnostics(reference_date: date | None = None) -> dic
                    JOIN user_profile p ON p.chel_id=u.chel_id
                    WHERE IS_STATS_USER(u.chel_id)=1
                      AND TRIM(COALESCE(p.company_inn,''))<>''
+                     AND EXISTS (
+                       SELECT 1 FROM external_identities e
+                       WHERE e.chel_id=u.chel_id AND e.access_status='active'
+                         AND e.provider IN ('telegram','max')
+                         AND (
+                           (e.provider='telegram' AND TRIM(COALESCE(e.provider_user_id,''))<>'')
+                           OR (e.provider='max' AND TRIM(COALESCE(e.chat_id,''))<>'')
+                         )
+                     )
                      AND EXISTS (SELECT 1 FROM enterprise_examination_schedule s
                        WHERE s.inn=p.company_inn AND s.status='active'
                          AND s.examination_date=?)""",
@@ -9007,8 +9017,8 @@ def admin_checkup_reoffer_diagnostics(reference_date: date | None = None) -> dic
             for user in rows:
                 chel_id = str(user["chel_id"])
                 if exclude_sent and conn.execute(
-                    "SELECT 1 FROM checkup_reoffers WHERE chel_id=? AND examination_date=?",
-                    (chel_id, examination_date),
+                    "SELECT 1 FROM checkup_reoffers WHERE chel_id=? AND is_test=0",
+                    (chel_id,),
                 ).fetchone():
                     continue
                 group, _ = _pre_exam_audience(conn, chel_id, dict(user), catalog)
@@ -9412,7 +9422,13 @@ def save_checkup_reoffer_dwell(journey_id: str, active_seconds: int) -> dict:
 
 
 def queue_due_checkup_reoffers(examination_date: date, public_url: str) -> list[dict]:
-    """Notify every known user whose company has an examination tomorrow."""
+    """Queue one reminder for a messenger-linked user before a known exam date.
+
+    The enterprise schedule can contain several consecutive examination dates
+    for the same company.  It does not identify which employee belongs to which
+    date, so a user must never be treated as due again merely because another
+    row for the same company becomes ``tomorrow``.
+    """
     exam_day = examination_date.isoformat()
     now = utc_now()
     base_url = str(public_url or "").rstrip("/")
@@ -9425,6 +9441,15 @@ def queue_due_checkup_reoffers(examination_date: date, public_url: str) -> list[
             WHERE IS_STATS_USER(u.chel_id)=1
               AND TRIM(COALESCE(p.company_inn,''))<>''
               AND EXISTS (
+                SELECT 1 FROM external_identities e
+                WHERE e.chel_id=u.chel_id AND e.access_status='active'
+                  AND e.provider IN ('telegram','max')
+                  AND (
+                    (e.provider='telegram' AND TRIM(COALESCE(e.provider_user_id,''))<>'')
+                    OR (e.provider='max' AND TRIM(COALESCE(e.chat_id,''))<>'')
+                  )
+              )
+              AND EXISTS (
                 SELECT 1 FROM enterprise_examination_schedule s
                 WHERE s.inn=p.company_inn AND s.status='active' AND s.examination_date=?
               )
@@ -9434,10 +9459,22 @@ def queue_due_checkup_reoffers(examination_date: date, public_url: str) -> list[
         for user in users:
             chel_id = str(user["chel_id"])
             existing = conn.execute(
-                "SELECT id FROM checkup_reoffers WHERE chel_id=? AND examination_date=?",
-                (chel_id, exam_day),
+                "SELECT id FROM checkup_reoffers WHERE chel_id=? AND is_test=0",
+                (chel_id,),
             ).fetchone()
             if existing:
+                continue
+            identities = conn.execute(
+                """SELECT provider,provider_user_id,chat_id FROM external_identities
+                WHERE chel_id=? AND access_status='active'
+                  AND provider IN ('telegram','max')""",
+                (chel_id,),
+            ).fetchall()
+            identities = [
+                identity for identity in identities
+                if _external_identity_recipient(identity)
+            ]
+            if not identities:
                 continue
             profile = dict(user)
             audience_group, snapshot = _pre_exam_audience(
@@ -9510,11 +9547,6 @@ def queue_due_checkup_reoffers(examination_date: date, public_url: str) -> list[
                 sent_at=? WHERE id=?""",
                 (conversation_id, message_id, now, reoffer_id),
             )
-            identities = conn.execute(
-                """SELECT provider,provider_user_id,chat_id FROM external_identities
-                WHERE chel_id=? AND access_status='active' AND provider IN ('telegram','max')""",
-                (chel_id,),
-            ).fetchall()
             payload = json.dumps({
                 "title": "Завтра медосмотр",
                 "body": message, "kind": "pre_exam_reminder",
@@ -12360,6 +12392,36 @@ def _reconcile_terminal_messenger_failures(conn) -> int:
         )
         changed += int(cursor.rowcount or 0)
     return changed
+
+
+def _cancel_redundant_pre_exam_notifications(conn) -> int:
+    """Cancel unsent reminders created after a user's first real reminder.
+
+    Older builds treated every dated row for an organisation as a separate
+    employee examination.  Keep the first reminder (and its Telegram/MAX
+    deliveries), but prevent already queued reminders for later company dates
+    from reaching the same person after an upgrade.
+    """
+    now = utc_now()
+    cursor = conn.execute(
+        """UPDATE user_notification_outbox
+        SET status='cancelled',next_attempt_at=NULL,lease_token=NULL,leased_at=NULL,
+            last_error='Отменено: повторное напоминание перед медосмотром',updated_at=?
+        WHERE event_type='pre_exam_reminder'
+          AND status IN ('pending','delivering')
+          AND EXISTS (
+            SELECT 1
+            FROM checkup_reoffers current_reminder
+            JOIN checkup_reoffers earlier_reminder
+              ON earlier_reminder.chel_id=current_reminder.chel_id
+             AND earlier_reminder.is_test=0
+             AND earlier_reminder.id<current_reminder.id
+            WHERE current_reminder.id=user_notification_outbox.reoffer_id
+              AND current_reminder.is_test=0
+          )""",
+        (now,),
+    )
+    return int(cursor.rowcount or 0)
 
 
 def notification_delivery_snapshot(provider: str = "max") -> dict:
