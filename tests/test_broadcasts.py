@@ -67,6 +67,33 @@ class BroadcastTests(unittest.TestCase):
         self.assertEqual(report["unique_clicks"], 1)
         self.assertEqual(report["total_clicks"], 2)
 
+    def test_consultation_offer_opens_consultations_menu_and_tracks_click(self):
+        campaign = db.create_broadcast_campaign({
+            "kind": "consultation",
+            "title": "Консультация Татьяны Витальевны",
+            "body": "Запишитесь на консультацию со скидкой 50%.",
+            "provider_scope": "telegram",
+        })
+        notification = db.claim_broadcast_notifications("telegram", 1)[0]
+        self.assertEqual(notification["payload"]["kind"], "broadcast_message")
+        self.assertEqual(
+            notification["payload"]["action_label"],
+            "Записаться на консультацию",
+        )
+        with db.connection() as conn:
+            click_token = conn.execute(
+                "SELECT click_token FROM broadcast_recipients WHERE campaign_id=? LIMIT 1",
+                (campaign["id"],),
+            ).fetchone()[0]
+        self.assertEqual(
+            db.record_broadcast_click(click_token),
+            "https://consilium.test?open=consultations",
+        )
+        report = db.admin_broadcast_report()["campaigns"][0]
+        self.assertEqual(report["kind"], "message")
+        self.assertEqual(report["destination"], "consultations")
+        self.assertEqual(report["unique_clicks"], 1)
+
     def test_poll_counts_one_user_and_locks_first_answer(self):
         campaign = db.create_broadcast_campaign({
             "kind": "poll", "title": "Опрос", "body": "Как вы себя чувствуете?",
@@ -143,6 +170,11 @@ class BroadcastTests(unittest.TestCase):
         self.assertIn("Для подтверждения введите слово ОТПРАВИТЬ", script)
         self.assertIn("payload.confirmation = 'ОТПРАВИТЬ'", script)
         self.assertIn("Подтвердите массовую рассылку словом ОТПРАВИТЬ", main)
+        app = (project / "static" / "app.js").read_text(encoding="utf-8")
+        self.assertIn('<option value="consultation">Предложение консультации</option>', html)
+        self.assertIn("kind === 'consultation'", script)
+        self.assertIn("query.get('open') === 'consultations'", app)
+        self.assertIn("consultationRequestButton", app)
 
 
 if __name__ == "__main__":

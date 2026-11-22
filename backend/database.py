@@ -8033,6 +8033,7 @@ def init_db() -> None:
             CREATE TABLE IF NOT EXISTS broadcast_campaigns (
                 id TEXT PRIMARY KEY,
                 kind TEXT NOT NULL CHECK(kind IN ('message','poll')),
+                destination TEXT NOT NULL DEFAULT 'app',
                 title TEXT NOT NULL DEFAULT '',
                 body TEXT NOT NULL,
                 button_label TEXT NOT NULL DEFAULT 'Открыть Консилиум',
@@ -8848,6 +8849,16 @@ def init_db() -> None:
             "CREATE INDEX IF NOT EXISTS idx_user_notification_outbox_delivery "
             "ON user_notification_outbox(provider, status, next_attempt_at)"
         )
+        broadcast_campaign_columns = {
+            row[1] for row in conn.execute(
+                "PRAGMA table_info(broadcast_campaigns)"
+            ).fetchall()
+        }
+        if "destination" not in broadcast_campaign_columns:
+            conn.execute(
+                "ALTER TABLE broadcast_campaigns "
+                "ADD COLUMN destination TEXT NOT NULL DEFAULT 'app'"
+            )
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_broadcast_recipients_delivery "
             "ON broadcast_recipients(provider, status, next_attempt_at)"
@@ -12672,16 +12683,20 @@ BROADCAST_MAX_ATTEMPTS = 8
 
 def _normalize_broadcast_payload(payload: dict) -> dict:
     kind = str(payload.get("kind") or "message").strip().lower()
-    if kind not in {"message", "poll"}:
-        raise ValueError("Выберите сообщение или голосование")
+    if kind not in {"message", "poll", "consultation"}:
+        raise ValueError("Выберите сообщение, голосование или предложение консультации")
     title = " ".join(str(payload.get("title") or "Консилиум").split())[:120]
     body = str(payload.get("body") or "").strip()
     if not body:
         raise ValueError("Введите текст рассылки")
     if len(body) > 3500:
         raise ValueError("Текст рассылки не должен превышать 3500 символов")
+    default_button_label = (
+        "Записаться на консультацию"
+        if kind == "consultation" else "Открыть Консилиум"
+    )
     button_label = " ".join(
-        str(payload.get("button_label") or "Открыть Консилиум").split()
+        str(payload.get("button_label") or default_button_label).split()
     )[:64]
     provider_scope = str(payload.get("provider_scope") or "all").strip().lower()
     if provider_scope not in {"all", "telegram", "max"}:
@@ -12694,8 +12709,11 @@ def _normalize_broadcast_payload(payload: dict) -> dict:
     if len(set(value.casefold() for value in options)) != len(options):
         raise ValueError("Варианты ответа не должны повторяться")
     return {
-        "kind": kind, "title": title or "Консилиум", "body": body,
-        "button_label": button_label or "Открыть Консилиум",
+        "kind": "message" if kind == "consultation" else kind,
+        "format": kind,
+        "destination": "consultations" if kind == "consultation" else "app",
+        "title": title or "Консилиум", "body": body,
+        "button_label": button_label or default_button_label,
         "provider_scope": provider_scope,
         "options": options if kind == "poll" else [],
     }
@@ -12744,10 +12762,11 @@ def create_broadcast_campaign(
             title = f"ТЕСТ · {title}"[:120]
         conn.execute(
             """INSERT INTO broadcast_campaigns
-               (id,kind,title,body,button_label,provider_scope,app_url,status,is_test,created_at)
-               VALUES (?,?,?,?,?,?,?,'queued',?,?)""",
+               (id,kind,destination,title,body,button_label,provider_scope,app_url,status,is_test,created_at)
+               VALUES (?,?,?,?,?,?,?,?,'queued',?,?)""",
             (
-                campaign_id, normalized["kind"], title, normalized["body"],
+                campaign_id, normalized["kind"], normalized["destination"],
+                title, normalized["body"],
                 normalized["button_label"], provider_scope,
                 str(settings.public_base_url or "").rstrip("/"),
                 int(bool(test_chel_id)), now,
@@ -12841,7 +12860,7 @@ def claim_broadcast_notifications(provider: str, limit: int = 5) -> list[dict]:
     with _write_lock, connection() as conn:
         rows = conn.execute(
             """SELECT r.id,r.recipient_id,r.click_token,r.attempts,
-                      c.id campaign_id,c.kind,c.title,c.body,c.button_label,c.app_url
+                      c.id campaign_id,c.kind,c.destination,c.title,c.body,c.button_label,c.app_url
                FROM broadcast_recipients r
                JOIN broadcast_campaigns c ON c.id=r.campaign_id
                WHERE r.provider=? AND c.status IN ('queued','sending')
@@ -12956,7 +12975,7 @@ def record_broadcast_click(click_token: str) -> str | None:
     now = utc_now()
     with _write_lock, connection() as conn:
         row = conn.execute(
-            """SELECT r.campaign_id,r.chel_id,r.provider,c.app_url,c.kind
+            """SELECT r.campaign_id,r.chel_id,r.provider,c.app_url,c.kind,c.destination
                FROM broadcast_recipients r
                JOIN broadcast_campaigns c ON c.id=r.campaign_id
                WHERE r.click_token=?""",
@@ -12974,7 +12993,11 @@ def record_broadcast_click(click_token: str) -> str | None:
             (row["campaign_id"], row["chel_id"], row["provider"], now, now),
         )
         conn.commit()
-    return str(row["app_url"] or "/")
+    target = str(row["app_url"] or "/")
+    if row["destination"] == "consultations":
+        separator = "&" if "?" in target else "?"
+        target = f"{target}{separator}open=consultations"
+    return target
 
 
 def record_broadcast_vote(

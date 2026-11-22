@@ -11,7 +11,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Manrope:wght@400;500;600;700;800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="/static/dashboard.css?v=20261111-broadcasts-fix-v25">
+  <link rel="stylesheet" href="/static/dashboard.css?v=20261122-consultation-broadcast-v26">
 </head>
 <body>
   <main class="dashboard-shell">
@@ -399,10 +399,10 @@
         </article>
         <div class="broadcast-layout">
           <article class="panel broadcast-compose-panel">
-            <div class="panel-heading"><div><p class="eyebrow">Новая рассылка</p><h2>Сообщение или голосование</h2></div></div>
+            <div class="panel-heading"><div><p class="eyebrow">Новая рассылка</p><h2>Сообщение, консультация или голосование</h2></div></div>
             <form id="broadcastForm" class="broadcast-form">
               <div class="broadcast-form-row">
-                <label>Формат<select id="broadcastKind"><option value="message">Сообщение с кнопкой</option><option value="poll">Голосование</option></select></label>
+                <label>Формат<select id="broadcastKind"><option value="message">Сообщение с кнопкой</option><option value="consultation">Предложение консультации</option><option value="poll">Голосование</option></select></label>
                 <label>Куда отправлять<select id="broadcastProvider"><option value="all">Telegram и MAX</option><option value="telegram">Только Telegram</option><option value="max">Только MAX</option></select></label>
               </div>
               <label>Заголовок<input id="broadcastTitle" maxlength="120" value="Консилиум" required></label>
@@ -947,6 +947,6 @@
       </div>
     </section>
   </div>
-  <script src="/static/dashboard.js?v=20261112-broadcast-confirm-v28" defer></script>
+  <script src="/static/dashboard.js?v=20261122-consultation-broadcast-v29" defer></script>
 </body>
 </html>

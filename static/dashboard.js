@@ -2147,12 +2147,15 @@ async function sendCheckupReofferTest() {
 }
 
 function broadcastPayload() {
+  const kind = $('#broadcastKind').value;
   return {
-    kind:$('#broadcastKind').value,
+    kind,
     provider_scope:$('#broadcastProvider').value,
     title:$('#broadcastTitle').value.trim(),
     body:$('#broadcastBody').value.trim(),
-    button_label:$('#broadcastButtonLabel').value.trim(),
+    button_label:kind === 'consultation'
+      ? 'Записаться на консультацию'
+      : $('#broadcastButtonLabel').value.trim(),
     options:$('#broadcastOptions').value.split('\n').map(value => value.trim()).filter(Boolean),
   };
 }
@@ -2167,17 +2170,34 @@ function showBroadcastStatus(message = '', error = false) {
 function renderBroadcastPreview() {
   const payload = broadcastPayload();
   const isPoll = payload.kind === 'poll';
-  $('#broadcastButtonLabelWrap').classList.toggle('hidden', isPoll);
+  const isConsultation = payload.kind === 'consultation';
+  $('#broadcastButtonLabelWrap').classList.toggle('hidden', isPoll || isConsultation);
   $('#broadcastOptionsWrap').classList.toggle('hidden', !isPoll);
   $('#broadcastBodyLength').textContent = String($('#broadcastBody').value.length);
   const options = payload.options.slice(0,10);
   $('#broadcastPreview').innerHTML = `
-    <small>Предпросмотр</small>
+    <small>${isConsultation ? 'Предпросмотр предложения консультации' : 'Предпросмотр'}</small>
     <strong>${escapeHtml(payload.title || 'Консилиум')}</strong>
     <p>${escapeHtml(payload.body || 'Здесь появится текст рассылки').replace(/\n/g,'<br>')}</p>
     <div>${isPoll
       ? (options.length ? options.map(value => `<span>${escapeHtml(value)}</span>`).join('') : '<em>Добавьте варианты ответа</em>')
       : `<span>${escapeHtml(payload.button_label || 'Открыть Консилиум')}</span>`}</div>`;
+}
+
+function handleBroadcastKindChange() {
+  const consultation = $('#broadcastKind').value === 'consultation';
+  if (consultation) {
+    if (!$('#broadcastBody').value.trim()) {
+      $('#broadcastBody').value = 'Запишитесь на консультацию Татьяны Витальевны — врача-терапевта, эндокринолога. Для клиентов Консилиума действует постоянная скидка 50%: стоимость 900 ₽ вместо 1 800 ₽. Оплата производится после консультации.';
+    }
+    if (!$('#broadcastTitle').value.trim() || $('#broadcastTitle').value.trim() === 'Консилиум') {
+      $('#broadcastTitle').value = 'Консультация Татьяны Витальевны';
+    }
+    $('#broadcastButtonLabel').value = 'Записаться на консультацию';
+  } else if ($('#broadcastButtonLabel').value === 'Записаться на консультацию') {
+    $('#broadcastButtonLabel').value = 'Открыть Консилиум';
+  }
+  renderBroadcastPreview();
 }
 
 function renderBroadcasts(data) {
@@ -2194,7 +2214,7 @@ function renderBroadcasts(data) {
   const root = $('#broadcastHistory');
   const campaigns = data.campaigns || [];
   if (!campaigns.length) {
-    root.innerHTML = '<div class="broadcast-empty"><strong>Рассылок пока нет</strong><span>Создайте сообщение или голосование слева.</span></div>';
+    root.innerHTML = '<div class="broadcast-empty"><strong>Рассылок пока нет</strong><span>Создайте сообщение, предложение консультации или голосование слева.</span></div>';
     return;
   }
   root.innerHTML = campaigns.map(item => {
@@ -2213,7 +2233,7 @@ function renderBroadcasts(data) {
     }).join('');
     const status = item.status === 'completed' ? 'Завершена' : item.status === 'sending' ? 'Отправляется' : 'В очереди';
     return `<article class="broadcast-campaign-card">
-      <header><div><small>${item.kind === 'poll' ? 'Голосование' : 'Сообщение'} · ${formatDate(item.created_at)}</small><h3>${escapeHtml(item.title)}</h3></div><span class="broadcast-campaign-status ${escapeHtml(item.status)}">${status}</span></header>
+      <header><div><small>${item.kind === 'poll' ? 'Голосование' : item.destination === 'consultations' ? 'Предложение консультации' : 'Сообщение'} · ${formatDate(item.created_at)}</small><h3>${escapeHtml(item.title)}</h3></div><span class="broadcast-campaign-status ${escapeHtml(item.status)}">${status}</span></header>
       <p>${escapeHtml(item.body).replace(/\n/g,'<br>')}</p>
       <div class="broadcast-delivery-stats"><span><b>${formatTokens(item.recipient_users)}</b> пользователей</span><span><b>${formatTokens(sent)}</b> доставлено</span><span><b>${formatTokens(pending)}</b> ожидает</span><span><b>${formatTokens(failed)}</b> ошибок</span></div>
       ${item.kind === 'message'
@@ -3398,7 +3418,7 @@ $('#metric2Apply').addEventListener('click', () => loadMetric2().catch(showDashb
 $('#broadcastForm').addEventListener('submit', submitBroadcast);
 $('#broadcastTestButton').addEventListener('click', sendBroadcastTest);
 $('#broadcastRefresh').addEventListener('click', () => loadBroadcasts().catch(showDashboardError));
-$('#broadcastKind').addEventListener('change', renderBroadcastPreview);
+$('#broadcastKind').addEventListener('change', handleBroadcastKindChange);
 $('#broadcastProvider').addEventListener('change', renderBroadcastPreview);
 $('#broadcastTitle').addEventListener('input', renderBroadcastPreview);
 $('#broadcastBody').addEventListener('input', renderBroadcastPreview);

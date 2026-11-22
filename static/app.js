@@ -6287,7 +6287,9 @@ function renderConsultations(items) {
 async function openConsultations() {
   closeFunctionMenu();
   const payButton = $('#consultationPayButton');
+  const requestButton = $('#consultationRequestButton');
   payButton.classList.add('hidden');
+  requestButton.classList.add('hidden');
   payButton.dataset.conversationId = '';
   $('#consultationsList').innerHTML = '<div class="purchases-loading"><span></span><p>Загружаем консультации…</p></div>';
   $('#consultationsModal').classList.remove('hidden');
@@ -6299,9 +6301,11 @@ async function openConsultations() {
     const offer = result.payment_offer || {};
     payButton.classList.toggle('hidden', !offer.available);
     payButton.dataset.conversationId = offer.conversation_id || '';
+    requestButton.classList.toggle('hidden', Boolean(offer.available));
     trackEvent('consultations_viewed', {consultation_count:state.consultations.length});
   } catch (error) {
     payButton.classList.add('hidden');
+    requestButton.classList.add('hidden');
     payButton.dataset.conversationId = '';
     $('#consultationsList').innerHTML = `<div class="consultations-empty"><strong>Не удалось загрузить консультации</strong><span>${escapeHtml(error.message)}</span></div>`;
   } finally {
@@ -6310,6 +6314,26 @@ async function openConsultations() {
 }
 
 function closeConsultations() { $('#consultationsModal').classList.add('hidden'); }
+
+async function requestConsultationFromMenu() {
+  closeConsultations();
+  trackEvent('consultation_request_opened', {source:'consultations_menu'});
+  if (!state.conversationId) {
+    beginUserProgress('Открываем запись на консультацию…');
+    try {
+      const conversation = await api('/api/conversations', {
+        method:'POST', body:JSON.stringify({title:'Консультация врача'}),
+      });
+      await openConversation(conversation.id);
+    } catch (error) {
+      addSystemError(error.message);
+      return;
+    } finally {
+      endUserProgress();
+    }
+  }
+  await openHumanModal();
+}
 
 function beginConsultationPurchase() {
   state.paymentReviewSource = 'consultation';
@@ -8192,6 +8216,7 @@ $('#purchasesModal').addEventListener('click', event => { if (event.target.id ==
 $('#purchasesList').addEventListener('click', handlePurchaseAction);
 $('#consultationsClose').addEventListener('click', closeConsultations);
 $('#consultationsModal').addEventListener('click', event => { if (event.target.id === 'consultationsModal') closeConsultations(); });
+$('#consultationRequestButton').addEventListener('click', requestConsultationFromMenu);
 $('#consultationPayButton').addEventListener('click', beginConsultationPurchase);
 $('#chatGuide').addEventListener('click', event => {
   if (event.target.closest('#chatGuideFinish')) return;
@@ -8671,6 +8696,12 @@ async function initMainApp() {
     }
   } else if (state.conversationId) await openConversation(state.conversationId);
   else newConversation();
+  if (query.get('open') === 'consultations') {
+    await openConsultations();
+    query.delete('open');
+    const cleanQuery = query.toString();
+    history.replaceState({}, '', `${location.pathname}${cleanQuery ? `?${cleanQuery}` : ''}`);
+  }
   if (query.get('preview_feed') === '1') requestAnimationFrame(openFeed);
   const pendingSpecialistDocument = sessionStorage.getItem(SPECIALIST_ANALYSIS_PENDING_KEY);
   if (pendingSpecialistDocument && linkedMessengerProviders().size) {
