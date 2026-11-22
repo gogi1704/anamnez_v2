@@ -1470,7 +1470,9 @@ class OrchestratorTests(unittest.TestCase):
         confirm_flow = script.split("async function chooseHumanSpecialistChat(", 1)[1].split(
             "function closeFunctionMenu", 1,
         )[0]
-        self.assertIn("chooseHumanSpecialistChat(false)", decline_flow)
+        self.assertNotIn("chooseHumanSpecialistChat(false)", decline_flow)
+        self.assertIn("closeHumanModal()", decline_flow)
+        self.assertIn("updateChatMode(true, 'none', null)", decline_flow)
         self.assertIn("/api/human-preference", confirm_flow)
         self.assertIn("channel:'chat'", confirm_flow)
         self.assertIn("consultation_request:false", confirm_flow)
@@ -1480,6 +1482,12 @@ class OrchestratorTests(unittest.TestCase):
         self.assertIn("Укажите предварительную тему разговора", script)
         self.assertIn('id="consultationTopic"', script)
         self.assertIn("consultation_topic:state.consultationTopic", script)
+        self.assertIn("if (!state.conversationId)", confirm_flow)
+        self.assertIn("method:'POST', body:JSON.stringify({title:'Консультация врача'})", confirm_flow)
+        self.assertLess(
+            confirm_flow.index("state.consultationTopic = topic"),
+            confirm_flow.index("interpretationProfileComplete()"),
+        )
 
     def test_unpaid_consultation_request_is_rejected(self):
         offered = ConversationOrchestrator(FakeLLM()).process(None, "Позови человека")
@@ -4617,14 +4625,14 @@ class OrchestratorTests(unittest.TestCase):
         self.assertIn("controllerchange", script)
         self.assertIn("url.pathname.startsWith('/api/')", worker)
         self.assertIn("url.pathname.startsWith('/auth/')", worker)
-        self.assertIn("consilium-shell-v223", worker)
+        self.assertIn("consilium-shell-v224", worker)
         self.assertIn("fetch(request)", worker)
-        self.assertIn("/static/styles.css?v=20261122-consultation-topic-v63", index)
+        self.assertIn("/static/styles.css?v=20261122-consultation-buttons-v64", index)
         self.assertIn("/static/rich-text.2bf1f5fab764.css", index)
         self.assertTrue((project_root / "static" / "styles.07ffaefb4795.css").is_file())
         self.assertTrue((project_root / "static" / "rich-text.2bf1f5fab764.css").is_file())
-        self.assertIn("/static/app.js?v=20261122-consultation-topic-v63", index)
-        self.assertIn("/static/metrika.js?v=20261122-consultation-topic-v63", index)
+        self.assertIn("/static/app.js?v=20261122-consultation-buttons-v64", index)
+        self.assertIn("/static/metrika.js?v=20261122-consultation-buttons-v64", index)
         self.assertIn("function safeUrl(value)", script)
         self.assertIn("error.code === 'http_404'", script)
         self.assertIn("fallback && fallback.id !== id", script)
@@ -4720,7 +4728,7 @@ class OrchestratorTests(unittest.TestCase):
         main = (project_root / "backend" / "main.py").read_text(encoding="utf-8")
         config = (project_root / "backend" / "config.py").read_text(encoding="utf-8")
 
-        self.assertIn('src="/static/metrika.js?v=20261122-consultation-topic-v63"', index)
+        self.assertIn('src="/static/metrika.js?v=20261122-consultation-buttons-v64"', index)
         self.assertIn('YANDEX_METRIKA_COUNTER_ID', config)
         self.assertIn('path == "/api/public-config"', main)
         self.assertIn('"metrika.js"', main)

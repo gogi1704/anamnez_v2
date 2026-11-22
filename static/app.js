@@ -6124,7 +6124,10 @@ function closeHumanModal() {
 }
 function declineHumanSpecialist() {
   if (state.conversationType !== 'masterclass_psychology') {
-    chooseHumanSpecialistChat(false);
+    closeHumanModal();
+    $('#taskStatus').textContent = 'ИИ продолжает отвечать';
+    updateChatMode(true, 'none', null);
+    focusChatInput();
     return;
   }
   closeHumanModal();
@@ -6138,13 +6141,7 @@ function setHumanChoiceDisabled(disabled) {
 }
 
 async function chooseHumanSpecialistChat(consultationRequest = true) {
-  if (!state.conversationId || state.processing) return;
-  if (!state.profile) await loadProfile();
-  if (!interpretationProfileComplete()) {
-    closeHumanModal();
-    openInterpretationProfileModal(consultationRequest ? 'consultation' : 'human_chat');
-    return;
-  }
+  if (state.processing) return;
   if (consultationRequest) {
     const topicInput = $('#consultationTopic');
     const topic = topicInput?.value.trim() || state.consultationTopic.trim();
@@ -6158,6 +6155,39 @@ async function chooseHumanSpecialistChat(consultationRequest = true) {
       return;
     }
     state.consultationTopic = topic;
+  }
+  if (!state.profile) await loadProfile();
+  if (!interpretationProfileComplete()) {
+    closeHumanModal();
+    openInterpretationProfileModal(consultationRequest ? 'consultation' : 'human_chat');
+    return;
+  }
+  if (consultationRequest) {
+    if (!state.conversationId) {
+      state.processing = true;
+      setHumanChoiceDisabled(true);
+      beginUserProgress('Открываем запись на консультацию…');
+      try {
+        const conversation = await api('/api/conversations', {
+          method:'POST', body:JSON.stringify({title:'Консультация врача'}),
+        });
+        state.conversationId = conversation.id;
+        state.conversationType = conversation.dialog_type || 'general';
+        localStorage.setItem('consilium_conversation_id', state.conversationId);
+        await loadConversationList();
+      } catch (error) {
+        const topicError = $('#consultationTopicError');
+        if (topicError) {
+          topicError.textContent = error.message || 'Не удалось открыть запись. Попробуйте ещё раз.';
+          topicError.classList.remove('hidden');
+        } else addSystemError(error.message);
+        return;
+      } finally {
+        state.processing = false;
+        setHumanChoiceDisabled(false);
+        endUserProgress();
+      }
+    }
     closeHumanModal();
     state.paymentReviewSource = 'consultation';
     state.paymentReviewOrderId = '';
