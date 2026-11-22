@@ -35,7 +35,7 @@ from backend.lab_result_valuation import (  # noqa: E402
 )
 from backend.llm import LLMProviderError, LLMService  # noqa: E402
 from backend.health_passport import build_health_passport_pdf  # noqa: E402
-from backend.main import ConsiliumHandler, _lab_result_analytics_event, _local_masterclass_test_url, _normalize_health_passport, _psychology_crisis_detected, _psychology_offer_url, _result_entry_can_start, admin_token_valid  # noqa: E402
+from backend.main import ConsiliumHandler, _fulfill_consultation_payment, _lab_result_analytics_event, _local_masterclass_test_url, _normalize_health_passport, _psychology_crisis_detected, _psychology_offer_url, _result_entry_can_start, admin_token_valid  # noqa: E402
 from backend.orchestrator import ConversationOrchestrator  # noqa: E402
 from backend.onboarding import (  # noqa: E402
     EXAMINATION_UPGRADE_PAIRS, TEST_CATALOG, effective_examination_price, online_examination_price, examination_recommendation_copy,
@@ -1473,18 +1473,18 @@ class OrchestratorTests(unittest.TestCase):
         self.assertIn("chooseHumanSpecialistChat(false)", decline_flow)
         self.assertIn("/api/human-preference", confirm_flow)
         self.assertIn("channel:'chat'", confirm_flow)
-        self.assertIn("consultation_request:", confirm_flow)
+        self.assertIn("consultation_request:false", confirm_flow)
+        self.assertIn("renderConsultationPayment()", confirm_flow)
         self.assertIn("Продолжить в обычный чат", script)
 
-    def test_consultation_request_routes_to_doctor_and_notifies_managers(self):
+    def test_unpaid_consultation_request_is_rejected(self):
         offered = ConversationOrchestrator(FakeLLM()).process(None, "Позови человека")
         handler = SimpleNamespace(
             _json=lambda status, payload: (status, payload),
             _track_analytics=lambda event, metadata=None: None,
         )
         complete_profile = {"sex": "female", "age": 40, "height_cm": 168, "weight_kg": 65}
-        with patch.object(db, "get_profile", return_value=complete_profile), \
-                patch.object(db, "enqueue_manager_notifications") as notify:
+        with patch.object(db, "get_profile", return_value=complete_profile):
             status, response = ConsiliumHandler._set_human_preference(
                 handler,
                 {
@@ -1494,21 +1494,11 @@ class OrchestratorTests(unittest.TestCase):
                 },
             )
 
-        self.assertEqual(status, 200)
-        self.assertEqual(response["recipient_role"], "doctor")
-        self.assertEqual(response["channel"], "paid_consultation")
+        self.assertEqual(status, 422)
+        self.assertIn("Сначала оплатите консультацию", response["detail"])
         saved = db.get_conversation(offered.conversation_id)
-        self.assertEqual(saved["human_recipient_role"], "doctor")
-        self.assertEqual(saved["human_channel"], "paid_consultation")
-        self.assertEqual(notify.call_count, 2)
-        self.assertEqual(
-            [call.kwargs["recipient_role"] for call in notify.call_args_list],
-            ["doctor", "manager"],
-        )
-        self.assertTrue(all(
-            call.kwargs["request_kind"] == "doctor_consultation"
-            for call in notify.call_args_list
-        ))
+        self.assertEqual(saved["human_status"], "none")
+        self.assertTrue(saved["ai_enabled"])
     def test_critical_phrase_bypasses_ai_router(self):
         fake = FakeLLM()
         result = ConversationOrchestrator(fake).process(None, "У меня сильная боль в груди, задыхаюсь")
@@ -3628,24 +3618,6 @@ class OrchestratorTests(unittest.TestCase):
                 conversation["id"], "Расшифровка готова", "Доктор", "doctor",
             )
             self.assertEqual(reply["metadata"]["staff_role"], "doctor")
-            with self.assertRaisesRegex(ValueError, "только врач"):
-                db.manager_send_consultation_payment_instruction(
-                    conversation["id"], "Менеджер", "manager",
-                )
-            instruction = db.manager_send_consultation_payment_instruction(
-                conversation["id"], "Доктор", "doctor",
-            )
-            self.assertEqual(
-                instruction["metadata"]["action"],
-                "consultation_payment_instruction",
-            )
-            self.assertIn("раздел «Консультации»", instruction["content"])
-            self.assertIn("900 ₽", instruction["content"])
-            self.assertIn("1 800 ₽", instruction["content"])
-            with self.assertRaisesRegex(ValueError, "уже отправлена"):
-                db.manager_send_consultation_payment_instruction(
-                    conversation["id"], "Доктор", "doctor",
-                )
             closed = db.manager_close_conversation(
                 conversation["id"], "Доктор", "doctor",
             )
@@ -4109,7 +4081,7 @@ class OrchestratorTests(unittest.TestCase):
         self.assertIn('id="profileDetails"', manager)
         self.assertIn('id="aiEnabled"', manager)
         self.assertIn('id="closeRequestButton"', manager)
-        self.assertIn('id="consultationPaymentInstructionButton"', manager)
+        self.assertNotIn('id="consultationPaymentInstructionButton"', manager)
         self.assertIn('id="managerLogin"', manager)
         self.assertIn('id="managerPassword"', manager)
         self.assertIn("/api/manager/login", manager_script)
@@ -4134,7 +4106,7 @@ class OrchestratorTests(unittest.TestCase):
         self.assertIn("state.collapsedPeople.add(chelId)", manager_script)
         self.assertIn("Номер заявки, chel_id или диалог", manager)
         self.assertIn("/close", manager_script)
-        self.assertIn("/consultation-payment-instruction", manager_script)
+        self.assertNotIn("/consultation-payment-instruction", manager_script)
         self.assertIn("state.manager?.role === 'doctor'", manager_script)
         self.assertIn("state.manager?.role === 'psychologist'", manager_script)
         self.assertIn("id=\"psychologySessionCompleteButton\"", manager)
@@ -4151,7 +4123,6 @@ class OrchestratorTests(unittest.TestCase):
             "    && conversation.human_status !== 'closed'",
             manager_script,
         )
-        self.assertIn("Подтвердить, что консультация проведена", manager_script)
         self.assertIn("if (!window.confirm(", manager_script)
         self.assertIn("playManagerSignal('request')", manager_script)
         self.assertIn("playManagerSignal('message')", manager_script)
@@ -4642,14 +4613,14 @@ class OrchestratorTests(unittest.TestCase):
         self.assertIn("controllerchange", script)
         self.assertIn("url.pathname.startsWith('/api/')", worker)
         self.assertIn("url.pathname.startsWith('/auth/')", worker)
-        self.assertIn("consilium-shell-v218", worker)
+        self.assertIn("consilium-shell-v221", worker)
         self.assertIn("fetch(request)", worker)
-        self.assertIn("/static/styles.css?v=20261107-splitter-medical-route-v58", index)
+        self.assertIn("/static/styles.css?v=20261122-consultation-prepay-v61", index)
         self.assertIn("/static/rich-text.2bf1f5fab764.css", index)
         self.assertTrue((project_root / "static" / "styles.07ffaefb4795.css").is_file())
         self.assertTrue((project_root / "static" / "rich-text.2bf1f5fab764.css").is_file())
-        self.assertIn("/static/app.js?v=20261107-splitter-medical-route-v58", index)
-        self.assertIn("/static/metrika.js?v=20261107-splitter-medical-route-v58", index)
+        self.assertIn("/static/app.js?v=20261122-consultation-prepay-v61", index)
+        self.assertIn("/static/metrika.js?v=20261122-consultation-prepay-v61", index)
         self.assertIn("function safeUrl(value)", script)
         self.assertIn("error.code === 'http_404'", script)
         self.assertIn("fallback && fallback.id !== id", script)
@@ -4696,7 +4667,7 @@ class OrchestratorTests(unittest.TestCase):
         self.assertIn('id="menuPurchasesButton"', index)
         self.assertIn('id="menuConsultationsButton"', index)
         self.assertIn('id="consultationsModal"', index)
-        self.assertIn('Оплатить после консультации · 900 ₽', index)
+        self.assertIn('Оплатить консультацию · 900 ₽', index)
         self.assertIn('скидка 50%', index)
         self.assertIn("/api/payments/yookassa/create-consultation", script)
         self.assertIn("/api/consultations", script)
@@ -4745,7 +4716,7 @@ class OrchestratorTests(unittest.TestCase):
         main = (project_root / "backend" / "main.py").read_text(encoding="utf-8")
         config = (project_root / "backend" / "config.py").read_text(encoding="utf-8")
 
-        self.assertIn('src="/static/metrika.js?v=20261107-splitter-medical-route-v58"', index)
+        self.assertIn('src="/static/metrika.js?v=20261122-consultation-prepay-v61"', index)
         self.assertIn('YANDEX_METRIKA_COUNTER_ID', config)
         self.assertIn('path == "/api/public-config"', main)
         self.assertIn('"metrika.js"', main)
@@ -6659,19 +6630,6 @@ class OrchestratorTests(unittest.TestCase):
             db.set_current_chel_id(chel_id)
             conversation = db.create_conversation("Консультация врача")
             onboarding_before = db.get_onboarding()["status"]
-            with self.assertRaisesRegex(ValueError, "после консультации"):
-                db.create_consultation_payment_order(conversation["id"])
-            db.confirm_human_chat(
-                conversation["id"], "D-POST01", recipient_role="doctor",
-                human_channel="paid_consultation",
-            )
-            db.manager_send_consultation_payment_instruction(
-                conversation["id"], "Татьяна Витальевна", "doctor",
-            )
-            closed = db.manager_close_conversation(
-                conversation["id"], "Татьяна Витальевна", "doctor",
-            )
-            self.assertEqual(closed["human_status"], "closed")
             order = db.create_consultation_payment_order(conversation["id"])
             private = db.payment_order_private(order["id"])
             self.assertEqual(private["order_type"], "consultation")
@@ -6688,13 +6646,27 @@ class OrchestratorTests(unittest.TestCase):
                 order["id"], {**provider, "status": "succeeded", "paid": True},
             )
             self.assertEqual(db.get_onboarding()["status"], onboarding_before)
-            first = db.fulfill_paid_consultation(paid["id"])
-            second = db.fulfill_paid_consultation(paid["id"])
+            with (
+                patch.object(db, "enqueue_manager_notifications") as notify,
+                patch("backend.main.analytics.record_server_event") as analytics_event,
+            ):
+                first = _fulfill_consultation_payment(paid)
+                second = _fulfill_consultation_payment(paid)
             self.assertTrue(first["created"])
             self.assertFalse(second["created"])
+            self.assertEqual(notify.call_count, 2)
+            self.assertEqual(
+                [call.kwargs["recipient_role"] for call in notify.call_args_list],
+                ["doctor", "manager"],
+            )
+            self.assertTrue(all(
+                call.kwargs["request_kind"] == "doctor_consultation"
+                for call in notify.call_args_list
+            ))
+            analytics_event.assert_called_once()
             saved = db.get_conversation(conversation["id"])
-            self.assertTrue(bool(saved["ai_enabled"]))
-            self.assertEqual(saved["human_status"], "closed")
+            self.assertFalse(bool(saved["ai_enabled"]))
+            self.assertEqual(saved["human_status"], "pending")
             self.assertEqual(saved["human_recipient_role"], "doctor")
             self.assertEqual(saved["human_channel"], "paid_consultation")
             messages = db.list_messages(conversation["id"])
@@ -6703,8 +6675,6 @@ class OrchestratorTests(unittest.TestCase):
                 for item in messages
             ), 1)
             self.assertEqual(len(db.list_paid_consultations()), 1)
-            self.assertFalse(db.consultation_payment_offer()["available"])
-            self.assertTrue(db.consultation_payment_offer()["already_paid"])
         finally:
             db.set_current_chel_id(chel_id)
             db.reset_current_user()
@@ -7615,6 +7585,15 @@ class OrchestratorTests(unittest.TestCase):
         self.assertIn("data-health-passport-download", app)
         self.assertIn("data-health-passport-checkups", app)
         self.assertIn("openHealthPassportCheckups", app)
+        self.assertIn("state.postOnboardingFlowBlocked = true", app)
+        self.assertIn("!$('#healthPassportModal').classList.contains('hidden')", app)
+        self.assertIn("state.postOnboardingFlowBlocked = false", app)
+        self.assertIn("requestAnimationFrame(() => openHumanModal())", app)
+        guide_close = app.split("function closeChatGuide()", 1)[1].split(
+            "function psychologySessionDate", 1,
+        )[0]
+        self.assertIn("guideType === 'general'", guide_close)
+        self.assertIn("postOnboardingConsultationPending", guide_close)
         exam_selection = app.split("function renderExamSelection(", 1)[1].split(
             "function renderExamSkipConfirmation", 1
         )[0]

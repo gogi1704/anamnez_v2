@@ -452,16 +452,6 @@ function renderHeader() {
     && (Boolean(conversation.human_ticket_id) || !conversation.ai_enabled);
   closeButton.classList.toggle('hidden', !closable);
   closeButton.disabled = state.busy;
-  const consultationInstruction = $('#consultationPaymentInstructionButton');
-  const consultationInstructionSent = state.detail.messages.some(
-    item => item.metadata?.action === 'consultation_payment_instruction',
-  );
-  const canOfferConsultation = state.manager?.role === 'doctor'
-    && conversation.human_channel === 'paid_consultation'
-    && conversation.human_status !== 'closed'
-    && !consultationInstructionSent;
-  consultationInstruction.classList.toggle('hidden', !canOfferConsultation);
-  consultationInstruction.disabled = state.busy;
   const psychologyComplete = $('#psychologySessionCompleteButton');
   const canCompletePsychologySession = state.manager?.role === 'psychologist'
     && conversation.dialog_type === 'masterclass_psychology'
@@ -806,33 +796,6 @@ async function sendReply(event) {
   } finally { state.busy = false; }
 }
 
-async function sendConsultationPaymentInstruction() {
-  if (!state.selectedId || state.busy) return;
-  if (!window.confirm(
-    'Подтвердить, что консультация проведена, и открыть пользователю оплату 900 ₽ со скидкой 50%? Сообщение сразу появится в его чате.'
-  )) return;
-  const button = $('#consultationPaymentInstructionButton');
-  state.busy = true;
-  button.disabled = true;
-  try {
-    const result = await api(
-      `/api/manager/conversations/${encodeURIComponent(state.selectedId)}/consultation-payment-instruction`,
-      {method:'POST', body:'{}'},
-    );
-    state.detail.messages.push(result.message);
-    state.detail.conversation = result.conversation;
-    renderHeader();
-    renderMessages();
-    await loadQueue();
-    toast('Инструкция по оплате отправлена пользователю');
-  } catch (error) {
-    toast(error.message, true);
-  } finally {
-    state.busy = false;
-    button.disabled = false;
-  }
-}
-
 async function completePsychologySession() {
   if (!state.selectedId || state.busy || !state.detail?.psychology_session) return;
   if (!window.confirm(
@@ -1016,7 +979,6 @@ $('#queueSearch').addEventListener('input', event => {
 });
 $('#aiEnabled').addEventListener('change', event => setAiMode(event.target.checked));
 $('#closeRequestButton').addEventListener('click', closeRequest);
-$('#consultationPaymentInstructionButton').addEventListener('click', sendConsultationPaymentInstruction);
 $('#psychologySessionCompleteButton').addEventListener('click', completePsychologySession);
 $('#psychologySessionPaymentInstructionButton').addEventListener('click', sendPsychologySessionPaymentInstruction);
 $('#psychologySessionInviteButton').addEventListener('click', openPsychologySessionInvitation);

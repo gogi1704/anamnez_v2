@@ -216,6 +216,13 @@ def _fulfill_consultation_payment(order: dict | None) -> dict | None:
         return None
     fulfillment = db.fulfill_paid_consultation(order["id"])
     if fulfillment and fulfillment.get("created"):
+        for recipient_role in ("doctor", "manager"):
+            db.enqueue_manager_notifications(
+                "new_request", fulfillment["conversation_id"],
+                message_id=int(fulfillment.get("message_id") or 0),
+                recipient_role=recipient_role,
+                request_kind="doctor_consultation",
+            )
         analytics.record_server_event(
             db.payment_order_private(order["id"], require_owner=False)["chel_id"],
             "consultation_payment_completed",
@@ -1023,10 +1030,7 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
         if path == "/api/purchases":
             return self._json(200, {"purchases": db.list_payment_orders()})
         if path == "/api/consultations":
-            return self._json(200, {
-                "consultations": db.list_paid_consultations(),
-                "payment_offer": db.consultation_payment_offer(),
-            })
+            return self._json(200, {"consultations": db.list_paid_consultations()})
         if path == "/api/psychology-sessions":
             try:
                 conversation_id = parse_qs(parsed.query).get("conversation_id", [""])[0]
@@ -1749,25 +1753,6 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                         )["conversation"],
                     })
                 except (ValueError, TypeError, json.JSONDecodeError, UnicodeDecodeError) as exc:
-                    return self._json(422, {"detail": str(exc)})
-            if suffix.endswith("/consultation-payment-instruction"):
-                conversation_id = suffix.removesuffix(
-                    "/consultation-payment-instruction"
-                ).strip("/")
-                try:
-                    message = db.manager_send_consultation_payment_instruction(
-                        conversation_id,
-                        manager["display_name"],
-                        manager.get("role", "manager"),
-                    )
-                    detail = db.manager_conversation_detail(
-                        conversation_id, manager.get("role", "manager"),
-                    )
-                    return self._json(201, {
-                        "message": message,
-                        "conversation": detail["conversation"],
-                    })
-                except (ValueError, TypeError) as exc:
                     return self._json(422, {"detail": str(exc)})
             if suffix.endswith("/ai-mode"):
                 conversation_id = suffix.removesuffix("/ai-mode").strip("/")
@@ -3345,11 +3330,11 @@ small{{display:block;color:#82918c;text-align:center;margin-top:18px}}
             return self._json(404, {"detail": "Диалог не найден"})
         psychology_chat = conversation.get("dialog_type") == "masterclass_psychology"
         consultation_request = bool(payload.get("consultation_request")) and not psychology_chat
-        recipient_role = (
-            "psychologist" if psychology_chat
-            else "doctor" if consultation_request
-            else "manager"
-        )
+        if consultation_request:
+            return self._json(422, {
+                "detail": "Сначала оплатите консультацию в разделе «Консультации»",
+            })
+        recipient_role = "psychologist" if psychology_chat else "manager"
         missing_profile = ConsiliumHandler._interpretation_profile_missing(db.get_profile())
         if missing_profile:
             return self._json(422, {
@@ -3361,7 +3346,7 @@ small{{display:block;color:#82918c;text-align:center;margin-top:18px}}
         confirmed, created = db.confirm_human_chat(
             conversation_id, f"H-{secrets.token_hex(3).upper()}",
             recipient_role=recipient_role,
-            human_channel="paid_consultation" if consultation_request else "chat",
+            human_channel="chat",
         )
         if not confirmed:
             return self._json(404, {"detail": "Диалог не найден"})
@@ -3373,11 +3358,6 @@ small{{display:block;color:#82918c;text-align:center;margin-top:18px}}
 
         specialist_name = "психологу" if psychology_chat else "медицинскому специалисту"
         text = (
-            "Заявка на консультацию Татьяны Витальевны принята. "
-            "Врач-терапевт, эндокринолог напишет вам в этом чате, "
-            "чтобы согласовать дату и формат. Стоимость со скидкой 50% — 900 ₽ "
-            "вместо 1 800 ₽. Оплата производится после консультации."
-            if consultation_request else
             f"Обращение передано {specialist_name}. ИИ в этом диалоге приостановлен. "
             "Пишите сюда — специалист увидит сообщения и ответит в этой переписке. "
             "Пока ожидаете ответа, для общения с ИИ можно открыть новый диалог."
@@ -3386,27 +3366,21 @@ small{{display:block;color:#82918c;text-align:center;margin-top:18px}}
             conversation_id, "assistant", text, recipient_role,
             {
                 "action": "human_preference",
-                "human_channel": "paid_consultation" if consultation_request else "chat",
+                "human_channel": "chat",
                 "human_ticket_id": ticket_id,
                 "human_recipient_role": recipient_role,
-                "consultation_request": consultation_request,
             },
         )
         if not already_requested:
             db.enqueue_manager_notifications(
                 "new_request", conversation_id, message_id=message["id"],
                 recipient_role=recipient_role,
-                request_kind="doctor_consultation" if consultation_request else "",
+                request_kind="",
             )
-            if consultation_request:
-                db.enqueue_manager_notifications(
-                    "new_request", conversation_id, message_id=message["id"],
-                    recipient_role="manager", request_kind="doctor_consultation",
-                )
         return self._json(200, {
             "conversation_id": conversation_id,
             "ticket_id": ticket_id,
-            "channel": "paid_consultation" if consultation_request else "chat",
+            "channel": "chat",
             "human_status": "pending",
             "recipient_role": recipient_role,
             "ai_enabled": False,

@@ -68,6 +68,8 @@ const state = {
   chatGuideStep: -1,
   chatGuideType: '',
   chatGuidesSeen: new Set(),
+  postOnboardingFlowBlocked: false,
+  postOnboardingConsultationPending: false,
 };
 
 const $ = selector => document.querySelector(selector);
@@ -3307,8 +3309,8 @@ function renderConsultationPayment() {
     ? `<label class="payment-email-label">Электронная почта для онлайн-чека <span>обязательное поле</span><input id="consultationReceiptEmail" type="email" autocomplete="email" maxlength="254" placeholder="name@example.ru" required value="${escapeAttr(state.paymentReceiptEmail)}"></label>` : '';
   $('#onboardingContent').innerHTML = `
     <span class="onboarding-kicker">Консультация врача</span>
-    <h1>Оплата после консультации</h1>
-    <p class="onboarding-lead">Татьяна Витальевна провела консультацию и открыла оплату со скидкой 50%.</p>
+    <h1>Оплата консультации</h1>
+    <p class="onboarding-lead">Оплатите консультацию со скидкой 50%. После подтверждения врач получит заявку и согласует с вами дату и формат.</p>
     <section class="consultation-payment-card"><header><strong>Консультация Татьяны Витальевны</strong><b><s>1 800 ₽</s> 900 ₽</b></header><p>Врач-терапевт, эндокринолог. История и статус оплаты сохранятся в разделе «Мои покупки».</p></section>
     ${emailField}
     <div class="onboarding-actions"><button type="button" class="onboarding-back" data-onboarding-action="cancel-consultation-payment">Назад</button><button type="button" class="onboarding-next" data-onboarding-action="pay-consultation">Оплатить 900 ₽</button></div>`;
@@ -3368,7 +3370,7 @@ function renderConsultationPaymentSuccess(order) {
       <span class="payment-result-icon success" aria-hidden="true">✓</span>
       <span class="onboarding-kicker">Консультация оплачена</span>
       <h1>Оплата подтверждена</h1>
-      <p class="onboarding-lead">Оплата 900 ₽ после консультации подтверждена. Скидка составила 50% от обычной цены 1 800 ₽.</p>
+      <p class="onboarding-lead">Предоплата 900 ₽ подтверждена. Скидка составила 50% от обычной цены 1 800 ₽. Врач получил заявку и напишет вам в чате.</p>
       <section class="payment-find-guide"><strong>Где найти консультацию</strong><p>Запись об оплате находится в «Моих покупках», а приобретённые консультации — в разделе «Консультации».</p></section>
       <div class="onboarding-actions"><button type="button" class="onboarding-next" data-onboarding-action="open-paid-consultation-chat">Открыть чат с врачом</button><button type="button" class="onboarding-back" data-onboarding-action="open-consultations-after-payment">Мои консультации</button></div>
     </div>`;
@@ -3770,6 +3772,13 @@ function renderRequiredStandardOnboarding() {
 
 async function openMainApp({ skipIntro = false, allowIncompleteOnboarding = false } = {}) {
   if (!allowIncompleteOnboarding && renderRequiredStandardOnboarding()) return false;
+  const needsGeneralGuide = state.onboarding?.status === 'complete'
+    && !state.chatGuidesSeen.has('general')
+    && (state.conversationType === 'general' || !state.mainInitialized);
+  if (needsGeneralGuide) {
+    state.postOnboardingFlowBlocked = true;
+    state.postOnboardingConsultationPending = true;
+  }
   state.returnToChatAfterExaminations = false;
   state.healthPassportCheckupMetric2 = false;
   $('#onboarding').classList.add('hidden');
@@ -3778,6 +3787,10 @@ async function openMainApp({ skipIntro = false, allowIncompleteOnboarding = fals
   if (!state.mainInitialized) await initMainApp();
   trackEvent('chat_opened', { screen:'chat' });
   const passportOffered = await maybeOfferHealthPassport();
+  if (!passportOffered && state.postOnboardingFlowBlocked) {
+    state.postOnboardingFlowBlocked = false;
+    maybeOpenChatGuide();
+  }
   if (!skipIntro && !state.onboarding?.intro_seen) {
     installAfterCapabilities = false;
     requestAnimationFrame(openCapabilities);
@@ -5148,10 +5161,14 @@ function startChatGuide(guideType = currentChatGuideType()) {
 function maybeOpenChatGuide() {
   const guideType = currentChatGuideType();
   if (state.chatGuidesSeen.has(guideType)
+      || state.postOnboardingFlowBlocked
+      || !$('#healthPassportModal').classList.contains('hidden')
       || !$('#chatGuide').classList.contains('hidden')) return;
   setTimeout(() => {
     if (currentChatGuideType() === guideType
         && !state.chatGuidesSeen.has(guideType)
+        && !state.postOnboardingFlowBlocked
+        && $('#healthPassportModal').classList.contains('hidden')
         && $('#chatGuide').classList.contains('hidden')) {
       startChatGuide(guideType);
     }
@@ -5180,6 +5197,10 @@ function closeChatGuide() {
     method:'POST', body:JSON.stringify({guide_type:guideType}),
   }).catch(() => {});
   trackEvent('chat_guide_completed', {screen:'chat',guide_type:guideType});
+  if (guideType === 'general' && state.postOnboardingConsultationPending) {
+    state.postOnboardingConsultationPending = false;
+    requestAnimationFrame(() => openHumanModal());
+  }
 }
 
 function psychologySessionDate(value) {
@@ -6060,15 +6081,15 @@ async function openHumanModal() {
       <strong>Татьяна Витальевна</strong>
       <p>Врач-терапевт, эндокринолог. Врач поможет разобрать ситуацию и согласует формат консультации.</p>
       <div class="consultation-price"><s>1 800 ₽</s><b>900 ₽</b></div>
-      <small>Постоянная скидка 50% для клиентов Консилиума · оплата после консультации</small>`;
+      <small>Постоянная скидка 50% для клиентов Консилиума · предоплата перед консультацией</small>`;
   }
   const option = $('#humanChatButton');
   option.querySelector('strong').textContent = psychologyChat
     ? 'Чат с психологом'
-    : 'Записаться на консультацию';
+    : 'Оплатить и записаться · 900 ₽';
   option.querySelector('small').textContent = psychologyChat
     ? 'Психолог получит обращение и ответит в этой переписке'
-    : 'Заявку получат врач и менеджеры; дату и формат согласуют в чате';
+    : 'После оплаты заявку получат врач и менеджеры; дату и формат согласуют в чате';
   const decline = $('#humanDeclineButton');
   decline.querySelector('strong').textContent = psychologyChat
     ? 'Не звать психолога'
@@ -6110,6 +6131,14 @@ async function chooseHumanSpecialistChat(consultationRequest = true) {
     openInterpretationProfileModal(consultationRequest ? 'consultation' : 'human_chat');
     return;
   }
+  if (consultationRequest) {
+    closeHumanModal();
+    state.paymentReviewSource = 'consultation';
+    state.paymentReviewOrderId = '';
+    state.paymentReviewConversationId = state.conversationId;
+    renderConsultationPayment();
+    return;
+  }
   state.processing = true;
   setHumanChoiceDisabled(true);
   try {
@@ -6118,8 +6147,7 @@ async function chooseHumanSpecialistChat(consultationRequest = true) {
       body: JSON.stringify({
         conversation_id: state.conversationId,
         channel:'chat',
-        consultation_request:
-          consultationRequest && state.conversationType !== 'masterclass_psychology',
+        consultation_request:false,
       }),
     });
     closeHumanModal();
@@ -6273,7 +6301,7 @@ function closePurchases() { $('#purchasesModal').classList.add('hidden'); }
 function renderConsultations(items) {
   const root = $('#consultationsList');
   if (!items.length) {
-    root.innerHTML = '<div class="consultations-empty"><strong>Оплаченных консультаций пока нет</strong><span>После консультации врач отправит инструкцию, и здесь станет доступна оплата 900 ₽.</span></div>';
+    root.innerHTML = '<div class="consultations-empty"><strong>Оплаченных консультаций пока нет</strong><span>Оплатите консультацию за 900 ₽, и врач получит заявку для согласования даты и формата.</span></div>';
     return;
   }
   root.innerHTML = items.map((item, index) => `
@@ -6286,11 +6314,8 @@ function renderConsultations(items) {
 
 async function openConsultations() {
   closeFunctionMenu();
-  const payButton = $('#consultationPayButton');
   const requestButton = $('#consultationRequestButton');
-  payButton.classList.add('hidden');
   requestButton.classList.add('hidden');
-  payButton.dataset.conversationId = '';
   $('#consultationsList').innerHTML = '<div class="purchases-loading"><span></span><p>Загружаем консультации…</p></div>';
   $('#consultationsModal').classList.remove('hidden');
   beginUserProgress('Загружаем консультации…');
@@ -6298,15 +6323,10 @@ async function openConsultations() {
     const result = await api('/api/consultations');
     state.consultations = result.consultations || [];
     renderConsultations(state.consultations);
-    const offer = result.payment_offer || {};
-    payButton.classList.toggle('hidden', !offer.available);
-    payButton.dataset.conversationId = offer.conversation_id || '';
-    requestButton.classList.toggle('hidden', Boolean(offer.available));
+    requestButton.classList.remove('hidden');
     trackEvent('consultations_viewed', {consultation_count:state.consultations.length});
   } catch (error) {
-    payButton.classList.add('hidden');
     requestButton.classList.add('hidden');
-    payButton.dataset.conversationId = '';
     $('#consultationsList').innerHTML = `<div class="consultations-empty"><strong>Не удалось загрузить консультации</strong><span>${escapeHtml(error.message)}</span></div>`;
   } finally {
     endUserProgress();
@@ -6332,14 +6352,7 @@ async function requestConsultationFromMenu() {
       endUserProgress();
     }
   }
-  await openHumanModal();
-}
-
-function beginConsultationPurchase() {
-  state.paymentReviewSource = 'consultation';
-  state.paymentReviewOrderId = '';
-  state.paymentReviewConversationId = $('#consultationPayButton').dataset.conversationId || '';
-  renderConsultationPayment();
+  await chooseHumanSpecialistChat(true);
 }
 
 function purchaseById(orderId) {
@@ -6714,13 +6727,17 @@ function showHealthPassportModal() {
   $('#healthPassportModal').classList.remove('hidden');
 }
 
-function closeHealthPassportModal({showMessengerFollowup = true} = {}) {
+function closeHealthPassportModal({showMessengerFollowup = true, resumeOnboardingFlow = true} = {}) {
   stopHealthPassportProgress();
   $('#healthPassportModal').classList.add('hidden');
   if (showMessengerFollowup && state.messengerLinkJustCompleted) {
     const provider = state.messengerLinkJustCompleted;
     state.messengerLinkJustCompleted = '';
     requestAnimationFrame(() => openMessengerLinkModal({source:'return', justLinked:provider}));
+  }
+  if (resumeOnboardingFlow && state.postOnboardingFlowBlocked) {
+    state.postOnboardingFlowBlocked = false;
+    maybeOpenChatGuide();
   }
 }
 
@@ -6847,7 +6864,7 @@ function openHealthPassportCheckups() {
     $('#healthPassportModal').dataset.metric2Flow = 'false';
   }
   state.returnToChatAfterExaminations = true;
-  closeHealthPassportModal({showMessengerFollowup:false});
+  closeHealthPassportModal({showMessengerFollowup:false, resumeOnboardingFlow:false});
   $('#appShell').classList.add('hidden');
   $('#onboarding').classList.remove('hidden');
   renderExamSelection();
@@ -6985,10 +7002,14 @@ async function askHealthPassportQuestion(index) {
     trackOnboardingAction('ask_question', 'health_passport_ready');
     $('#healthPassportModal').dataset.metric2Flow = 'false';
   }
-  closeHealthPassportModal({showMessengerFollowup:false});
+  closeHealthPassportModal({showMessengerFollowup:false, resumeOnboardingFlow:false});
   closeProfileModal();
   if (state.conversationType !== 'general' || !state.aiEnabled) newConversation();
   await processMessage(question);
+  if (state.postOnboardingFlowBlocked) {
+    state.postOnboardingFlowBlocked = false;
+    maybeOpenChatGuide();
+  }
 }
 
 function profileCompletion(profile = state.profile) {
@@ -8217,7 +8238,6 @@ $('#purchasesList').addEventListener('click', handlePurchaseAction);
 $('#consultationsClose').addEventListener('click', closeConsultations);
 $('#consultationsModal').addEventListener('click', event => { if (event.target.id === 'consultationsModal') closeConsultations(); });
 $('#consultationRequestButton').addEventListener('click', requestConsultationFromMenu);
-$('#consultationPayButton').addEventListener('click', beginConsultationPurchase);
 $('#chatGuide').addEventListener('click', event => {
   if (event.target.closest('#chatGuideFinish')) return;
   if (event.target.closest('#chatGuideNext')) return;
