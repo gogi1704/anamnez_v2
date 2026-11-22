@@ -98,7 +98,7 @@ class IkpAccessTests(unittest.TestCase):
         finally:
             db.set_current_chel_id(previous_chel_id)
 
-    def test_unknown_entry_direction_screen_routes_all_four_choices(self):
+    def test_unknown_entry_direction_screen_shows_three_public_choices(self):
         project_root = Path(__file__).resolve().parents[1]
         index = (project_root / 'index.html').read_text(encoding='utf-8')
         script = (project_root / 'static' / 'app.js').read_text(encoding='utf-8')
@@ -106,10 +106,18 @@ class IkpAccessTests(unittest.TestCase):
         main = (project_root / 'backend' / 'main.py').read_text(encoding='utf-8')
 
         self.assertIn('id="entryDirectionScreen"', index)
-        self.assertIn('data-entry-route="masterclass"', index)
+        self.assertNotIn('data-entry-route="masterclass"', index)
         self.assertIn('data-entry-route="medical_exam"', index)
         self.assertIn('data-entry-route="results"', index)
         self.assertIn('data-entry-route="other"', index)
+        self.assertLess(
+            index.index('data-entry-route="medical_exam"'),
+            index.index('data-entry-route="results"'),
+        )
+        self.assertLess(
+            index.index('data-entry-route="results"'),
+            index.index('data-entry-route="other"'),
+        )
         self.assertIn('Чем мы можем вам помочь?', index)
         self.assertIn('Выберите нужный раздел — мы сразу направим вас дальше.', index)
         self.assertIn("identity.entry_route_choice_required", script)
