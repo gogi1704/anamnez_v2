@@ -70,6 +70,7 @@ const state = {
   chatGuidesSeen: new Set(),
   postOnboardingFlowBlocked: false,
   postOnboardingConsultationPending: false,
+  consultationTopic: '',
 };
 
 const $ = selector => document.querySelector(selector);
@@ -3331,6 +3332,7 @@ async function startConsultationPayment() {
       method:'POST',
       body:JSON.stringify({
         conversation_id:state.paymentReviewConversationId || state.conversationId,
+        consultation_topic:state.consultationTopic,
         receipt_email:state.paymentReceiptEmail,
       }),
     });
@@ -3381,6 +3383,7 @@ async function finishConsultationPayment(openList = false) {
   await openMainApp({skipIntro:true});
   if (conversationId) await openConversation(conversationId);
   if (openList) await openConsultations();
+  state.consultationTopic = '';
   state.paymentReviewSource = '';
   state.paymentReviewOrderId = '';
   state.paymentReviewConversationId = '';
@@ -6079,7 +6082,7 @@ async function openHumanModal() {
     offer.innerHTML = `
       <em>${checkupCustomer ? 'Специальное предложение' : 'Консультация врача'}</em>
       <strong>Татьяна Витальевна</strong>
-      <p>Врач-терапевт, эндокринолог. Врач поможет разобрать ситуацию и согласует формат консультации.</p>
+      <p>Можно задать вопросы о самочувствии, симптомах, результатах анализов, питании, обмене веществ и гормональном здоровье. Врач-терапевт, эндокринолог поможет разобраться и согласует формат консультации.</p>
       <div class="consultation-price"><s>1 800 ₽</s><b>900 ₽</b></div>
       <small>Постоянная скидка 50% для клиентов Консилиума · предоплата перед консультацией</small>`;
   }
@@ -6090,14 +6093,25 @@ async function openHumanModal() {
   option.querySelector('small').textContent = psychologyChat
     ? 'Психолог получит обращение и ответит в этой переписке'
     : 'После оплаты заявку получат врач и менеджеры; дату и формат согласуют в чате';
+  const reviewTitle = document.querySelector('.handoff-review > strong');
+  const reviewDescription = document.querySelector('.handoff-review > p');
+  const preview = $('#handoffPreview');
+  if (!psychologyChat) {
+    reviewTitle.textContent = 'Укажите предварительную тему разговора';
+    reviewDescription.textContent = 'Кратко опишите, что вы хотите обсудить с врачом. Это поможет заранее подготовиться к консультации.';
+    preview.innerHTML = `<label class="consultation-topic-field"><span>Тема консультации</span><textarea id="consultationTopic" rows="4" maxlength="1000" placeholder="Например: хочу обсудить результаты анализов, усталость и возможные причины изменений веса">${escapeHtml(state.consultationTopic)}</textarea><small id="consultationTopicError" class="hidden" role="alert"></small></label>`;
+  } else {
+    reviewTitle.textContent = 'Проверьте сведения обращения';
+    reviewDescription.textContent = 'Если что-то указано неточно, исправьте сведения — психолог увидит обновлённую версию.';
+    preview.innerHTML = '<span>Подготавливаю сводку…</span>';
+  }
   const decline = $('#humanDeclineButton');
   decline.querySelector('strong').textContent = psychologyChat
     ? 'Не звать психолога'
     : 'Продолжить в обычный чат';
   setHumanChoiceDisabled(false);
-  $('#handoffPreview').innerHTML = '<span>Подготавливаю сводку…</span>';
   $('#humanModal').classList.remove('hidden');
-  if (state.conversationId) {
+  if (psychologyChat && state.conversationId) {
     try {
       const preview = await api(`/api/handoff-preview/${state.conversationId}`);
       const facts = preview.facts?.length ? `<ul>${preview.facts.slice(0, 5).map(item => `<li>${escapeHtml(item)}</li>`).join('')}</ul>` : '<span>Подтверждённые факты пока не собраны.</span>';
@@ -6132,6 +6146,18 @@ async function chooseHumanSpecialistChat(consultationRequest = true) {
     return;
   }
   if (consultationRequest) {
+    const topicInput = $('#consultationTopic');
+    const topic = topicInput?.value.trim() || state.consultationTopic.trim();
+    if (topic.length < 5) {
+      const error = $('#consultationTopicError');
+      if (error) {
+        error.textContent = 'Кратко укажите тему разговора с врачом.';
+        error.classList.remove('hidden');
+      }
+      topicInput?.focus();
+      return;
+    }
+    state.consultationTopic = topic;
     closeHumanModal();
     state.paymentReviewSource = 'consultation';
     state.paymentReviewOrderId = '';

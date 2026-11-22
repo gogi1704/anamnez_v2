@@ -1,5 +1,5 @@
-const CACHE_NAME = 'consilium-shell-v222';
-const ASSET_VERSION = '20261122-entry-medical-first-v62';
+const CACHE_NAME = 'consilium-shell-v223';
+const ASSET_VERSION = '20261122-consultation-topic-v63';
 const APP_SHELL = [
   '/',
   '/manifest.webmanifest',

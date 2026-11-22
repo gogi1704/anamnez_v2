@@ -4610,6 +4610,9 @@ def enqueue_manager_notifications(
                         "Откройте чат, "
                         "чтобы согласовать дату и формат."
                     )
+                    excerpt = " ".join(str(message_text or "").split())[:500]
+                    if excerpt:
+                        body += f" Предварительная тема: «{excerpt}»."
                 else:
                     title = "Новая расшифровка чек-апа"
                     body = (
@@ -4637,6 +4640,9 @@ def enqueue_manager_notifications(
                         f"{name} оплатил консультацию Татьяны Витальевны — 900 ₽. "
                         "Заявка также отправлена врачу."
                     )
+                    excerpt = " ".join(str(message_text or "").split())[:500]
+                    if excerpt:
+                        body += f" Предварительная тема: «{excerpt}»."
                 elif request_kind == "checkup_purchase":
                     title = "Пользователь хочет купить чекап"
                     excerpt = " ".join(str(message_text or "").split())[:240]
@@ -5026,11 +5032,16 @@ CONSULTATION_LIST_PRICE_RUB = 1800
 CONSULTATION_PRICE_RUB = 900
 
 
-def create_consultation_payment_order(conversation_id: str) -> dict:
+def create_consultation_payment_order(conversation_id: str, consultation_topic: str = "") -> dict:
     """Create a discounted prepaid doctor consultation order."""
     conversation = get_conversation(conversation_id)
     if not conversation:
         raise ValueError("Диалог для консультации не найден")
+    consultation_topic = " ".join(str(consultation_topic or "").split())
+    if len(consultation_topic) < 5:
+        raise ValueError("Укажите предварительную тему консультации")
+    if len(consultation_topic) > 1000:
+        raise ValueError("Тема консультации не должна превышать 1000 символов")
     chel_id = current_chel_id()
     items = [{
         "id": "doctor_consultation",
@@ -5038,6 +5049,7 @@ def create_consultation_payment_order(conversation_id: str) -> dict:
         "price": CONSULTATION_PRICE_RUB,
         "list_price": CONSULTATION_LIST_PRICE_RUB,
         "discount_percent": 50,
+        "consultation_topic": consultation_topic,
     }]
     canonical = json.dumps(items, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     fingerprint = hashlib.sha256(
@@ -6018,10 +6030,18 @@ def fulfill_paid_consultation(order_id: str) -> dict | None:
         if not conversation:
             return None
         if order["fulfillment_at"]:
+            items = _payment_items(order["items"])
             return {
                 "created": False, "conversation_id": conversation_id,
                 "message_id": 0,
+                "consultation_topic": str(
+                    items[0].get("consultation_topic", "") if items else ""
+                ),
             }
+        items = _payment_items(order["items"])
+        consultation_topic = str(
+            items[0].get("consultation_topic", "") if items else ""
+        ).strip()
         ticket_id = (
             str(conversation["human_ticket_id"] or "")
             if conversation["human_status"] in {"pending", "connected"}
@@ -6042,11 +6062,13 @@ def fulfill_paid_consultation(order_id: str) -> dict | None:
             (
                 conversation_id,
                 f"Оплачена консультация Татьяны Витальевны — {CONSULTATION_PRICE_RUB} ₽. "
-                f"Заказ № {str(order['id'])[-8:].upper()}.",
+                f"Заказ № {str(order['id'])[-8:].upper()}.\n"
+                f"Предварительная тема: {consultation_topic}",
                 json.dumps({
                     "action": "paid_consultation_purchased",
                     "payment_order_id": order["id"],
                     "amount_kopecks": int(order["amount_kopecks"]),
+                    "consultation_topic": consultation_topic,
                 }, ensure_ascii=False),
                 now,
             ),
@@ -6078,6 +6100,7 @@ def fulfill_paid_consultation(order_id: str) -> dict | None:
         "created": True, "conversation_id": conversation_id,
         "ticket_id": ticket_id, "user_message_id": user_cursor.lastrowid,
         "message_id": message_cursor.lastrowid,
+        "consultation_topic": consultation_topic,
     }
 
 

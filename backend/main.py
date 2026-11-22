@@ -220,6 +220,7 @@ def _fulfill_consultation_payment(order: dict | None) -> dict | None:
             db.enqueue_manager_notifications(
                 "new_request", fulfillment["conversation_id"],
                 message_id=int(fulfillment.get("message_id") or 0),
+                message_text=str(fulfillment.get("consultation_topic") or ""),
                 recipient_role=recipient_role,
                 request_kind="doctor_consultation",
             )
@@ -1861,7 +1862,10 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                 conversation = db.get_conversation(conversation_id) if conversation_id else None
                 if not conversation:
                     raise ValueError("Диалог консультации не найден")
-                order = db.create_consultation_payment_order(conversation["id"])
+                consultation_topic = str(payload.get("consultation_topic") or "").strip()
+                order = db.create_consultation_payment_order(
+                    conversation["id"], consultation_topic,
+                )
                 private_order = db.payment_order_private(order["id"])
                 if private_order.get("provider_payment_id"):
                     verified = yookassa.get_payment(private_order["provider_payment_id"])
@@ -1870,7 +1874,9 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                         if refreshed["status"] == "succeeded" and refreshed.get("paid"):
                             _fulfill_consultation_payment(refreshed)
                         return self._json(200, {"order": refreshed})
-                    order = db.create_consultation_payment_order(conversation["id"])
+                    order = db.create_consultation_payment_order(
+                        conversation["id"], consultation_topic,
+                    )
                     private_order = db.payment_order_private(order["id"])
                 return_url = (
                     f"{settings.public_base_url}/?payment_return={quote(order['id'])}"

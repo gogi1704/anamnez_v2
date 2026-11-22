@@ -1476,6 +1476,10 @@ class OrchestratorTests(unittest.TestCase):
         self.assertIn("consultation_request:false", confirm_flow)
         self.assertIn("renderConsultationPayment()", confirm_flow)
         self.assertIn("Продолжить в обычный чат", script)
+        self.assertIn("Можно задать вопросы о самочувствии", script)
+        self.assertIn("Укажите предварительную тему разговора", script)
+        self.assertIn('id="consultationTopic"', script)
+        self.assertIn("consultation_topic:state.consultationTopic", script)
 
     def test_unpaid_consultation_request_is_rejected(self):
         offered = ConversationOrchestrator(FakeLLM()).process(None, "Позови человека")
@@ -4613,14 +4617,14 @@ class OrchestratorTests(unittest.TestCase):
         self.assertIn("controllerchange", script)
         self.assertIn("url.pathname.startsWith('/api/')", worker)
         self.assertIn("url.pathname.startsWith('/auth/')", worker)
-        self.assertIn("consilium-shell-v222", worker)
+        self.assertIn("consilium-shell-v223", worker)
         self.assertIn("fetch(request)", worker)
-        self.assertIn("/static/styles.css?v=20261122-entry-medical-first-v62", index)
+        self.assertIn("/static/styles.css?v=20261122-consultation-topic-v63", index)
         self.assertIn("/static/rich-text.2bf1f5fab764.css", index)
         self.assertTrue((project_root / "static" / "styles.07ffaefb4795.css").is_file())
         self.assertTrue((project_root / "static" / "rich-text.2bf1f5fab764.css").is_file())
-        self.assertIn("/static/app.js?v=20261122-entry-medical-first-v62", index)
-        self.assertIn("/static/metrika.js?v=20261122-entry-medical-first-v62", index)
+        self.assertIn("/static/app.js?v=20261122-consultation-topic-v63", index)
+        self.assertIn("/static/metrika.js?v=20261122-consultation-topic-v63", index)
         self.assertIn("function safeUrl(value)", script)
         self.assertIn("error.code === 'http_404'", script)
         self.assertIn("fallback && fallback.id !== id", script)
@@ -4716,7 +4720,7 @@ class OrchestratorTests(unittest.TestCase):
         main = (project_root / "backend" / "main.py").read_text(encoding="utf-8")
         config = (project_root / "backend" / "config.py").read_text(encoding="utf-8")
 
-        self.assertIn('src="/static/metrika.js?v=20261122-entry-medical-first-v62"', index)
+        self.assertIn('src="/static/metrika.js?v=20261122-consultation-topic-v63"', index)
         self.assertIn('YANDEX_METRIKA_COUNTER_ID', config)
         self.assertIn('path == "/api/public-config"', main)
         self.assertIn('"metrika.js"', main)
@@ -6630,10 +6634,14 @@ class OrchestratorTests(unittest.TestCase):
             db.set_current_chel_id(chel_id)
             conversation = db.create_conversation("Консультация врача")
             onboarding_before = db.get_onboarding()["status"]
-            order = db.create_consultation_payment_order(conversation["id"])
+            topic = "Обсудить усталость, результаты анализов и изменения веса"
+            with self.assertRaisesRegex(ValueError, "предварительную тему"):
+                db.create_consultation_payment_order(conversation["id"])
+            order = db.create_consultation_payment_order(conversation["id"], topic)
             private = db.payment_order_private(order["id"])
             self.assertEqual(private["order_type"], "consultation")
             self.assertEqual(private["amount_kopecks"], 90000)
+            self.assertEqual(private["items"][0]["consultation_topic"], topic)
             provider = {
                 "id": "7f3e4567-89ab-4cde-8012-3456789abcde",
                 "status": "pending", "paid": False, "test": True,
@@ -6663,6 +6671,10 @@ class OrchestratorTests(unittest.TestCase):
                 call.kwargs["request_kind"] == "doctor_consultation"
                 for call in notify.call_args_list
             ))
+            self.assertTrue(all(
+                call.kwargs["message_text"] == topic
+                for call in notify.call_args_list
+            ))
             analytics_event.assert_called_once()
             saved = db.get_conversation(conversation["id"])
             self.assertFalse(bool(saved["ai_enabled"]))
@@ -6674,6 +6686,12 @@ class OrchestratorTests(unittest.TestCase):
                 item.get("metadata", {}).get("action") == "paid_consultation_confirmed"
                 for item in messages
             ), 1)
+            paid_message = next(
+                item for item in messages
+                if item.get("metadata", {}).get("action") == "paid_consultation_purchased"
+            )
+            self.assertEqual(paid_message["metadata"]["consultation_topic"], topic)
+            self.assertIn(topic, paid_message["content"])
             self.assertEqual(len(db.list_paid_consultations()), 1)
         finally:
             db.set_current_chel_id(chel_id)
