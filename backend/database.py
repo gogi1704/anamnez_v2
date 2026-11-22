@@ -4603,11 +4603,12 @@ def enqueue_manager_notifications(
             preference = "notify_new_requests"
         elif event_type == "new_request":
             if recipient_role == "doctor":
-                if conversation["human_channel"] == "paid_consultation":
-                    title = "Оплачена консультация врача"
+                if request_kind == "doctor_consultation":
+                    title = "Новая заявка на консультацию"
                     body = (
-                        f"{name} оплатил консультацию. Откройте чат, чтобы "
-                        "согласовать дату и время."
+                        f"{name} хочет записаться на консультацию Татьяны Витальевны. "
+                        "Оплата 900 ₽ производится после консультации. Откройте чат, "
+                        "чтобы согласовать дату и формат."
                     )
                 else:
                     title = "Новая расшифровка чек-апа"
@@ -4630,7 +4631,13 @@ def enqueue_manager_notifications(
                         f"Обращение {conversation['human_ticket_id'] or conversation_id[:8]}."
                     )
             else:
-                if request_kind == "checkup_purchase":
+                if request_kind == "doctor_consultation":
+                    title = "Новая заявка на консультацию врача"
+                    body = (
+                        f"{name} хочет записаться на консультацию Татьяны Витальевны. "
+                        "Заявка также отправлена врачу. Оплата 900 ₽ — после консультации."
+                    )
+                elif request_kind == "checkup_purchase":
                     title = "Пользователь хочет купить чекап"
                     excerpt = " ".join(str(message_text or "").split())[:240]
                     body = f"{name} хочет приобрести чекап."
@@ -5015,13 +5022,65 @@ def create_payment_order() -> dict:
     return _public_payment_order(row)
 
 
+CONSULTATION_LIST_PRICE_RUB = 1800
+CONSULTATION_PRICE_RUB = 900
+
+
+def consultation_payment_offer() -> dict:
+    """Return the latest doctor-issued post-consultation payment offer."""
+    chel_id = current_chel_id()
+    with connection() as conn:
+        row = conn.execute(
+            """SELECT m.conversation_id,m.metadata,m.created_at,
+                      EXISTS(
+                        SELECT 1 FROM payment_orders p
+                        WHERE p.chel_id=c.chel_id
+                          AND p.order_type='consultation'
+                          AND p.target_conversation_id=m.conversation_id
+                          AND p.status='succeeded' AND p.paid=1
+                      ) AS already_paid
+               FROM messages m JOIN conversations c ON c.id=m.conversation_id
+               WHERE c.chel_id=? AND m.role='assistant'
+                 AND json_extract(m.metadata, '$.action')='consultation_payment_instruction'
+               ORDER BY m.id DESC LIMIT 1""",
+            (chel_id,),
+        ).fetchone()
+    if row:
+        return {
+            "available": not bool(row["already_paid"]),
+            "already_paid": bool(row["already_paid"]),
+            "conversation_id": row["conversation_id"],
+            "created_at": row["created_at"],
+            "price": CONSULTATION_PRICE_RUB,
+            "list_price": CONSULTATION_LIST_PRICE_RUB,
+            "discount_percent": 50,
+        }
+    return {
+        "available": False, "already_paid": False, "conversation_id": "",
+        "price": CONSULTATION_PRICE_RUB,
+        "list_price": CONSULTATION_LIST_PRICE_RUB,
+        "discount_percent": 50,
+    }
+
+
 def create_consultation_payment_order(conversation_id: str) -> dict:
-    """Create a fixed-price doctor consultation order for the current user."""
+    """Create the doctor-issued post-consultation payment order."""
     conversation = get_conversation(conversation_id)
     if not conversation:
         raise ValueError("Диалог для консультации не найден")
+    offer = consultation_payment_offer()
+    if not offer["available"] or offer["conversation_id"] != conversation_id:
+        raise ValueError(
+            "Оплата станет доступна после консультации, когда врач отправит инструкцию"
+        )
     chel_id = current_chel_id()
-    items = [{"id": "doctor_consultation", "name": "Консультация врача", "price": 1000}]
+    items = [{
+        "id": "doctor_consultation",
+        "name": "Консультация Татьяны Витальевны",
+        "price": CONSULTATION_PRICE_RUB,
+        "list_price": CONSULTATION_LIST_PRICE_RUB,
+        "discount_percent": 50,
+    }]
     canonical = json.dumps(items, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
     fingerprint = hashlib.sha256(
         f"consultation:{conversation_id}:{canonical}".encode("utf-8")
@@ -5043,10 +5102,10 @@ def create_consultation_payment_order(conversation_id: str) -> dict:
             """INSERT INTO payment_orders
             (id, chel_id, idempotence_key, selection_fingerprint, order_type,
              target_conversation_id, status, amount_kopecks, items, created_at, updated_at)
-            VALUES (?, ?, ?, ?, 'consultation', ?, 'creating', 100000, ?, ?, ?)""",
+            VALUES (?, ?, ?, ?, 'consultation', ?, 'creating', ?, ?, ?, ?)""",
             (
                 order_id, chel_id, str(uuid.uuid4()), fingerprint,
-                conversation_id, canonical, now, now,
+                conversation_id, CONSULTATION_PRICE_RUB * 100, canonical, now, now,
             ),
         )
         conn.commit()
@@ -5983,7 +6042,7 @@ def apply_yookassa_status(order_id: str, payment: dict) -> dict:
 
 
 def fulfill_paid_consultation(order_id: str) -> dict | None:
-    """Open the paid consultation chat exactly once after provider confirmation."""
+    """Record post-consultation payment exactly once without reopening the request."""
     now = utc_now()
     with _write_lock, connection() as conn:
         order = conn.execute(
@@ -5999,42 +6058,21 @@ def fulfill_paid_consultation(order_id: str) -> dict | None:
             (conversation_id, order["chel_id"]),
         ).fetchone()
         if not conversation:
-            conversation_id = str(uuid.uuid4())
-            conn.execute(
-                """INSERT INTO conversations
-                (id, chel_id, title, created_at, updated_at)
-                VALUES (?, ?, 'Консультация врача', ?, ?)""",
-                (conversation_id, order["chel_id"], now, now),
-            )
-            conn.execute(
-                """INSERT INTO conversation_reads
-                (conversation_id, last_read_message_id, read_at) VALUES (?, 0, ?)""",
-                (conversation_id, now),
-            )
-            conn.execute(
-                "UPDATE payment_orders SET target_conversation_id = ? WHERE id = ?",
-                (conversation_id, order["id"]),
-            )
+            return None
         if order["fulfillment_at"]:
             return {
                 "created": False, "conversation_id": conversation_id,
                 "message_id": 0,
             }
-        ticket_id = f"C-{secrets.token_hex(3).upper()}"
-        conn.execute(
-            """UPDATE conversations SET active_agent = 'manager', status = 'waiting_human',
-            human_status = 'pending', human_ticket_id = ?, human_channel = 'paid_consultation',
-            human_phone = NULL, human_recipient_role = 'doctor', ai_enabled = 0,
-            updated_at = ? WHERE id = ? AND chel_id = ?""",
-            (ticket_id, now, conversation_id, order["chel_id"]),
-        )
+        ticket_id = str(conversation["human_ticket_id"] or "")
         user_cursor = conn.execute(
             """INSERT INTO messages
             (conversation_id, role, agent_id, content, metadata, created_at)
             VALUES (?, 'user', NULL, ?, ?, ?)""",
             (
                 conversation_id,
-                f"Оплачена консультация врача — 1 000 ₽. Заказ № {str(order['id'])[-8:].upper()}.",
+                f"Оплата консультации после проведения — {CONSULTATION_PRICE_RUB} ₽. "
+                f"Заказ № {str(order['id'])[-8:].upper()}.",
                 json.dumps({
                     "action": "paid_consultation_purchased",
                     "payment_order_id": order["id"],
@@ -6049,9 +6087,8 @@ def fulfill_paid_consultation(order_id: str) -> dict | None:
             VALUES (?, 'assistant', 'manager', ?, ?, ?)""",
             (
                 conversation_id,
-                "Оплата консультации подтверждена. Скоро врач напишет вам в этот чат, "
-                "и вы вместе согласуете удобные дату и время. До завершения консультации "
-                "ИИ в этом диалоге выключен, поэтому все новые сообщения увидит врач.",
+                "Оплата консультации подтверждена. Сумма 900 ₽ со скидкой 50%. "
+                "Платёж сохранён в разделе «Мои покупки».",
                 json.dumps({
                     "action": "paid_consultation_confirmed",
                     "payment_order_id": order["id"],
@@ -6836,15 +6873,30 @@ def manager_send_consultation_payment_instruction(
     """Send the canonical consultation purchase instructions from a doctor chat."""
     if _staff_role(staff_role) != "doctor":
         raise ValueError("Инструкцию по оплате консультации может отправить только врач")
+    with connection() as conn:
+        conversation = conn.execute(
+            """SELECT c.human_channel,
+                      EXISTS(
+                        SELECT 1 FROM messages m
+                        WHERE m.conversation_id=c.id
+                          AND json_extract(m.metadata, '$.action')='consultation_payment_instruction'
+                      ) AS instruction_sent
+               FROM conversations c WHERE c.id=?
+               AND COALESCE(human_recipient_role, 'manager')='doctor'""",
+            (conversation_id,),
+        ).fetchone()
+    if not conversation or conversation["human_channel"] != "paid_consultation":
+        raise ValueError("Инструкция доступна только для заявки на консультацию врача")
+    if conversation["instruction_sent"]:
+        raise ValueError("Инструкция по оплате консультации уже отправлена")
     content = (
-        "Как оплатить платную консультацию врача за 1 000 ₽:\n\n"
+        "Консультация завершена. Как оплатить её со скидкой 50%:\n\n"
         "1. Откройте меню ☰ в правом верхнем углу.\n"
         "2. Выберите раздел «Консультации».\n"
-        "3. Нажмите «Оплатить консультацию · 1 000 ₽».\n"
+        "3. Нажмите «Оплатить консультацию · 900 ₽».\n"
         "4. При необходимости укажите электронную почту для чека и завершите оплату через ЮKassa.\n\n"
-        "После подтверждения оплаты врач автоматически получит уведомление и напишет вам "
-        "в отдельном чате, чтобы согласовать удобные дату и время. Информация об оплате "
-        "сохранится в разделе «Мои покупки»."
+        "Обычная цена — 1 800 ₽. Для клиентов Консилиума всегда действует скидка 50%, "
+        "поэтому к оплате 900 ₽. Информация об оплате сохранится в разделе «Мои покупки»."
     )
     return manager_add_reply(
         conversation_id, content, manager_name, "doctor",
@@ -11563,10 +11615,13 @@ def update_conversation(
 
 def confirm_human_chat(
     conversation_id: str, proposed_ticket_id: str, *, recipient_role: str = "manager",
+    human_channel: str = "chat",
 ) -> tuple[dict | None, bool]:
     """Atomically creates or reuses a confirmed specialist chat request."""
     owner = current_chel_id()
     recipient_role = _staff_role(recipient_role)
+    if human_channel not in {"chat", "paid_consultation"}:
+        raise ValueError("Неизвестный тип обращения")
     now = utc_now()
     with _write_lock, connection() as conn:
         row = conn.execute(
@@ -11586,7 +11641,7 @@ def confirm_human_chat(
         # same specialist from a call to chat, but report the chat handoff as
         # newly created so its messenger notification is queued.
         already_requested = bool(
-            same_role_request and current.get("human_channel") == "chat"
+            same_role_request and current.get("human_channel") == human_channel
         )
         ticket_id = (
             current["human_ticket_id"] if same_role_request else proposed_ticket_id
@@ -11595,10 +11650,13 @@ def confirm_human_chat(
         conn.execute(
             """UPDATE conversations
             SET active_agent = ?, status = 'waiting_human',
-                human_status = 'pending', human_ticket_id = ?, human_channel = 'chat',
+                human_status = 'pending', human_ticket_id = ?, human_channel = ?,
                 human_phone = NULL, human_recipient_role = ?, ai_enabled = 0, updated_at = ?
             WHERE id = ? AND chel_id = ?""",
-            (active_agent, ticket_id, recipient_role, now, conversation_id, owner),
+            (
+                active_agent, ticket_id, human_channel, recipient_role,
+                now, conversation_id, owner,
+            ),
         )
         conn.commit()
         saved = conn.execute(

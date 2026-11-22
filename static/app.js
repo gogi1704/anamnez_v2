@@ -3261,7 +3261,7 @@ async function returnToConsultationPayment() {
   const receiptInput = $('#consultationReceiptEmail');
   if (receiptInput && !receiptInput.value.trim()) {
     receiptInput.focus();
-    showOnboardingError('Укажите электронную почту для чека, затем нажмите «Оплатить 1 000 ₽».');
+    showOnboardingError('Укажите электронную почту для чека, затем нажмите «Оплатить 900 ₽».');
     return;
   }
   await startConsultationPayment();
@@ -3307,11 +3307,11 @@ function renderConsultationPayment() {
     ? `<label class="payment-email-label">Электронная почта для онлайн-чека <span>обязательное поле</span><input id="consultationReceiptEmail" type="email" autocomplete="email" maxlength="254" placeholder="name@example.ru" required value="${escapeAttr(state.paymentReceiptEmail)}"></label>` : '';
   $('#onboardingContent').innerHTML = `
     <span class="onboarding-kicker">Консультация врача</span>
-    <h1>Оплата консультации</h1>
-    <p class="onboarding-lead">После подтверждения оплаты врач напишет в ваш чат и согласует удобные дату и время.</p>
-    <section class="consultation-payment-card"><header><strong>Консультация врача</strong><b>1 000 ₽</b></header><p>Общение продолжится в Консилиуме. История и статус оплаты сохранятся в разделе «Мои покупки».</p></section>
+    <h1>Оплата после консультации</h1>
+    <p class="onboarding-lead">Татьяна Витальевна провела консультацию и открыла оплату со скидкой 50%.</p>
+    <section class="consultation-payment-card"><header><strong>Консультация Татьяны Витальевны</strong><b><s>1 800 ₽</s> 900 ₽</b></header><p>Врач-терапевт, эндокринолог. История и статус оплаты сохранятся в разделе «Мои покупки».</p></section>
     ${emailField}
-    <div class="onboarding-actions"><button type="button" class="onboarding-back" data-onboarding-action="cancel-consultation-payment">Назад</button><button type="button" class="onboarding-next" data-onboarding-action="pay-consultation">Оплатить 1 000 ₽</button></div>`;
+    <div class="onboarding-actions"><button type="button" class="onboarding-back" data-onboarding-action="cancel-consultation-payment">Назад</button><button type="button" class="onboarding-next" data-onboarding-action="pay-consultation">Оплатить 900 ₽</button></div>`;
 }
 
 async function startConsultationPayment() {
@@ -3341,7 +3341,7 @@ async function startConsultationPayment() {
       conversationId:state.paymentReviewConversationId,
       receiptEmail:state.paymentReceiptEmail, savedAt:Date.now(),
     }));
-    trackEvent('consultation_payment_created', {provider:'yookassa', amount_kopecks:100000});
+    trackEvent('consultation_payment_created', {provider:'yookassa', amount_kopecks:90000});
     if (order.confirmation_url?.startsWith('https://')) {
       window.location.assign(order.confirmation_url);
       return;
@@ -3367,8 +3367,8 @@ function renderConsultationPaymentSuccess(order) {
     <div class="payment-success-result">
       <span class="payment-result-icon success" aria-hidden="true">✓</span>
       <span class="onboarding-kicker">Консультация оплачена</span>
-      <h1>Врач скоро напишет вам</h1>
-      <p class="onboarding-lead">Оплата 1 000 ₽ подтверждена. Врач напишет в этот чат, и вы согласуете удобные дату и время консультации.</p>
+      <h1>Оплата подтверждена</h1>
+      <p class="onboarding-lead">Оплата 900 ₽ после консультации подтверждена. Скидка составила 50% от обычной цены 1 800 ₽.</p>
       <section class="payment-find-guide"><strong>Где найти консультацию</strong><p>Запись об оплате находится в «Моих покупках», а приобретённые консультации — в разделе «Консультации».</p></section>
       <div class="onboarding-actions"><button type="button" class="onboarding-next" data-onboarding-action="open-paid-consultation-chat">Открыть чат с врачом</button><button type="button" class="onboarding-back" data-onboarding-action="open-consultations-after-payment">Мои консультации</button></div>
     </div>`;
@@ -6038,20 +6038,41 @@ async function handleWeightReminderAction(event) {
 
 async function openHumanModal() {
   const psychologyChat = state.conversationType === 'masterclass_psychology';
+  const selectedCheckups = state.onboarding?.selected_tests || [...(state.selectedTests || [])];
+  const checkupCustomer = !psychologyChat && (
+    selectedCheckups.length > 0
+    || ['paid_online','pay_at_exam','selected'].includes(state.onboarding?.payment_status)
+  );
   $('#humanTitle').textContent = psychologyChat
     ? 'Подключить психолога?'
-    : 'Подключить медицинского специалиста?';
+    : 'Консультация Татьяны Витальевны';
+  $('#humanDescription').textContent = psychologyChat
+    ? 'Контекст разговора уже подготовлен. Обращение будет создано только после вашего подтверждения.'
+    : checkupCustomer
+      ? 'Для вас доступно специальное предложение перед переходом в чат врача.'
+      : 'Перед переходом в чат можно записаться на персональную консультацию врача.';
+  const offer = $('#consultationOfferCard');
+  offer.classList.toggle('hidden', psychologyChat);
+  offer.classList.toggle('special', checkupCustomer);
+  if (!psychologyChat) {
+    offer.innerHTML = `
+      <em>${checkupCustomer ? 'Специальное предложение' : 'Консультация врача'}</em>
+      <strong>Татьяна Витальевна</strong>
+      <p>Врач-терапевт, эндокринолог. Врач поможет разобрать ситуацию и согласует формат консультации.</p>
+      <div class="consultation-price"><s>1 800 ₽</s><b>900 ₽</b></div>
+      <small>Постоянная скидка 50% для клиентов Консилиума · оплата после консультации</small>`;
+  }
   const option = $('#humanChatButton');
   option.querySelector('strong').textContent = psychologyChat
     ? 'Чат с психологом'
-    : 'Чат с медицинским специалистом';
+    : 'Записаться на консультацию';
   option.querySelector('small').textContent = psychologyChat
     ? 'Психолог получит обращение и ответит в этой переписке'
-    : 'Специалист получит обращение и ответит в этой переписке';
+    : 'Заявку получат врач и менеджеры; дату и формат согласуют в чате';
   const decline = $('#humanDeclineButton');
   decline.querySelector('strong').textContent = psychologyChat
     ? 'Не звать психолога'
-    : 'Не звать медицинского специалиста';
+    : 'Продолжить в обычный чат';
   setHumanChoiceDisabled(false);
   $('#handoffPreview').innerHTML = '<span>Подготавливаю сводку…</span>';
   $('#humanModal').classList.remove('hidden');
@@ -6067,6 +6088,10 @@ function closeHumanModal() {
   $('#humanModal').classList.add('hidden');
 }
 function declineHumanSpecialist() {
+  if (state.conversationType !== 'masterclass_psychology') {
+    chooseHumanSpecialistChat(false);
+    return;
+  }
   closeHumanModal();
   $('#taskStatus').textContent = 'ИИ продолжает отвечать';
   updateChatMode(true, 'none', null);
@@ -6077,12 +6102,12 @@ function setHumanChoiceDisabled(disabled) {
   $('#humanDeclineButton').disabled = disabled;
 }
 
-async function chooseHumanSpecialistChat() {
+async function chooseHumanSpecialistChat(consultationRequest = true) {
   if (!state.conversationId || state.processing) return;
   if (!state.profile) await loadProfile();
   if (!interpretationProfileComplete()) {
     closeHumanModal();
-    openInterpretationProfileModal('consultation');
+    openInterpretationProfileModal(consultationRequest ? 'consultation' : 'human_chat');
     return;
   }
   state.processing = true;
@@ -6090,7 +6115,12 @@ async function chooseHumanSpecialistChat() {
   try {
     const result = await api('/api/human-preference', {
       method: 'POST',
-      body: JSON.stringify({ conversation_id: state.conversationId, channel:'chat' }),
+      body: JSON.stringify({
+        conversation_id: state.conversationId,
+        channel:'chat',
+        consultation_request:
+          consultationRequest && state.conversationType !== 'masterclass_psychology',
+      }),
     });
     closeHumanModal();
     updateChatMode(false, result.human_status, result.ticket_id);
@@ -6104,7 +6134,9 @@ async function chooseHumanSpecialistChat() {
     const psychologyChat = recipientRole === 'psychologist';
     $('#taskStatus').textContent = psychologyChat
       ? 'Сообщения ждут ответа психолога'
-      : 'Сообщения ждут ответа медицинского специалиста';
+      : recipientRole === 'doctor'
+        ? 'Заявка на консультацию передана врачу'
+        : 'Сообщения ждут ответа медицинского специалиста';
     input.placeholder = psychologyChat
       ? 'Напишите психологу...'
       : 'Напишите медицинскому специалисту...';
@@ -6113,7 +6145,7 @@ async function chooseHumanSpecialistChat() {
   } catch (error) {
     if (error.code === 'consultation_profile_required') {
       closeHumanModal();
-      openInterpretationProfileModal('consultation');
+      openInterpretationProfileModal(consultationRequest ? 'consultation' : 'human_chat');
       return;
     }
     addSystemError(error.message);
@@ -6241,19 +6273,22 @@ function closePurchases() { $('#purchasesModal').classList.add('hidden'); }
 function renderConsultations(items) {
   const root = $('#consultationsList');
   if (!items.length) {
-    root.innerHTML = '<div class="consultations-empty"><strong>Приобретённых консультаций пока нет</strong><span>После оплаты здесь появятся дата, сумма и переход в чат с врачом.</span></div>';
+    root.innerHTML = '<div class="consultations-empty"><strong>Оплаченных консультаций пока нет</strong><span>После консультации врач отправит инструкцию, и здесь станет доступна оплата 900 ₽.</span></div>';
     return;
   }
   root.innerHTML = items.map((item, index) => `
     <article class="consultation-card">
       <i aria-hidden="true">✓</i>
-      <div><strong>Консультация врача № ${items.length - index}</strong><small>${purchaseDate(item.paid_at || item.created_at)}</small></div>
-      <b>${Number(item.amount || 1000).toLocaleString('ru-RU', {maximumFractionDigits:2})} ₽</b>
+      <div><strong>Консультация Татьяны Витальевны № ${items.length - index}</strong><small>${purchaseDate(item.paid_at || item.created_at)}</small></div>
+      <b>${Number(item.amount || 900).toLocaleString('ru-RU', {maximumFractionDigits:2})} ₽</b>
     </article>`).join('');
 }
 
 async function openConsultations() {
   closeFunctionMenu();
+  const payButton = $('#consultationPayButton');
+  payButton.classList.add('hidden');
+  payButton.dataset.conversationId = '';
   $('#consultationsList').innerHTML = '<div class="purchases-loading"><span></span><p>Загружаем консультации…</p></div>';
   $('#consultationsModal').classList.remove('hidden');
   beginUserProgress('Загружаем консультации…');
@@ -6261,8 +6296,13 @@ async function openConsultations() {
     const result = await api('/api/consultations');
     state.consultations = result.consultations || [];
     renderConsultations(state.consultations);
+    const offer = result.payment_offer || {};
+    payButton.classList.toggle('hidden', !offer.available);
+    payButton.dataset.conversationId = offer.conversation_id || '';
     trackEvent('consultations_viewed', {consultation_count:state.consultations.length});
   } catch (error) {
+    payButton.classList.add('hidden');
+    payButton.dataset.conversationId = '';
     $('#consultationsList').innerHTML = `<div class="consultations-empty"><strong>Не удалось загрузить консультации</strong><span>${escapeHtml(error.message)}</span></div>`;
   } finally {
     endUserProgress();
@@ -6274,7 +6314,7 @@ function closeConsultations() { $('#consultationsModal').classList.add('hidden')
 function beginConsultationPurchase() {
   state.paymentReviewSource = 'consultation';
   state.paymentReviewOrderId = '';
-  state.paymentReviewConversationId = state.conversationId || '';
+  state.paymentReviewConversationId = $('#consultationPayButton').dataset.conversationId || '';
   renderConsultationPayment();
 }
 
@@ -7202,18 +7242,20 @@ function openInterpretationProfileModal(purpose = 'interpretation') {
   $('#interpretationProfileWeight').value = profile.weight_kg ?? '';
   $('#interpretationProfileError').classList.add('hidden');
   const consultation = purpose === 'consultation';
+  const humanChat = purpose === 'human_chat';
   const specialist = purpose === 'specialist_analysis';
-  $('#interpretationProfileKicker').textContent = consultation || specialist ? 'Перед консультацией' : 'Перед расшифровкой';
-  $('#interpretationProfileDescription').textContent = consultation || specialist
-    ? 'Для бесплатной консультации медицинскому специалисту нужны пол, возраст, рост и вес. Это займёт меньше минуты.'
+  $('#interpretationProfileKicker').textContent = consultation || humanChat || specialist ? 'Перед консультацией' : 'Перед расшифровкой';
+  $('#interpretationProfileDescription').textContent = consultation || humanChat || specialist
+    ? 'Медицинскому специалисту нужны пол, возраст, рост и вес. Это займёт меньше минуты.'
     : 'Для корректной расшифровки результатов и бесплатной консультации специалисту нужны четыре основных показателя. Это займёт меньше минуты.';
   $('#saveInterpretationProfileButton').textContent = consultation
-    ? 'Сохранить и вызвать специалиста'
+    ? 'Сохранить и записаться на консультацию'
+    : humanChat ? 'Сохранить и открыть обычный чат'
     : specialist ? 'Сохранить и передать специалисту'
     : 'Сохранить и перейти к анализам';
   $('#interpretationProfileModal').classList.remove('hidden');
-  trackEvent(specialist ? 'lab_specialist_profile_requested' : consultation ? 'human_consultation_profile_requested' : 'lab_interpretation_profile_requested', {
-    source:consultation ? 'human_handoff' : 'lab_results',
+  trackEvent(specialist ? 'lab_specialist_profile_requested' : consultation || humanChat ? 'human_consultation_profile_requested' : 'lab_interpretation_profile_requested', {
+    source:consultation || humanChat ? 'human_handoff' : 'lab_results',
     stage:'mini_profile',
   });
   requestAnimationFrame(() => {
@@ -7262,14 +7304,15 @@ async function saveInterpretationProfile() {
       body:JSON.stringify(payload),
     });
     renderProfileStatus();
-    trackEvent(purpose === 'specialist_analysis' ? 'lab_specialist_profile_completed' : purpose === 'consultation' ? 'human_consultation_profile_completed' : 'lab_interpretation_profile_completed', {
-      source:purpose === 'consultation' ? 'human_handoff' : 'lab_results',
+    trackEvent(purpose === 'specialist_analysis' ? 'lab_specialist_profile_completed' : ['consultation','human_chat'].includes(purpose) ? 'human_consultation_profile_completed' : 'lab_interpretation_profile_completed', {
+      source:['consultation','human_chat'].includes(purpose) ? 'human_handoff' : 'lab_results',
       stage:'mini_profile',
     });
     closeInterpretationProfileModal();
     $('#taskStatus').textContent = 'Мини-анкета сохранена';
     state.miniProfilePurpose = 'interpretation';
     if (purpose === 'consultation') await chooseHumanSpecialistChat();
+    else if (purpose === 'human_chat') await chooseHumanSpecialistChat(false);
     else if (purpose === 'specialist_analysis') {
       await requestSpecialistAnalysis(state.pendingLabAction?.documentId || 'all');
     } else if (state.pendingLabAction?.type === 'ai') {
@@ -8565,7 +8608,7 @@ $('#chatModeBanner').addEventListener('keydown', event => {
 });
 $('#conversationList').addEventListener('click', event => { const row = event.target.closest('[data-id]'); if (row) openConversation(row.dataset.id); });
 $('#modalClose').addEventListener('click', declineHumanSpecialist);
-$('#humanChatButton').addEventListener('click', chooseHumanSpecialistChat);
+$('#humanChatButton').addEventListener('click', () => chooseHumanSpecialistChat(true));
 $('#humanDeclineButton').addEventListener('click', declineHumanSpecialist);
 $('#humanModal').addEventListener('click', event => { if (event.target.id === 'humanModal') declineHumanSpecialist(); });
 $('#handoffPreview').addEventListener('click', event => {

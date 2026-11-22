@@ -1454,27 +1454,61 @@ class OrchestratorTests(unittest.TestCase):
         self.assertTrue(saved["ai_enabled"])
         self.assertEqual(saved["human_status"], "none")
         self.assertIsNone(saved["human_ticket_id"])
-    def test_human_modal_offers_specialist_chat_or_ai_without_call(self):
+    def test_human_modal_offers_consultation_or_regular_specialist_chat(self):
         project_root = Path(__file__).resolve().parents[1]
         index = (project_root / "index.html").read_text(encoding="utf-8")
         script = (project_root / "static" / "app.js").read_text(encoding="utf-8")
 
-        self.assertIn("Чат с медицинским специалистом", index)
-        self.assertIn("Не звать медицинского специалиста", index)
-        self.assertIn("Остаться в текущем чате с ИИ", index)
+        self.assertIn('id="consultationOfferCard"', index)
+        self.assertIn("Татьяны Витальевны", index)
         self.assertNotIn('id="humanCallButton"', index)
         self.assertNotIn('id="callPhoneStep"', index)
         self.assertNotIn('id="ticketNumber"', index)
         decline_flow = script.split("function declineHumanSpecialist()", 1)[1].split(
             "function setHumanChoiceDisabled", 1,
         )[0]
-        confirm_flow = script.split("async function chooseHumanSpecialistChat()", 1)[1].split(
+        confirm_flow = script.split("async function chooseHumanSpecialistChat(", 1)[1].split(
             "function closeFunctionMenu", 1,
         )[0]
-        self.assertIn("updateChatMode(true, 'none', null)", decline_flow)
-        self.assertNotIn("/api/human-preference", decline_flow)
+        self.assertIn("chooseHumanSpecialistChat(false)", decline_flow)
         self.assertIn("/api/human-preference", confirm_flow)
         self.assertIn("channel:'chat'", confirm_flow)
+        self.assertIn("consultation_request:", confirm_flow)
+        self.assertIn("Продолжить в обычный чат", script)
+
+    def test_consultation_request_routes_to_doctor_and_notifies_managers(self):
+        offered = ConversationOrchestrator(FakeLLM()).process(None, "Позови человека")
+        handler = SimpleNamespace(
+            _json=lambda status, payload: (status, payload),
+            _track_analytics=lambda event, metadata=None: None,
+        )
+        complete_profile = {"sex": "female", "age": 40, "height_cm": 168, "weight_kg": 65}
+        with patch.object(db, "get_profile", return_value=complete_profile), \
+                patch.object(db, "enqueue_manager_notifications") as notify:
+            status, response = ConsiliumHandler._set_human_preference(
+                handler,
+                {
+                    "conversation_id": offered.conversation_id,
+                    "channel": "chat",
+                    "consultation_request": True,
+                },
+            )
+
+        self.assertEqual(status, 200)
+        self.assertEqual(response["recipient_role"], "doctor")
+        self.assertEqual(response["channel"], "paid_consultation")
+        saved = db.get_conversation(offered.conversation_id)
+        self.assertEqual(saved["human_recipient_role"], "doctor")
+        self.assertEqual(saved["human_channel"], "paid_consultation")
+        self.assertEqual(notify.call_count, 2)
+        self.assertEqual(
+            [call.kwargs["recipient_role"] for call in notify.call_args_list],
+            ["doctor", "manager"],
+        )
+        self.assertTrue(all(
+            call.kwargs["request_kind"] == "doctor_consultation"
+            for call in notify.call_args_list
+        ))
     def test_critical_phrase_bypasses_ai_router(self):
         fake = FakeLLM()
         result = ConversationOrchestrator(fake).process(None, "У меня сильная боль в груди, задыхаюсь")
@@ -2649,7 +2683,7 @@ class OrchestratorTests(unittest.TestCase):
         self.assertIn('id="interpretationProfileHeight"', index)
         self.assertIn('id="interpretationProfileWeight"', index)
         self.assertIn("function interpretationProfileComplete", script)
-        self.assertIn("openInterpretationProfileModal('consultation');", script)
+        self.assertIn("openInterpretationProfileModal(consultationRequest ? 'consultation' : 'human_chat');", script)
         self.assertIn("await openLabResults();", script)
         self.assertIn("await chooseHumanSpecialistChat();", script)
         self.assertNotIn("Сначала завершите короткую анкету", backend_source)
@@ -3557,6 +3591,7 @@ class OrchestratorTests(unittest.TestCase):
             conversation = db.create_conversation("Анализ специалистом")
             confirmed, created = db.confirm_human_chat(
                 conversation["id"], "D-TEST01", recipient_role="doctor",
+                human_channel="paid_consultation",
             )
             self.assertTrue(created)
             self.assertEqual(confirmed["human_recipient_role"], "doctor")
@@ -3605,7 +3640,12 @@ class OrchestratorTests(unittest.TestCase):
                 "consultation_payment_instruction",
             )
             self.assertIn("раздел «Консультации»", instruction["content"])
-            self.assertIn("1 000 ₽", instruction["content"])
+            self.assertIn("900 ₽", instruction["content"])
+            self.assertIn("1 800 ₽", instruction["content"])
+            with self.assertRaisesRegex(ValueError, "уже отправлена"):
+                db.manager_send_consultation_payment_instruction(
+                    conversation["id"], "Доктор", "doctor",
+                )
             closed = db.manager_close_conversation(
                 conversation["id"], "Доктор", "doctor",
             )
@@ -4111,7 +4151,7 @@ class OrchestratorTests(unittest.TestCase):
             "    && conversation.human_status !== 'closed'",
             manager_script,
         )
-        self.assertIn("Отправить пользователю инструкцию по оплате консультации", manager_script)
+        self.assertIn("Подтвердить, что консультация проведена", manager_script)
         self.assertIn("if (!window.confirm(", manager_script)
         self.assertIn("playManagerSignal('request')", manager_script)
         self.assertIn("playManagerSignal('message')", manager_script)
@@ -4656,7 +4696,8 @@ class OrchestratorTests(unittest.TestCase):
         self.assertIn('id="menuPurchasesButton"', index)
         self.assertIn('id="menuConsultationsButton"', index)
         self.assertIn('id="consultationsModal"', index)
-        self.assertIn('Оплатить консультацию · 1 000 ₽', index)
+        self.assertIn('Оплатить после консультации · 900 ₽', index)
+        self.assertIn('скидка 50%', index)
         self.assertIn("/api/payments/yookassa/create-consultation", script)
         self.assertIn("/api/consultations", script)
         self.assertIn("renderConsultationPaymentSuccess", script)
@@ -6618,14 +6659,27 @@ class OrchestratorTests(unittest.TestCase):
             db.set_current_chel_id(chel_id)
             conversation = db.create_conversation("Консультация врача")
             onboarding_before = db.get_onboarding()["status"]
+            with self.assertRaisesRegex(ValueError, "после консультации"):
+                db.create_consultation_payment_order(conversation["id"])
+            db.confirm_human_chat(
+                conversation["id"], "D-POST01", recipient_role="doctor",
+                human_channel="paid_consultation",
+            )
+            db.manager_send_consultation_payment_instruction(
+                conversation["id"], "Татьяна Витальевна", "doctor",
+            )
+            closed = db.manager_close_conversation(
+                conversation["id"], "Татьяна Витальевна", "doctor",
+            )
+            self.assertEqual(closed["human_status"], "closed")
             order = db.create_consultation_payment_order(conversation["id"])
             private = db.payment_order_private(order["id"])
             self.assertEqual(private["order_type"], "consultation")
-            self.assertEqual(private["amount_kopecks"], 100000)
+            self.assertEqual(private["amount_kopecks"], 90000)
             provider = {
                 "id": "7f3e4567-89ab-4cde-8012-3456789abcde",
                 "status": "pending", "paid": False, "test": True,
-                "amount": {"value": "1000.00", "currency": "RUB"},
+                "amount": {"value": "900.00", "currency": "RUB"},
                 "metadata": {"order_id": order["id"]},
                 "confirmation": {"confirmation_url": "https://yoomoney.ru/pay/consultation"},
             }
@@ -6639,7 +6693,8 @@ class OrchestratorTests(unittest.TestCase):
             self.assertTrue(first["created"])
             self.assertFalse(second["created"])
             saved = db.get_conversation(conversation["id"])
-            self.assertFalse(bool(saved["ai_enabled"]))
+            self.assertTrue(bool(saved["ai_enabled"]))
+            self.assertEqual(saved["human_status"], "closed")
             self.assertEqual(saved["human_recipient_role"], "doctor")
             self.assertEqual(saved["human_channel"], "paid_consultation")
             messages = db.list_messages(conversation["id"])
@@ -6648,18 +6703,8 @@ class OrchestratorTests(unittest.TestCase):
                 for item in messages
             ), 1)
             self.assertEqual(len(db.list_paid_consultations()), 1)
-            self.assertEqual(db.enqueue_manager_notifications(
-                "new_request", conversation["id"],
-                message_id=first["message_id"], recipient_role="doctor",
-            ), 1)
-            notices = db.claim_manager_notifications("telegram")
-            notice = next(item for item in notices if item["conversation_id"] == conversation["id"])
-            self.assertIn("Оплачена консультация", notice["payload"]["title"])
-            self.assertEqual(notice["payload"]["action_label"], "Открыть чат пользователя")
-            self.assertIn(
-                f"manager?conversation={conversation['id']}",
-                notice["payload"]["action_url"],
-            )
+            self.assertFalse(db.consultation_payment_offer()["available"])
+            self.assertTrue(db.consultation_payment_offer()["already_paid"])
         finally:
             db.set_current_chel_id(chel_id)
             db.reset_current_user()
@@ -6733,6 +6778,34 @@ class OrchestratorTests(unittest.TestCase):
         self.assertEqual(payload["items"], [
             {"name": "Дефолтное название чекапа", "amount_kopecks": 1500000},
         ])
+
+    def test_bitrix_payload_identifies_discounted_consultation_payment(self):
+        order = {
+            "id": "ord_consultation", "order_type": "consultation",
+            "amount_kopecks": 90000, "currency": "RUB",
+            "items": [{
+                "id": "doctor_consultation",
+                "name": "Консультация Татьяны Витальевны",
+                "price": 900,
+            }],
+        }
+        payment = {
+            "id": "2f3e4567-89ab-4cde-8012-3456789abcdf",
+            "status": "succeeded", "paid": True, "test": False,
+            "captured_at": "2026-11-22T12:00:00Z",
+        }
+        with (
+            patch.object(db, "examination_default_names", return_value={}),
+            patch.object(db, "find_upcoming_enterprise_examination", return_value=None),
+            patch.object(bitrix_payments, "_organization_name", return_value=""),
+        ):
+            payload = bitrix_payments.build_payload(order, payment, {})
+        self.assertEqual(payload["order_type"], "consultation")
+        self.assertEqual(payload["amount_kopecks"], 90000)
+        self.assertEqual(payload["items"], [{
+            "name": "Консультация Татьяны Витальевны",
+            "amount_kopecks": 90000,
+        }])
 
     def test_examination_schedule_parses_api_row_and_filters_date_window(self):
         self.assertEqual(

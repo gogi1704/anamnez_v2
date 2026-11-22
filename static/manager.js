@@ -261,7 +261,7 @@ function queueLabel(item) {
       : '<b>Чат с Витой</b>';
   }
   if (item.human_channel === 'call') return '<b>Созвон</b>';
-  if (item.human_channel === 'paid_consultation') return '<b>Оплаченная консультация</b>';
+  if (item.human_channel === 'paid_consultation') return '<b>Консультация врача</b>';
   if (item.human_channel === 'chat') return '<b>Чат</b>';
   return '<b>Формат не выбран</b>';
 }
@@ -424,7 +424,7 @@ function renderHeader() {
   $('#profileName').textContent = name;
   $('#chatAvatar').textContent = initials(name);
   $('#chatTicket').textContent = conversation.human_ticket_id
-    ? `${conversation.dialog_type === 'masterclass_psychology' ? 'Заявка № ' : ''}${conversation.human_ticket_id} · ${conversation.human_status === 'closed' ? 'закрыто' : conversation.human_channel === 'paid_consultation' ? 'оплаченная консультация' : conversation.human_channel === 'call' ? 'созвон' : conversation.human_channel === 'chat' ? 'чат' : 'формат не выбран'}`
+    ? `${conversation.dialog_type === 'masterclass_psychology' ? 'Заявка № ' : ''}${conversation.human_ticket_id} · ${conversation.human_status === 'closed' ? 'закрыто' : conversation.human_channel === 'paid_consultation' ? 'консультация врача' : conversation.human_channel === 'call' ? 'созвон' : conversation.human_channel === 'chat' ? 'чат' : 'формат не выбран'}`
     : `Диалог ${conversation.id.slice(0, 8)}`;
   $('#aiEnabled').checked = Boolean(conversation.ai_enabled);
   $('#aiEnabled').disabled = observingVitaChat || state.busy;
@@ -453,9 +453,13 @@ function renderHeader() {
   closeButton.classList.toggle('hidden', !closable);
   closeButton.disabled = state.busy;
   const consultationInstruction = $('#consultationPaymentInstructionButton');
+  const consultationInstructionSent = state.detail.messages.some(
+    item => item.metadata?.action === 'consultation_payment_instruction',
+  );
   const canOfferConsultation = state.manager?.role === 'doctor'
-    && conversation.human_channel !== 'paid_consultation'
-    && conversation.human_status !== 'closed';
+    && conversation.human_channel === 'paid_consultation'
+    && conversation.human_status !== 'closed'
+    && !consultationInstructionSent;
   consultationInstruction.classList.toggle('hidden', !canOfferConsultation);
   consultationInstruction.disabled = state.busy;
   const psychologyComplete = $('#psychologySessionCompleteButton');
@@ -805,7 +809,7 @@ async function sendReply(event) {
 async function sendConsultationPaymentInstruction() {
   if (!state.selectedId || state.busy) return;
   if (!window.confirm(
-    'Отправить пользователю инструкцию по оплате консультации за 1 000 ₽? Сообщение сразу появится в его чате.'
+    'Подтвердить, что консультация проведена, и открыть пользователю оплату 900 ₽ со скидкой 50%? Сообщение сразу появится в его чате.'
   )) return;
   const button = $('#consultationPaymentInstructionButton');
   state.busy = true;
