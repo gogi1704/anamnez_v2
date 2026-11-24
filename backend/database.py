@@ -1666,6 +1666,28 @@ def current_user_has_result_entry() -> bool:
     return bool(row and str(row["result_entry_at"] or "").strip())
 
 
+def claim_current_user_result_consultation_offer() -> bool:
+    """Claim the one-time paid consultation offer for the results-entry journey."""
+    now = utc_now()
+    with _write_lock, connection() as conn:
+        cursor = conn.execute(
+            """UPDATE users
+            SET result_consultation_offered_at = ?
+            WHERE chel_id = ?
+              AND result_entry_at IS NOT NULL
+              AND result_consultation_offered_at IS NULL
+              AND NOT EXISTS (
+                SELECT 1 FROM payment_orders AS orders
+                WHERE orders.chel_id = users.chel_id
+                  AND orders.order_type = 'consultation'
+                  AND orders.status IN ('creating', 'pending', 'succeeded')
+              )""",
+            (now, current_chel_id()),
+        )
+        conn.commit()
+    return bool(cursor.rowcount)
+
+
 def classify_user_agent(user_agent: str) -> dict:
     """Turn a browser User-Agent into coarse, privacy-conscious audience fields."""
     raw = " ".join(str(user_agent or "").split())[:500]
@@ -7111,7 +7133,8 @@ def init_db() -> None:
                 registered_at TEXT,
                 registration_method TEXT,
                 from_manager TEXT NOT NULL DEFAULT '',
-                result_entry_at TEXT
+                result_entry_at TEXT,
+                result_consultation_offered_at TEXT
             );
 
             CREATE TABLE IF NOT EXISTS ikp_access_links (
@@ -8228,6 +8251,8 @@ def init_db() -> None:
             conn.execute("ALTER TABLE users ADD COLUMN from_manager TEXT NOT NULL DEFAULT ''")
         if "result_entry_at" not in users_columns:
             conn.execute("ALTER TABLE users ADD COLUMN result_entry_at TEXT")
+        if "result_consultation_offered_at" not in users_columns:
+            conn.execute("ALTER TABLE users ADD COLUMN result_consultation_offered_at TEXT")
         examination_columns = {
             row[1] for row in conn.execute("PRAGMA table_info(examination_catalog)").fetchall()
         }

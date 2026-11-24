@@ -1,5 +1,5 @@
-const CACHE_NAME = 'consilium-shell-v224';
-const ASSET_VERSION = '20261122-consultation-buttons-v64';
+const CACHE_NAME = 'consilium-shell-v225';
+const ASSET_VERSION = '20261124-lab-consultation-offer-v65';
 const APP_SHELL = [
   '/',
   '/manifest.webmanifest',

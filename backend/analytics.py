@@ -208,6 +208,8 @@ ALLOWED_EVENTS = {
     "council_completed", "council_error", "human_requested", "human_channel_selected",
     "manager_joined", "human_request_closed", "tube_linked", "lab_results_requested", "lab_results_found",
     "lab_results_processing", "lab_results_not_found", "lab_results_error",
+    "lab_consultation_offer_viewed", "lab_consultation_offer_clicked",
+    "lab_consultation_offer_dismissed",
     "lab_interpretation_started", "lab_interpretation_completed",
     "lab_interpretation_error", "lab_interpretation_profile_requested",
     "lab_interpretation_profile_completed", "lab_results_notification_requested", "result_entry_started",

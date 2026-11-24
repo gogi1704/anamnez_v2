@@ -6060,7 +6060,9 @@ async function handleWeightReminderAction(event) {
   }
 }
 
-async function openHumanModal() {
+async function openHumanModal(options = {}) {
+  const offerSource = options?.source === 'lab_results' ? 'lab_results' : 'general';
+  const labResultsOffer = offerSource === 'lab_results';
   const psychologyChat = state.conversationType === 'masterclass_psychology';
   const selectedCheckups = state.onboarding?.selected_tests || [...(state.selectedTests || [])];
   const checkupCustomer = !psychologyChat && (
@@ -6069,36 +6071,42 @@ async function openHumanModal() {
   );
   $('#humanTitle').textContent = psychologyChat
     ? 'Подключить психолога?'
-    : 'Консультация Татьяны Витальевны';
+    : labResultsOffer ? 'Обсудить результаты с врачом?' : 'Консультация Татьяны Витальевны';
   $('#humanDescription').textContent = psychologyChat
     ? 'Контекст разговора уже подготовлен. Обращение будет создано только после вашего подтверждения.'
+    : labResultsOffer
+      ? 'Результаты уже получены. Вы можете обсудить их и другие вопросы о здоровье на персональной консультации по телефону.'
     : checkupCustomer
       ? 'Для вас доступно специальное предложение перед переходом в чат врача.'
       : 'Перед переходом в чат можно записаться на персональную консультацию врача.';
   const offer = $('#consultationOfferCard');
   offer.classList.toggle('hidden', psychologyChat);
-  offer.classList.toggle('special', checkupCustomer);
+  offer.classList.toggle('special', checkupCustomer || labResultsOffer);
   if (!psychologyChat) {
     offer.innerHTML = `
-      <em>${checkupCustomer ? 'Специальное предложение' : 'Консультация врача'}</em>
+      <em>${labResultsOffer ? 'Результаты уже готовы' : checkupCustomer ? 'Специальное предложение' : 'Консультация врача'}</em>
       <strong>Татьяна Витальевна</strong>
-      <p>Можно задать вопросы о самочувствии, симптомах, результатах анализов, питании, обмене веществ и гормональном здоровье. Врач-терапевт, эндокринолог поможет разобраться и согласует формат консультации.</p>
+      <p>${labResultsOffer ? 'Врач высшей категории, терапевт и эндокринолог разберёт полученные результаты, ответит на другие вопросы о здоровье и проведёт консультацию по телефону.' : 'Можно задать вопросы о самочувствии, симптомах, результатах анализов, питании, обмене веществ и гормональном здоровье. Врач-терапевт, эндокринолог поможет разобраться и согласует формат консультации.'}</p>
       <div class="consultation-price"><s>1 800 ₽</s><b>900 ₽</b></div>
       <small>Постоянная скидка 50% для клиентов Консилиума · предоплата перед консультацией</small>`;
   }
   const option = $('#humanChatButton');
   option.querySelector('strong').textContent = psychologyChat
     ? 'Чат с психологом'
-    : 'Оплатить и записаться · 900 ₽';
+    : labResultsOffer ? 'Записаться на консультацию · 900 ₽' : 'Оплатить и записаться · 900 ₽';
   option.querySelector('small').textContent = psychologyChat
     ? 'Психолог получит обращение и ответит в этой переписке'
-    : 'После оплаты заявку получат врач и менеджеры; дату и формат согласуют в чате';
+    : labResultsOffer
+      ? 'После оплаты врач и менеджеры согласуют дату телефонной консультации'
+      : 'После оплаты заявку получат врач и менеджеры; дату и формат согласуют в чате';
   const reviewTitle = document.querySelector('.handoff-review > strong');
   const reviewDescription = document.querySelector('.handoff-review > p');
   const preview = $('#handoffPreview');
   if (!psychologyChat) {
     reviewTitle.textContent = 'Укажите предварительную тему разговора';
-    reviewDescription.textContent = 'Кратко опишите, что вы хотите обсудить с врачом. Это поможет заранее подготовиться к консультации.';
+    reviewDescription.textContent = labResultsOffer
+      ? 'Мы уже указали разбор полученных анализов. При желании добавьте другие вопросы, которые хотите обсудить.'
+      : 'Кратко опишите, что вы хотите обсудить с врачом. Это поможет заранее подготовиться к консультации.';
     preview.innerHTML = `<label class="consultation-topic-field"><span>Тема консультации</span><textarea id="consultationTopic" rows="4" maxlength="1000" placeholder="Например: хочу обсудить результаты анализов, усталость и возможные причины изменений веса">${escapeHtml(state.consultationTopic)}</textarea><small id="consultationTopicError" class="hidden" role="alert"></small></label>`;
   } else {
     reviewTitle.textContent = 'Проверьте сведения обращения';
@@ -6108,7 +6116,7 @@ async function openHumanModal() {
   const decline = $('#humanDeclineButton');
   decline.querySelector('strong').textContent = psychologyChat
     ? 'Не звать психолога'
-    : 'Продолжить в обычный чат';
+    : labResultsOffer ? 'Не сейчас' : 'Продолжить в обычный чат';
   setHumanChoiceDisabled(false);
   $('#humanModal').classList.remove('hidden');
   if (psychologyChat && state.conversationId) {
@@ -7195,6 +7203,7 @@ function renderLabResults() {
   if (tubeNumber) $('#labSavedTube').textContent = tubeNumber;
   else $('#labTubeInput').value = '';
   $('#labResultDocuments').classList.add('hidden');
+  $('#labConsultationOffer').classList.add('hidden');
   setLabResultNotificationAction(false);
 }
 
@@ -7325,6 +7334,24 @@ function renderLabResultDocuments(documents) {
   container.classList.toggle('hidden', !state.labDocuments.length);
 }
 
+function showLabConsultationOffer() {
+  $('#labConsultationOffer').classList.remove('hidden');
+  trackEvent('lab_consultation_offer_viewed', {source:'lab_results'});
+}
+
+async function openLabConsultationOffer() {
+  $('#labConsultationOffer').classList.add('hidden');
+  closeLabResults();
+  state.consultationTopic = 'Хочу обсудить полученные результаты анализов и другие вопросы о здоровье.';
+  trackEvent('lab_consultation_offer_clicked', {source:'lab_results'});
+  await openHumanModal({source:'lab_results'});
+}
+
+function dismissLabConsultationOffer() {
+  $('#labConsultationOffer').classList.add('hidden');
+  trackEvent('lab_consultation_offer_dismissed', {source:'lab_results'});
+}
+
 function interpretationProfileComplete(profile = state.profile) {
   return Boolean(
     profile?.sex
@@ -7437,6 +7464,7 @@ async function fetchLabResults() {
   beginUserProgress('Ищем результаты анализов…');
   button.textContent = 'Проверяю…';
   setLabResultNotificationAction(false);
+  $('#labConsultationOffer').classList.add('hidden');
   renderLabResultDocuments([]);
   setLabResultsState('⌕', 'Ищу результаты', 'Проверяю номер пробирки в базе лаборатории.');
   try {
@@ -7445,6 +7473,7 @@ async function fetchLabResults() {
       setLabResultsState('✓', 'Результаты готовы', 'Откройте оригинал или выберите расшифровку с помощью ИИ либо бесплатный анализ специалистом.');
       renderLabResultDocuments(result.documents || result.urls);
       $('#taskStatus').textContent = 'Результаты анализов найдены';
+      if (result.consultation_offer) showLabConsultationOffer();
     } else if (result.status === 'processing') {
       setLabResultsState('…', 'Результаты обрабатываются', 'Номер найден, но ссылка на документ пока не добавлена. Попробуйте позже.');
       setLabResultNotificationAction(true);
@@ -8392,6 +8421,8 @@ $('#healthPassportContent').addEventListener('click', event => {
   }
 });
 $('#labResultsClose').addEventListener('click', closeLabResults);
+$('#labConsultationOfferButton').addEventListener('click', openLabConsultationOffer);
+$('#labConsultationOfferDismiss').addEventListener('click', dismissLabConsultationOffer);
 $('#labResultsModal').addEventListener('click', event => { if (event.target.id === 'labResultsModal') closeLabResults(); });
 $('#interpretationProfileClose').addEventListener('click', closeInterpretationProfileModal);
 $('#interpretationProfileModal').addEventListener('click', event => {

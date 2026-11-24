@@ -2675,6 +2675,9 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                 lab_result = lookup_lab_results(tube_number).to_dict()
                 result_status = str(lab_result.get("status") or "not_found")
                 if result_status == "found":
+                    lab_result["consultation_offer"] = (
+                        db.claim_current_user_result_consultation_offer()
+                    )
                     schedule_lab_result_value_estimate(
                         db.current_chel_id(), tube_number,
                         list(lab_result.get("documents") or []),
