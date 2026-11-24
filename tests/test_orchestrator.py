@@ -3616,12 +3616,26 @@ class OrchestratorTests(unittest.TestCase):
             self.assertEqual(db.enqueue_manager_notifications(
                 "new_request", conversation["id"], recipient_role="doctor",
             ), 1)
+            self.assertEqual(db.enqueue_manager_notifications(
+                "new_request", conversation["id"], recipient_role="manager",
+                request_kind="doctor_consultation",
+                message_text="Обсудить результаты анализов",
+            ), 1)
             notifications = db.claim_manager_notifications("telegram")
             matching = [item for item in notifications if item["conversation_id"] == conversation["id"]]
-            self.assertEqual(len(matching), 1)
-            self.assertEqual(matching[0]["recipient_id"], doctor["telegram_id"])
-            self.assertEqual(matching[0]["payload"]["recipient_role"], "doctor")
-            self.assertIn("manager?conversation=", matching[0]["payload"]["manager_url"])
+            self.assertEqual(len(matching), 2)
+            self.assertEqual(
+                {item["recipient_id"] for item in matching},
+                {doctor["telegram_id"], manager["telegram_id"]},
+            )
+            self.assertEqual(
+                {item["payload"]["recipient_role"] for item in matching},
+                {"doctor", "manager"},
+            )
+            self.assertTrue(all(
+                "manager?conversation=" in item["payload"]["manager_url"]
+                for item in matching
+            ))
             with self.assertRaises(ValueError):
                 db.manager_add_reply(
                     conversation["id"], "Ответ чужой роли", "Менеджер", "manager",

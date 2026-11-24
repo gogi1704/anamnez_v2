@@ -4747,7 +4747,10 @@ def claim_manager_notifications(provider: str, limit: int = 20) -> list[dict]:
                 SELECT 1 FROM staff_users AS staff
                 JOIN conversations AS conversation ON conversation.id = outbox.conversation_id
                 WHERE staff.id = outbox.staff_user_id AND staff.is_active = 1
-                  AND staff.role = COALESCE(conversation.human_recipient_role, 'manager')
+                  AND staff.role = COALESCE(
+                    NULLIF(TRIM(JSON_EXTRACT(outbox.payload, '$.recipient_role')), ''),
+                    COALESCE(conversation.human_recipient_role, 'manager')
+                  )
                   AND (
                     outbox.event_type IN ('request_cancelled','weight_program_completed','psychology_session_requested','psychology_payment_succeeded','psychology_crisis')
                     OR COALESCE(conversation.human_status, 'closed') <> 'closed'
