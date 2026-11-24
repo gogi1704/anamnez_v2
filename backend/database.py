@@ -1680,7 +1680,7 @@ def claim_current_user_result_consultation_offer() -> bool:
                 SELECT 1 FROM payment_orders AS orders
                 WHERE orders.chel_id = users.chel_id
                   AND orders.order_type = 'consultation'
-                  AND orders.status IN ('creating', 'pending', 'succeeded')
+                  AND orders.status IN ('creating', 'pending', 'waiting_for_capture', 'succeeded')
               )""",
             (now, current_chel_id()),
         )

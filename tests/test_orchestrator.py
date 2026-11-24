@@ -7395,6 +7395,37 @@ class OrchestratorTests(unittest.TestCase):
             db.ensure_user("chel_test_default")
             db.set_current_chel_id("chel_test_default")
 
+    def test_result_consultation_offer_is_suppressed_for_active_payment(self):
+        chel_id = "chel_result_consultation_payment_test"
+        db.ensure_user(chel_id, pending=True)
+        try:
+            db.set_current_chel_id(chel_id)
+            db.mark_current_user_result_entry()
+            conversation = db.create_conversation("Консультация по результатам")
+            order = db.create_consultation_payment_order(
+                conversation["id"], "Обсудить результаты анализов",
+            )
+            with db.connection() as conn:
+                conn.execute(
+                    "UPDATE payment_orders SET status='waiting_for_capture' WHERE id=?",
+                    (order["id"],),
+                )
+                conn.commit()
+            self.assertFalse(db.claim_current_user_result_consultation_offer())
+            with db.connection() as conn:
+                conn.execute(
+                    "UPDATE payment_orders SET status='canceled' WHERE id=?",
+                    (order["id"],),
+                )
+                conn.commit()
+            self.assertTrue(db.claim_current_user_result_consultation_offer())
+            self.assertFalse(db.claim_current_user_result_consultation_offer())
+        finally:
+            db.set_current_chel_id(chel_id)
+            db.reset_current_user()
+            db.ensure_user("chel_test_default")
+            db.set_current_chel_id("chel_test_default")
+
     def test_result_flow_has_real_screens_and_metric_definitions(self):
         project_root = Path(__file__).resolve().parents[1]
         index = (project_root / "index.html").read_text(encoding="utf-8")
