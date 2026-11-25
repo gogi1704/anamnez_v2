@@ -19,6 +19,8 @@ from .schemas import normalize_psychology_dialog_state
 _write_lock = threading.Lock()
 _current_chel_id: ContextVar[str] = ContextVar("current_chel_id", default="chel_test_default")
 _ACTIVITY_TOUCH_INTERVAL = timedelta(minutes=5)
+MANAGER_MESSAGE_DEBOUNCE = timedelta(minutes=3)
+MANAGER_MESSAGE_COOLDOWN = timedelta(minutes=10)
 MOSCOW_TZ = timezone(timedelta(hours=3), "Europe/Moscow")
 TEST_COMPANY_INN = "123123"
 WEIGHT_ANALYSIS_MIN_CONFIRMED_MEALS = 20
@@ -4707,7 +4709,7 @@ def enqueue_manager_notifications(
                 (recipient_role,),
             ).fetchall()
         inserted = 0
-        payload = json.dumps({
+        payload_data = {
             "title": title, "body": body, "manager_url": manager_url,
             "action_url": manager_url,
             "action_label": (
@@ -4726,21 +4728,127 @@ def enqueue_manager_notifications(
             "request_kind": str(request_kind or ""),
             "amount_kopecks": max(0, int(amount_kopecks or 0)),
             "client_card": client_card,
-        }, ensure_ascii=False)
+        }
         for staff in recipients:
             for provider, recipient in (
                 ("telegram", staff["telegram_chat_id"]), ("max", staff["max_chat_id"]),
             ):
                 if not recipient:
                     continue
+                if event_type == "new_message":
+                    duplicate = conn.execute(
+                        """SELECT 1 FROM manager_notification_outbox
+                        WHERE staff_user_id=? AND provider=? AND conversation_id=?
+                          AND event_type='new_message' AND source_message_id=?
+                        LIMIT 1""",
+                        (staff["id"], provider, conversation_id, int(message_id or 0)),
+                    ).fetchone()
+                    if duplicate:
+                        continue
+                    active = conn.execute(
+                        """SELECT * FROM manager_notification_outbox
+                        WHERE staff_user_id=? AND provider=? AND conversation_id=?
+                          AND event_type='new_message'
+                          AND status='pending' AND next_attempt_at IS NOT NULL
+                        ORDER BY id DESC LIMIT 1""",
+                        (staff["id"], provider, conversation_id),
+                    ).fetchone()
+                    immediate = conn.execute(
+                        """SELECT 1 FROM manager_notification_outbox
+                        WHERE staff_user_id=? AND provider=? AND conversation_id=?
+                          AND event_type='new_message'
+                          AND (
+                            status='delivering'
+                            OR (status='pending' AND next_attempt_at IS NULL)
+                          )
+                        LIMIT 1""",
+                        (staff["id"], provider, conversation_id),
+                    ).fetchone()
+                    reset_row = conn.execute(
+                        """SELECT MAX(reset_at) FROM (
+                            SELECT read_at AS reset_at FROM staff_conversation_reads
+                            WHERE staff_user_id=? AND conversation_id=?
+                            UNION ALL
+                            SELECT created_at AS reset_at FROM manager_actions
+                            WHERE conversation_id=? AND action IN (
+                                'reply','consultation_payment_instruction',
+                                'psychology_session_payment_instruction',
+                                'psychology_session_invitation'
+                            )
+                        )""",
+                        (staff["id"], conversation_id, conversation_id),
+                    ).fetchone()
+                    reset_at = str(reset_row[0] or "") if reset_row else ""
+                    last_sent = conn.execute(
+                        """SELECT sent_at FROM manager_notification_outbox
+                        WHERE staff_user_id=? AND provider=? AND conversation_id=?
+                          AND event_type='new_message' AND status='sent'
+                          AND sent_at IS NOT NULL
+                          AND (?='' OR sent_at>?)
+                        ORDER BY sent_at DESC LIMIT 1""",
+                        (staff["id"], provider, conversation_id, reset_at, reset_at),
+                    ).fetchone()
+                    due_candidates = [
+                        datetime.now(timezone.utc) + MANAGER_MESSAGE_DEBOUNCE,
+                    ]
+                    if last_sent and last_sent["sent_at"]:
+                        due_candidates.append(
+                            datetime.fromisoformat(last_sent["sent_at"])
+                            + MANAGER_MESSAGE_COOLDOWN
+                        )
+                    excerpt = " ".join(str(message_text or "").split())[:300]
+                    current_count = 0
+                    if active:
+                        try:
+                            active_payload = json.loads(active["payload"] or "{}")
+                        except (TypeError, json.JSONDecodeError):
+                            active_payload = {}
+                        current_count = max(1, int(active_payload.get("message_count") or 1))
+                        if active["next_attempt_at"]:
+                            due_candidates.append(
+                                datetime.fromisoformat(active["next_attempt_at"])
+                            )
+                    message_count = current_count + 1 if active else 1
+                    notification_payload = dict(payload_data)
+                    notification_payload["message_count"] = message_count
+                    notification_payload["last_message"] = excerpt
+                    if message_count > 1:
+                        notification_payload["title"] = f"Новые сообщения от {name}"
+                        notification_payload["body"] = (
+                            f"{name} отправил {message_count} новых сообщений."
+                            + (f" Последнее: «{excerpt}»." if excerpt else "")
+                        )
+                    elif excerpt:
+                        notification_payload["body"] = (
+                            f"{name} отправил новое сообщение: «{excerpt}»."
+                        )
+                    payload = json.dumps(notification_payload, ensure_ascii=False)
+                    if active and active["status"] == "pending":
+                        next_attempt_at = max(due_candidates).isoformat()
+                        conn.execute(
+                            """UPDATE manager_notification_outbox
+                            SET source_message_id=?, payload=?, next_attempt_at=?
+                            WHERE id=? AND status='pending'""",
+                            (int(message_id or 0), payload, next_attempt_at, active["id"]),
+                        )
+                        inserted += 1
+                        continue
+                    next_attempt_at = (
+                        max(due_candidates).isoformat()
+                        if active or immediate or last_sent else None
+                    )
+                else:
+                    payload = json.dumps(payload_data, ensure_ascii=False)
+                    next_attempt_at = None
                 cursor = conn.execute(
                     """INSERT OR IGNORE INTO manager_notification_outbox
                     (staff_user_id, provider, recipient_id, event_type,
-                     conversation_id, source_message_id, payload, status, created_at)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?)""",
+                     conversation_id, source_message_id, payload, status,
+                     next_attempt_at, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, 'pending', ?, ?)""",
                     (
                         staff["id"], provider, recipient, event_type, conversation_id,
-                        int(message_id or 0), payload, now,
+                        int(message_id or 0), payload, next_attempt_at, now,
                     ),
                 )
                 inserted += int(bool(cursor.rowcount))
@@ -4813,7 +4921,8 @@ def acknowledge_manager_notification(
     now = now_dt.isoformat()
     with _write_lock, connection() as conn:
         row = conn.execute(
-            """SELECT attempts FROM manager_notification_outbox
+            """SELECT attempts, staff_user_id, provider, event_type, conversation_id
+            FROM manager_notification_outbox
             WHERE id = ? AND lease_token = ? AND status = 'delivering'""",
             (int(notification_id), str(lease_token or "")),
         ).fetchone()
@@ -4836,6 +4945,20 @@ def acknowledge_manager_notification(
                 int(notification_id), str(lease_token or ""),
             ),
         )
+        if cursor.rowcount and success and row["event_type"] == "new_message":
+            cooldown_at = (now_dt + MANAGER_MESSAGE_COOLDOWN).isoformat()
+            conn.execute(
+                """UPDATE manager_notification_outbox
+                SET next_attempt_at = CASE
+                    WHEN next_attempt_at IS NULL OR next_attempt_at < ? THEN ?
+                    ELSE next_attempt_at END
+                WHERE staff_user_id=? AND provider=? AND conversation_id=?
+                  AND event_type='new_message' AND status='pending'""",
+                (
+                    cooldown_at, cooldown_at, row["staff_user_id"],
+                    row["provider"], row["conversation_id"],
+                ),
+            )
         conn.commit()
     return bool(cursor.rowcount)
 
@@ -6593,6 +6716,15 @@ def manager_mark_conversation_read(
                 read_at = excluded.read_at""",
             (staff_id, conversation_id, visible_message_id, now),
         )
+        conn.execute(
+            """UPDATE manager_notification_outbox
+            SET status='cancelled', lease_token=NULL, leased_at=NULL,
+                next_attempt_at=NULL
+            WHERE staff_user_id=? AND conversation_id=?
+              AND event_type='new_message'
+              AND status IN ('pending','delivering')""",
+            (staff_id, conversation_id),
+        )
         conn.commit()
     return {
         "conversation_id": conversation_id,
@@ -6799,6 +6931,17 @@ def manager_add_reply(
                 message_action if message_action != "manager_reply" else "reply",
                 json.dumps({"message_id": cursor.lastrowid}), now,
             ),
+        )
+        conn.execute(
+            """UPDATE manager_notification_outbox
+            SET status='cancelled', lease_token=NULL, leased_at=NULL,
+                next_attempt_at=NULL
+            WHERE conversation_id=? AND event_type='new_message'
+              AND status IN ('pending','delivering')
+              AND staff_user_id IN (
+                  SELECT id FROM staff_users WHERE role=?
+              )""",
+            (conversation_id, staff_role),
         )
         conn.commit()
         row = conn.execute(

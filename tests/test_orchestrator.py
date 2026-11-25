@@ -3745,9 +3745,24 @@ class OrchestratorTests(unittest.TestCase):
                 ),
                 1,
             )
+            self.assertFalse(any(
+                item["conversation_id"] == conversation["id"]
+                for item in db.claim_manager_notifications("telegram")
+            ))
+            with db.connection() as connection:
+                connection.execute(
+                    "UPDATE manager_notification_outbox SET next_attempt_at=? WHERE id=?",
+                    ("2000-01-01T00:00:00+00:00", retry_item["id"]),
+                )
+                connection.commit()
             permanent_item = next(
                 item for item in db.claim_manager_notifications("telegram")
                 if item["conversation_id"] == conversation["id"]
+            )
+            self.assertEqual(permanent_item["payload"]["message_count"], 2)
+            self.assertIn(
+                "Проверка необратимой ошибки доставки",
+                permanent_item["payload"]["body"],
             )
             self.assertTrue(db.acknowledge_manager_notification(
                 permanent_item["id"], permanent_item["lease_token"], False,
@@ -3796,6 +3811,131 @@ class OrchestratorTests(unittest.TestCase):
                 ).fetchone()[0]
             self.assertEqual(pending_request_events, 0)
         finally:
+            db.set_current_chel_id("chel_test_default")
+            db.admin_delete_staff(manager["id"])
+
+    def test_manager_message_notifications_are_grouped_and_reset_after_reply(self):
+        suffix = secrets.token_hex(3)
+        manager = db.admin_create_staff(
+            "Менеджер группировки", f"notify.group.{suffix}", "123456",
+            telegram_id=f"7{int.from_bytes(secrets.token_bytes(5), 'big')}",
+            notify_new_requests=True, notify_new_messages=True,
+        )
+        chel_id = f"chel_notify_group_{suffix}"
+        db.ensure_user(chel_id)
+        try:
+            db.set_current_chel_id(chel_id)
+            conversation = db.create_conversation("Группировка уведомлений")
+            db.update_conversation(
+                conversation["id"], active_agent="manager", context_summary="{}",
+                status="waiting_human", human_status="pending",
+                human_ticket_id=f"H-{suffix}", human_channel="chat",
+                ai_enabled=False,
+            )
+            self.assertGreaterEqual(db.enqueue_manager_notifications(
+                "new_message", conversation["id"], message_id=1001,
+                message_text="Первое сообщение",
+            ), 1)
+            first = next(
+                item for item in db.claim_manager_notifications("telegram")
+                if item["conversation_id"] == conversation["id"]
+                and item["recipient_id"] == manager["telegram_id"]
+            )
+            self.assertEqual(first["payload"]["message_count"], 1)
+            self.assertTrue(db.acknowledge_manager_notification(
+                first["id"], first["lease_token"], True,
+            ))
+
+            db.enqueue_manager_notifications(
+                "new_message", conversation["id"], message_id=1002,
+                message_text="Второе сообщение",
+            )
+            db.enqueue_manager_notifications(
+                "new_message", conversation["id"], message_id=1003,
+                message_text="Третье и последнее сообщение",
+            )
+            with db.connection() as connection:
+                pending = connection.execute(
+                    """SELECT * FROM manager_notification_outbox
+                    WHERE staff_user_id=? AND provider='telegram'
+                      AND conversation_id=? AND event_type='new_message'
+                      AND status='pending'""",
+                    (manager["id"], conversation["id"]),
+                ).fetchall()
+            self.assertEqual(len(pending), 1)
+            grouped_payload = json.loads(pending[0]["payload"])
+            self.assertEqual(grouped_payload["message_count"], 2)
+            self.assertEqual(grouped_payload["last_message"], "Третье и последнее сообщение")
+            self.assertIn("2 новых сообщений", grouped_payload["body"])
+            self.assertIsNotNone(pending[0]["next_attempt_at"])
+            self.assertFalse(any(
+                item["id"] == pending[0]["id"]
+                for item in db.claim_manager_notifications("telegram")
+            ))
+
+            db.manager_add_reply(
+                conversation["id"], "Спасибо, отвечаю вам", "Менеджер группировки",
+            )
+            with db.connection() as connection:
+                status = connection.execute(
+                    "SELECT status FROM manager_notification_outbox WHERE id=?",
+                    (pending[0]["id"],),
+                ).fetchone()[0]
+            self.assertEqual(status, "cancelled")
+
+            db.enqueue_manager_notifications(
+                "new_message", conversation["id"], message_id=1004,
+                message_text="Сообщение после ответа менеджера",
+            )
+            after_reply = next(
+                item for item in db.claim_manager_notifications("telegram")
+                if item["conversation_id"] == conversation["id"]
+                and item["recipient_id"] == manager["telegram_id"]
+            )
+            self.assertEqual(after_reply["payload"]["message_count"], 1)
+            self.assertIn("после ответа", after_reply["payload"]["body"])
+            self.assertTrue(db.acknowledge_manager_notification(
+                after_reply["id"], after_reply["lease_token"], True,
+            ))
+
+            db.enqueue_manager_notifications(
+                "new_message", conversation["id"], message_id=1005,
+                message_text="Сообщение до открытия диалога",
+            )
+            with db.connection() as connection:
+                before_read = connection.execute(
+                    """SELECT id FROM manager_notification_outbox
+                    WHERE staff_user_id=? AND provider='telegram'
+                      AND conversation_id=? AND event_type='new_message'
+                      AND status='pending'""",
+                    (manager["id"], conversation["id"]),
+                ).fetchone()
+            self.assertIsNotNone(before_read)
+            self.assertIsNotNone(db.manager_mark_conversation_read(
+                conversation["id"], manager["id"], "manager",
+            ))
+            with db.connection() as connection:
+                read_status = connection.execute(
+                    "SELECT status FROM manager_notification_outbox WHERE id=?",
+                    (before_read["id"],),
+                ).fetchone()[0]
+            self.assertEqual(read_status, "cancelled")
+
+            db.enqueue_manager_notifications(
+                "new_message", conversation["id"], message_id=1006,
+                message_text="Сообщение после открытия диалога",
+            )
+            after_read = next(
+                item for item in db.claim_manager_notifications("telegram")
+                if item["conversation_id"] == conversation["id"]
+                and item["recipient_id"] == manager["telegram_id"]
+            )
+            self.assertEqual(after_read["payload"]["message_count"], 1)
+            self.assertIn("после открытия", after_read["payload"]["body"])
+        finally:
+            db.set_current_chel_id(chel_id)
+            db.reset_current_user()
+            db.ensure_user("chel_test_default")
             db.set_current_chel_id("chel_test_default")
             db.admin_delete_staff(manager["id"])
 
