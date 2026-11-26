@@ -4779,14 +4779,14 @@ class OrchestratorTests(unittest.TestCase):
         self.assertIn("controllerchange", script)
         self.assertIn("url.pathname.startsWith('/api/')", worker)
         self.assertIn("url.pathname.startsWith('/auth/')", worker)
-        self.assertIn("consilium-shell-v225", worker)
+        self.assertIn("consilium-shell-v226", worker)
         self.assertIn("fetch(request)", worker)
-        self.assertIn("/static/styles.css?v=20261124-lab-consultation-offer-v65", index)
+        self.assertIn("/static/styles.css?v=20261127-lab-consultation-repeat-v66", index)
         self.assertIn("/static/rich-text.2bf1f5fab764.css", index)
         self.assertTrue((project_root / "static" / "styles.07ffaefb4795.css").is_file())
         self.assertTrue((project_root / "static" / "rich-text.2bf1f5fab764.css").is_file())
-        self.assertIn("/static/app.js?v=20261124-lab-consultation-offer-v65", index)
-        self.assertIn("/static/metrika.js?v=20261124-lab-consultation-offer-v65", index)
+        self.assertIn("/static/app.js?v=20261127-lab-consultation-repeat-v66", index)
+        self.assertIn("/static/metrika.js?v=20261127-lab-consultation-repeat-v66", index)
         self.assertIn("function safeUrl(value)", script)
         self.assertIn("error.code === 'http_404'", script)
         self.assertIn("fallback && fallback.id !== id", script)
@@ -4882,7 +4882,7 @@ class OrchestratorTests(unittest.TestCase):
         main = (project_root / "backend" / "main.py").read_text(encoding="utf-8")
         config = (project_root / "backend" / "config.py").read_text(encoding="utf-8")
 
-        self.assertIn('src="/static/metrika.js?v=20261124-lab-consultation-offer-v65"', index)
+        self.assertIn('src="/static/metrika.js?v=20261127-lab-consultation-repeat-v66"', index)
         self.assertIn('YANDEX_METRIKA_COUNTER_ID', config)
         self.assertIn('path == "/api/public-config"', main)
         self.assertIn('"metrika.js"', main)
@@ -7520,13 +7520,17 @@ class OrchestratorTests(unittest.TestCase):
         try:
             db.set_current_chel_id(chel_id)
             self.assertFalse(db.current_user_has_result_entry())
-            self.assertFalse(db.claim_current_user_result_consultation_offer())
+            self.assertTrue(db.current_user_should_offer_result_consultation())
             marked = db.mark_current_user_result_entry()
             self.assertEqual(marked["registration_method"], "result")
             self.assertTrue(marked["registered_at"])
             self.assertTrue(db.current_user_has_result_entry())
-            self.assertTrue(db.claim_current_user_result_consultation_offer())
-            self.assertFalse(db.claim_current_user_result_consultation_offer())
+            self.assertTrue(db.current_user_should_offer_result_consultation())
+            self.assertTrue(db.current_user_should_offer_result_consultation())
+            self.assertTrue(db.set_current_user_result_consultation_offer_opt_out(True))
+            self.assertFalse(db.current_user_should_offer_result_consultation())
+            self.assertTrue(db.set_current_user_result_consultation_offer_opt_out(False))
+            self.assertTrue(db.current_user_should_offer_result_consultation())
             table = db.admin_table("users", "result_entry_test", limit=10)
             self.assertEqual(table["rows"][0]["entry_flow"], "result")
             self.assertGreaterEqual(db.admin_dashboard()["summary"]["result_entry_users"], 1)
@@ -7551,15 +7555,15 @@ class OrchestratorTests(unittest.TestCase):
                     (order["id"],),
                 )
                 conn.commit()
-            self.assertFalse(db.claim_current_user_result_consultation_offer())
+            self.assertFalse(db.current_user_should_offer_result_consultation())
             with db.connection() as conn:
                 conn.execute(
                     "UPDATE payment_orders SET status='canceled' WHERE id=?",
                     (order["id"],),
                 )
                 conn.commit()
-            self.assertTrue(db.claim_current_user_result_consultation_offer())
-            self.assertFalse(db.claim_current_user_result_consultation_offer())
+            self.assertTrue(db.current_user_should_offer_result_consultation())
+            self.assertTrue(db.current_user_should_offer_result_consultation())
         finally:
             db.set_current_chel_id(chel_id)
             db.reset_current_user()
@@ -7599,14 +7603,18 @@ class OrchestratorTests(unittest.TestCase):
         self.assertIn('id="requestLabResultNotificationButton"', index)
         self.assertIn("requestLabResultNotification", app)
         self.assertIn('id="labConsultationOffer"', index)
+        self.assertIn('id="labConsultationOfferOptOut"', index)
         self.assertIn("if (result.consultation_offer) showLabConsultationOffer()", app)
+        self.assertIn("/api/lab-results/consultation-offer", app + main)
+        self.assertIn("updateLabConsultationOfferPreference", app)
         self.assertIn("openHumanModal({source:'lab_results'})", app)
         self.assertIn("Хочу обсудить полученные результаты анализов", app)
-        self.assertIn("claim_current_user_result_consultation_offer", main)
+        self.assertIn("current_user_should_offer_result_consultation", main)
         for event_name in (
             "lab_consultation_offer_viewed",
             "lab_consultation_offer_clicked",
             "lab_consultation_offer_dismissed",
+            "lab_consultation_offer_opted_out",
         ):
             self.assertIn(event_name, analytics.ALLOWED_EVENTS)
         self.assertIn("linkedMessengerProviders().size", app)

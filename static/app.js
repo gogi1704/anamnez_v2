@@ -7335,8 +7335,41 @@ function renderLabResultDocuments(documents) {
 }
 
 function showLabConsultationOffer() {
+  const optOut = $('#labConsultationOfferOptOut');
+  const status = $('#labConsultationOfferPreferenceStatus');
+  optOut.checked = false;
+  optOut.disabled = false;
+  status.textContent = '';
+  status.classList.add('hidden');
   $('#labConsultationOffer').classList.remove('hidden');
   trackEvent('lab_consultation_offer_viewed', {source:'lab_results'});
+}
+
+async function updateLabConsultationOfferPreference(event) {
+  const checkbox = event.currentTarget;
+  const neverShow = checkbox.checked;
+  const status = $('#labConsultationOfferPreferenceStatus');
+  checkbox.disabled = true;
+  status.textContent = 'Сохраняю настройку…';
+  status.classList.remove('hidden');
+  try {
+    await api('/api/lab-results/consultation-offer', {
+      method:'POST', body:JSON.stringify({never_show:neverShow}),
+    });
+    status.textContent = neverShow
+      ? 'Сохранено: это предложение больше не будет показываться.'
+      : 'Сохранено: предложение снова будет показываться с результатами.';
+    if (neverShow) {
+      trackEvent('lab_consultation_offer_opted_out', {source:'lab_results'});
+    }
+  } catch (error) {
+    checkbox.checked = !neverShow;
+    status.textContent = error.message === 'Failed to fetch'
+      ? 'Не удалось сохранить настройку. Проверьте соединение.'
+      : error.message;
+  } finally {
+    checkbox.disabled = false;
+  }
 }
 
 async function openLabConsultationOffer() {
@@ -8423,6 +8456,7 @@ $('#healthPassportContent').addEventListener('click', event => {
 $('#labResultsClose').addEventListener('click', closeLabResults);
 $('#labConsultationOfferButton').addEventListener('click', openLabConsultationOffer);
 $('#labConsultationOfferDismiss').addEventListener('click', dismissLabConsultationOffer);
+$('#labConsultationOfferOptOut').addEventListener('change', updateLabConsultationOfferPreference);
 $('#labResultsModal').addEventListener('click', event => { if (event.target.id === 'labResultsModal') closeLabResults(); });
 $('#interpretationProfileClose').addEventListener('click', closeInterpretationProfileModal);
 $('#interpretationProfileModal').addEventListener('click', event => {

@@ -1668,23 +1668,35 @@ def current_user_has_result_entry() -> bool:
     return bool(row and str(row["result_entry_at"] or "").strip())
 
 
-def claim_current_user_result_consultation_offer() -> bool:
-    """Claim the one-time paid consultation offer for the results-entry journey."""
-    now = utc_now()
-    with _write_lock, connection() as conn:
-        cursor = conn.execute(
-            """UPDATE users
-            SET result_consultation_offered_at = ?
+def current_user_should_offer_result_consultation() -> bool:
+    """Return whether the recurring consultation offer is enabled for this user."""
+    with connection() as conn:
+        row = conn.execute(
+            """SELECT 1 FROM users
             WHERE chel_id = ?
-              AND result_entry_at IS NOT NULL
-              AND result_consultation_offered_at IS NULL
+              AND result_consultation_offer_opt_out_at IS NULL
               AND NOT EXISTS (
                 SELECT 1 FROM payment_orders AS orders
                 WHERE orders.chel_id = users.chel_id
                   AND orders.order_type = 'consultation'
-                  AND orders.status IN ('creating', 'pending', 'waiting_for_capture', 'succeeded')
+                  AND orders.status IN (
+                    'creating', 'pending', 'waiting_for_capture', 'succeeded'
+                  )
               )""",
-            (now, current_chel_id()),
+            (current_chel_id(),),
+        ).fetchone()
+    return bool(row)
+
+
+def set_current_user_result_consultation_offer_opt_out(opt_out: bool) -> bool:
+    """Persist the user's recurring lab-result consultation offer preference."""
+    if not isinstance(opt_out, bool):
+        raise ValueError("Передайте логическое значение настройки")
+    with _write_lock, connection() as conn:
+        cursor = conn.execute(
+            """UPDATE users SET result_consultation_offer_opt_out_at = ?
+            WHERE chel_id = ?""",
+            (utc_now() if opt_out else None, current_chel_id()),
         )
         conn.commit()
     return bool(cursor.rowcount)
@@ -7277,7 +7289,8 @@ def init_db() -> None:
                 registration_method TEXT,
                 from_manager TEXT NOT NULL DEFAULT '',
                 result_entry_at TEXT,
-                result_consultation_offered_at TEXT
+                result_consultation_offered_at TEXT,
+                result_consultation_offer_opt_out_at TEXT
             );
 
             CREATE TABLE IF NOT EXISTS ikp_access_links (
@@ -8396,6 +8409,10 @@ def init_db() -> None:
             conn.execute("ALTER TABLE users ADD COLUMN result_entry_at TEXT")
         if "result_consultation_offered_at" not in users_columns:
             conn.execute("ALTER TABLE users ADD COLUMN result_consultation_offered_at TEXT")
+        if "result_consultation_offer_opt_out_at" not in users_columns:
+            conn.execute(
+                "ALTER TABLE users ADD COLUMN result_consultation_offer_opt_out_at TEXT"
+            )
         examination_columns = {
             row[1] for row in conn.execute("PRAGMA table_info(examination_catalog)").fetchall()
         }

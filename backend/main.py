@@ -2663,6 +2663,20 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                 })
             except ValueError as exc:
                 return self._json(422, {"detail": str(exc)})
+        if path == "/api/lab-results/consultation-offer":
+            try:
+                payload = self._read_json(max_bytes=1_000)
+                never_show = payload.get("never_show")
+                if not isinstance(never_show, bool):
+                    raise ValueError("Передайте never_show=true или never_show=false")
+                saved = db.set_current_user_result_consultation_offer_opt_out(
+                    never_show
+                )
+                if not saved:
+                    return self._json(404, {"detail": "Пользователь не найден"})
+                return self._json(200, {"never_show": never_show})
+            except (ValueError, TypeError, json.JSONDecodeError, UnicodeDecodeError) as exc:
+                return self._json(422, {"detail": str(exc)})
         if path == "/api/lab-results":
             self._track_analytics("lab_results_requested")
             tube_number = str(db.get_profile().get("tube_number", "")).strip()
@@ -2676,7 +2690,7 @@ class ConsiliumHandler(BaseHTTPRequestHandler):
                 result_status = str(lab_result.get("status") or "not_found")
                 if result_status == "found":
                     lab_result["consultation_offer"] = (
-                        db.claim_current_user_result_consultation_offer()
+                        db.current_user_should_offer_result_consultation()
                     )
                     schedule_lab_result_value_estimate(
                         db.current_chel_id(), tube_number,
